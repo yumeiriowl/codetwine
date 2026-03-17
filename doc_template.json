@@ -1,0 +1,30 @@
+{
+  "sections": [
+    {
+      "id": "overview",
+      "title": "Overview & Purpose",
+      "prompt": "Describe the purpose and responsibilities of this file (module).\n- The role this file plays within the project and why it exists as a separate file\n- A table of main public interfaces (functions, classes, types exported/made public) with name, arguments, return value, and responsibility in one concise line each\n- Any design patterns adopted or important design decisions, if applicable"
+    },
+    {
+      "id": "definitions",
+      "title": "Definition Design Specifications",
+      "prompt": "For all definitions in the file (functions, classes, interfaces, enums, etc.), describe the following information.\n\n[What to describe]\n- Function/class name, argument types and meanings, return value type and meaning\n- Why the function exists (responsibility / design intent) in 1-2 sentences\n- Important design decisions (why this algorithm, why this return value format, etc.) if any\n- Edge cases and constraints (input value constraints, preconditions, etc.)\n\n[What NOT to describe (strictly enforced)]\n- Step-by-step code explanations (paraphrasing like \"Step 1: do X, Step 2: do Y\")\n- Line number references (they become outdated immediately when source changes)\n- Explanations of standard library functions (no need to explain os.path.relpath, etc.)\n- Source code quotations or specific expressions\n\nDescribe each function concisely and omit anything that is obvious from reading the code."
+    },
+    {
+      "id": "dependencies",
+      "title": "Dependency Description",
+      "prompt": "Describe the modules/headers/packages that this file depends on and those that depend on this file.\nExclude standard library and framework dependencies (Qt, Spring, React, .NET, etc.) and describe only project-internal file dependencies.\n\n[Dependencies (what this file uses)]\nDescribe based on the \"external functions/classes used by this file (dependencies)\" information provided in the prompt.\n- Briefly explain \"why\" each dependency is used (what functionality it is needed for)\n\n[Dependents (what uses this file)]\nDescribe based on the \"external files that use this file (dependents)\" information provided in the prompt.\nIf no dependent information is provided, state \"No dependent information available.\"\n- What each dependent uses this file for\n\n- Direction of dependency (unidirectional or bidirectional)\n\n[What NOT to describe (strictly enforced)]\n- Line number references\n- Enumeration of usage locations (details like how many places it is called from)\n- Speculative dependencies (do not fabricate dependencies not present in the provided information)"
+    },
+    {
+      "id": "dataflow",
+      "title": "Data Flow",
+      "prompt": "Describe how data flows within this file.\n- Input data format and source\n- Overview of main transformation processing flow (not a detailed description of every step, but how data is transformed)\n- Output data format and destination\n- Field structure and purpose of main data structures (maps, arrays, structs, classes, etc.)\n\nSummarize concisely using diagrams or tables. No need to explain standard library functions.\n\n[What NOT to describe (strictly enforced)]\n- Line number references (L1, line 10, etc.) (they become outdated immediately when source changes)"
+    },
+    {
+      "id": "error_handling",
+      "title": "Error Handling",
+      "prompt": "Summarize the error handling policy in this file.\n- Overall error handling strategy (fail-fast / graceful degradation, etc.)\n- Summarize main error patterns and handling policies in a table format (Error type / Handling / Impact)\n- Briefly note any design considerations\n\n[What NOT to describe (strictly enforced)]\n- Detailed explanation of individual exception handling blocks or error check branches (describe at the policy level)\n- Code examples or improved code examples (describe only the policy and rationale)\n- Line number references (they become outdated immediately when source changes)\n- Improvement suggestions or recommended improvement policies (focus on explaining the current policy)"
+    }
+  ],
+  "summary_prompt": "Summarize the content of the above design document in 400-600 characters, focusing on this file's responsibilities, public interfaces, and main data structures, so it can be used as context when creating design documents for other files. Do not include code details or line numbers."
+}

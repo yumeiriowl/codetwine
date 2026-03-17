@@ -1,0 +1,23 @@
+{
+  "file": "codetwine/codetwine/llm/__init___py/__init__.py",
+  "definitions": [
+    {
+      "name": "__all__",
+      "type": "expression_statement",
+      "start_line": 3,
+      "end_line": 3,
+      "context": "__all__ = [\"ContextWindowExceededError\"]"
+    }
+  ],
+  "callee_usages": [],
+  "caller_usages": [
+    {
+      "lines": [
+        434
+      ],
+      "name": "ContextWindowExceededError",
+      "file": "codetwine/codetwine/doc_creator_py/doc_creator.py",
+      "usage_context": "            result = await llm_client.generate(prompt)\n            if result is not None:\n                return result\n        except ContextWindowExceededError:\n            logger.warning(\n                f\"Context exceeded ({label}): {file_path}/{section['id']}. \"\n                f\"Falling back to next attempt.\""
+    }
+  ]
+}

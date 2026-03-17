@@ -1,0 +1,583 @@
+{
+  "file": "codetwine/codetwine/config/settings_py/settings.py",
+  "definitions": [
+    {
+      "name": "_REQUIRED",
+      "type": "expression_statement",
+      "start_line": 16,
+      "end_line": 16,
+      "context": "_REQUIRED = object()"
+    },
+    {
+      "name": "get_config_value",
+      "type": "function_definition",
+      "start_line": 19,
+      "end_line": 54,
+      "context": "def get_config_value(key: str, default=_REQUIRED, var_type: type = str):\n    \"\"\"Retrieve an environment variable and return it converted to the specified type.\n\n    Args:\n        key: Environment variable name.\n        default: Default value when the variable is not set.\n                 If omitted, raises ValueError when the variable is missing.\n        var_type: Target type for conversion (str / int / float / bool).\n\n    Returns:\n        The converted configuration value.\n\n    Raises:\n        ValueError: If a required environment variable is not set.\n    \"\"\"\n    value = os.getenv(key)\n\n    # When the environment variable is not set\n    if value is None:\n        if default is _REQUIRED:\n            raise ValueError(\n                f\"Environment variable '{key}' is not set. \"\n                f\"Please set it in the .env file or your shell.\"\n            )\n        if default is None:\n            return None\n        value = str(default)\n\n    # Type conversion\n    if var_type == bool:\n        return value.lower() in (\"true\", \"1\", \"yes\", \"on\")\n    if var_type == int:\n        return int(value)\n    if var_type == float:\n        return float(value)\n    return value"
+    },
+    {
+      "name": "LLM_API_KEY",
+      "type": "expression_statement",
+      "start_line": 58,
+      "end_line": 58,
+      "context": "LLM_API_KEY = get_config_value(\"LLM_API_KEY\", default=\"\")"
+    },
+    {
+      "name": "LLM_MODEL",
+      "type": "expression_statement",
+      "start_line": 59,
+      "end_line": 59,
+      "context": "LLM_MODEL = get_config_value(\"LLM_MODEL\", default=\"\")"
+    },
+    {
+      "name": "LLM_API_BASE",
+      "type": "expression_statement",
+      "start_line": 60,
+      "end_line": 60,
+      "context": "LLM_API_BASE = get_config_value(\"LLM_API_BASE\", default=\"\")"
+    },
+    {
+      "name": "OUTPUT_LANGUAGE",
+      "type": "expression_statement",
+      "start_line": 61,
+      "end_line": 61,
+      "context": "OUTPUT_LANGUAGE = get_config_value(\"OUTPUT_LANGUAGE\", default=\"English\")"
+    },
+    {
+      "name": "DOC_MAX_TOKENS",
+      "type": "expression_statement",
+      "start_line": 62,
+      "end_line": 62,
+      "context": "DOC_MAX_TOKENS = get_config_value(\"DOC_MAX_TOKENS\", default=8192, var_type=int)"
+    },
+    {
+      "name": "REPO_ROOT",
+      "type": "expression_statement",
+      "start_line": 65,
+      "end_line": 65,
+      "context": "REPO_ROOT = os.path.normpath(os.path.join(os.path.dirname(__file__), \"..\", \"..\"))"
+    },
+    {
+      "name": "DEFAULT_PROJECT_DIR",
+      "type": "expression_statement",
+      "start_line": 66,
+      "end_line": 66,
+      "context": "DEFAULT_PROJECT_DIR = get_config_value(\"DEFAULT_PROJECT_DIR\", default=REPO_ROOT)"
+    },
+    {
+      "name": "DEFAULT_OUTPUT_DIR",
+      "type": "expression_statement",
+      "start_line": 67,
+      "end_line": 70,
+      "context": "DEFAULT_OUTPUT_DIR = get_config_value(\n    \"DEFAULT_OUTPUT_DIR\",\n    default=os.path.join(REPO_ROOT, \"output\"),\n)"
+    },
+    {
+      "name": "DOC_TEMPLATE_PATH",
+      "type": "expression_statement",
+      "start_line": 71,
+      "end_line": 74,
+      "context": "DOC_TEMPLATE_PATH = get_config_value(\n    \"DOC_TEMPLATE_PATH\",\n    default=os.path.join(REPO_ROOT, \"doc_template.json\"),\n)"
+    },
+    {
+      "name": "MAX_WORKERS",
+      "type": "expression_statement",
+      "start_line": 77,
+      "end_line": 77,
+      "context": "MAX_WORKERS = get_config_value(\"MAX_WORKERS\", default=4, var_type=int)"
+    },
+    {
+      "name": "MAX_RETRIES",
+      "type": "expression_statement",
+      "start_line": 78,
+      "end_line": 78,
+      "context": "MAX_RETRIES = get_config_value(\"MAX_RETRIES\", default=3, var_type=int)"
+    },
+    {
+      "name": "RETRY_WAIT",
+      "type": "expression_statement",
+      "start_line": 79,
+      "end_line": 79,
+      "context": "RETRY_WAIT = get_config_value(\"RETRY_WAIT\", default=2, var_type=int)"
+    },
+    {
+      "name": "ENABLE_LLM_DOC",
+      "type": "expression_statement",
+      "start_line": 82,
+      "end_line": 82,
+      "context": "ENABLE_LLM_DOC = get_config_value(\"ENABLE_LLM_DOC\", default=True, var_type=bool)"
+    },
+    {
+      "name": "SUMMARY_MAX_CHARS",
+      "type": "expression_statement",
+      "start_line": 83,
+      "end_line": 83,
+      "context": "SUMMARY_MAX_CHARS: int = get_config_value(\"SUMMARY_MAX_CHARS\", default=600, var_type=int)"
+    },
+    {
+      "name": "_EXCLUDE_PATTERNS_ENV",
+      "type": "expression_statement",
+      "start_line": 84,
+      "end_line": 84,
+      "context": "_EXCLUDE_PATTERNS_ENV = get_config_value(\"EXCLUDE_PATTERNS\", default=\"\", var_type=str)"
+    },
+    {
+      "name": "EXCLUDE_PATTERNS",
+      "type": "expression_statement",
+      "start_line": 85,
+      "end_line": 95,
+      "context": "EXCLUDE_PATTERNS: list[str] = (\n    [p.strip() for p in _EXCLUDE_PATTERNS_ENV.split(\",\") if p.strip()]\n    if _EXCLUDE_PATTERNS_ENV\n    else [\n        \"__pycache__\",\n        \".git\",\n        \".github\",\n        \".venv\",\n        \"node_modules\",\n    ]\n)"
+    },
+    {
+      "name": "PYTHON_DEFINITION_DICT",
+      "type": "expression_statement",
+      "start_line": 108,
+      "end_line": 113,
+      "context": "PYTHON_DEFINITION_DICT = {\n    \"function_definition\": \"identifier\",\n    \"class_definition\": \"identifier\",\n    \"decorated_definition\": \"identifier\",\n    \"expression_statement\": \"__assignment__\",\n}"
+    },
+    {
+      "name": "JAVA_DEFINITION_DICT",
+      "type": "expression_statement",
+      "start_line": 115,
+      "end_line": 121,
+      "context": "JAVA_DEFINITION_DICT = {\n    \"class_declaration\": \"identifier\",\n    \"method_declaration\": \"identifier\",\n    \"interface_declaration\": \"identifier\",\n    \"constructor_declaration\": \"identifier\",\n    \"enum_declaration\": \"identifier\",\n}"
+    },
+    {
+      "name": "CPP_DEFINITION_DICT",
+      "type": "expression_statement",
+      "start_line": 123,
+      "end_line": 133,
+      "context": "CPP_DEFINITION_DICT = {\n    \"class_specifier\": \"type_identifier\",\n    \"struct_specifier\": \"type_identifier\",\n    \"function_declarator\": \"identifier\",\n    \"function_definition\": \"__function_declarator__\",\n    \"namespace_definition\": \"namespace_identifier\",\n    \"declaration\": \"__init_declarator__\",\n    \"alias_declaration\": \"type_identifier\",\n    \"enum_specifier\": \"type_identifier\",\n    \"preproc_def\": \"identifier\",\n}"
+    },
+    {
+      "name": "C_DEFINITION_DICT",
+      "type": "expression_statement",
+      "start_line": 135,
+      "end_line": 143,
+      "context": "C_DEFINITION_DICT = {\n    \"function_declarator\": \"identifier\",\n    \"function_definition\": \"__function_declarator__\",\n    \"struct_specifier\": \"type_identifier\",\n    \"declaration\": \"__init_declarator__\",\n    \"preproc_def\": \"identifier\",\n    \"type_definition\": \"type_identifier\",\n    \"enum_specifier\": \"type_identifier\",\n}"
+    },
+    {
+      "name": "KOTLIN_DEFINITION_DICT",
+      "type": "expression_statement",
+      "start_line": 145,
+      "end_line": 149,
+      "context": "KOTLIN_DEFINITION_DICT = {\n    \"class_declaration\": \"identifier\",\n    \"function_declaration\": \"identifier\",\n    \"object_declaration\": \"identifier\",\n}"
+    },
+    {
+      "name": "JS_DEFINITION_DICT",
+      "type": "expression_statement",
+      "start_line": 151,
+      "end_line": 157,
+      "context": "JS_DEFINITION_DICT = {\n    \"function_declaration\": \"identifier\",\n    \"method_definition\": \"identifier\",\n    \"class_declaration\": \"identifier\",\n    \"lexical_declaration\": \"__variable_declarator__\",\n    \"variable_declaration\": \"__variable_declarator__\",\n}"
+    },
+    {
+      "name": "TS_DEFINITION_DICT",
+      "type": "expression_statement",
+      "start_line": 159,
+      "end_line": 168,
+      "context": "TS_DEFINITION_DICT = {\n    \"function_declaration\": \"identifier\",\n    \"method_definition\": \"identifier\",\n    \"class_declaration\": \"type_identifier\",\n    \"interface_declaration\": \"type_identifier\",\n    \"lexical_declaration\": \"__variable_declarator__\",\n    \"variable_declaration\": \"__variable_declarator__\",\n    \"type_alias_declaration\": \"type_identifier\",\n    \"enum_declaration\": \"identifier\",\n}"
+    },
+    {
+      "name": "_PYTHON_IMPORT_QUERY",
+      "type": "expression_statement",
+      "start_line": 184,
+      "end_line": 195,
+      "context": "_PYTHON_IMPORT_QUERY = \"\"\"\n(import_statement\n  name: (dotted_name) @module) @import_node\n\n(import_statement\n  name: (aliased_import\n    name: (dotted_name) @module)) @import_node\n\n(import_from_statement\n  module_name: (_) @module\n  name: (_) @name) @import_node\n\"\"\""
+    },
+    {
+      "name": "_JS_IMPORT_QUERY",
+      "type": "expression_statement",
+      "start_line": 205,
+      "end_line": 235,
+      "context": "_JS_IMPORT_QUERY = \"\"\"\n(import_statement\n  source: (string) @module) @import_node\n\n(import_statement\n  (import_clause\n    (named_imports\n      (import_specifier\n        name: (identifier) @name)))\n  source: (string) @module) @import_node\n\n(export_statement\n  source: (string) @module) @import_node\n\n(export_statement\n  (export_clause\n    (export_specifier\n      name: (identifier) @name))\n  source: (string) @module) @import_node\n\n(call_expression\n  function: (identifier) @_require_func\n  arguments: (arguments (string) @module)) @import_node\n\n(variable_declarator\n  name: (object_pattern\n    (shorthand_property_identifier_pattern) @name)\n  value: (call_expression\n    function: (identifier) @_require_func\n    arguments: (arguments (string) @module))) @import_node\n\"\"\""
+    },
+    {
+      "name": "_JAVA_IMPORT_QUERY",
+      "type": "expression_statement",
+      "start_line": 239,
+      "end_line": 242,
+      "context": "_JAVA_IMPORT_QUERY = \"\"\"\n(import_declaration\n  (scoped_identifier) @module) @import_node\n\"\"\""
+    },
+    {
+      "name": "_C_IMPORT_QUERY",
+      "type": "expression_statement",
+      "start_line": 246,
+      "end_line": 249,
+      "context": "_C_IMPORT_QUERY = \"\"\"\n(preproc_include\n  path: (_) @module) @import_node\n\"\"\""
+    },
+    {
+      "name": "_KOTLIN_IMPORT_QUERY",
+      "type": "expression_statement",
+      "start_line": 253,
+      "end_line": 256,
+      "context": "_KOTLIN_IMPORT_QUERY = \"\"\"\n(import\n  (qualified_identifier) @module) @import_node\n\"\"\""
+    },
+    {
+      "name": "_PYTHON_USAGE_NODE_TYPES",
+      "type": "expression_statement",
+      "start_line": 269,
+      "end_line": 284,
+      "context": "_PYTHON_USAGE_NODE_TYPES = {\n    \"call_types\": {\"call\"},\n    \"attribute_types\": {\"attribute\"},\n    \"skip_parent_types\": {\n        \"attribute\", \"call\",\n        \"import_statement\", \"import_from_statement\",\n        \"dotted_name\", \"aliased_import\",\n        \"function_definition\", \"class_definition\",\n        \"parameter\", \"parameters\", \"typed_parameter\",\n        \"list_splat_pattern\", \"dictionary_splat_pattern\",\n    },\n    \"skip_name_field_types\": {\n        \"default_parameter\", \"typed_default_parameter\", \"keyword_argument\",\n    },\n    \"skip_parent_types_for_type_ref\": set(),\n}"
+    },
+    {
+      "name": "_JAVA_USAGE_NODE_TYPES",
+      "type": "expression_statement",
+      "start_line": 286,
+      "end_line": 302,
+      "context": "_JAVA_USAGE_NODE_TYPES = {\n    \"call_types\": {\"method_invocation\"},\n    \"attribute_types\": {\"field_access\"},\n    \"skip_parent_types\": {\n        \"method_invocation\", \"field_access\",\n        \"import_declaration\", \"scoped_identifier\",\n        \"class_declaration\", \"method_declaration\",\n        \"interface_declaration\", \"constructor_declaration\",\n        \"formal_parameter\", \"spread_parameter\",\n    },\n    \"skip_parent_types_for_type_ref\": {\n        \"scoped_identifier\", \"import_declaration\",\n    },\n    \"typed_alias_parent_types\": {\n        \"field_declaration\", \"local_variable_declaration\", \"formal_parameter\",\n    },\n}"
+    },
+    {
+      "name": "_JS_USAGE_NODE_TYPES",
+      "type": "expression_statement",
+      "start_line": 304,
+      "end_line": 316,
+      "context": "_JS_USAGE_NODE_TYPES = {\n    \"call_types\": {\"call_expression\"},\n    \"attribute_types\": {\"member_expression\"},\n    \"skip_parent_types\": {\n        \"call_expression\", \"member_expression\",\n        \"import_statement\", \"import_specifier\", \"namespace_import\",\n        \"function_declaration\", \"class_declaration\", \"method_definition\",\n        \"formal_parameters\",\n    },\n    \"skip_parent_types_for_type_ref\": {\n        \"import_statement\", \"import_specifier\", \"namespace_import\",\n    },\n}"
+    },
+    {
+      "name": "_C_USAGE_NODE_TYPES",
+      "type": "expression_statement",
+      "start_line": 318,
+      "end_line": 334,
+      "context": "_C_USAGE_NODE_TYPES = {\n    \"call_types\": {\"call_expression\"},\n    \"attribute_types\": {\"field_expression\"},\n    \"skip_parent_types\": {\n        \"call_expression\", \"field_expression\",\n        \"preproc_include\",\n        \"function_declarator\", \"function_definition\",\n        \"struct_specifier\", \"parameter_declaration\",\n        \"qualified_identifier\",\n    },\n    \"skip_parent_types_for_type_ref\": {\n        \"preproc_include\", \"qualified_identifier\",\n    },\n    \"typed_alias_parent_types\": {\n        \"declaration\", \"parameter_declaration\",\n    },\n}"
+    },
+    {
+      "name": "_KOTLIN_USAGE_NODE_TYPES",
+      "type": "expression_statement",
+      "start_line": 336,
+      "end_line": 352,
+      "context": "_KOTLIN_USAGE_NODE_TYPES = {\n    \"call_types\": {\"call_expression\"},\n    \"attribute_types\": {\"navigation_expression\"},\n    \"skip_parent_types\": {\n        \"call_expression\", \"navigation_expression\",\n        \"import\", \"qualified_identifier\",\n        \"class_declaration\", \"function_declaration\",\n        \"object_declaration\",\n        \"parameter\", \"package_header\",\n    },\n    \"skip_parent_types_for_type_ref\": {\n        \"import\", \"qualified_identifier\", \"package_header\",\n    },\n    \"typed_alias_parent_types\": {\n        \"property_declaration\", \"parameter\",\n    },\n}"
+    },
+    {
+      "name": "_JS_TS_EXT_LIST",
+      "type": "expression_statement",
+      "start_line": 363,
+      "end_line": 363,
+      "context": "_JS_TS_EXT_LIST = [\".ts\", \".tsx\", \".js\", \".jsx\"]"
+    },
+    {
+      "name": "_C_CPP_EXT_LIST",
+      "type": "expression_statement",
+      "start_line": 364,
+      "end_line": 364,
+      "context": "_C_CPP_EXT_LIST = [\".h\", \".c\", \".cpp\"]"
+    },
+    {
+      "name": "LangConfig",
+      "type": "class_definition",
+      "start_line": 367,
+      "end_line": 388,
+      "context": "@dataclass(frozen=True)\nclass LangConfig:\n    \"\"\"Data class bundling all settings associated with a single language (extension).\n\n    language:         tree-sitter Language object\n    definition_dict:  Mapping of AST node type -> name node type (for definition extraction)\n    import_query:     tree-sitter import extraction query string (S-expression)\n    usage_node_types: AST node type settings for usage tracking\n    import_resolve:   Module resolution settings. A dict with the following keys:\n                        separator      - Module name delimiter (\".\" or \"/\")\n                        try_init       - Whether to look for __init__.py as a package (Python)\n                        index_ext_list - List of extensions to try as index files (JS/TS)\n                        alt_ext_list   - List of alternative extensions\n                        try_bare_path  - Whether to try paths without extensions (C/C++)\n                        try_current_dir - Whether to also try relative paths from the current directory (C/C++)\n    \"\"\"\n    language: Language\n    definition_dict: dict[str, str]\n    import_query: str | None = None\n    usage_node_types: dict | None = None\n    import_resolve: dict | None = None\n    same_package_visible: bool = False"
+    },
+    {
+      "name": "_LANG_REGISTRY",
+      "type": "expression_statement",
+      "start_line": 391,
+      "end_line": 472,
+      "context": "_LANG_REGISTRY: dict[str, LangConfig] = {\n    \"py\": LangConfig(\n        language=Language(tspython.language()),\n        definition_dict=PYTHON_DEFINITION_DICT,\n        import_query=_PYTHON_IMPORT_QUERY,\n        usage_node_types=_PYTHON_USAGE_NODE_TYPES,\n        import_resolve={\"separator\": \".\", \"try_init\": True},\n    ),\n    \"java\": LangConfig(\n        language=Language(tsjava.language()),\n        definition_dict=JAVA_DEFINITION_DICT,\n        import_query=_JAVA_IMPORT_QUERY,\n        usage_node_types=_JAVA_USAGE_NODE_TYPES,\n        import_resolve={\"separator\": \".\"},\n        same_package_visible=True,\n    ),\n    \"cpp\": LangConfig(\n        language=Language(tscpp.language()),\n        definition_dict=CPP_DEFINITION_DICT,\n        import_query=_C_IMPORT_QUERY,\n        usage_node_types=_C_USAGE_NODE_TYPES,\n        import_resolve={\n            \"separator\": \"/\",\n            \"alt_ext_list\": _C_CPP_EXT_LIST,\n            \"try_bare_path\": True,\n            \"try_current_dir\": True,\n        },\n    ),\n    \"c\": LangConfig(\n        language=Language(tsc.language()),\n        definition_dict=C_DEFINITION_DICT,\n        import_query=_C_IMPORT_QUERY,\n        usage_node_types=_C_USAGE_NODE_TYPES,\n        import_resolve={\n            \"separator\": \"/\",\n            \"alt_ext_list\": _C_CPP_EXT_LIST,\n            \"try_bare_path\": True,\n            \"try_current_dir\": True,\n        },\n    ),\n    \"kt\": LangConfig(\n        language=Language(tskotlin.language()),\n        definition_dict=KOTLIN_DEFINITION_DICT,\n        import_query=_KOTLIN_IMPORT_QUERY,\n        usage_node_types=_KOTLIN_USAGE_NODE_TYPES,\n        import_resolve={\"separator\": \".\"},\n        same_package_visible=True,\n    ),\n    \"js\": LangConfig(\n        language=Language(tsjavascript.language()),\n        definition_dict=JS_DEFINITION_DICT,\n        import_query=_JS_IMPORT_QUERY,\n        usage_node_types=_JS_USAGE_NODE_TYPES,\n        import_resolve={\n            \"separator\": \"/\",\n            \"index_ext_list\": _JS_TS_EXT_LIST,\n            \"alt_ext_list\": _JS_TS_EXT_LIST,\n        },\n    ),\n    \"ts\": LangConfig(\n        language=Language(tstypescript.language_typescript()),\n        definition_dict=TS_DEFINITION_DICT,\n        import_query=_JS_IMPORT_QUERY,\n        usage_node_types=_JS_USAGE_NODE_TYPES,\n        import_resolve={\n            \"separator\": \"/\",\n            \"index_ext_list\": _JS_TS_EXT_LIST,\n            \"alt_ext_list\": _JS_TS_EXT_LIST,\n        },\n    ),\n    \"tsx\": LangConfig(\n        language=Language(tstypescript.language_tsx()),\n        definition_dict=TS_DEFINITION_DICT,\n        import_query=_JS_IMPORT_QUERY,\n        usage_node_types=_JS_USAGE_NODE_TYPES,\n        import_resolve={\n            \"separator\": \"/\",\n            \"index_ext_list\": _JS_TS_EXT_LIST,\n            \"alt_ext_list\": _JS_TS_EXT_LIST,\n        },\n    ),\n}"
+    },
+    {
+      "name": "_EXT_ALIASES",
+      "type": "expression_statement",
+      "start_line": 480,
+      "end_line": 484,
+      "context": "_EXT_ALIASES: dict[str, str] = {\n    \"h\":   \"cpp\",\n    \"kts\": \"kt\",\n    \"jsx\": \"js\",\n}"
+    },
+    {
+      "name": "_expand_ext_aliases",
+      "type": "function_definition",
+      "start_line": 487,
+      "end_line": 503,
+      "context": "def _expand_ext_aliases(base_dict: dict) -> dict:\n    \"\"\"Return a new dictionary with alias extension entries added based on _EXT_ALIASES.\n\n    For example, if _EXT_ALIASES = {\"h\": \"cpp\"} and base_dict contains \"cpp\",\n    the \"h\" key is also set to the same value.\n\n    Args:\n        base_dict: A settings dictionary keyed by canonical extensions.\n\n    Returns:\n        A new dictionary with alias extensions added.\n    \"\"\"\n    expanded = dict(base_dict)\n    for alias, canonical in _EXT_ALIASES.items():\n        if alias not in expanded and canonical in expanded:\n            expanded[alias] = expanded[canonical]\n    return expanded"
+    },
+    {
+      "name": "TREE_SITTER_LANGUAGES",
+      "type": "expression_statement",
+      "start_line": 507,
+      "end_line": 509,
+      "context": "TREE_SITTER_LANGUAGES: dict[str, Language] = _expand_ext_aliases(\n    {ext: cfg.language for ext, cfg in _LANG_REGISTRY.items()}\n)"
+    },
+    {
+      "name": "DEFINITION_DICTS",
+      "type": "expression_statement",
+      "start_line": 512,
+      "end_line": 514,
+      "context": "DEFINITION_DICTS: dict[str, dict[str, str]] = _expand_ext_aliases(\n    {ext: cfg.definition_dict for ext, cfg in _LANG_REGISTRY.items()}\n)"
+    },
+    {
+      "name": "IMPORT_QUERIES",
+      "type": "expression_statement",
+      "start_line": 517,
+      "end_line": 519,
+      "context": "IMPORT_QUERIES: dict[str, str | None] = _expand_ext_aliases(\n    {ext: cfg.import_query for ext, cfg in _LANG_REGISTRY.items()}\n)"
+    },
+    {
+      "name": "USAGE_NODE_TYPES",
+      "type": "expression_statement",
+      "start_line": 522,
+      "end_line": 524,
+      "context": "USAGE_NODE_TYPES: dict[str, dict | None] = _expand_ext_aliases(\n    {ext: cfg.usage_node_types for ext, cfg in _LANG_REGISTRY.items()}\n)"
+    },
+    {
+      "name": "IMPORT_RESOLVE_CONFIG",
+      "type": "expression_statement",
+      "start_line": 527,
+      "end_line": 530,
+      "context": "IMPORT_RESOLVE_CONFIG: dict[str, dict] = _expand_ext_aliases(\n    {ext: cfg.import_resolve for ext, cfg in _LANG_REGISTRY.items()\n     if cfg.import_resolve is not None}\n)"
+    },
+    {
+      "name": "SAME_PACKAGE_VISIBLE",
+      "type": "expression_statement",
+      "start_line": 533,
+      "end_line": 536,
+      "context": "SAME_PACKAGE_VISIBLE: dict[str, bool] = _expand_ext_aliases(\n    {ext: cfg.same_package_visible for ext, cfg in _LANG_REGISTRY.items()\n     if cfg.same_package_visible}\n)"
+    }
+  ],
+  "callee_usages": [],
+  "caller_usages": [
+    {
+      "lines": [
+        58
+      ],
+      "name": "DEFAULT_PROJECT_DIR",
+      "file": "codetwine/main_py/main.py",
+      "usage_context": "    Returns:\n        tuple[str, str]: (project_dir, output_dir) tuple.\n    \"\"\"\n    project_dir = args.project_dir or DEFAULT_PROJECT_DIR\n\n    if args.output_dir:\n        output_dir = args.output_dir"
+    },
+    {
+      "lines": [
+        63
+      ],
+      "name": "REPO_ROOT",
+      "file": "codetwine/main_py/main.py",
+      "usage_context": "    if args.output_dir:\n        output_dir = args.output_dir\n    elif args.project_dir:\n        output_dir = os.path.join(REPO_ROOT, \"output\")\n    else:\n        output_dir = DEFAULT_OUTPUT_DIR\n"
+    },
+    {
+      "lines": [
+        65
+      ],
+      "name": "DEFAULT_OUTPUT_DIR",
+      "file": "codetwine/main_py/main.py",
+      "usage_context": "    elif args.project_dir:\n        output_dir = os.path.join(REPO_ROOT, \"output\")\n    else:\n        output_dir = DEFAULT_OUTPUT_DIR\n\n    return project_dir, output_dir\n"
+    },
+    {
+      "lines": [
+        76
+      ],
+      "name": "ENABLE_LLM_DOC",
+      "file": "codetwine/main_py/main.py",
+      "usage_context": "    args = parse_args()\n    project_dir, output_dir = resolve_dirs(args)\n\n    llm_client = LLMClient() if ENABLE_LLM_DOC else None\n    asyncio.run(process_all_files(project_dir, output_dir, llm_client))\n\n"
+    },
+    {
+      "lines": [
+        182,
+        265
+      ],
+      "name": "IMPORT_RESOLVE_CONFIG.get",
+      "file": "codetwine/codetwine/import_to_path_py/import_to_path.py",
+      "usage_context": "    src_ext = src_ext_with_dot.lstrip(\".\")\n\n    # Get the module resolve config for this extension\n    resolve_config = IMPORT_RESOLVE_CONFIG.get(src_ext)\n    if not resolve_config:\n        return None\n\n...\n    alias_to_original: dict[str, str] = {}\n\n    # Get the resolve config for the current file's extension\n    resolve_config = IMPORT_RESOLVE_CONFIG.get(file_ext, {})\n    separator = resolve_config.get(\"separator\", \".\")\n\n    for import_info in import_info_list:"
+    },
+    {
+      "lines": [
+        338
+      ],
+      "name": "SAME_PACKAGE_VISIBLE.get",
+      "file": "codetwine/codetwine/import_to_path_py/import_to_path.py",
+      "usage_context": "\n    # Register definition names from same-package files (Java/Kotlin)\n    # Add classes referenceable without import statements to symbol_to_file_map\n    if SAME_PACKAGE_VISIBLE.get(file_ext):\n        current_dir = os.path.dirname(current_file_rel)\n        for project_file in project_file_set:\n            if project_file == current_file_rel:"
+    },
+    {
+      "lines": [
+        377
+      ],
+      "name": "DEFINITION_DICTS.get",
+      "file": "codetwine/codetwine/import_to_path_py/import_to_path.py",
+      "usage_context": "\n    # Get the definition dict for this extension\n    resolved_ext = os.path.splitext(file_rel)[1].lstrip(\".\")\n    definition_dict = DEFINITION_DICTS.get(resolved_ext)\n    if not definition_dict:\n        return\n"
+    },
+    {
+      "lines": [
+        435
+      ],
+      "name": "IMPORT_QUERIES.get",
+      "file": "codetwine/codetwine/import_to_path_py/import_to_path.py",
+      "usage_context": "        A (Language, import_query_str) tuple. (None, None) if unsupported.\n    \"\"\"\n    # Get the import query string for this extension\n    import_query_str = IMPORT_QUERIES.get(file_ext)\n    if not import_query_str:\n        return None, None\n"
+    },
+    {
+      "lines": [
+        441
+      ],
+      "name": "TREE_SITTER_LANGUAGES",
+      "file": "codetwine/codetwine/import_to_path_py/import_to_path.py",
+      "usage_context": "\n    # Get the tree-sitter Language object for this extension\n    try:\n        language = TREE_SITTER_LANGUAGES[file_ext]\n    except KeyError:\n        return None, None\n    return language, import_query_str"
+    },
+    {
+      "lines": [
+        38
+      ],
+      "name": "DEFINITION_DICTS.get",
+      "file": "codetwine/codetwine/file_analyzer_py/file_analyzer.py",
+      "usage_context": "    target_file_rel = os.path.relpath(target_file, project_dir).replace(\"\\\\\", \"/\")\n    file_ext = os.path.splitext(target_file)[1].lstrip(\".\")\n    # Per-language definition extraction settings (None for unsupported languages)\n    definition_dict = DEFINITION_DICTS.get(file_ext)\n\n    root_node, content = parse_file(target_file)\n"
+    },
+    {
+      "lines": [
+        149
+      ],
+      "name": "MAX_WORKERS",
+      "file": "codetwine/codetwine/pipeline_py/pipeline.py",
+      "usage_context": "    project_dir: str,\n    output_dir: str,\n    llm_client: LLMClient | None,\n    max_workers: int = MAX_WORKERS,\n) -> None:\n    \"\"\"Analyze the entire project and output per-file dependency JSON, design documents,\n    and consolidated JSON."
+    },
+    {
+      "lines": [
+        212
+      ],
+      "name": "ENABLE_LLM_DOC",
+      "file": "codetwine/codetwine/pipeline_py/pipeline.py",
+      "usage_context": "    )\n\n    # == Step 3: Generate design documents in topological order ================\n    if ENABLE_LLM_DOC:\n        print(\"Generating design documents...\")\n        logger.info(\"Generating design documents...\")\n        await generate_all_docs("
+    },
+    {
+      "lines": [
+        265,
+        306
+      ],
+      "name": "OUTPUT_LANGUAGE",
+      "file": "codetwine/codetwine/doc_creator_py/doc_creator.py",
+      "usage_context": "    parts.append(SECTION_REQUEST_TEMPLATE.format(title=section['title']))\n    parts.append(section[\"prompt\"])\n    # Append output language specification at the end\n    parts.append(\"\\n\" + OUTPUT_LANGUAGE_INSTRUCTION.format(language=OUTPUT_LANGUAGE))\n    # Append source code consistency instruction at the end\n    parts.append(FACTUAL_ACCURACY_INSTRUCTION)\n\n...\n    parts.append(HEADER_REQUEST)\n    parts.append(f\"{summary_prompt}\")\n    parts.append(SUMMARY_CHAR_LIMIT.format(max_chars=summary_max_chars))\n    parts.append(OUTPUT_LANGUAGE_INSTRUCTION.format(language=OUTPUT_LANGUAGE))\n\n    return \"\\n\".join(parts)\n"
+    },
+    {
+      "lines": [
+        548
+      ],
+      "name": "SUMMARY_MAX_CHARS",
+      "file": "codetwine/codetwine/doc_creator_py/doc_creator.py",
+      "usage_context": "        Summary text, or None on failure.\n    \"\"\"\n    summary_prompt = template[\"summary_prompt\"]\n    summary_max_chars = SUMMARY_MAX_CHARS\n\n    prompt = _build_summary_prompt(file_path, section_list, summary_prompt, summary_max_chars)\n"
+    },
+    {
+      "lines": [
+        727
+      ],
+      "name": "MAX_WORKERS",
+      "file": "codetwine/codetwine/doc_creator_py/doc_creator.py",
+      "usage_context": "    base_output_dir: str,\n    project_dep_list: list,\n    llm_client: LLMClient,\n    max_workers: int = MAX_WORKERS,\n    changed_files: set[str] | None = None,\n) -> None:\n    \"\"\"Main function to generate design documents for all files in topological sort order."
+    },
+    {
+      "lines": [
+        750
+      ],
+      "name": "DOC_TEMPLATE_PATH",
+      "file": "codetwine/codetwine/doc_creator_py/doc_creator.py",
+      "usage_context": "        max_workers: Number of parallel workers within each level.\n        changed_files: Set of relative paths of changed files. If None, all files are processed.\n    \"\"\"\n    with open(DOC_TEMPLATE_PATH, \"r\", encoding=\"utf-8\") as f:\n        template = json.load(f)\n\n    # Get level-ordered file list via topological sort"
+    },
+    {
+      "lines": [
+        24
+      ],
+      "name": "LLM_MODEL",
+      "file": "codetwine/codetwine/llm/client_py/client.py",
+      "usage_context": "\n    def __init__(\n        self,\n        model: str = LLM_MODEL,\n        api_key: str = LLM_API_KEY,\n        api_base: str = LLM_API_BASE,\n    ) -> None:"
+    },
+    {
+      "lines": [
+        25
+      ],
+      "name": "LLM_API_KEY",
+      "file": "codetwine/codetwine/llm/client_py/client.py",
+      "usage_context": "    def __init__(\n        self,\n        model: str = LLM_MODEL,\n        api_key: str = LLM_API_KEY,\n        api_base: str = LLM_API_BASE,\n    ) -> None:\n        \"\"\"Initialize the LLM client with a model name, API key, and endpoint URL."
+    },
+    {
+      "lines": [
+        26
+      ],
+      "name": "LLM_API_BASE",
+      "file": "codetwine/codetwine/llm/client_py/client.py",
+      "usage_context": "        self,\n        model: str = LLM_MODEL,\n        api_key: str = LLM_API_KEY,\n        api_base: str = LLM_API_BASE,\n    ) -> None:\n        \"\"\"Initialize the LLM client with a model name, API key, and endpoint URL.\n"
+    },
+    {
+      "lines": [
+        57,
+        78
+      ],
+      "name": "MAX_RETRIES",
+      "file": "codetwine/codetwine/llm/client_py/client.py",
+      "usage_context": "        Returns:\n            The generated text, or None on failure.\n        \"\"\"\n        for attempt in range(MAX_RETRIES):\n            try:\n                # litellm.acompletion: OpenAI-compatible async API\n                # The model name prefix is used to auto-detect the provider\n...\n\n            except litellm.RateLimitError:\n                # Wait and retry on rate limit exceeded\n                if attempt < MAX_RETRIES - 1:\n                    logger.warning(f\"Rate limit exceeded. Retrying in {RETRY_WAIT} seconds\")\n                    await asyncio.sleep(RETRY_WAIT)\n                else:"
+    },
+    {
+      "lines": [
+        79,
+        80
+      ],
+      "name": "RETRY_WAIT",
+      "file": "codetwine/codetwine/llm/client_py/client.py",
+      "usage_context": "            except litellm.RateLimitError:\n                # Wait and retry on rate limit exceeded\n                if attempt < MAX_RETRIES - 1:\n                    logger.warning(f\"Rate limit exceeded. Retrying in {RETRY_WAIT} seconds\")\n                    await asyncio.sleep(RETRY_WAIT)\n                else:\n                    # Log error and return None when max retries reached\n...\n                # Wait and retry on rate limit exceeded\n                if attempt < MAX_RETRIES - 1:\n                    logger.warning(f\"Rate limit exceeded. Retrying in {RETRY_WAIT} seconds\")\n                    await asyncio.sleep(RETRY_WAIT)\n                else:\n                    # Log error and return None when max retries reached\n                    logger.error(\"Rate limit exceeded: max retries reached\")"
+    },
+    {
+      "lines": [
+        92
+      ],
+      "name": "DOC_MAX_TOKENS",
+      "file": "codetwine/codetwine/llm/client_py/client.py",
+      "usage_context": "                return None\n\n    async def generate(\n        self, prompt: str, max_tokens: int = DOC_MAX_TOKENS\n    ) -> str | None:\n        \"\"\"Send a completed prompt to the LLM and return the generated text.\n"
+    },
+    {
+      "lines": [
+        45,
+        281
+      ],
+      "name": "USAGE_NODE_TYPES.get",
+      "file": "codetwine/codetwine/extractors/usage_analysis_py/usage_analysis.py",
+      "usage_context": "    Returns:\n        A list of dicts containing usage location information.\n    \"\"\"\n    usage_node_types = USAGE_NODE_TYPES.get(file_ext)\n\n    # Build a variable-name -> type-name mapping from typed variable declarations\n    typed_alias_parent_types = (\n...\n\n        # Step 3: Extract and aggregate lines where those names are used within the caller\n        if names_from_target:\n            usage_node_types = USAGE_NODE_TYPES.get(caller_ext)\n\n            # Add typed variable aliases to the tracking set\n            typed_alias_parent_types = ("
+    },
+    {
+      "lines": [
+        143
+      ],
+      "name": "IMPORT_RESOLVE_CONFIG.get",
+      "file": "codetwine/codetwine/extractors/usage_analysis_py/usage_analysis.py",
+      "usage_context": "        For C/C++, target_definition_names is returned as a cache to the caller.\n    \"\"\"\n    names_from_target: list[str] = []\n    caller_resolve_config = IMPORT_RESOLVE_CONFIG.get(caller_ext, {})\n    caller_separator = caller_resolve_config.get(\"separator\", \".\")\n\n    for import_info in caller_import_list:"
+    },
+    {
+      "lines": [
+        191
+      ],
+      "name": "SAME_PACKAGE_VISIBLE.get",
+      "file": "codetwine/codetwine/extractors/usage_analysis_py/usage_analysis.py",
+      "usage_context": "\n    # Same package (same directory): references are possible without import statements (Java/Kotlin)\n    # Add target definition names even if there are no import matches\n    if not names_from_target and SAME_PACKAGE_VISIBLE.get(caller_ext):\n        if os.path.dirname(caller_rel) == os.path.dirname(target_file_rel):\n            if target_definition_names is None:\n                target_definition_names = _load_target_definitions("
+    },
+    {
+      "lines": [
+        218
+      ],
+      "name": "DEFINITION_DICTS.get",
+      "file": "codetwine/codetwine/extractors/usage_analysis_py/usage_analysis.py",
+      "usage_context": "    names: list[str] = []\n    target_abs = os.path.join(project_dir, target_file_rel)\n    target_ext = os.path.splitext(target_file_rel)[1].lstrip(\".\")\n    target_def_dict = DEFINITION_DICTS.get(target_ext)\n    if target_def_dict and os.path.isfile(target_abs):\n        target_root = parse_file(target_abs)[0]\n        for defn in extract_definitions(target_root, target_def_dict):"
+    },
+    {
+      "lines": [
+        140
+      ],
+      "name": "DEFINITION_DICTS.keys",
+      "file": "codetwine/codetwine/extractors/dependency_graph_py/dependency_graph.py",
+      "usage_context": "    Returns:\n        A list of file dependency information dicts.\n    \"\"\"\n    supported_ext_set = set(DEFINITION_DICTS.keys())\n\n    # == Step 1: Collect all files with supported extensions ======================\n    all_file_list: list[str] = []"
+    },
+    {
+      "lines": [
+        147,
+        149
+      ],
+      "name": "EXCLUDE_PATTERNS",
+      "file": "codetwine/codetwine/extractors/dependency_graph_py/dependency_graph.py",
+      "usage_context": "    for dir_path, dir_names, file_name_list in os.walk(project_dir):\n        # Remove directories matching exclude patterns from the traversal targets\n        # Modifying dir_names in-place causes os.walk to skip those subtrees\n        dir_names[:] = [d for d in dir_names if not any(fnmatch.fnmatch(d, p) for p in EXCLUDE_PATTERNS)]\n        for file_name in file_name_list:\n            if any(fnmatch.fnmatch(file_name, p) for p in EXCLUDE_PATTERNS):\n                continue\n...\n        # Modifying dir_names in-place causes os.walk to skip those subtrees\n        dir_names[:] = [d for d in dir_names if not any(fnmatch.fnmatch(d, p) for p in EXCLUDE_PATTERNS)]\n        for file_name in file_name_list:\n            if any(fnmatch.fnmatch(file_name, p) for p in EXCLUDE_PATTERNS):\n                continue\n            if os.path.splitext(file_name)[1].lstrip(\".\") in supported_ext_set:\n                all_file_list.append(os.path.join(dir_path, file_name))"
+    },
+    {
+      "lines": [
+        190
+      ],
+      "name": "SAME_PACKAGE_VISIBLE.get",
+      "file": "codetwine/codetwine/extractors/dependency_graph_py/dependency_graph.py",
+      "usage_context": "    dir_ext_groups: dict[tuple[str, str], list[str]] = {}\n    for file_path in all_file_list:\n        file_ext = os.path.splitext(file_path)[1].lstrip(\".\")\n        if not SAME_PACKAGE_VISIBLE.get(file_ext):\n            continue\n        abs_path = os.path.abspath(file_path)\n        key = (os.path.dirname(abs_path), file_ext)"
+    },
+    {
+      "lines": [
+        6
+      ],
+      "name": "TREE_SITTER_LANGUAGES",
+      "file": "codetwine/codetwine/parsers/ts_parser_py/ts_parser.py",
+      "usage_context": "from codetwine.config.settings import TREE_SITTER_LANGUAGES\n\n# Refer to the extension -> Language object mapping from TREE_SITTER_LANGUAGES in settings.py.\n_language_map = TREE_SITTER_LANGUAGES\n\n\n# Module-level cache for parse results."
+    }
+  ]
+}

@@ -1,0 +1,123 @@
+# Design Document: codetwine/llm/__init__.py
+
+## Overview & Purpose
+
+# Overview & Purpose
+
+## Role and Purpose
+
+This file serves as the **public API entry point** for the `codetwine.llm` package. Its sole responsibility is to re-export `ContextWindowExceededError` from the `litellm` third-party library, exposing it as part of the `codetwine.llm` package's public interface.
+
+By existing as a dedicated `__init__.py`, it acts as an **abstraction boundary** between the rest of the codebase and the `litellm` library. Consumers within the project (e.g., `codetwine/doc_creator.py`) import `ContextWindowExceededError` from `codetwine.llm` rather than directly from `litellm`, isolating the dependency on `litellm` to this single location.
+
+---
+
+## Public Interfaces
+
+| Name | Arguments | Return Value | Responsibility |
+|---|---|---|---|
+| `ContextWindowExceededError` | *(exception class — no constructor arguments defined here)* | — | Re-exported exception from `litellm`; raised when an LLM request exceeds the model's context window limit |
+
+---
+
+## Design Decisions
+
+- **Re-export pattern**: Rather than scattering direct `litellm` imports throughout the codebase, this file centralizes the dependency. If the underlying LLM library were ever replaced, only this file would need to be updated.
+- **Explicit `__all__`**: The use of `__all__ = ["ContextWindowExceededError"]` makes the package's public surface area explicit and intentional, preventing unintended symbols from being exported.
+
+## Definition Design Specifications
+
+# Definition Design Specifications
+
+## Re-exported Symbol: `ContextWindowExceededError`
+
+**Origin:** `litellm.ContextWindowExceededError`
+**Type:** Exception class (re-exported)
+
+This module re-exports `ContextWindowExceededError` from the `litellm` library to provide a stable, package-internal import path for LLM-related error types. Dependents within the `codetwine` package import this exception from this module rather than directly from `litellm`, decoupling internal code from the upstream library's import structure.
+
+**Design intent:** Centralizing the re-export here means that if the source of `ContextWindowExceededError` ever changes (e.g., a different LLM library is adopted), only this file needs to be updated rather than every call site across the codebase.
+
+**Usage constraint:** This symbol is intended solely for `except` clause handling at call sites that invoke LLM generation. As seen in `codetwine/doc_creator.py`, callers catch this exception to detect when a prompt exceeds the model's context window and apply a fallback strategy. No additional wrapping or subclassing is performed; the exception identity is preserved exactly as provided by `litellm`.
+
+## Dependency Description
+
+# Dependency Description
+
+## Dependencies (what this file uses)
+
+**`litellm` (external library)**
+- Imports `ContextWindowExceededError` from the `litellm` package to re-export it as part of this module's public interface. This file serves as a wrapper that exposes the exception class under the project's own `llm` module namespace.
+
+> Note: No project-internal file dependencies exist for this file. The sole dependency is on the external `litellm` library.
+
+---
+
+## Dependents (what uses this file)
+
+**`codetwine/doc_creator.py`**
+- Imports `ContextWindowExceededError` from this module to handle the case where an LLM prompt exceeds the model's context window during document generation. It catches this exception within a generation retry flow to trigger a fallback attempt when a given prompt is too large for the model to process.
+
+---
+
+## Direction of Dependency
+
+The dependency relationship is **unidirectional**: `doc_creator.py` depends on this `llm/__init__.py` module, while this module has no dependency on `doc_creator.py`. This file acts as a centralized re-export point, decoupling the rest of the project from directly importing `litellm` internals.
+
+## Data Flow
+
+# Data Flow
+
+## Overview
+
+This file acts as a **re-export module**, passing through an external symbol with no transformation.
+
+```
+[litellm library]
+    └─ ContextWindowExceededError (exception class)
+            │
+            ▼
+[codetwine/llm/__init__.py]
+    (re-exports via __all__)
+            │
+            ▼
+[codetwine/doc_creator.py]
+    └─ caught in except clause during LLM generation
+```
+
+## Data Structure
+
+| Symbol | Type | Source | Purpose |
+|---|---|---|---|
+| `ContextWindowExceededError` | Exception class | `litellm` | Signals that the input prompt exceeded the LLM's context window limit |
+
+## Flow Description
+
+- **Input**: `ContextWindowExceededError` imported directly from the `litellm` library
+- **Transformation**: None — the symbol is re-exported as-is
+- **Output**: The same exception class exposed as part of this package's public API via `__all__`
+- **Consumer**: `doc_creator.py` catches this exception during `llm_client.generate(prompt)` calls, triggering a fallback behavior with a warning log
+
+## Error Handling
+
+# Error Handling
+
+## Overall Strategy
+
+This module adopts a **re-export** pattern rather than defining or handling errors itself. It acts as a single, stable import boundary by surfacing `ContextWindowExceededError` from the `litellm` library to the rest of the codebase. Error handling responsibility is fully delegated to callers.
+
+## Error Patterns and Handling Policies
+
+| Error Type | Handling in This Module | Impact on Callers |
+|---|---|---|
+| `ContextWindowExceededError` | Re-exported as-is from `litellm`; no interception or transformation | Callers (e.g., `doc_creator.py`) catch this error directly and apply their own fallback logic |
+
+## Design Considerations
+
+- By re-exporting `ContextWindowExceededError` through this module's public interface (`__all__`), dependents are decoupled from `litellm` as a direct dependency. Callers import the error type from this unified boundary rather than from the upstream library.
+- No error suppression, wrapping, or logging occurs at this layer. The module makes no policy decisions about severity or recovery; those concerns belong entirely to the calling code.
+- This design means that if the upstream source of the error type changes, only this module needs to be updated, leaving callers unaffected.
+
+## Summary
+
+`codetwine/llm/__init__.py` serves as the public API entry point for the `codetwine.llm` package. Its sole responsibility is re-exporting `ContextWindowExceededError` from the `litellm` external library, exposing it under the project's own namespace via `__all__`. This creates an abstraction boundary that decouples the rest of the codebase from `litellm` directly. The only dependent is `codetwine/doc_creator.py`, which catches this exception to handle prompts exceeding the model's context window. No transformation, wrapping, or error handling occurs here; the symbol is passed through as-is.

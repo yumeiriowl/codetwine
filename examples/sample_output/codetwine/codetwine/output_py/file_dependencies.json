@@ -1,0 +1,143 @@
+{
+  "file": "codetwine/codetwine/output_py/output.py",
+  "definitions": [
+    {
+      "name": "logger",
+      "type": "expression_statement",
+      "start_line": 11,
+      "end_line": 11,
+      "context": "logger = logging.getLogger(__name__)"
+    },
+    {
+      "name": "to_output_path",
+      "type": "function_definition",
+      "start_line": 14,
+      "end_line": 25,
+      "context": "def to_output_path(base_output_dir: str, rel_path: str) -> str:\n    \"\"\"Convert a file relative path to the \"project_name/copy_path\" format.\n\n    Args:\n        base_output_dir: Base output directory (the trailing directory name is the project name).\n        rel_path: Relative path from the project root.\n\n    Returns:\n        A string in \"project_name/copy_path\" format.\n    \"\"\"\n    project_name = os.path.basename(base_output_dir)\n    return f\"{project_name}/{rel_to_copy_path(rel_path)}\""
+    },
+    {
+      "name": "build_summary_map",
+      "type": "function_definition",
+      "start_line": 28,
+      "end_line": 51,
+      "context": "def build_summary_map(\n    base_output_dir: str,\n    all_file_list: list[str],\n) -> dict[str, str | None]:\n    \"\"\"Read the summary from each file's doc.json and return it as a dict.\n\n    Args:\n        base_output_dir: Base output directory for file_dependencies.\n        all_file_list: List of relative paths of files to analyze.\n\n    Returns:\n        A {file relative path: summary text or None} dict.\n    \"\"\"\n    summary_map: dict[str, str | None] = {}\n    for file_rel in all_file_list:\n        output_file_dir = resolve_file_output_dir(base_output_dir, file_rel)\n        doc_path = os.path.join(output_file_dir, \"doc.json\")\n        summary = None\n        if os.path.exists(doc_path):\n            with open(doc_path, \"r\", encoding=\"utf-8\") as f:\n                doc = json.load(f)\n            summary = doc.get(\"summary\")\n        summary_map[file_rel] = summary\n    return summary_map"
+    },
+    {
+      "name": "save_consolidated_json",
+      "type": "function_definition",
+      "start_line": 54,
+      "end_line": 133,
+      "context": "def save_consolidated_json(\n    base_output_dir: str,\n    all_file_list: list[str],\n    output_path: str,\n    symbol_deps: dict[str, dict[str, set[str]]],\n    summary_map: dict[str, str | None],\n) -> None:\n    \"\"\"Consolidate the entire project's analysis results into a single JSON file.\n\n    Combines each file's file_dependencies.json (dependency info) and doc.json (design document),\n    along with the dependency graph, into one file.\n\n    Attach the doc.json summary to each entry in project_dependencies.\n    Files without a doc.json will have a null summary.\n\n    All file paths in the consolidated JSON use the \"project_name/copy_path\" format.\n\n    Args:\n        base_output_dir: Base output directory for file_dependencies.\n        all_file_list: List of relative paths of files to analyze.\n        output_path: Output file path for the consolidated JSON.\n        symbol_deps: Return value of build_symbol_level_deps (symbol-level dependency info).\n        summary_map: Return value of build_summary_map (file relative path -> summary text or None).\n    \"\"\"\n    # Build entries for project_dependencies\n    converted_deps: list[dict] = []\n    for file_rel in all_file_list:\n        deps = symbol_deps[file_rel]\n        converted_deps.append({\n            \"file\": to_output_path(base_output_dir, file_rel),\n            \"summary\": summary_map.get(file_rel),\n            \"callers\": sorted(to_output_path(base_output_dir, c) for c in deps[\"callers\"]),\n            \"callees\": sorted(to_output_path(base_output_dir, c) for c in deps[\"callees\"]),\n        })\n\n    # Build consolidated entries for each file's dependency info and design document\n    files_list: list[dict] = []\n\n    for file_rel in all_file_list:\n        output_file_dir = resolve_file_output_dir(base_output_dir, file_rel)\n\n        entry: dict = {\"file\": to_output_path(base_output_dir, file_rel)}\n\n        # file_dependencies.json loading\n        deps_path = os.path.join(output_file_dir, \"file_dependencies.json\")\n        if os.path.exists(deps_path):\n            with open(deps_path, \"r\", encoding=\"utf-8\") as f:\n                file_deps = json.load(f)\n            # Unify the file field at the entry's top level and remove it from the individual JSON side\n            # Paths were already converted to output format during individual JSON save, so use as-is\n            file_deps.pop(\"file\", None)\n            entry[\"file_dependencies\"] = file_deps\n\n        # doc.json loading\n        doc_path = os.path.join(output_file_dir, \"doc.json\")\n        if os.path.exists(doc_path):\n            with open(doc_path, \"r\", encoding=\"utf-8\") as f:\n                doc = json.load(f)\n            # Unify the file field at the entry's top level and remove it from the individual JSON side\n            doc.pop(\"file\", None)\n            entry[\"doc\"] = doc\n\n        if len(entry) > 1: \n            files_list.append(entry)\n        else:\n            logger.warning(f\"Consolidated JSON: analysis results not found for {file_rel}\")\n\n    consolidated = {\n        \"project_name\": os.path.basename(base_output_dir),\n        \"project_dependencies\": converted_deps,\n        \"files\": files_list,\n    }\n\n    with open(output_path, \"w\", encoding=\"utf-8\") as f:\n        json.dump(consolidated, f, indent=2, ensure_ascii=False)\n\n    logger.info(\n        f\"Consolidated JSON output: {output_path} \"\n        f\"(files: {len(files_list)}/{len(all_file_list)})\"\n    )"
+    },
+    {
+      "name": "build_symbol_level_deps",
+      "type": "function_definition",
+      "start_line": 136,
+      "end_line": 179,
+      "context": "def build_symbol_level_deps(\n    base_output_dir: str,\n    all_file_list: list[str],\n) -> dict[str, dict[str, set[str]]]:\n    \"\"\"Build symbol-level dependencies from each file's file_dependencies.json.\n\n    Calculate callees from callee_usages' from field and callers from\n    caller_usages' file field.\n    Returns dependency info based on actual symbol usage rather than import-level.\n\n    Args:\n        base_output_dir: Base output directory.\n        all_file_list: List of relative paths of files to analyze.\n\n    Returns:\n        A {file relative path: {\"callers\": set, \"callees\": set}} dict.\n    \"\"\"\n    # Initialize empty dependency maps for all files\n    deps_map: dict[str, dict[str, set[str]]] = {\n        f: {\"callers\": set(), \"callees\": set()} for f in all_file_list\n    }\n\n    # Collect callee/caller from each file's file_dependencies.json\n    for file_rel in all_file_list:\n        output_file_dir = resolve_file_output_dir(base_output_dir, file_rel)\n        deps_path = os.path.join(output_file_dir, \"file_dependencies.json\")\n        if not os.path.exists(deps_path):\n            continue\n        with open(deps_path, \"r\", encoding=\"utf-8\") as f:\n            file_deps = json.load(f)\n\n        # Add dependency target files from callee_usages' from field\n        for usage in file_deps.get(\"callee_usages\", []):\n            callee_file = usage.get(\"from\")\n            if callee_file:\n                deps_map[file_rel][\"callees\"].add(output_path_to_rel(callee_file))\n\n        # Add dependency source files from caller_usages' file field\n        for usage in file_deps.get(\"caller_usages\", []):\n            caller_file = usage.get(\"file\")\n            if caller_file:\n                deps_map[file_rel][\"callers\"].add(output_path_to_rel(caller_file))\n\n    return deps_map"
+    },
+    {
+      "name": "save_dependency_summary",
+      "type": "function_definition",
+      "start_line": 182,
+      "end_line": 226,
+      "context": "def save_dependency_summary(\n    base_output_dir: str,\n    all_file_list: list[str],\n    output_path: str,\n    symbol_deps: dict[str, dict[str, set[str]]],\n    summary_map: dict[str, str | None],\n) -> None:\n    \"\"\"Output a lightweight JSON combining symbol-level dependencies and summaries for each file.\n\n    Combine symbol-level dependencies from file_dependencies.json (only actually used dependencies)\n    with summaries generated from design documents into a single file.\n\n    Files without a doc.json (no LLM used / generation failed) output with a null summary,\n    with only the dependency structure included.\n\n    Args:\n        base_output_dir: Base output directory for file_dependencies.\n        all_file_list: List of relative paths of files to analyze.\n        output_path: Output file path for the consolidated JSON.\n        symbol_deps: Return value of build_symbol_level_deps (symbol-level dependency info).\n        summary_map: Return value of build_summary_map (file relative path -> summary text or None).\n    \"\"\"\n    files_list: list[dict] = []\n    for file_rel in all_file_list:\n        deps = symbol_deps[file_rel]\n        files_list.append({\n            \"file\": to_output_path(base_output_dir, file_rel),\n            \"summary\": summary_map.get(file_rel),\n            \"callers\": sorted(to_output_path(base_output_dir, c) for c in deps[\"callers\"]),\n            \"callees\": sorted(to_output_path(base_output_dir, c) for c in deps[\"callees\"]),\n        })\n\n    result = {\n        \"project_name\": os.path.basename(base_output_dir),\n        \"files\": files_list,\n    }\n\n    with open(output_path, \"w\", encoding=\"utf-8\") as f:\n        json.dump(result, f, indent=2, ensure_ascii=False)\n\n    summary_count = sum(1 for s in summary_map.values() if s is not None)\n    logger.info(\n        f\"Dependency graph + summary JSON output: {output_path} \"\n        f\"(files: {len(files_list)}, with summary: {summary_count})\"\n    )"
+    },
+    {
+      "name": "save_dependency_graph_as_mermaid",
+      "type": "function_definition",
+      "start_line": 229,
+      "end_line": 296,
+      "context": "def save_dependency_graph_as_mermaid(\n    base_output_dir: str,\n    output_path: str,\n    symbol_deps: dict[str, dict[str, set[str]]],\n) -> None:\n    \"\"\"Generate a Mermaid flowchart from the symbol-level dependency graph\n    and output it as a Markdown file.\n\n    Args:\n        base_output_dir: Base output directory.\n        output_path: Output file path for the Mermaid Markdown.\n        symbol_deps: Return value of build_symbol_level_deps (symbol-level dependency info).\n    \"\"\"\n\n    # Collect nodes and edges\n    node_set: set[str] = set()\n    edge_set: set[tuple] = set()\n\n    for file_rel, deps in symbol_deps.items():\n        output_path_file = to_output_path(base_output_dir, file_rel)\n        node_set.add(output_path_file)\n        for callee in deps[\"callees\"]:\n            callee_output = to_output_path(base_output_dir, callee)\n            node_set.add(callee_output)\n            edge_set.add((output_path_file, callee_output))\n\n    def to_mermaid_node_id(path: str) -> str:\n        \"\"\"Convert a path string into a string usable as a Mermaid node ID.\n\n        Args:\n            path: The source path string.\n\n        Returns:\n            str: A string with slashes and dots replaced by \"_\".\n        \"\"\"\n        return path.replace(\"/\", \"_\").replace(\".\", \"_\")\n\n    def to_display_label(path: str) -> str:\n        \"\"\"Convert a path in \"project_name/copy_path\" format to a source relative path.\n\n        Example: \"qt_project/MainWindow_cpp/MainWindow.cpp\" -> \"MainWindow.cpp\"\n\n        Args:\n            path: A path string in \"project_name/copy_path\" format.\n\n        Returns:\n            str: A string with the project name removed and copy_path restored to the original relative path.\n        \"\"\"\n        parts = path.split(\"/\", 1)\n        if len(parts) == 2:\n            return copy_path_to_rel(parts[1])\n        return path\n\n    # Build the Mermaid text\n    line_list = [\"```mermaid\", \"graph LR\"]\n\n    for node_path in sorted(node_set):\n        node_id = to_mermaid_node_id(node_path)\n        label = to_display_label(node_path)\n        line_list.append(f'    {node_id}[\"{label}\"]')\n\n    for src_path, dst_path in sorted(edge_set):\n        line_list.append(f\"    {to_mermaid_node_id(src_path)} --> {to_mermaid_node_id(dst_path)}\")\n\n    line_list.append(\"```\")\n\n    with open(output_path, \"w\", encoding=\"utf-8\") as f:\n        f.write(\"\\n\".join(line_list))"
+    }
+  ],
+  "callee_usages": [
+    {
+      "lines": [
+        25
+      ],
+      "name": "rel_to_copy_path",
+      "from": "codetwine/codetwine/utils/file_utils_py/file_utils.py",
+      "target_context": "def rel_to_copy_path(rel_path: str) -> str:\n    \"\"\"Convert a project-relative path to a copy-destination directory structure path.\n\n    Matches the path structure used by process_single_file when copying source code.\n    The destination follows the format {parent_dir}/{stem}_{ext}/{filename}.\n    By appending the extension as a suffix, output destinations for files with the\n    same name but different extensions (e.g. utils.c and utils.h) do not collide.\n\n    Examples:\n        \"config.py\"                    -> \"config_py/config.py\"\n        \"repo_graphrag/prompts.py\"     -> \"repo_graphrag/prompts_py/prompts.py\"\n        \"repo_graphrag/llm/client.py\"  -> \"repo_graphrag/llm/client_py/client.py\"\n        \"Makefile\"                     -> \"Makefile/Makefile\"\n\n    Args:\n        rel_path: Relative path from the project root.\n\n    Returns:\n        A path matching the copy-destination directory structure.\n    \"\"\"\n    # Separate the filename and parent directory\n    parent_dir = os.path.dirname(rel_path)\n    filename = os.path.basename(rel_path)\n    dir_name = _to_dir_name(filename)\n    # Include the parent directory in the path if present\n    if parent_dir:\n        return f\"{parent_dir}/{dir_name}/{filename}\"\n    # For top-level files\n    return f\"{dir_name}/{filename}\""
+    },
+    {
+      "lines": [
+        43,
+        93,
+        160
+      ],
+      "name": "resolve_file_output_dir",
+      "from": "codetwine/codetwine/utils/file_utils_py/file_utils.py",
+      "target_context": "def resolve_file_output_dir(base_output_dir: str, file_rel: str) -> str:\n    \"\"\"Resolve the absolute output directory path from a file's relative path.\n\n    The output destination follows the structure {base_output_dir}/{parent_dir}/{stem}_{ext}/.\n    Shares the same path structure as rel_to_copy_path; by appending the extension\n    as a suffix, output destinations for files with the same name but different\n    extensions (e.g. utils.c and utils.h) do not collide.\n\n    Args:\n        base_output_dir: Base output directory.\n        file_rel: File's relative path (e.g. \"src/foo.py\").\n\n    Returns:\n        The absolute path of the output directory.\n    \"\"\"\n    # Convert the path structure with rel_to_copy_path and use its parent directory as the output destination\n    copy_path = rel_to_copy_path(file_rel)\n    return os.path.join(base_output_dir, os.path.dirname(copy_path))"
+    },
+    {
+      "lines": [
+        171,
+        177
+      ],
+      "name": "output_path_to_rel",
+      "from": "codetwine/codetwine/utils/file_utils_py/file_utils.py",
+      "target_context": "def output_path_to_rel(output_path: str) -> str:\n    \"\"\"Restore a \"project_name/copy_destination_path\" format path to a source-relative path.\n\n    The inverse of to_output_path() in output.py.\n    Removes the project name prefix and converts the copy-destination path\n    back to the original relative path.\n\n    Examples:\n        \"js_project/src/emitter_js/emitter.js\"  -> \"src/emitter.js\"\n        \"my_project/config_py/config.py\"         -> \"config.py\"\n\n    Args:\n        output_path: A path in \"project_name/copy_destination_path\" format.\n\n    Returns:\n        The relative path from the project root.\n    \"\"\"\n    parts = output_path.split(\"/\", 1)\n    if len(parts) == 2:\n        return copy_path_to_rel(parts[1])\n    return output_path"
+    },
+    {
+      "lines": [
+        279
+      ],
+      "name": "copy_path_to_rel",
+      "from": "codetwine/codetwine/utils/file_utils_py/file_utils.py",
+      "target_context": "def copy_path_to_rel(copy_path: str) -> str:\n    \"\"\"Restore a copy-destination directory structure path to a project-relative path.\n\n    The inverse of rel_to_copy_path. In copy-destination paths, a {stem}_{ext}\n    directory is inserted; this removes it to recover the original relative path.\n\n    Examples:\n        \"config_py/config.py\"                    -> \"config.py\"\n        \"repo_graphrag/prompts_py/prompts.py\"     -> \"repo_graphrag/prompts.py\"\n        \"repo_graphrag/llm/client_py/client.py\"   -> \"repo_graphrag/llm/client.py\"\n        \"Makefile/Makefile\"                       -> \"Makefile\"\n\n    Args:\n        copy_path: A copy-destination directory structure path.\n\n    Returns:\n        The relative path from the project root.\n    \"\"\"\n    # Split the path by separator\n    parts = copy_path.replace(\"\\\\\", \"/\").split(\"/\")\n    if len(parts) >= 2:\n        filename = parts[-1]\n        # If the second-to-last directory name matches _to_dir_name(filename), it was inserted\n        if parts[-2] == _to_dir_name(filename):\n            return \"/\".join(parts[:-2] + [filename])\n    return copy_path"
+    }
+  ],
+  "caller_usages": [
+    {
+      "lines": [
+        126,
+        129,
+        132
+      ],
+      "name": "to_output_path",
+      "file": "codetwine/codetwine/pipeline_py/pipeline.py",
+      "usage_context": "            )\n\n            # Convert paths to output format (project_name/copy_path)\n            dep_result[\"file\"] = to_output_path(base_output_dir, dep_result[\"file\"])\n            for usage in dep_result.get(\"callee_usages\", []):\n                if \"from\" in usage:\n                    usage[\"from\"] = to_output_path(base_output_dir, usage[\"from\"])\n...\n            dep_result[\"file\"] = to_output_path(base_output_dir, dep_result[\"file\"])\n            for usage in dep_result.get(\"callee_usages\", []):\n                if \"from\" in usage:\n                    usage[\"from\"] = to_output_path(base_output_dir, usage[\"from\"])\n            for usage in dep_result.get(\"caller_usages\", []):\n                if \"file\" in usage:\n                    usage[\"file\"] = to_output_path(base_output_dir, usage[\"file\"])"
+    },
+    {
+      "lines": [
+        228
+      ],
+      "name": "build_symbol_level_deps",
+      "file": "codetwine/codetwine/pipeline_py/pipeline.py",
+      "usage_context": "    logger.info(\"Generating dependency graph + summary JSON...\")\n\n    # Build symbol-level dependencies once and share across the 3 subsequent functions\n    symbol_deps = build_symbol_level_deps(base_output_dir, all_file_list)\n\n    summary_map = build_summary_map(base_output_dir, all_file_list)\n"
+    },
+    {
+      "lines": [
+        230
+      ],
+      "name": "build_summary_map",
+      "file": "codetwine/codetwine/pipeline_py/pipeline.py",
+      "usage_context": "    # Build symbol-level dependencies once and share across the 3 subsequent functions\n    symbol_deps = build_symbol_level_deps(base_output_dir, all_file_list)\n\n    summary_map = build_summary_map(base_output_dir, all_file_list)\n\n    dep_summary_path = os.path.join(base_output_dir, \"project_dependency_summary.json\")\n    save_dependency_summary(base_output_dir, all_file_list, dep_summary_path, symbol_deps, summary_map)"
+    },
+    {
+      "lines": [
+        233
+      ],
+      "name": "save_dependency_summary",
+      "file": "codetwine/codetwine/pipeline_py/pipeline.py",
+      "usage_context": "    summary_map = build_summary_map(base_output_dir, all_file_list)\n\n    dep_summary_path = os.path.join(base_output_dir, \"project_dependency_summary.json\")\n    save_dependency_summary(base_output_dir, all_file_list, dep_summary_path, symbol_deps, summary_map)\n\n    # == Step 4: Generate Mermaid dependency graph ========================\n    mermaid_output_path = os.path.join(base_output_dir, \"dependency_graph.md\")"
+    },
+    {
+      "lines": [
+        237
+      ],
+      "name": "save_dependency_graph_as_mermaid",
+      "file": "codetwine/codetwine/pipeline_py/pipeline.py",
+      "usage_context": "\n    # == Step 4: Generate Mermaid dependency graph ========================\n    mermaid_output_path = os.path.join(base_output_dir, \"dependency_graph.md\")\n    save_dependency_graph_as_mermaid(base_output_dir, mermaid_output_path, symbol_deps)\n\n    # == Step 5: Generate consolidated JSON ==================================\n    print(\"Generating consolidated JSON...\")"
+    },
+    {
+      "lines": [
+        243
+      ],
+      "name": "save_consolidated_json",
+      "file": "codetwine/codetwine/pipeline_py/pipeline.py",
+      "usage_context": "    print(\"Generating consolidated JSON...\")\n    logger.info(\"Generating consolidated JSON...\")\n    knowledge_path = os.path.join(base_output_dir, \"project_knowledge.json\")\n    save_consolidated_json(base_output_dir, all_file_list, knowledge_path, symbol_deps, summary_map)\n\n    # Clear parse result cache to free memory\n    parse_cache.clear()"
+    }
+  ]
+}

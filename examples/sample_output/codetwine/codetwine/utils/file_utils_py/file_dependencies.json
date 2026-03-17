@@ -1,0 +1,146 @@
+{
+  "file": "codetwine/codetwine/utils/file_utils_py/file_utils.py",
+  "definitions": [
+    {
+      "name": "_to_dir_name",
+      "type": "function_definition",
+      "start_line": 5,
+      "end_line": 25,
+      "context": "def _to_dir_name(filename: str) -> str:\n    \"\"\"Generate an output directory name from a filename.\n\n    Returns the name with the \".\" in the extension replaced by \"_\".\n    Files without extensions (e.g. Makefile) are returned as-is.\n\n    Examples:\n        \"settings.py\"  -> \"settings_py\"\n        \"helper.h\"     -> \"helper_h\"\n        \"Makefile\"     -> \"Makefile\"\n\n    Args:\n        filename: The source filename (e.g. \"settings.py\").\n\n    Returns:\n        str: The directory name with the extension's \".\" replaced by \"_\".\n    \"\"\"\n    stem, ext = os.path.splitext(filename)\n    if ext:\n        return f\"{stem}_{ext[1:]}\"\n    return stem"
+    },
+    {
+      "name": "rel_to_copy_path",
+      "type": "function_definition",
+      "start_line": 28,
+      "end_line": 56,
+      "context": "def rel_to_copy_path(rel_path: str) -> str:\n    \"\"\"Convert a project-relative path to a copy-destination directory structure path.\n\n    Matches the path structure used by process_single_file when copying source code.\n    The destination follows the format {parent_dir}/{stem}_{ext}/{filename}.\n    By appending the extension as a suffix, output destinations for files with the\n    same name but different extensions (e.g. utils.c and utils.h) do not collide.\n\n    Examples:\n        \"config.py\"                    -> \"config_py/config.py\"\n        \"repo_graphrag/prompts.py\"     -> \"repo_graphrag/prompts_py/prompts.py\"\n        \"repo_graphrag/llm/client.py\"  -> \"repo_graphrag/llm/client_py/client.py\"\n        \"Makefile\"                     -> \"Makefile/Makefile\"\n\n    Args:\n        rel_path: Relative path from the project root.\n\n    Returns:\n        A path matching the copy-destination directory structure.\n    \"\"\"\n    # Separate the filename and parent directory\n    parent_dir = os.path.dirname(rel_path)\n    filename = os.path.basename(rel_path)\n    dir_name = _to_dir_name(filename)\n    # Include the parent directory in the path if present\n    if parent_dir:\n        return f\"{parent_dir}/{dir_name}/{filename}\"\n    # For top-level files\n    return f\"{dir_name}/{filename}\""
+    },
+    {
+      "name": "copy_path_to_rel",
+      "type": "function_definition",
+      "start_line": 59,
+      "end_line": 84,
+      "context": "def copy_path_to_rel(copy_path: str) -> str:\n    \"\"\"Restore a copy-destination directory structure path to a project-relative path.\n\n    The inverse of rel_to_copy_path. In copy-destination paths, a {stem}_{ext}\n    directory is inserted; this removes it to recover the original relative path.\n\n    Examples:\n        \"config_py/config.py\"                    -> \"config.py\"\n        \"repo_graphrag/prompts_py/prompts.py\"     -> \"repo_graphrag/prompts.py\"\n        \"repo_graphrag/llm/client_py/client.py\"   -> \"repo_graphrag/llm/client.py\"\n        \"Makefile/Makefile\"                       -> \"Makefile\"\n\n    Args:\n        copy_path: A copy-destination directory structure path.\n\n    Returns:\n        The relative path from the project root.\n    \"\"\"\n    # Split the path by separator\n    parts = copy_path.replace(\"\\\\\", \"/\").split(\"/\")\n    if len(parts) >= 2:\n        filename = parts[-1]\n        # If the second-to-last directory name matches _to_dir_name(filename), it was inserted\n        if parts[-2] == _to_dir_name(filename):\n            return \"/\".join(parts[:-2] + [filename])\n    return copy_path"
+    },
+    {
+      "name": "output_path_to_rel",
+      "type": "function_definition",
+      "start_line": 87,
+      "end_line": 107,
+      "context": "def output_path_to_rel(output_path: str) -> str:\n    \"\"\"Restore a \"project_name/copy_destination_path\" format path to a source-relative path.\n\n    The inverse of to_output_path() in output.py.\n    Removes the project name prefix and converts the copy-destination path\n    back to the original relative path.\n\n    Examples:\n        \"js_project/src/emitter_js/emitter.js\"  -> \"src/emitter.js\"\n        \"my_project/config_py/config.py\"         -> \"config.py\"\n\n    Args:\n        output_path: A path in \"project_name/copy_destination_path\" format.\n\n    Returns:\n        The relative path from the project root.\n    \"\"\"\n    parts = output_path.split(\"/\", 1)\n    if len(parts) == 2:\n        return copy_path_to_rel(parts[1])\n    return output_path"
+    },
+    {
+      "name": "resolve_file_output_dir",
+      "type": "function_definition",
+      "start_line": 110,
+      "end_line": 127,
+      "context": "def resolve_file_output_dir(base_output_dir: str, file_rel: str) -> str:\n    \"\"\"Resolve the absolute output directory path from a file's relative path.\n\n    The output destination follows the structure {base_output_dir}/{parent_dir}/{stem}_{ext}/.\n    Shares the same path structure as rel_to_copy_path; by appending the extension\n    as a suffix, output destinations for files with the same name but different\n    extensions (e.g. utils.c and utils.h) do not collide.\n\n    Args:\n        base_output_dir: Base output directory.\n        file_rel: File's relative path (e.g. \"src/foo.py\").\n\n    Returns:\n        The absolute path of the output directory.\n    \"\"\"\n    # Convert the path structure with rel_to_copy_path and use its parent directory as the output destination\n    copy_path = rel_to_copy_path(file_rel)\n    return os.path.join(base_output_dir, os.path.dirname(copy_path))"
+    },
+    {
+      "name": "compute_file_hash",
+      "type": "function_definition",
+      "start_line": 130,
+      "end_line": 145,
+      "context": "def compute_file_hash(file_path: str) -> str:\n    \"\"\"Return the SHA256 hash of a file as a hex string.\n\n    Args:\n        file_path: Absolute path of the file to hash.\n\n    Returns:\n        SHA256 hash as a hex string.\n    \"\"\"\n    # Initialize a SHA256 hash object\n    h = hashlib.sha256()\n    # Read and hash in 8KB chunks\n    with open(file_path, \"rb\") as f:\n        for chunk in iter(lambda: f.read(8192), b\"\"):\n            h.update(chunk)\n    return h.hexdigest()"
+    },
+    {
+      "name": "is_file_unchanged",
+      "type": "function_definition",
+      "start_line": 148,
+      "end_line": 165,
+      "context": "def is_file_unchanged(source_path: str, copied_path: str) -> bool:\n    \"\"\"Compare the SHA256 hashes of the original file and its copy in the output\n    directory, returning True if the file has not changed.\n\n    Returns False (treated as changed) if the copy does not exist at the destination.\n\n    Args:\n        source_path: Absolute path of the original file in the project.\n        copied_path: Absolute path of the copied file in the output directory.\n\n    Returns:\n        True if the hashes match.\n    \"\"\"\n    # Treat as changed if the copy does not exist at the destination\n    if not os.path.exists(copied_path):\n        return False\n    # Compare the SHA256 hashes of both files\n    return compute_file_hash(source_path) == compute_file_hash(copied_path)"
+    }
+  ],
+  "callee_usages": [],
+  "caller_usages": [
+    {
+      "lines": [
+        25
+      ],
+      "name": "rel_to_copy_path",
+      "file": "codetwine/codetwine/output_py/output.py",
+      "usage_context": "        A string in \"project_name/copy_path\" format.\n    \"\"\"\n    project_name = os.path.basename(base_output_dir)\n    return f\"{project_name}/{rel_to_copy_path(rel_path)}\"\n\n\ndef build_summary_map("
+    },
+    {
+      "lines": [
+        43,
+        93,
+        160
+      ],
+      "name": "resolve_file_output_dir",
+      "file": "codetwine/codetwine/output_py/output.py",
+      "usage_context": "    \"\"\"\n    summary_map: dict[str, str | None] = {}\n    for file_rel in all_file_list:\n        output_file_dir = resolve_file_output_dir(base_output_dir, file_rel)\n        doc_path = os.path.join(output_file_dir, \"doc.json\")\n        summary = None\n        if os.path.exists(doc_path):\n...\n    files_list: list[dict] = []\n\n    for file_rel in all_file_list:\n        output_file_dir = resolve_file_output_dir(base_output_dir, file_rel)\n\n        entry: dict = {\"file\": to_output_path(base_output_dir, file_rel)}\n"
+    },
+    {
+      "lines": [
+        171,
+        177
+      ],
+      "name": "output_path_to_rel",
+      "file": "codetwine/codetwine/output_py/output.py",
+      "usage_context": "        for usage in file_deps.get(\"callee_usages\", []):\n            callee_file = usage.get(\"from\")\n            if callee_file:\n                deps_map[file_rel][\"callees\"].add(output_path_to_rel(callee_file))\n\n        # Add dependency source files from caller_usages' file field\n        for usage in file_deps.get(\"caller_usages\", []):\n...\n        for usage in file_deps.get(\"caller_usages\", []):\n            caller_file = usage.get(\"file\")\n            if caller_file:\n                deps_map[file_rel][\"callers\"].add(output_path_to_rel(caller_file))\n\n    return deps_map\n"
+    },
+    {
+      "lines": [
+        279
+      ],
+      "name": "copy_path_to_rel",
+      "file": "codetwine/codetwine/output_py/output.py",
+      "usage_context": "        \"\"\"\n        parts = path.split(\"/\", 1)\n        if len(parts) == 2:\n            return copy_path_to_rel(parts[1])\n        return path\n\n    # Build the Mermaid text"
+    },
+    {
+      "lines": [
+        52
+      ],
+      "name": "copy_path_to_rel",
+      "file": "codetwine/codetwine/pipeline_py/pipeline.py",
+      "usage_context": "\n    def to_internal(path: str) -> str:\n        stripped = path[len(prefix):] if path.startswith(prefix) else path\n        return copy_path_to_rel(stripped)\n\n    return [\n        {"
+    },
+    {
+      "lines": [
+        87,
+        117
+      ],
+      "name": "resolve_file_output_dir",
+      "file": "codetwine/codetwine/pipeline_py/pipeline.py",
+      "usage_context": "    changed: set[str] = set()\n    for file_rel in all_file_list:\n        file_abs = os.path.join(project_dir, file_rel)\n        output_file_dir = resolve_file_output_dir(base_output_dir, file_rel)\n        copied_path = os.path.join(output_file_dir, os.path.basename(file_rel))\n        deps_json_path = os.path.join(output_file_dir, \"file_dependencies.json\")\n\n...\n    for file_rel in files_to_process:\n        try:\n            file_abs = os.path.join(project_dir, file_rel)\n            output_file_dir = resolve_file_output_dir(base_output_dir, file_rel)\n\n            os.makedirs(output_file_dir, exist_ok=True)\n"
+    },
+    {
+      "lines": [
+        91
+      ],
+      "name": "is_file_unchanged",
+      "file": "codetwine/codetwine/pipeline_py/pipeline.py",
+      "usage_context": "        copied_path = os.path.join(output_file_dir, os.path.basename(file_rel))\n        deps_json_path = os.path.join(output_file_dir, \"file_dependencies.json\")\n\n        if not is_file_unchanged(file_abs, copied_path) or not os.path.exists(deps_json_path):\n            changed.add(file_rel)\n    return changed\n"
+    },
+    {
+      "lines": [
+        227,
+        244,
+        343,
+        350
+      ],
+      "name": "output_path_to_rel",
+      "file": "codetwine/codetwine/doc_creator_py/doc_creator.py",
+      "usage_context": "        parts.append(HEADER_CALLEE_USAGES)\n        parts.append(CALLEE_USAGES_SCHEMA_NOTE)\n        for u in callee_usages:\n            parts.append(f\"- {u['name']} (from {output_path_to_rel(u['from'])})\")\n            # Attach the full dependency source code if available\n            target_context = u.get(\"target_context\")\n            if target_context:\n...\n        parts.append(HEADER_CALLER_USAGES)\n        parts.append(CALLER_USAGES_SCHEMA_NOTE)\n        for u in caller_usages:\n            parts.append(f\"- {u['name']} (from {output_path_to_rel(u['file'])})\")\n            usage_context = u.get(\"usage_context\")\n            if usage_context:\n                parts.append(CALLER_SOURCE_CODE_LABEL)"
+    },
+    {
+      "lines": [
+        811
+      ],
+      "name": "resolve_file_output_dir",
+      "file": "codetwine/codetwine/doc_creator_py/doc_creator.py",
+      "usage_context": "        Returns:\n            tuple[str, dict | None]: Tuple of (file relative path, design document dict). dict is None on failure.\n        \"\"\"\n        output_dir = resolve_file_output_dir(base_output_dir, file_rel)\n        if not os.path.isdir(output_dir):\n            logger.warning(f\"Output directory does not exist: {output_dir}\")\n            return file_rel, None"
+    },
+    {
+      "lines": [
+        238,
+        239,
+        240
+      ],
+      "name": "rel_to_copy_path",
+      "file": "codetwine/codetwine/extractors/dependency_graph_py/dependency_graph.py",
+      "usage_context": "        caller_rels = [os.path.relpath(p, project_dir).replace(\"\\\\\", \"/\") for p in file_caller_map[abs_path]]\n        callee_rels = [os.path.relpath(p, project_dir).replace(\"\\\\\", \"/\") for p in file_callee_map[abs_path]]\n        file_info_list.append({\n            \"file\":    f\"{project_name}/{rel_to_copy_path(rel)}\",\n            \"callers\": [f\"{project_name}/{rel_to_copy_path(r)}\" for r in caller_rels],\n            \"callees\": [f\"{project_name}/{rel_to_copy_path(r)}\" for r in callee_rels],\n        })\n...\n        callee_rels = [os.path.relpath(p, project_dir).replace(\"\\\\\", \"/\") for p in file_callee_map[abs_path]]\n        file_info_list.append({\n            \"file\":    f\"{project_name}/{rel_to_copy_path(rel)}\",\n            \"callers\": [f\"{project_name}/{rel_to_copy_path(r)}\" for r in caller_rels],\n            \"callees\": [f\"{project_name}/{rel_to_copy_path(r)}\" for r in callee_rels],\n        })\n"
+    }
+  ]
+}

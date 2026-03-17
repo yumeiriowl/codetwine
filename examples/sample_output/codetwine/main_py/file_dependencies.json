@@ -1,0 +1,85 @@
+{
+  "file": "codetwine/main_py/main.py",
+  "definitions": [
+    {
+      "name": "parse_args",
+      "type": "function_definition",
+      "start_line": 26,
+      "end_line": 43,
+      "context": "def parse_args() -> argparse.Namespace:\n    \"\"\"Parse command-line arguments.\n\n    Returns:\n        argparse.Namespace: Parsed argument object.\n    \"\"\"\n    parser = argparse.ArgumentParser(\n        description=\"Automatically generate inter-file dependencies and design documents from project source code, output as JSON\",\n    )\n    parser.add_argument(\n        \"--project-dir\",\n        help=\"Root directory of the project to analyze (defaults to DEFAULT_PROJECT_DIR from .env)\",\n    )\n    parser.add_argument(\n        \"--output-dir\",\n        help=\"Output directory for analysis results (defaults to DEFAULT_OUTPUT_DIR from .env)\",\n    )\n    return parser.parse_args()"
+    },
+    {
+      "name": "resolve_dirs",
+      "type": "function_definition",
+      "start_line": 46,
+      "end_line": 67,
+      "context": "def resolve_dirs(args: argparse.Namespace) -> tuple[str, str]:\n    \"\"\"Determine project_dir and output_dir from CLI arguments and .env settings.\n\n    When only --project-dir is specified and --output-dir is omitted,\n    DEFAULT_OUTPUT_DIR from .env is ignored and the default value ({REPO_ROOT}/output) is used.\n\n    Args:\n        args: Command-line arguments obtained from parse_args().\n\n    Returns:\n        tuple[str, str]: (project_dir, output_dir) tuple.\n    \"\"\"\n    project_dir = args.project_dir or DEFAULT_PROJECT_DIR\n\n    if args.output_dir:\n        output_dir = args.output_dir\n    elif args.project_dir:\n        output_dir = os.path.join(REPO_ROOT, \"output\")\n    else:\n        output_dir = DEFAULT_OUTPUT_DIR\n\n    return project_dir, output_dir"
+    },
+    {
+      "name": "main",
+      "type": "function_definition",
+      "start_line": 70,
+      "end_line": 77,
+      "context": "def main() -> None:\n    \"\"\"Entry point for dependency analysis and design document generation.\"\"\"\n    setup_logging()\n    args = parse_args()\n    project_dir, output_dir = resolve_dirs(args)\n\n    llm_client = LLMClient() if ENABLE_LLM_DOC else None\n    asyncio.run(process_all_files(project_dir, output_dir, llm_client))"
+    }
+  ],
+  "callee_usages": [
+    {
+      "lines": [
+        58
+      ],
+      "name": "DEFAULT_PROJECT_DIR",
+      "from": "codetwine/codetwine/config/settings_py/settings.py",
+      "target_context": "DEFAULT_PROJECT_DIR = get_config_value(\"DEFAULT_PROJECT_DIR\", default=REPO_ROOT)"
+    },
+    {
+      "lines": [
+        63
+      ],
+      "name": "REPO_ROOT",
+      "from": "codetwine/codetwine/config/settings_py/settings.py",
+      "target_context": "REPO_ROOT = os.path.normpath(os.path.join(os.path.dirname(__file__), \"..\", \"..\"))"
+    },
+    {
+      "lines": [
+        65
+      ],
+      "name": "DEFAULT_OUTPUT_DIR",
+      "from": "codetwine/codetwine/config/settings_py/settings.py",
+      "target_context": "DEFAULT_OUTPUT_DIR = get_config_value(\n    \"DEFAULT_OUTPUT_DIR\",\n    default=os.path.join(REPO_ROOT, \"output\"),\n)"
+    },
+    {
+      "lines": [
+        72
+      ],
+      "name": "setup_logging",
+      "from": "codetwine/codetwine/config/logging_py/logging.py",
+      "target_context": "def setup_logging(level: int = logging.INFO) -> None:\n    \"\"\"Configure both console output and log file output.\n\n    Call this function once at the beginning of main() in entry points\n    (main.py, rlm_qa_agent.py).\n\n    Args:\n        level: Log level. Defaults to logging.INFO.\n    \"\"\"\n    # Get the root logger and set the log level\n    root_logger = logging.getLogger()\n    root_logger.setLevel(level)\n\n    # Create a formatter used by both console and file handlers\n    formatter = _SkipBlankFormatter(_LOG_FORMAT)\n\n    # ===== Console handler =====\n    # Only WARNING and above are output to the console; details are recorded in the log file.\n    console_handler = logging.StreamHandler()\n    console_handler.setLevel(logging.WARNING)\n    console_handler.setFormatter(formatter)\n    root_logger.addHandler(console_handler)\n\n    # ===== File handler =====\n    os.makedirs(_LOG_DIR, exist_ok=True)\n    file_handler = RotatingFileHandler(\n        os.path.join(_LOG_DIR, \"codetwine.log\"),\n        maxBytes=_MAX_BYTES,\n        backupCount=_BACKUP_COUNT,\n        encoding=\"utf-8\",\n    )\n    file_handler.setFormatter(formatter)\n    root_logger.addHandler(file_handler)\n\n    # ===== Restrict external library log levels to WARNING =====\n    logging.getLogger(\"httpx\").setLevel(logging.WARNING)\n    logging.getLogger(\"httpcore\").setLevel(logging.WARNING)\n    logging.getLogger(\"LiteLLM\").setLevel(logging.WARNING)"
+    },
+    {
+      "lines": [
+        76
+      ],
+      "name": "ENABLE_LLM_DOC",
+      "from": "codetwine/codetwine/config/settings_py/settings.py",
+      "target_context": "ENABLE_LLM_DOC = get_config_value(\"ENABLE_LLM_DOC\", default=True, var_type=bool)"
+    },
+    {
+      "lines": [
+        76
+      ],
+      "name": "LLMClient",
+      "from": "codetwine/codetwine/llm/client_py/client.py",
+      "target_context": "class LLMClient:\n    \"\"\"Async LLM API wrapper via litellm.\n\n    Accepts a prompt, calls the API with retry logic, and returns the generated text.\n    \"\"\"\n\n    def __init__(\n        self,\n        model: str = LLM_MODEL,\n        api_key: str = LLM_API_KEY,\n        api_base: str = LLM_API_BASE,\n    ) -> None:\n        \"\"\"Initialize the LLM client with a model name, API key, and endpoint URL.\n\n        Args:\n            model: Model name in litellm format.\n            api_key: Provider's API key.\n            api_base: Base URL of the API (for custom endpoints).\n        \"\"\"\n        if not model:\n            raise ValueError(\n                \"LLM_MODEL is not set. \"\n                \"Please set LLM_MODEL in the .env file or your shell.\"\n            )\n        self.model = model\n        self.api_key = api_key\n        self.api_base = api_base\n\n    async def _call_with_retry(self, prompt: str, max_tokens: int) -> str | None:\n        \"\"\"Call the LLM API with retry logic and return the generated text.\n\n        On 429 (rate limit exceeded) errors, waits RETRY_WAIT seconds before retrying.\n        Returns None if all MAX_RETRIES attempts fail.\n\n        Args:\n            prompt: The prompt string to send to the LLM.\n            max_tokens: Maximum output token limit for the LLM.\n\n        Returns:\n            The generated text, or None on failure.\n        \"\"\"\n        for attempt in range(MAX_RETRIES):\n            try:\n                # litellm.acompletion: OpenAI-compatible async API\n                # The model name prefix is used to auto-detect the provider\n                kwargs = {\n                    \"model\": self.model,\n                    \"max_tokens\": max_tokens,\n                    \"messages\": [{\"role\": \"user\", \"content\": prompt}],\n                }\n                # Add optional parameters\n                if self.api_key:\n                    kwargs[\"api_key\"] = self.api_key\n                if self.api_base:\n                    kwargs[\"api_base\"] = self.api_base\n\n                response = await litellm.acompletion(**kwargs)\n                # Extract and return the generated text from the response\n                return response.choices[0].message.content.strip()\n\n            except litellm.RateLimitError:\n                # Wait and retry on rate limit exceeded\n                if attempt < MAX_RETRIES - 1:\n                    logger.warning(f\"Rate limit exceeded. Retrying in {RETRY_WAIT} seconds\")\n                    await asyncio.sleep(RETRY_WAIT)\n                else:\n                    # Log error and return None when max retries reached\n                    logger.error(\"Rate limit exceeded: max retries reached\")\n                    return None\n\n            except litellm.APIError as e:\n                # Do not retry on API errors; fail immediately\n                logger.error(f\"LLM call failed: {e}\")\n                return None\n\n    async def generate(\n        self, prompt: str, max_tokens: int = DOC_MAX_TOKENS\n    ) -> str | None:\n        \"\"\"Send a completed prompt to the LLM and return the generated text.\n\n        Args:\n            prompt: The prompt string to send to the LLM.\n            max_tokens: Maximum output token limit for the LLM.\n\n        Returns:\n            The generated text, or None if generation failed.\n        \"\"\"\n        if not prompt:\n            return None\n\n        # Delegate to the API call with retry logic\n        return await self._call_with_retry(prompt, max_tokens)"
+    },
+    {
+      "lines": [
+        77
+      ],
+      "name": "process_all_files",
+      "from": "codetwine/codetwine/pipeline_py/pipeline.py",
+      "target_context": "async def process_all_files(\n    project_dir: str,\n    output_dir: str,\n    llm_client: LLMClient | None,\n    max_workers: int = MAX_WORKERS,\n) -> None:\n    \"\"\"Analyze the entire project and output per-file dependency JSON, design documents,\n    and consolidated JSON.\n\n    Processing flow:\n    1. Build the project-wide dependency graph.\n    1.5. Detect changed files (for Stage 4 impact range identification).\n    2. Extract dependency info for all files (always process all for consistency).\n    3. Generate design documents in topological order (regenerate only the impact range of changes).\n    3.5. Generate dependency graph + summary consolidated JSON.\n    4. Generate Mermaid dependency graph diagram.\n    5. Generate consolidated JSON.\n\n    Args:\n        project_dir: Root directory of the project to analyze.\n        output_dir: Output directory for analysis results.\n        llm_client: LLM summary generation client.\n        max_workers: Maximum number of files to process concurrently.\n    \"\"\"\n    project_name = os.path.basename(project_dir)\n    base_output_dir = os.path.join(output_dir, project_name)\n    os.makedirs(base_output_dir, exist_ok=True)\n\n    # == Step 1: Build the project-wide dependency graph ====================\n    print(\"Analyzing project dependencies...\")\n    logger.info(\"Analyzing project dependencies...\")\n    project_dep_list_raw = build_project_dependencies(project_dir)\n    project_dep_list = _convert_dep_list_to_internal_paths(project_dep_list_raw, project_name)\n\n    all_file_list = [info[\"file\"] for info in project_dep_list]\n\n    # Exclude empty files from processing\n    empty_files = set()\n    for file_rel in all_file_list:\n        file_abs = os.path.join(project_dir, file_rel)\n        try:\n            with open(file_abs, \"r\", encoding=\"utf-8\") as f:\n                if not f.read().strip():\n                    empty_files.add(file_rel)\n        except (OSError, UnicodeDecodeError):\n            pass\n    if empty_files:\n        project_dep_list = [info for info in project_dep_list if info[\"file\"] not in empty_files]\n        all_file_list = [f for f in all_file_list if f not in empty_files]\n        print(f\"Excluded {len(empty_files)} empty files: {sorted(empty_files)}\")\n        logger.info(f\"Excluded {len(empty_files)} empty files: {sorted(empty_files)}\")\n\n    print(f\"Files to analyze: {len(all_file_list)}\")\n    logger.info(f\"Files to analyze: {len(all_file_list)}\")\n\n    # == Step 1.5: Detect changed files ==============================\n    changed_files = _detect_changed_files(all_file_list, project_dir, base_output_dir)\n    print(f\"Change detection: {len(changed_files)} changed / {len(all_file_list)} total\")\n    logger.info(f\"Change detection: {len(changed_files)} changed / {len(all_file_list)} total\")\n\n    # == Step 2: Extract dependency info for all files ========================\n    _process_file_dependencies(\n        all_file_list, project_dir, base_output_dir,\n        project_dep_list,\n    )\n\n    # == Step 3: Generate design documents in topological order ================\n    if ENABLE_LLM_DOC:\n        print(\"Generating design documents...\")\n        logger.info(\"Generating design documents...\")\n        await generate_all_docs(\n            base_output_dir, project_dep_list, llm_client, max_workers,\n            changed_files,\n        )\n    else:\n        print(\"ENABLE_LLM_DOC=False: skipping design document generation\")\n        logger.info(\"ENABLE_LLM_DOC=False: skipping design document generation\")\n\n    # == Step 3.5: Generate dependency graph + summary consolidated JSON ==========\n    print(\"Generating dependency graph + summary JSON...\")\n    logger.info(\"Generating dependency graph + summary JSON...\")\n\n    # Build symbol-level dependencies once and share across the 3 subsequent functions\n    symbol_deps = build_symbol_level_deps(base_output_dir, all_file_list)\n\n    summary_map = build_summary_map(base_output_dir, all_file_list)\n\n    dep_summary_path = os.path.join(base_output_dir, \"project_dependency_summary.json\")\n    save_dependency_summary(base_output_dir, all_file_list, dep_summary_path, symbol_deps, summary_map)\n\n    # == Step 4: Generate Mermaid dependency graph ========================\n    mermaid_output_path = os.path.join(base_output_dir, \"dependency_graph.md\")\n    save_dependency_graph_as_mermaid(base_output_dir, mermaid_output_path, symbol_deps)\n\n    # == Step 5: Generate consolidated JSON ==================================\n    print(\"Generating consolidated JSON...\")\n    logger.info(\"Generating consolidated JSON...\")\n    knowledge_path = os.path.join(base_output_dir, \"project_knowledge.json\")\n    save_consolidated_json(base_output_dir, all_file_list, knowledge_path, symbol_deps, summary_map)\n\n    # Clear parse result cache to free memory\n    parse_cache.clear()\n\n    print(\"Analysis complete.\")\n    logger.info(\"Analysis complete.\")"
+    }
+  ],
+  "caller_usages": []
+}

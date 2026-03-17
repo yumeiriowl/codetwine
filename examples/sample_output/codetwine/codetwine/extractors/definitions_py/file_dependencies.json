@@ -1,0 +1,116 @@
+{
+  "file": "codetwine/codetwine/extractors/definitions_py/definitions.py",
+  "definitions": [
+    {
+      "name": "_INCLUDE_GUARD_RE",
+      "type": "expression_statement",
+      "start_line": 7,
+      "end_line": 7,
+      "context": "_INCLUDE_GUARD_RE = re.compile(r\"^_*[A-Z][A-Z0-9_]*_H(?:PP|XX)?_*(?:INCLUDED)?_*$\")"
+    },
+    {
+      "name": "DefinitionInfo",
+      "type": "class_definition",
+      "start_line": 10,
+      "end_line": 17,
+      "context": "@dataclass\nclass DefinitionInfo:\n    \"\"\"Data class holding information about a single definition.\"\"\"\n\n    name: str                                     # Definition name (function / class / variable / type, etc.)\n    type: str                                     # AST node type (\"function_definition\" / \"expression_statement\", etc.)\n    start_line: int                               # Start line number of the definition (1-based)\n    end_line: int                                 # End line number of the definition"
+    },
+    {
+      "name": "extract_definitions",
+      "type": "function_definition",
+      "start_line": 20,
+      "end_line": 99,
+      "context": "def extract_definitions(\n    root_node: Node,\n    definition_dict: dict[str, str],\n) -> list[DefinitionInfo]:\n    \"\"\"Extract definitions (functions, classes, variables, types, etc.) from the AST and return them in line-number order.\n\n    definition_dict structure:\n        key = AST node type (e.g. \"function_definition\")\n        value = one of the following:\n          - Child node type name (standard pattern): obtains the name from a direct child.\n            e.g. \"identifier\" -> searches node.children for a child with type==\"identifier\"\n          - \"__sentinel__\" format sentinel value (special pattern): the name node is\n            nested two or more levels deep, and a dedicated extraction function is used.\n            e.g. \"__assignment__\" -> expression_statement > assignment > identifier\n\n    If name extraction fails (e.g. a C/C++ declaration is a forward declaration),\n    child nodes are added to the queue and BFS continues. This allows detection of\n    definitions like function_declarator nested inside.\n\n    Args:\n        root_node: The AST root node covering the entire file.\n        definition_dict: Per-language definition node settings.\n\n    Returns:\n        A list of DefinitionInfo sorted by line number in ascending order.\n    \"\"\"\n\n    definition_list: list[DefinitionInfo] = []\n\n    # AST node types for which child node traversal continues even after being recorded as a definition.\n    # e.g. namespace_definition contains class and function definitions inside.\n    _CONTAINER_DEFINITION_TYPES = {\"namespace_definition\"}\n\n    # BFS traversal of the AST using a deque\n    node_queue = deque([root_node])\n\n    while node_queue:\n        node = node_queue.popleft()\n\n        if node.type == \"decorated_definition\" and \"decorated_definition\" in definition_dict:\n            # Process decorated definitions (e.g. @property) with a dedicated parser\n            definition = _parse_decorated_definition(node, definition_dict)\n            if definition:\n                definition_list.append(definition)\n\n        elif node.type in definition_dict and node.type != \"decorated_definition\":\n            # Process a standard definition node\n            name_node_type = definition_dict[node.type]\n            definition = _parse_definition_node(node, name_node_type)\n            if definition:\n                # Exclude #include guard #define directives\n                if node.type == \"preproc_def\" and _INCLUDE_GUARD_RE.match(definition.name):\n                    node_queue.extend(node.children)\n                    continue\n\n                definition_list.append(definition)\n\n                # Continue traversal inside container-type definitions (e.g. namespace)\n                if node.type in _CONTAINER_DEFINITION_TYPES:\n                    node_queue.extend(node.children)\n            else:\n                # For destructuring (destructured assignment), extract multiple names\n                names = _extract_destructured_names(node, name_node_type)\n                if names:\n                    for name in names:\n                        definition_list.append(DefinitionInfo(\n                            name=name,\n                            type=node.type,\n                            start_line=node.start_point[0] + 1,\n                            end_line=node.end_point[0] + 1,\n                        ))\n                else:\n                    # When name extraction fails, descend into child nodes to continue search\n                    node_queue.extend(node.children)\n\n        else:\n            # If not a definition node, add children to the queue to dig deeper\n            node_queue.extend(node.children)\n\n    return sorted(definition_list, key=lambda d: d.start_line)"
+    },
+    {
+      "name": "_parse_decorated_definition",
+      "type": "function_definition",
+      "start_line": 102,
+      "end_line": 138,
+      "context": "def _parse_decorated_definition(\n    node: Node,\n    definition_dict: dict[str, str],\n) -> DefinitionInfo | None:\n    \"\"\"Parse a decorated definition node (decorated_definition).\n\n    Extracts the inner function/class definition and delegates\n    to _parse_definition_node.\n\n    Args:\n        node: A decorated_definition node.\n        definition_dict: Per-language definition node settings.\n\n    Returns:\n        DefinitionInfo, or None if no valid definition is found inside.\n    \"\"\"\n    # Find the inner function/class definition\n    inner_node: Node | None = None\n\n    # Search children of decorated_definition for a definition node\n    for child in node.children:\n        if child.type in definition_dict and child.type != \"decorated_definition\":\n            inner_node = child\n\n    if inner_node is None:\n        return None\n\n    # Extract the name from the inner definition node\n    name_node_type = definition_dict[inner_node.type]\n    definition = _parse_definition_node(inner_node, name_node_type)\n\n    if definition:\n        # Adjust to the full line range including the decorator\n        definition.start_line = node.start_point[0] + 1\n        definition.end_line = node.end_point[0] + 1\n\n    return definition"
+    },
+    {
+      "name": "_parse_definition_node",
+      "type": "function_definition",
+      "start_line": 141,
+      "end_line": 170,
+      "context": "def _parse_definition_node(\n    node: Node,\n    name_node_type: str,\n) -> DefinitionInfo | None:\n    \"\"\"Convert a definition node into a DefinitionInfo.\n\n    When name_node_type is a standard node type name (e.g. \"identifier\"),\n    the name is looked up among direct children.\n    When it is a \"__sentinel__\" format sentinel value, processing is\n    delegated to a dedicated extraction function via _extract_name.\n\n    Args:\n        node: A definition node (function_definition / class_definition / expression_statement, etc.).\n        name_node_type: A string indicating how to obtain the name.\n\n    Returns:\n        DefinitionInfo, or None if the name cannot be obtained.\n    \"\"\"\n    # Extract the name from the node\n    name = _extract_name(node, name_node_type)\n    if name is None:\n        return None\n\n    # Create and return a DefinitionInfo (convert 0-based line numbers to 1-based)\n    return DefinitionInfo(\n        name=name,\n        type=node.type,\n        start_line=node.start_point[0] + 1,\n        end_line=node.end_point[0] + 1,\n    )"
+    },
+    {
+      "name": "_extract_name",
+      "type": "function_definition",
+      "start_line": 173,
+      "end_line": 212,
+      "context": "def _extract_name(node: Node, name_type: str) -> str | None:\n    \"\"\"Dispatcher that extracts the name according to the node type.\n\n    When name_type is a sentinel value (a string starting and ending with \"__\"),\n    a dedicated function is used to obtain the name node located deep in the AST.\n    For standard values, the name is looked up among direct children.\n\n    Args:\n        node: The definition node from which to extract the name.\n        name_type: The value specified in definition_dict of settings.py.\n                   Standard pattern: \"identifier\", \"type_identifier\", etc.\n                   Special pattern: \"__assignment__\", \"__variable_declarator__\",\n                                    \"__function_declarator__\", \"__init_declarator__\"\n\n    Returns:\n        The definition name string, or None if extraction fails.\n    \"\"\"\n    # Dispatch to a dedicated extraction function for each sentinel value\n\n    # Python: expression_statement > assignment > left-hand identifier\n    if name_type == \"__assignment__\":\n        return _extract_assignment_name(node)\n\n    # JS/TS: lexical_declaration / variable_declaration > variable_declarator > identifier\n    if name_type == \"__variable_declarator__\":\n        return _extract_variable_declarator_name(node)\n\n    # C/C++: declaration > init_declarator > identifier\n    if name_type == \"__init_declarator__\":\n        return _extract_init_declarator_name(node)\n\n    # C/C++: function_definition > function_declarator > identifier\n    if name_type == \"__function_declarator__\":\n        return _extract_function_declarator_name(node)\n\n    # Standard pattern: search direct children for one matching name_type\n    for child in node.children:\n        if child.type == name_type:\n            return child.text.decode(\"utf-8\")\n    return None"
+    },
+    {
+      "name": "_extract_assignment_name",
+      "type": "function_definition",
+      "start_line": 215,
+      "end_line": 244,
+      "context": "def _extract_assignment_name(node: Node) -> str | None:\n    \"\"\"Extract the variable name from a Python top-level variable assignment.\n\n    Target AST structure:\n        expression_statement       <- this node is passed as the argument\n          +-- assignment\n               +-- left: identifier \"X\"  <- extract this\n               +-- =\n               +-- right: (value)\n\n    Returns None if the content of expression_statement is not an assignment\n    (e.g. print(\"hello\")) or if the left-hand side is not an identifier\n    (e.g. obj.attr = 1).\n\n    Args:\n        node: An expression_statement node.\n\n    Returns:\n        The variable name string, or None if not applicable.\n    \"\"\"\n    if not node.children:\n        return None\n    inner = node.children[0]\n    if inner.type != \"assignment\":\n        return None\n    # Get the left-hand side from the assignment's left field\n    lhs = inner.child_by_field_name(\"left\")\n    if lhs and lhs.type == \"identifier\":\n        return lhs.text.decode(\"utf-8\")\n    return None"
+    },
+    {
+      "name": "_extract_variable_declarator_name",
+      "type": "function_definition",
+      "start_line": 247,
+      "end_line": 273,
+      "context": "def _extract_variable_declarator_name(node: Node) -> str | None:\n    \"\"\"Extract the variable name from a JS/TS variable declaration.\n\n    Target AST structure:\n        lexical_declaration              <- this node is passed as the argument\n          +-- const / let\n          +-- variable_declarator\n               +-- name: identifier \"X\"  <- extract this\n               +-- (: type annotation)   <- TS only\n               +-- =\n               +-- (value)\n\n    The same structure applies to variable_declaration (var declarations).\n\n    Args:\n        node: A lexical_declaration or variable_declaration node.\n\n    Returns:\n        The variable name string, or None if extraction fails.\n    \"\"\"\n    # Get the identifier from the variable_declarator's name field\n    for child in node.children:\n        if child.type == \"variable_declarator\":\n            name_node = child.child_by_field_name(\"name\")\n            if name_node:\n                return name_node.text.decode(\"utf-8\")\n    return None"
+    },
+    {
+      "name": "_extract_function_declarator_name",
+      "type": "function_definition",
+      "start_line": 276,
+      "end_line": 318,
+      "context": "def _extract_function_declarator_name(node: Node) -> str | None:\n    \"\"\"Extract the function name from a C/C++ function definition.\n\n    Target AST structure:\n        function_definition              <- this node is passed as the argument\n          +-- primitive_type \"double\"\n          +-- declarator: function_declarator\n          |    +-- declarator: identifier \"distance\"  <- extract this\n          |    +-- parameters: parameter_list\n          +-- body: compound_statement { ... }\n\n    function_definition does not have an identifier as a direct child;\n    it is inside function_declarator, so the standard pattern (direct child search)\n    cannot obtain the name.\n\n    For C++ class method implementations, the function_declarator's declarator\n    becomes a qualified_identifier (e.g. \"Shape::get_name\"). In that case,\n    the method name is obtained from the last identifier within the qualified_identifier.\n\n    Args:\n        node: A function_definition node.\n\n    Returns:\n        The function name string, or None if function_declarator is not found.\n    \"\"\"\n    # Get function_declarator from the function_definition's declarator field\n    func_decl = node.child_by_field_name(\"declarator\")\n    if not func_decl or func_decl.type != \"function_declarator\":\n        return None\n    # Get the name node from function_declarator's declarator field\n    name_node = func_decl.child_by_field_name(\"declarator\")\n    if not name_node:\n        return None\n    if name_node.type == \"identifier\":\n        return name_node.text.decode(\"utf-8\")\n    # C++ class method implementation: qualified_identifier like Shape::get_name\n    if name_node.type == \"qualified_identifier\":\n        last_id = None\n        for qc in name_node.children:\n            if qc.type == \"identifier\":\n                last_id = qc.text.decode(\"utf-8\")\n        return last_id\n    return None"
+    },
+    {
+      "name": "_extract_init_declarator_name",
+      "type": "function_definition",
+      "start_line": 321,
+      "end_line": 351,
+      "context": "def _extract_init_declarator_name(node: Node) -> str | None:\n    \"\"\"Extract the variable name from a C/C++ variable/constant declaration.\n\n    Target AST structure:\n        declaration                      <- this node is passed as the argument\n          +-- const (optional)\n          +-- primitive_type \"int\"\n          +-- declarator: init_declarator\n               +-- declarator: identifier \"X\"  <- extract this\n               +-- =\n               +-- number_literal 3\n\n    Forward declarations (e.g. void freeFunction();) do not have an init_declarator,\n    so None is returned. The caller's BFS fallback will extract the function name\n    from the child function_declarator.\n\n    Args:\n        node: A declaration node.\n\n    Returns:\n        The variable name string, or None if no init_declarator is found.\n    \"\"\"\n    # Get the init_declarator from the declaration's declarator field\n    declarator = node.child_by_field_name(\"declarator\")\n    if not declarator or declarator.type != \"init_declarator\":\n        return None\n    # Get the identifier from init_declarator's declarator field\n    name_node = declarator.child_by_field_name(\"declarator\")\n    if name_node and name_node.type == \"identifier\":\n        return name_node.text.decode(\"utf-8\")\n    return None"
+    },
+    {
+      "name": "_extract_destructured_names",
+      "type": "function_definition",
+      "start_line": 354,
+      "end_line": 397,
+      "context": "def _extract_destructured_names(node: Node, name_type: str) -> list[str]:\n    \"\"\"Extract multiple variable names from a destructuring (destructured assignment).\n\n    Called when standard name extraction fails; determines whether the node\n    is a destructuring pattern and collects the names.\n\n    Target patterns:\n        Python:  X, Y = 1, 2    -> collect identifiers from pattern_list\n        JS/TS:   const { a, b } = obj  -> collect names from object_pattern\n        JS/TS:   const [a, b] = arr    -> collect names from array_pattern\n\n    Args:\n        node: A definition node (expression_statement / lexical_declaration, etc.).\n        name_type: The sentinel value specified in definition_dict of settings.py.\n\n    Returns:\n        A list of variable names. Empty list if not a destructuring pattern.\n    \"\"\"\n    if name_type == \"__assignment__\":\n        # Python: collect variable names from pattern_list in X, Y = 1, 2\n        if not node.children:\n            return []\n        inner = node.children[0]\n        if inner.type != \"assignment\":\n            return []\n        lhs = inner.child_by_field_name(\"left\")\n        if not lhs or lhs.type != \"pattern_list\":\n            return []\n        return [\n            child.text.decode(\"utf-8\")\n            for child in lhs.children\n            if child.type == \"identifier\"\n        ]\n\n    if name_type == \"__variable_declarator__\":\n        # JS/TS: const { a, b } = obj / const [a, b] = arr\n        for child in node.children:\n            if child.type == \"variable_declarator\":\n                name_node = child.child_by_field_name(\"name\")\n                if name_node and name_node.type in (\"object_pattern\", \"array_pattern\"):\n                    return _collect_identifiers_from_pattern(name_node)\n        return []\n\n    return []"
+    },
+    {
+      "name": "_collect_identifiers_from_pattern",
+      "type": "function_definition",
+      "start_line": 400,
+      "end_line": 428,
+      "context": "def _collect_identifiers_from_pattern(pattern_node: Node) -> list[str]:\n    \"\"\"Collect variable names from an object_pattern / array_pattern.\n\n    Handles nested patterns recursively\n    (e.g. const { a, inner: { b } } = obj).\n\n    Args:\n        pattern_node: An object_pattern or array_pattern node.\n\n    Returns:\n        A list of variable names found in the pattern.\n    \"\"\"\n    names: list[str] = []\n    for child in pattern_node.children:\n        if child.type == \"identifier\":\n            names.append(child.text.decode(\"utf-8\"))\n        elif child.type == \"shorthand_property_identifier_pattern\":\n            # a, b in { a, b }\n            names.append(child.text.decode(\"utf-8\"))\n        elif child.type in (\"object_pattern\", \"array_pattern\"):\n            names.extend(_collect_identifiers_from_pattern(child))\n        elif child.type == \"pair_pattern\":\n            # { key: localName } -> localName (local variable name) is defined\n            value = child.child_by_field_name(\"value\")\n            if value and value.type == \"identifier\":\n                names.append(value.text.decode(\"utf-8\"))\n            elif value and value.type in (\"object_pattern\", \"array_pattern\"):\n                names.extend(_collect_identifiers_from_pattern(value))\n    return names"
+    }
+  ],
+  "callee_usages": [],
+  "caller_usages": [
+    {
+      "lines": [
+        383
+      ],
+      "name": "extract_definitions",
+      "file": "codetwine/codetwine/import_to_path_py/import_to_path.py",
+      "usage_context": "\n    # Parse the file, extract definitions, and register each definition name in symbol_to_file_map\n    root_node = parse_file(abs_path)[0]\n    for defn in extract_definitions(root_node, definition_dict):\n        if defn.name:\n            _put_symbol(symbol_to_file_map, defn.name, file_rel)\n"
+    },
+    {
+      "lines": [
+        52
+      ],
+      "name": "extract_definitions",
+      "file": "codetwine/codetwine/file_analyzer_py/file_analyzer.py",
+      "usage_context": "            \"end_line\":   d.end_line,\n            \"context\":    \"\\n\".join(content_lines[d.start_line - 1 : d.end_line]),\n        }\n        for d in extract_definitions(root_node, definition_dict)\n    ]\n\n    # import / usage analysis"
+    },
+    {
+      "lines": [
+        221
+      ],
+      "name": "extract_definitions",
+      "file": "codetwine/codetwine/extractors/usage_analysis_py/usage_analysis.py",
+      "usage_context": "    target_def_dict = DEFINITION_DICTS.get(target_ext)\n    if target_def_dict and os.path.isfile(target_abs):\n        target_root = parse_file(target_abs)[0]\n        for defn in extract_definitions(target_root, target_def_dict):\n            if defn.name:\n                names.append(defn.name)\n    return names"
+    }
+  ]
+}

@@ -1,0 +1,80 @@
+{
+  "file": "codetwine/codetwine/parsers/ts_parser_py/ts_parser.py",
+  "definitions": [
+    {
+      "name": "_language_map",
+      "type": "expression_statement",
+      "start_line": 6,
+      "end_line": 6,
+      "context": "_language_map = TREE_SITTER_LANGUAGES"
+    },
+    {
+      "name": "parse_cache",
+      "type": "expression_statement",
+      "start_line": 10,
+      "end_line": 10,
+      "context": "parse_cache: dict[str, tuple[Node, bytes]] = {}"
+    },
+    {
+      "name": "parse_file",
+      "type": "function_definition",
+      "start_line": 13,
+      "end_line": 44,
+      "context": "def parse_file(file_path: str) -> tuple[Node, bytes]:\n    \"\"\"Read a file, parse it with tree-sitter, and return (AST root node, byte content).\n\n    Parse results are cached at module level to avoid re-parsing the same file.\n\n    Args:\n        file_path: Absolute path of the file to parse.\n\n    Returns:\n        A (root_node, content) tuple.\n    \"\"\"\n    # Return from cache if available\n    if file_path in parse_cache:\n        return parse_cache[file_path]\n\n    # Get the corresponding language from the file extension\n    ext = os.path.splitext(file_path)[1].lstrip(\".\")\n\n    # Initialize the Parser with the Language object for this extension\n    parser = Parser(_language_map[ext])\n\n    # Read the file content in binary mode\n    with open(file_path, \"rb\") as f:\n        content = f.read()\n\n    # Parse with tree-sitter to generate the AST\n    tree = parser.parse(content)\n    result = (tree.root_node, content)\n\n    # Store in cache\n    parse_cache[file_path] = result\n    return result"
+    }
+  ],
+  "callee_usages": [
+    {
+      "lines": [
+        6
+      ],
+      "name": "TREE_SITTER_LANGUAGES",
+      "from": "codetwine/codetwine/config/settings_py/settings.py",
+      "target_context": "TREE_SITTER_LANGUAGES: dict[str, Language] = _expand_ext_aliases(\n    {ext: cfg.language for ext, cfg in _LANG_REGISTRY.items()}\n)"
+    }
+  ],
+  "caller_usages": [
+    {
+      "lines": [
+        382
+      ],
+      "name": "parse_file",
+      "file": "codetwine/codetwine/import_to_path_py/import_to_path.py",
+      "usage_context": "        return\n\n    # Parse the file, extract definitions, and register each definition name in symbol_to_file_map\n    root_node = parse_file(abs_path)[0]\n    for defn in extract_definitions(root_node, definition_dict):\n        if defn.name:\n            _put_symbol(symbol_to_file_map, defn.name, file_rel)"
+    },
+    {
+      "lines": [
+        40
+      ],
+      "name": "parse_file",
+      "file": "codetwine/codetwine/file_analyzer_py/file_analyzer.py",
+      "usage_context": "    # Per-language definition extraction settings (None for unsupported languages)\n    definition_dict = DEFINITION_DICTS.get(file_ext)\n\n    root_node, content = parse_file(target_file)\n\n    # Convert content to text lines and extract source code from each definition's line range\n    content_lines = content.decode(\"utf-8\").splitlines()"
+    },
+    {
+      "lines": [
+        246
+      ],
+      "name": "parse_cache.clear",
+      "file": "codetwine/codetwine/pipeline_py/pipeline.py",
+      "usage_context": "    save_consolidated_json(base_output_dir, all_file_list, knowledge_path, symbol_deps, summary_map)\n\n    # Clear parse result cache to free memory\n    parse_cache.clear()\n\n    print(\"Analysis complete.\")\n    logger.info(\"Analysis complete.\")"
+    },
+    {
+      "lines": [
+        220,
+        261
+      ],
+      "name": "parse_file",
+      "file": "codetwine/codetwine/extractors/usage_analysis_py/usage_analysis.py",
+      "usage_context": "    target_ext = os.path.splitext(target_file_rel)[1].lstrip(\".\")\n    target_def_dict = DEFINITION_DICTS.get(target_ext)\n    if target_def_dict and os.path.isfile(target_abs):\n        target_root = parse_file(target_abs)[0]\n        for defn in extract_definitions(target_root, target_def_dict):\n            if defn.name:\n                names.append(defn.name)\n...\n        caller_abs = os.path.join(project_dir, caller_rel)\n        caller_ext = os.path.splitext(caller_rel)[1].lstrip(\".\")\n\n        caller_root = parse_file(caller_abs)[0]\n\n        # Retrieve parameters for import extraction\n        language, import_query_str = get_import_params(caller_ext)"
+    },
+    {
+      "lines": [
+        99,
+        170
+      ],
+      "name": "parse_file",
+      "file": "codetwine/codetwine/extractors/dependency_graph_py/dependency_graph.py",
+      "usage_context": "\n    absolute_path = os.path.join(project_dir, callee_file_path)\n\n    callee_root = parse_file(absolute_path)[0]\n\n    # For attribute access like \"helper.process\", the trailing \"process\" is the actual definition name.\n    # For cases like \"TEMPLATE.format\" where the trailing part is a built-in method,\n...\n\n        # Parse import statements and add those resolvable to project files as callees\n        if language and import_query_str:\n            root_node = parse_file(file_path)[0]\n            for import_info in extract_imports(root_node, language, import_query_str):\n                resolved = resolve_module_to_project_path(\n                    import_info.module,"
+    }
+  ]
+}

@@ -1,0 +1,84 @@
+{
+  "file": "codetwine/examples/rlm_qa/rlm_qa_agent_py/rlm_qa_agent.py",
+  "definitions": [
+    {
+      "name": "LLM_MODEL",
+      "type": "expression_statement",
+      "start_line": 31,
+      "end_line": 31,
+      "context": "LLM_MODEL = \"anthropic/claude-sonnet-4-6\""
+    },
+    {
+      "name": "LLM_API_KEY",
+      "type": "expression_statement",
+      "start_line": 34,
+      "end_line": 34,
+      "context": "LLM_API_KEY = os.environ.get(\"LLM_API_KEY\", \"\")"
+    },
+    {
+      "name": "OUTPUT_LANGUAGE",
+      "type": "expression_statement",
+      "start_line": 37,
+      "end_line": 37,
+      "context": "OUTPUT_LANGUAGE = \"English\""
+    },
+    {
+      "name": "TARGET_JSON_PATH",
+      "type": "expression_statement",
+      "start_line": 40,
+      "end_line": 40,
+      "context": "TARGET_JSON_PATH = \"/path/to/project_knowledge.json\""
+    },
+    {
+      "name": "INSTRUCTIONS_TEMPLATE",
+      "type": "expression_statement",
+      "start_line": 47,
+      "end_line": 133,
+      "context": "INSTRUCTIONS_TEMPLATE = \"\"\"You are an agent that explores a project design document in JSON format.\nManipulate the input project_data variable with Python code and answer the question.\nAlways write your answer in <<<RLM_OUTPUT_LANGUAGE>>>.\n\n## Important rules\n**Do not print() the entire project_data**: The data is too large and the output will be truncated. Extract and print() only the parts you need.\n\n## JSON Schema\n\n### Top level\n- `project_name` (str): Project name\n- `project_dependencies` (array): Project-wide dependency graph (for understanding overall structure, entry point search)\n- `files` (array): Per-file detailed information (dependency details, design documents, source code)\n\n### project_dependencies[]\n- `file` (str): File path\n- `summary` (str|null): Summary of the file (null if not yet generated)\n- `callers` (str[]): Files calling this file (dependents)\n- `callees` (str[]): Files this file calls (dependencies)\n\n### files[]\n- `file` (str): File path\n- `file_dependencies` (object): Dependency details\n- `doc` (object): Design document\n\n### file_dependencies.definitions[]\n- `name` (str): Function/class name\n- `type` (str): Definition type (\"function_definition\", \"class_definition\", etc.)\n- `start_line` (int): Start line number (1-indexed)\n- `end_line` (int): End line number (1-indexed)\n- `context` (str): Full source code of the definition (prefer this field for source code reference; use read_source_file only when the entire file is needed)\n\n### file_dependencies.callee_usages[] (dependencies used by this file)\n- `lines` (int[]): Usage line numbers within this file\n- `name` (str): Function/class name being used\n- `from` (str): Dependency file path\n- `target_context` (str): Full source code of the dependency function/class\n\n### file_dependencies.caller_usages[] (dependents using this file)\n- `lines` (int[]): Usage line numbers within the dependent file\n- `name` (str): Function/class name being used\n- `file` (str): Dependent file path\n- `usage_context` (str): Source code of the usage location in the dependent\n\n### doc\n- `summary` (str): Summary of the file\n- `sections` (array): Design document section array. Each element has `id` (str), `title` (str), `content` (str)\n\n<<<DOC_SCHEMA>>>\n\n## Code examples\n\n### Keyword search (across all fields)\n```python\nkeyword = \"search_term\"\nkw = keyword.lower()\nfor f in project_data[\"files\"]:\n    fp = f[\"file\"]\n    deps = f[\"file_dependencies\"]\n    if kw in f[\"doc\"][\"summary\"].lower():\n        print(f\"summary: {fp}\")\n    for s in f[\"doc\"][\"sections\"]:\n        if kw in s[\"content\"].lower():\n            print(f\"section: {fp} / {s['title']}\")\n    for d in deps[\"definitions\"]:\n        if kw in d.get(\"context\", \"\").lower():\n            print(f\"definition: {fp} / {d['name']}\")\n    for u in deps[\"callee_usages\"]:\n        if u.get(\"target_context\") and kw in u[\"target_context\"].lower():\n            print(f\"callee: {fp} -> {u['from']} / {u['name']}\")\n    for c in deps[\"caller_usages\"]:\n        if c.get(\"usage_context\") and kw in c[\"usage_context\"].lower():\n            print(f\"caller: {c['file']} -> {fp} / {c['name']}\")\n```\n\n### Entry point search and dependency investigation\n```python\n# Entry point search\nentry_points = [f[\"file\"] for f in project_data[\"project_dependencies\"] if not f[\"callers\"]]\nprint(entry_points)\n\n# Investigate dependencies and dependents of a file\ntarget = [f for f in project_data[\"files\"] if \"module_name\" in f[\"file\"]][0]\nprint(\"Dependencies:\", [(u[\"from\"], u[\"name\"]) for u in target[\"file_dependencies\"][\"callee_usages\"]])\nprint(\"Dependents:\", [(c[\"file\"], c[\"name\"]) for c in target[\"file_dependencies\"][\"caller_usages\"]])\n```\n\"\"\""
+    },
+    {
+      "name": "_build_doc_schema",
+      "type": "function_definition",
+      "start_line": 136,
+      "end_line": 157,
+      "context": "def _build_doc_schema(project_data: dict) -> str:\n    \"\"\"\n    Extract doc section list from actual project_knowledge.json data\n    and dynamically generate text to embed in instructions.\n\n    Args:\n        project_data: Loaded project_knowledge.json data\n\n    Returns:\n        Text listing doc sections\n    \"\"\"\n    sections = []\n    for file_entry in project_data.get(\"files\", []):\n        doc = file_entry.get(\"doc\", {})\n        if doc.get(\"sections\"):\n            sections = doc[\"sections\"]\n            break\n\n    section_rows = [f\"| `{s['id']}` | {s['title']} |\" for s in sections]\n    section_table = \"| id | title |\\n|---|---|\\n\" + \"\\n\".join(section_rows)\n\n    return \"**doc.sections list for this project (each section has content in its content field):**\\n\" + section_table"
+    },
+    {
+      "name": "_load_project",
+      "type": "function_definition",
+      "start_line": 160,
+      "end_line": 171,
+      "context": "def _load_project(json_path: str):\n    \"\"\"Load project_knowledge.json and set qa_tools module variables.\n\n    Args:\n        json_path: File path to project_knowledge.json\n    \"\"\"\n    with open(json_path, \"r\", encoding=\"utf-8\") as f:\n        qa_tools.project_data = json.load(f)\n\n    qa_tools.base_dir = os.path.dirname(json_path)\n\n    print(f\"[OK] Loaded {len(qa_tools.project_data['files'])} files from project '{qa_tools.project_data['project_name']}'\")"
+    },
+    {
+      "name": "_create_interpreter",
+      "type": "function_definition",
+      "start_line": 174,
+      "end_line": 209,
+      "context": "def _create_interpreter() -> PythonInterpreter:\n    \"\"\"Create a PythonInterpreter configured with --node-modules-dir=false and --allow-read for Deno 2.x.\n\n    Returns:\n        PythonInterpreter: Interpreter with Deno command configured\n    \"\"\"\n    # Get the path to runner.js\n    primitives_dir = os.path.dirname(inspect.getfile(PythonInterpreter))\n    runner_path = os.path.join(primitives_dir, \"runner.js\")\n\n    # Locate Deno cache directory\n    deno_dir = os.environ.get(\"DENO_DIR\")\n    if not deno_dir:\n        try:\n            result = subprocess.run(\n                [\"deno\", \"info\", \"--json\"],\n                capture_output=True, text=True, check=False,\n            )\n            if result.returncode == 0:\n                deno_dir = json.loads(result.stdout).get(\"denoDir\")\n        except FileNotFoundError:\n            pass\n    if not deno_dir:\n        deno_dir = os.path.expanduser(\"~/.cache/deno\")\n\n    # Set DENO_DIR environment variable\n    os.environ[\"DENO_DIR\"] = deno_dir\n\n    deno_command = [\n        \"deno\", \"run\",\n        \"--node-modules-dir=false\",\n        f\"--allow-read={runner_path},{deno_dir}\",\n        runner_path,\n    ]\n\n    return PythonInterpreter(deno_command=deno_command)"
+    },
+    {
+      "name": "create_qa_agent",
+      "type": "function_definition",
+      "start_line": 212,
+      "end_line": 258,
+      "context": "def create_qa_agent(json_path: str) -> dspy.RLM:\n    \"\"\"\n    Create a dspy.RLM-based Q&A agent.\n\n    Args:\n        json_path: Path to project_knowledge.json\n\n    Returns:\n        Configured dspy.RLM instance\n    \"\"\"\n    # Load project data\n    _load_project(json_path)\n\n    # Initialize LLM and set as dspy default\n    lm = dspy.LM(LLM_MODEL, api_key=LLM_API_KEY)\n    dspy.configure(lm=lm)\n\n    # Embed doc schema and output language into the template to build instructions\n    doc_schema = _build_doc_schema(qa_tools.project_data)\n    instructions = (\n        INSTRUCTIONS_TEMPLATE\n        .replace(\"<<<DOC_SCHEMA>>>\", doc_schema)\n        .replace(\"<<<RLM_OUTPUT_LANGUAGE>>>\", OUTPUT_LANGUAGE)\n    )\n\n    # Create Signature and PythonInterpreter\n    signature = dspy.Signature(\n        \"project_data, question -> answer\",\n        instructions,\n    )\n\n    interpreter = _create_interpreter()\n\n    # Assemble and return the RLM agent\n    rlm = dspy.RLM(\n        signature,\n        max_iterations=10,\n        tools=[\n            qa_tools.read_source_file,\n            qa_tools.get_files_using,\n            qa_tools.graph_search,\n        ],\n        verbose=True,\n        interpreter=interpreter,\n    )\n\n    return rlm"
+    },
+    {
+      "name": "ask",
+      "type": "function_definition",
+      "start_line": 261,
+      "end_line": 276,
+      "context": "def ask(rlm: dspy.RLM, question: str) -> str:\n    \"\"\"\n    Answer a question using dspy.RLM.\n\n    Args:\n        rlm: dspy.RLM instance\n        question: User's question\n\n    Returns:\n        Answer text\n    \"\"\"\n    result = rlm(\n        project_data=qa_tools.project_data,\n        question=question,\n    )\n    return result.answer"
+    },
+    {
+      "name": "main",
+      "type": "function_definition",
+      "start_line": 279,
+      "end_line": 314,
+      "context": "def main():\n    \"\"\"Interactive mode - enter questions to get answers\"\"\"\n    json_path = TARGET_JSON_PATH\n\n    if not os.path.exists(json_path):\n        print(f\"Error: {json_path} not found.\")\n        print(\"Run uv run python main.py first.\")\n        sys.exit(1)\n\n    # Initialize the RLM agent\n    print(f\"Loading: {json_path}\")\n    rlm = create_qa_agent(json_path)\n    print(\"\\n[OK] Initialization complete\")\n    print(\"\\nEnter your question (exit: exit, quit, q)\\n\")\n\n    # Interactive loop\n    try:\n        while True:\n            try:\n                question = input(\"> \")\n                if question.lower() in (\"exit\", \"quit\", \"q\"):\n                    break\n\n                if not question.strip():\n                    continue\n\n                print(\"\\nProcessing...\\n\")\n                answer = ask(rlm, question)\n                print(f\"{answer}\\n\")\n\n            except KeyboardInterrupt:\n                break\n    finally:\n        # Shut down PythonInterpreter (Deno process)\n        if rlm._interpreter is not None:\n            rlm._interpreter.shutdown()"
+    }
+  ],
+  "callee_usages": [],
+  "caller_usages": []
+}

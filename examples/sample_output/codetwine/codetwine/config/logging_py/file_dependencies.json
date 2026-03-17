@@ -1,0 +1,58 @@
+{
+  "file": "codetwine/codetwine/config/logging_py/logging.py",
+  "definitions": [
+    {
+      "name": "_LOG_DIR",
+      "type": "expression_statement",
+      "start_line": 7,
+      "end_line": 10,
+      "context": "_LOG_DIR = os.path.join(\n    os.path.normpath(os.path.join(os.path.dirname(__file__), \"..\", \"..\")),\n    \"logs\",\n)"
+    },
+    {
+      "name": "_LOG_FORMAT",
+      "type": "expression_statement",
+      "start_line": 13,
+      "end_line": 13,
+      "context": "_LOG_FORMAT = \"%(asctime)s [%(levelname)s] %(name)s: %(message)s\""
+    },
+    {
+      "name": "_MAX_BYTES",
+      "type": "expression_statement",
+      "start_line": 16,
+      "end_line": 16,
+      "context": "_MAX_BYTES = 1_048_576"
+    },
+    {
+      "name": "_BACKUP_COUNT",
+      "type": "expression_statement",
+      "start_line": 17,
+      "end_line": 17,
+      "context": "_BACKUP_COUNT = 5"
+    },
+    {
+      "name": "_SkipBlankFormatter",
+      "type": "class_definition",
+      "start_line": 20,
+      "end_line": 35,
+      "context": "class _SkipBlankFormatter(logging.Formatter):\n    \"\"\"Formatter that skips log messages consisting only of blank lines or whitespace.\"\"\"\n\n    def format(self, record: logging.LogRecord) -> str:\n        \"\"\"Format a log record, returning an empty string to skip blank-line messages.\n\n        Args:\n            record: The log record to format.\n\n        Returns:\n            str: The formatted log string, or an empty string for blank-line messages.\n        \"\"\"\n        # Suppress output to the log file when the message is whitespace-only\n        if record.getMessage().strip() in (\"\", \"\\n\"):\n            return \"\"\n        return super().format(record)"
+    },
+    {
+      "name": "setup_logging",
+      "type": "function_definition",
+      "start_line": 38,
+      "end_line": 75,
+      "context": "def setup_logging(level: int = logging.INFO) -> None:\n    \"\"\"Configure both console output and log file output.\n\n    Call this function once at the beginning of main() in entry points\n    (main.py, rlm_qa_agent.py).\n\n    Args:\n        level: Log level. Defaults to logging.INFO.\n    \"\"\"\n    # Get the root logger and set the log level\n    root_logger = logging.getLogger()\n    root_logger.setLevel(level)\n\n    # Create a formatter used by both console and file handlers\n    formatter = _SkipBlankFormatter(_LOG_FORMAT)\n\n    # ===== Console handler =====\n    # Only WARNING and above are output to the console; details are recorded in the log file.\n    console_handler = logging.StreamHandler()\n    console_handler.setLevel(logging.WARNING)\n    console_handler.setFormatter(formatter)\n    root_logger.addHandler(console_handler)\n\n    # ===== File handler =====\n    os.makedirs(_LOG_DIR, exist_ok=True)\n    file_handler = RotatingFileHandler(\n        os.path.join(_LOG_DIR, \"codetwine.log\"),\n        maxBytes=_MAX_BYTES,\n        backupCount=_BACKUP_COUNT,\n        encoding=\"utf-8\",\n    )\n    file_handler.setFormatter(formatter)\n    root_logger.addHandler(file_handler)\n\n    # ===== Restrict external library log levels to WARNING =====\n    logging.getLogger(\"httpx\").setLevel(logging.WARNING)\n    logging.getLogger(\"httpcore\").setLevel(logging.WARNING)\n    logging.getLogger(\"LiteLLM\").setLevel(logging.WARNING)"
+    }
+  ],
+  "callee_usages": [],
+  "caller_usages": [
+    {
+      "lines": [
+        72
+      ],
+      "name": "setup_logging",
+      "file": "codetwine/main_py/main.py",
+      "usage_context": "\ndef main() -> None:\n    \"\"\"Entry point for dependency analysis and design document generation.\"\"\"\n    setup_logging()\n    args = parse_args()\n    project_dir, output_dir = resolve_dirs(args)\n"
+    }
+  ]
+}

@@ -1,0 +1,74 @@
+{
+  "file": "codetwine/codetwine/extractors/imports_py/imports.py",
+  "definitions": [
+    {
+      "name": "ImportInfo",
+      "type": "class_definition",
+      "start_line": 5,
+      "end_line": 13,
+      "context": "@dataclass\nclass ImportInfo:\n    \"\"\"Data class holding information about a single import statement.\"\"\"\n\n    module: str         # Import source module name/path\n    names: list[str]    # List of names specified in from ... import (empty list for languages without this)\n    line: int           # Line number of the import statement (1-based)\n    module_alias: str | None = None  # \"Y\" in import X as Y (alias name)\n    alias_map: dict[str, str] | None = None  # {alias name -> original name} (for from X import a as b: {\"b\": \"a\"})"
+    },
+    {
+      "name": "extract_imports",
+      "type": "function_definition",
+      "start_line": 16,
+      "end_line": 113,
+      "context": "def extract_imports(\n    root_node: Node,\n    language: Language,\n    import_query_str: str | None,\n) -> list[ImportInfo]:\n    \"\"\"Extract import statements from the AST and return them.\n\n    Uses tree-sitter queries (S-expression pattern matching) to uniformly\n    handle import syntax that differs across languages.\n\n    Query capture names:\n        @module      -> Import source (module name, path, header name, etc.)\n        @name        -> Individually imported name (the Y in \"from X import Y\")\n        @import_node -> The entire import statement node (for line number retrieval)\n\n    When the same import statement has multiple @name captures (from X import Y, Z),\n    they are consolidated into a single ImportInfo.\n\n    Args:\n        root_node: The AST root node covering the entire file.\n        language: tree-sitter Language object (required for Query creation).\n        import_query_str: tree-sitter query string (obtained from IMPORT_QUERIES in config.py).\n                          Returns an empty list when None (for languages with no import query defined).\n\n    Returns:\n        A list of ImportInfo.\n    \"\"\"\n    if not import_query_str:\n        return []\n\n    # Create a tree-sitter query and scan the AST with a cursor\n    query = Query(language, import_query_str)\n    cursor = QueryCursor(query)\n\n    # Key: (module string, line number) -> ImportInfo\n    # Groups multiple @name captures from the same import statement into one entry\n    grouped: dict[tuple[str, int], ImportInfo] = {}\n\n    # Retrieve query match results\n    for _, captures in cursor.matches(root_node):\n        # CommonJS require() pattern filtering:\n        # If a @_require_func capture exists and the function name is not \"require\", skip it\n        require_func_nodes = captures.get(\"_require_func\", [])\n        if require_func_nodes:\n            if require_func_nodes[0].text.decode(\"utf-8\") != \"require\":\n                continue\n\n        # Retrieve @module, @name, and @import_node captures\n        module_nodes = captures.get(\"module\", [])\n        name_nodes = captures.get(\"name\", [])\n        import_nodes = captures.get(\"import_node\", [])\n\n        if not module_nodes:\n            continue\n\n        # Get the module name from the @module capture and strip quotes\n        raw_module = module_nodes[0].text.decode(\"utf-8\")\n        module = _strip_quotes(raw_module)\n\n        # Get line number from the entire import statement node (fallback to module node)\n        if import_nodes:\n            line = import_nodes[0].start_point[0] + 1\n        else:\n            line = module_nodes[0].start_point[0] + 1\n\n        # Create the grouping key\n        group_key = (module, line)\n\n        # Create a new entry if the group does not exist yet\n        if group_key not in grouped:\n            grouped[group_key] = ImportInfo(module=module, names=[], line=line)\n\n        # Detect import X as Y alias\n        module_alias = _detect_module_alias(module_nodes[0], import_nodes)\n        if module_alias:\n            grouped[group_key].module_alias = module_alias\n\n        # If @name captures exist, add them to the names list (excluding duplicates)\n        # When an alias is present, register the alias name and record the mapping to the original name in alias_map\n        for name_node in name_nodes:\n            alias_name = _resolve_imported_name(name_node)\n            original_name = _get_original_name(name_node)\n            if alias_name and alias_name not in grouped[group_key].names:\n                grouped[group_key].names.append(alias_name)\n                if original_name and original_name != alias_name:\n                    if grouped[group_key].alias_map is None:\n                        grouped[group_key].alias_map = {}\n                    grouped[group_key].alias_map[alias_name] = original_name\n\n        # Java/Kotlin wildcard import detection:\n        # If an import_node's child contains asterisk (Java) or * (Kotlin), add \"*\" to names\n        if import_nodes and \"*\" not in grouped[group_key].names:\n            for child in import_nodes[0].children:\n                if child.type in (\"asterisk\", \"*\"):\n                    grouped[group_key].names.append(\"*\")\n                    break\n\n    return list(grouped.values())"
+    },
+    {
+      "name": "_detect_module_alias",
+      "type": "function_definition",
+      "start_line": 116,
+      "end_line": 146,
+      "context": "def _detect_module_alias(\n    module_node: Node, import_nodes: list[Node],\n) -> str | None:\n    \"\"\"Detect the alias name (Y) from import X as Y.\n\n    Python: aliased_import node has an alias field.\n    Kotlin: import node has an import_alias child node directly beneath it.\n\n    Args:\n        module_node: The node captured by @module.\n        import_nodes: List of nodes captured by @import_node.\n\n    Returns:\n        The alias name, or None if no alias exists.\n    \"\"\"\n    # Python: if module_node's parent is aliased_import, get the alias\n    parent = module_node.parent\n    if parent and parent.type == \"aliased_import\":\n        alias = parent.child_by_field_name(\"alias\")\n        if alias:\n            return alias.text.decode(\"utf-8\")\n\n    # Kotlin: get the alias from import_alias directly under the import node\n    if import_nodes:\n        alias_child = import_nodes[0].child_by_field_name(\"alias\")\n        if alias_child:\n            for child in alias_child.children:\n                if child.type in (\"simple_identifier\", \"identifier\"):\n                    return child.text.decode(\"utf-8\")\n\n    return None"
+    },
+    {
+      "name": "_resolve_imported_name",
+      "type": "function_definition",
+      "start_line": 149,
+      "end_line": 179,
+      "context": "def _resolve_imported_name(name_node: Node) -> str | None:\n    \"\"\"Get the name actually used in code from a @name capture.\n\n    Returns the alias name if one exists.\n    e.g. from X import join as path_join -> returns \"path_join\"\n    e.g. import { useState as useMyState } -> returns \"useMyState\"\n\n    Args:\n        name_node: The node captured by @name.\n\n    Returns:\n        The name string as used in code.\n    \"\"\"\n    # Python: when @name is an aliased_import node (from X import a as b)\n    if name_node.type == \"aliased_import\":\n        alias = name_node.child_by_field_name(\"alias\")\n        if alias:\n            return alias.text.decode(\"utf-8\")\n        name = name_node.child_by_field_name(\"name\")\n        if name:\n            return name.text.decode(\"utf-8\")\n        return name_node.text.decode(\"utf-8\")\n\n    # JS/TS: when @name is an identifier inside import_specifier / export_specifier\n    parent = name_node.parent\n    if parent and parent.type in (\"import_specifier\", \"export_specifier\"):\n        alias = parent.child_by_field_name(\"alias\")\n        if alias:\n            return alias.text.decode(\"utf-8\")\n\n    return name_node.text.decode(\"utf-8\")"
+    },
+    {
+      "name": "_get_original_name",
+      "type": "function_definition",
+      "start_line": 182,
+      "end_line": 211,
+      "context": "def _get_original_name(name_node: Node) -> str | None:\n    \"\"\"Get the original definition name (before aliasing) from a @name capture.\n\n    Returns None if there is no alias (would be the same result as _resolve_imported_name).\n    e.g. from X import join as path_join -> returns \"join\"\n    e.g. import { useState as useMyState } -> returns \"useState\"\n    e.g. from X import join -> returns None (no alias)\n\n    Args:\n        name_node: The node captured by @name.\n\n    Returns:\n        The original name string, or None if no alias exists.\n    \"\"\"\n    # Python: return the original name only when aliased_import has an alias field\n    if name_node.type == \"aliased_import\":\n        alias = name_node.child_by_field_name(\"alias\")\n        if alias:\n            name = name_node.child_by_field_name(\"name\")\n            return name.text.decode(\"utf-8\") if name else None\n        return None\n\n    # JS/TS: when import_specifier / export_specifier has an alias field\n    parent = name_node.parent\n    if parent and parent.type in (\"import_specifier\", \"export_specifier\"):\n        alias = parent.child_by_field_name(\"alias\")\n        if alias:\n            return name_node.text.decode(\"utf-8\")\n\n    return None"
+    },
+    {
+      "name": "_strip_quotes",
+      "type": "function_definition",
+      "start_line": 214,
+      "end_line": 234,
+      "context": "def _strip_quotes(text: str) -> str:\n    \"\"\"Remove quotes or angle brackets surrounding a module name.\n\n    Import path notation varies by language:\n        JavaScript/TypeScript: \"react\" / 'react'\n        C/C++:                 <stdio.h> / \"helper.h\"\n\n    Languages without quotes (Python, Java, etc.) are returned as-is.\n\n    Args:\n        text: The raw module string captured by the query.\n\n    Returns:\n        The string with quotes/angle brackets removed.\n    \"\"\"\n    if len(text) >= 2:\n        if (text[0] == '\"' and text[-1] == '\"') or (text[0] == \"'\" and text[-1] == \"'\"):\n            return text[1:-1]\n        if text[0] == '<' and text[-1] == '>':\n            return text[1:-1]\n    return text"
+    }
+  ],
+  "callee_usages": [],
+  "caller_usages": [
+    {
+      "lines": [
+        69
+      ],
+      "name": "extract_imports",
+      "file": "codetwine/codetwine/file_analyzer_py/file_analyzer.py",
+      "usage_context": "\n        # Parse import statements and create an \"imported name -> dependency file\" dict\n        symbol_to_file_map, alias_to_original = build_symbol_to_file_map(\n            extract_imports(root_node, language, import_query_str),\n            target_file_rel,\n            project_file_set,\n            file_ext,"
+    },
+    {
+      "lines": [
+        268
+      ],
+      "name": "extract_imports",
+      "file": "codetwine/codetwine/extractors/usage_analysis_py/usage_analysis.py",
+      "usage_context": "        if not language:\n            continue\n\n        caller_import_list = extract_imports(\n            caller_root, language, import_query_str\n        )\n"
+    },
+    {
+      "lines": [
+        171
+      ],
+      "name": "extract_imports",
+      "file": "codetwine/codetwine/extractors/dependency_graph_py/dependency_graph.py",
+      "usage_context": "        # Parse import statements and add those resolvable to project files as callees\n        if language and import_query_str:\n            root_node = parse_file(file_path)[0]\n            for import_info in extract_imports(root_node, language, import_query_str):\n                resolved = resolve_module_to_project_path(\n                    import_info.module,\n                    file_rel,"
+    }
+  ]
+}
