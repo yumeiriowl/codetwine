@@ -799,6 +799,19 @@ async def generate_all_docs(
                 return True
         return False
 
+    def _is_doc_complete(doc: dict) -> bool:
+        """Check whether a design document contains all expected sections and summary.
+
+        Returns False if any template section is missing/extra or if the summary is empty.
+        """
+        expected_ids = {s["id"] for s in template["sections"]}
+        actual_ids = {s["id"] for s in doc.get("sections", [])}
+        if expected_ids != actual_ids:
+            return False
+        if "summary_prompt" in template and not doc.get("summary"):
+            return False
+        return True
+
     async def process_one(file_rel: str) -> tuple[str, dict | None]:
         """Generate the design document for one file and return (file_rel, doc).
 
@@ -822,9 +835,12 @@ async def generate_all_docs(
                 try:
                     with open(existing_doc_path, "r", encoding="utf-8") as f:
                         existing_doc = json.load(f)
-                    print(f"  REUSE: {file_rel}")
-                    logger.info(f"  REUSE: {file_rel}")
-                    return file_rel, existing_doc
+                    if _is_doc_complete(existing_doc):
+                        print(f"  REUSE: {file_rel}")
+                        logger.info(f"  REUSE: {file_rel}")
+                        return file_rel, existing_doc
+                    print(f"  INCOMPLETE: {file_rel}")
+                    logger.info(f"  INCOMPLETE: {file_rel} — regenerating")
                 except (json.JSONDecodeError, OSError):
                     pass  # Fall back to regeneration on read failure
 

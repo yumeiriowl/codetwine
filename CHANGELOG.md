@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.1 - 2026-03-18
+
+### Fixed
+- Incomplete `doc.json` (missing sections or empty summary) being reused instead of regenerated
+- `InternalServerError` and `ServiceUnavailableError` not being caught in LLM API error handling
+
 ## 0.1.0 - 2026-03-17
 
 ### Added

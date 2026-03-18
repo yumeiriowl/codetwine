@@ -220,6 +220,7 @@ On subsequent runs, only the changed files and their affected scope have their d
 - **Change detection**: Compares SHA256 hashes of source files with the copies from the previous output to detect changed files
 - **Dependency information**: Re-extracted for all files every run to ensure consistency
 - **Design documents**: Only the changed files and files that depend on them (dependents) are regenerated; all others reuse previous results
+- **Completeness check**: Even for unchanged files, if the existing `doc.json` has missing sections or an empty summary (e.g. due to a previous LLM API failure), it is treated as incomplete and regenerated
 
 ## Output JSON Schema
 
@@ -387,6 +388,8 @@ Edit `doc_template.json` to customize the section structure and LLM instructions
 | Change instructions | Edit the text in the `prompt` field |
 | Change summary instructions | Edit the `summary_prompt` field |
 | Use a different template | Specify the path in `DOC_TEMPLATE_PATH` in `.env` |
+
+When you modify the template sections, existing design documents whose section structure no longer matches the template are automatically regenerated on the next run.
 
 ## Manual Editing of Design Documents
 
