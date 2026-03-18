@@ -20,7 +20,7 @@ from codetwine.config.settings import (
     ENABLE_LLM_DOC,
     REPO_ROOT,
 )
-from codetwine.config.logging import setup_logging
+from codetwine.config.logger import setup_logging
 
 
 def parse_args() -> argparse.Namespace:

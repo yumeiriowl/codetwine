@@ -419,7 +419,7 @@ The design document generation step is skipped. Dependency information (`file_de
 
 ### Sample Output
 
-`examples/sample_output/` contains pre-generated output produced by analyzing the codetwine repository itself. `rlm_qa_agent.py` references this output by default, so you can try out RLM QA immediately without running any analysis.
+`examples/sample_output/` contains sample output produced by analyzing the codetwine repository itself. This output was generated using a Python-specific template (`examples/doc_template_python.json`) created for this sample. `rlm_qa_agent.py` references this output by default, so you can try out RLM QA immediately without running any analysis.
 
 ### Additional Prerequisites
 
@@ -453,7 +453,7 @@ codetwine/
 │   ├── output.py               # JSON and Mermaid output processing
 │   ├── config/
 │   │   ├── settings.py         # Environment variables and per-language settings management
-│   │   └── logging.py          # Logging configuration
+│   │   └── logger.py           # Logging configuration
 │   ├── extractors/
 │   │   ├── definitions.py      # Definition extraction (functions, classes, etc.)
 │   │   ├── imports.py          # Import statement extraction
@@ -467,7 +467,8 @@ codetwine/
 │   └── utils/
 │       └── file_utils.py       # File operation utilities
 └── examples/
-    ├── rlm_qa/                 # RLM QA agent sample
+    ├── doc_template_python.json  # Python-optimized design document template
+    ├── rlm_qa/                   # RLM QA agent sample
     └── sample_output/            # Sample output (codetwine analyzed against itself)
 ```
 

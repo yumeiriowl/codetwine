@@ -394,7 +394,7 @@ _LANG_REGISTRY: dict[str, LangConfig] = {
         definition_dict=PYTHON_DEFINITION_DICT,
         import_query=_PYTHON_IMPORT_QUERY,
         usage_node_types=_PYTHON_USAGE_NODE_TYPES,
-        import_resolve={"separator": ".", "try_init": True},
+        import_resolve={"separator": ".", "try_init": True, "try_current_dir": True},
     ),
     "java": LangConfig(
         language=Language(tsjava.language()),

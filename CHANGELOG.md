@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.2 - 2026-03-19
+
+### Fixed
+- Python same-directory imports (e.g. `import module_name`) not detected as dependencies
+
+### Changed
+- Renamed `config/logging.py` to `config/logger.py` to avoid standard library name collision
+
+### Added
+- Python-optimized design document template (`examples/doc_template_python.json`)
+
 ## 0.1.1 - 2026-03-18
 
 ### Fixed

@@ -1,5 +1,5 @@
 {
-  "file": "codetwine/codetwine/config/logging_py/logging.py",
+  "file": "codetwine/codetwine/config/logger_py/logger.py",
   "definitions": [
     {
       "name": "_LOG_DIR",

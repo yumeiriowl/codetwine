@@ -4,31 +4,32 @@
 
 # Overview & Purpose
 
-## Role and Purpose
+## 1. Module Summary
 
-`qa_tools.py` provides the core tool functions used during question-answering sessions over a loaded project knowledge base. It exists as a dedicated module to centralize all data-access and graph-traversal operations that operate on the in-memory project knowledge JSON (`project_data`) and the on-disk source file tree (`base_dir`). By isolating these utilities in one file, consuming code (e.g. a QA agent or REPL) can import exactly the tools it needs without duplicating file-reading or dependency-graph logic.
+Provides a set of stateful tool functions for querying a loaded project knowledge graph, enabling callers to read source files, look up file dependents, and traverse definition-level dependency graphs via BFS.
 
-The module relies on two module-level variables (`project_data`, `base_dir`) that are expected to be populated by an external `load_project()` call before any tool function is invoked. This shared-state pattern means all three functions implicitly share the same project context without requiring it to be passed as an argument on every call.
+## 2. When to Use This Module
 
----
+- **Reading source file content**: Call `read_source_file(path)` when you need the raw text of a source file identified by its path as recorded in `project_knowledge.json`.
+- **Finding files that depend on a given file**: Call `get_files_using(target_file)` when you need to know which files import or reference a specific file, receiving a list of file paths and their specific usages.
+- **Exploring the dependency graph around a definition**: Call `graph_search(name, hops, direction)` when you need to discover which definitions a given symbol depends on (`"outgoing"`), which definitions depend on it (`"incoming"`), or both, up to N hops away.
+- **Initializing module state before calling any tool**: Set `project_data` and `base_dir` (as done in `rlm_qa_agent.py`) before invoking any of the above functions; all three tool functions rely on these module-level variables.
 
-## Public Interface
+## 3. Public Interface Table
 
-| Name | Arguments | Return Value | Responsibility |
+| Name | Arguments (type) | Return type | Responsibility |
 |---|---|---|---|
-| `read_source_file` | `path: str` | `str` (file content or error message) | Reads and returns the raw text of a source file from disk, stripping the leading project-name prefix from the path before resolving it under `base_dir`. |
-| `get_files_using` | `target_file: str` | `list[dict]` — `[{"file": str, "usage": dict}, ...]` | Scans `callee_usages` across all files and returns every file that has a usage whose `from` field partially matches `target_file`. |
-| `graph_search` | `name: str`, `hops: int = 1`, `direction: str = "both"` | `dict` — start key, matched results list, and edges list | Performs a BFS over the definition-dependency graph starting from a named definition, collecting reachable nodes and traversed edges within the specified hop count and direction. |
+| `project_data` | — | `dict \| None` | Module-level variable holding the parsed contents of `project_knowledge.json`; must be set before calling tool functions |
+| `base_dir` | — | `str \| None` | Module-level variable holding the base directory for resolving source file paths; must be set before calling `read_source_file` |
+| `read_source_file` | `path: str` | `str` | Returns the full text content of the source file at the given path, or an error message string on failure |
+| `get_files_using` | `target_file: str` | `list` | Returns a list of `{"file": str, "usage": dict}` entries for every file whose `callee_usages` partially match the given file path |
+| `graph_search` | `name: str`, `hops: int`, `direction: str` | `dict` | Performs BFS from a named definition and returns reachable definitions and edges within the specified hop count and direction |
 
----
+## 4. Design Decisions
 
-## Design Decisions
-
-- **Implicit shared state via module-level variables.** `project_data` and `base_dir` are module globals rather than parameters, so tool functions stay signature-simple and naturally form a stateful context once initialized externally.
-- **Graceful degradation on missing state.** Each function checks for uninitialized globals and returns an error string or error-keyed dict rather than raising an exception, making failures observable without crashing a QA loop.
-- **Exact-then-partial match fallback in `graph_search`.** The BFS start-node lookup first tries exact name matching; only if no match is found does it fall back to case-insensitive substring matching, minimizing accidental broad matches while still being user-friendly.
-- **BFS with a seen-edge set.** `graph_search` tracks both visited nodes and seen edges separately, allowing the returned `edges` list to represent the full traversal structure without duplicates, independent of node deduplication.
-- **Line-range containment for outgoing edges.** Rather than treating all `callee_usages` of a file as belonging to a single definition, `graph_search` filters usages by checking whether their line numbers fall within the current definition's `start_line`–`end_line` range, attributing each call site to the correct enclosing definition.
+- **Module-level mutable state**: `project_data` and `base_dir` are module-level variables rather than function parameters or a class instance. This allows the tool functions to be passed as plain callables (e.g., into a `tools=[...]` list in `rlm_qa_agent.py`) without requiring callers to supply context on every invocation.
+- **Exact-then-partial match fallback in `graph_search`**: The BFS start node search first attempts an exact match on definition name, then falls back to a case-insensitive partial match. This makes the function usable with approximate or abbreviated names while still preferring precise matches.
+- **Line-range scoping for outgoing edges**: `graph_search` restricts `callee_usages` to those whose usage line numbers fall within the current definition's `start_line`–`end_line` range, ensuring that outgoing edges are attributed to the specific definition that contains the call rather than to the file as a whole.
 
 ## Definition Design Specifications
 
@@ -36,248 +37,353 @@ The module relies on two module-level variables (`project_data`, `base_dir`) tha
 
 ---
 
-## `read_source_file(path: str) -> str`
+## Module-Level Variables
 
-**Responsibility:** Resolves a file path recorded in the JSON knowledge data to an absolute path on disk and returns the file's text content, providing a uniform access point for source file reads across all tool functions.
+| Variable | Type | Purpose |
+|---|---|---|
+| `project_data` | `dict \| None` | Holds the entire parsed `project_knowledge.json` content. Must be set externally (by `load_project()` in `rlm_qa_agent.py`) before any tool function is called. |
+| `base_dir` | `str \| None` | Filesystem path to the directory containing the source files. Derived from the JSON file's location. Must be set alongside `project_data`. |
 
-**Arguments:**
-- `path` (`str`): A file path as it appears in the `"file"` field of `project_knowledge.json` entries (e.g., `"myproject/module/file.py"`). May include a leading `project_name/` prefix.
-
-**Return value:** (`str`) The full UTF-8 text content of the file, or an error message string beginning with `"Error:"` if `base_dir` is uninitialized or if the file cannot be opened.
-
-**Design decisions:**
-- Returns an error string rather than raising an exception, keeping the interface uniform for LLM tool-call consumers that expect a string response in all cases.
-- Strips the leading `project_name/` prefix before joining with `base_dir`, because the JSON field includes the project name as a path component while the physical file tree rooted at `base_dir` does not.
-
-**Edge cases and constraints:**
-- Requires `base_dir` and `project_data` module variables to be initialized by `load_project()` before calling; returns an error string immediately if `base_dir` is `None`.
-- Prefix stripping only occurs when `project_name` is non-empty and the path literally starts with `project_name + "/"`.
+**Constraints:** Both variables default to `None`. All three tool functions depend on at least one of them being initialized. Neither variable is set by any function within this file itself.
 
 ---
 
-## `get_files_using(target_file: str) -> list`
+## `read_source_file`
 
-**Responsibility:** Answers the question "which files depend on this file?" by scanning the `callee_usages` of every file in the project and collecting entries whose origin matches the target.
+**Signature:**
+```
+read_source_file(path: str) -> str
+```
 
-**Arguments:**
-- `target_file` (`str`): A partial or full file path string to match against the `"from"` field of each `callee_usages` entry (substring match).
+**Responsibility:** Resolves a file path recorded in the JSON metadata to an absolute filesystem path and returns the file's text content. Exists to let callers retrieve raw source code for inspection given a path entry from `project_data`.
 
-**Return value:** (`list`) A list of dicts, each with:
-- `"file"` (`str`): The path of the file that contains the dependency.
-- `"usage"` (`dict`): The raw `callee_usages` entry that matched.
-
-Returns an empty list if no dependents are found.
+**When to use:** When a caller needs the raw text of a source file identified by a path string from a `project_data["files"]` entry.
 
 **Design decisions:**
-- Uses substring (`in`) matching rather than exact path equality so callers can pass a short identifying fragment without knowing the full canonical path.
-- Exposes the raw usage dict rather than a simplified summary, giving callers access to all usage metadata (name, lines, etc.) without an additional lookup.
+- Automatically strips a leading `<project_name>/` prefix from `path` before joining with `base_dir`, accommodating the convention that JSON file fields include the project name as a prefix component.
+- Returns a human-readable error string (rather than raising an exception) on any read failure, making it safe to use inside agent tool loops where exceptions would interrupt execution.
 
-**Edge cases and constraints:**
-- Relies on `project_data` being initialized; no guard is present, so calling before `load_project()` will raise `TypeError`.
-- A very short or generic `target_file` string may produce false-positive matches across unrelated files.
+**Constraints & edge cases:**
+- Returns an error string if `base_dir` is `None`.
+- If `project_data` has no `"project_name"` key, no prefix stripping occurs.
+- Prefix stripping only applies when the path starts with exactly `<project_name>/`; deeper nesting or alternative separators are not handled.
 
 ---
 
-## `graph_search(name: str, hops: int = 1, direction: str = "both") -> dict`
+## `get_files_using`
 
-**Responsibility:** Performs a breadth-first traversal of the definition dependency graph starting from a named definition, enabling callers to discover transitive dependencies and/or dependents up to a specified depth.
+**Signature:**
+```
+get_files_using(target_file: str) -> list
+```
+`list` — a list of dicts, each with shape `{"file": str, "usage": dict}`, where `"file"` is the path of the dependent file and `"usage"` is the raw `callee_usages` entry that matched.
 
-**Arguments:**
-- `name` (`str`): The definition name to use as the BFS starting node. Exact match is attempted first; partial case-insensitive match is used as a fallback.
-- `hops` (`int`, default `1`): Maximum traversal depth. A value of `1` returns only direct neighbors; `2` includes neighbors of neighbors, and so on.
-- `direction` (`str`, default `"both"`): Controls which edges are followed. `"outgoing"` follows dependencies (things this definition calls/uses), `"incoming"` follows dependents (things that call/use this definition), and `"both"` follows both.
+**Responsibility:** Performs a reverse dependency lookup across all files, finding every file that declares a usage originating from `target_file`. Exists to answer "what files depend on this file?"
 
-**Return value:** (`dict`) with keys:
-- `"start"` (`str`): The starting node key in `"file:name"` format.
-- `"hops"` (`int`): The `hops` argument as provided.
-- `"direction"` (`str`): The `direction` argument as provided.
-- `"results"` (`list[dict]`): Each discovered node, with fields `key`, `file`, `name`, `type`, `hop` (the hop depth at which it was first reached), and `via` (`"outgoing"` or `"incoming"`).
-- `"edges"` (`list[dict]`): Each traversed edge, with fields `source`, `target`, and `hop`.
-- `"error"` (`str`): Present instead of the above keys if `project_data` is not loaded or the starting definition cannot be found.
+**When to use:** When a caller needs to identify all files that import from or reference a specific source file.
 
 **Design decisions:**
-- Nodes are keyed as `"file:name"` composites rather than name alone, because the same definition name can exist in multiple files; this composite key keeps nodes globally unique across the project.
-- Outgoing edges are scoped to the line range of the current definition: a `callee_usages` entry is only attributed to a definition if at least one of its usage line numbers falls within that definition's `start_line`–`end_line` range. For a special `"__module__"` pseudo-definition, lines that fall outside all declared definitions are attributed to it.
-- Deduplication of both nodes (`visited` set) and edges (`seen_edges` set) prevents infinite loops in cyclic graphs and avoids redundant output.
-- When `direction="incoming"`, the traversal identifies which definition inside the caller file is responsible for the usage by finding the definition whose line range contains the caller's reported usage lines, defaulting to `"__module__"` if none match.
-- The first exact match found is used as the start node when multiple files define the same name; no error or warning is issued for ambiguous names.
+- Uses partial string matching (`target_file in usage["from"]`) rather than exact matching, so callers can pass a short identifying substring rather than a full path.
+- Searches `callee_usages` entries across all files in `project_data`, making it a full-project scan.
 
-**Edge cases and constraints:**
-- Returns `{"error": ...}` immediately if `project_data` is `None` or if no definition matching `name` can be found by either exact or partial search.
-- `hops=0` causes the BFS loop body to skip immediately for all dequeued items, producing empty `results` and `edges`.
-- Partial-match fallback may yield an unintended starting node if the name fragment matches multiple unrelated definitions; only the first match in file iteration order is used.
-- `target_type` for outgoing edges is resolved from the file index at traversal time; if the target file is absent from the index, `target_type` defaults to an empty string without error.
+**Constraints & edge cases:**
+- Returns an empty list if no matches are found; raises no error.
+- Partial matching can produce false positives if `target_file` is a substring of an unrelated path.
+- Depends on `project_data` being initialized; will raise `TypeError` if called before `project_data` is set.
+
+---
+
+## `graph_search`
+
+**Signature:**
+```
+graph_search(name: str, hops: int = 1, direction: str = "both") -> dict
+```
+
+**Return type:** A dict with the following structure:
+
+| Key | Type | Description |
+|---|---|---|
+| `"start"` | `str` | The starting node key in `"<file>:<name>"` format |
+| `"hops"` | `int` | The requested hop limit |
+| `"direction"` | `str` | The requested direction |
+| `"results"` | `list[dict]` | Found definitions reachable within the hop limit |
+| `"edges"` | `list[dict]` | Directed edges traversed during the search |
+
+Each entry in `"results"`:
+
+| Field | Type | Description |
+|---|---|---|
+| `"key"` | `str` | `"<file>:<name>"` identifier |
+| `"file"` | `str` | File path of the definition |
+| `"name"` | `str` | Symbol name |
+| `"type"` | `str` | Definition type (e.g., function, class) |
+| `"hop"` | `int` | Distance from the start node |
+| `"via"` | `"outgoing" \| "incoming"` | Direction through which this node was reached |
+
+Each entry in `"edges"`:
+
+| Field | Type | Description |
+|---|---|---|
+| `"source"` | `str` | `"<file>:<name>"` of the source node |
+| `"target"` | `str` | `"<file>:<name>"` of the target node |
+| `"hop"` | `int` | Hop number at which this edge was discovered |
+
+**Responsibility:** Performs a BFS over the dependency graph rooted at a named definition, collecting reachable definitions and the edges connecting them up to a specified depth. Exists to enable structured dependency exploration for agent-driven code analysis.
+
+**When to use:** When a caller needs to understand what a definition depends on, what depends on it, or both, up to an arbitrary depth.
+
+**Design decisions:**
+- **Name resolution:** Performs exact match first; falls back to case-insensitive partial match if no exact match is found. Only the first match is used as the start node.
+- **Node key format:** Uses `"<file_path>:<symbol_name>"` as a composite key to distinguish identically named symbols in different files.
+- **Module-level code:** Usage lines that fall outside any named definition's line range are attributed to a synthetic node named `"__module__"`, representing top-level module code.
+- **Outgoing edge filtering:** For a definition node, only `callee_usages` entries whose usage lines fall within that definition's declared line range are considered its outgoing edges, scoping each edge to a specific definition rather than the whole file.
+- **Duplicate suppression:** Both visited nodes and seen edges are tracked separately using sets, preventing cycles from causing infinite traversal and preventing duplicate edges in the output.
+- **BFS termination:** Nodes at exactly `hops` depth are added to results but not enqueued for further expansion, enforcing the depth limit strictly.
+
+**Constraints & edge cases:**
+- Returns `{"error": ...}` if `project_data` is `None` or if `name` cannot be matched.
+- `direction` must be one of `"outgoing"`, `"incoming"`, or `"both"`; no validation is performed — an unrecognized value silently produces no results.
+- If a `callee_usages` entry references a file not present in `project_data`, its `target_type` is left as an empty string and traversal into it is skipped.
+- For `"__module__"` nodes, outgoing edge detection uses a different containment check than named definitions.
 
 ## Dependency Description
 
-## Dependency Description
+# Dependency Description
 
-### Dependencies (what this file uses)
+## Dependencies (modules this file imports)
 
-This file has no project-internal file dependencies. All imports (`os`, `collections.deque`) are standard library modules. The module operates entirely on data passed in through the module-level variables `project_data` and `base_dir`, which are set externally by a `load_project()` function defined outside this file.
+No project-internal module dependencies are present. This file (`qa_tools.py`) imports only from the Python standard library (`os`, `collections.deque`) and defines tool functions that operate on module-level variables (`project_data`, `base_dir`) injected by an external caller.
 
-### Dependents (what uses this file)
+## Dependents (modules that import this file)
 
-No dependent information available.
+- `examples/rlm_qa/rlm_qa_agent.py` → `codetwine/examples/rlm_qa/qa_tools_py/qa_tools.py` : The agent module uses this file for the following purposes:
+  - **`qa_tools.project_data`** and **`qa_tools.base_dir`**: Directly assigns these module-level variables after loading a `project_knowledge.json` file, initializing the shared state required by all tool functions.
+  - **`qa_tools.read_source_file`**: Registers this function as a callable tool for reading source file contents from the loaded project.
+  - **`qa_tools.get_files_using`**: Registers this function as a callable tool for finding files that depend on a given file.
+  - **`qa_tools.graph_search`**: Registers this function as a callable tool for performing BFS-based dependency graph searches.
+
+## Dependency Direction
+
+| Relationship | Direction |
+|---|---|
+| `qa_tools.py` → any project-internal module | None (no project-internal imports) |
+| `rlm_qa_agent.py` → `qa_tools.py` | **Unidirectional**: `rlm_qa_agent.py` depends on `qa_tools.py`; `qa_tools.py` has no knowledge of or reference to `rlm_qa_agent.py` |
 
 ## Data Flow
 
 # Data Flow
 
-## Module-Level State
+## 1. Inputs
 
-Two module variables act as shared state, initialized externally via `load_project()`:
-
-| Variable | Type | Purpose |
+| Input | Source | Format |
 |---|---|---|
-| `project_data` | `dict` | Entire parsed project knowledge JSON |
-| `base_dir` | `str` | Filesystem root for resolving source file paths |
+| `project_data` | Module-level variable, set externally by `rlm_qa_agent.py` via `qa_tools.project_data = json.load(f)` | `dict` parsed from `project_knowledge.json` |
+| `base_dir` | Module-level variable, set externally by `rlm_qa_agent.py` via `qa_tools.base_dir = os.path.dirname(json_path)` | `str` (directory path) |
+| `path` argument | Caller of `read_source_file()` | `str` (relative file path as listed in the JSON `"file"` field) |
+| `target_file` argument | Caller of `get_files_using()` | `str` (partial file path for matching) |
+| `name`, `hops`, `direction` arguments | Caller of `graph_search()` | `str`, `int`, `str` |
 
-All three tool functions read directly from these module globals.
-
----
-
-## `read_source_file(path)`
-
-```
-Input:  path (str) — relative file path from JSON "file" field
-          │
-          ▼
-Strip leading "project_name/" prefix if present
-          │
-          ▼
-Join with base_dir → absolute filesystem path
-          │
-          ▼
-Output: raw file content (str), or error message (str) on failure
-```
+The module has no initialization logic of its own. All shared state (`project_data`, `base_dir`) is injected by the external caller (`rlm_qa_agent.py`) before any tool function is invoked.
 
 ---
 
-## `get_files_using(target_file)`
+## 2. Transformation Overview
+
+### `read_source_file(path)`
 
 ```
-Input:  target_file (str) — partial path string to match against
+path (str)
+  → Strip leading "project_name/" prefix if present
+  → Join with base_dir to form an absolute filesystem path
+  → Read file from disk
+  → Return raw file content (str)
+```
 
+### `get_files_using(target_file)`
+
+```
+project_data["files"] (list of file entries)
+  → Iterate all files → iterate each file's callee_usages[]
+  → Filter: keep usages where target_file is a substring of usage["from"]
+  → Collect matching entries as {"file": file_entry["file"], "usage": usage_dict}
+  → Return list of matches
+```
+
+### `graph_search(name, hops, direction)`
+
+```
 project_data["files"]
-    └── each file_entry
-            └── file_dependencies.callee_usages[]
-                    └── usage["from"] contains target_file?
-                                │ yes
-                                ▼
-                        collect {"file": file_entry["file"], "usage": usage}
+  → Build file_index: {file_path → file_entry} for O(1) lookup
 
-Output: list of {"file": str, "usage": dict}
+  → Find start definition(s):
+      Exact match on definition["name"] == name
+      → Fallback: partial match (name.lower() in definition["name"].lower())
+      → Take first match as start node
+
+  → BFS from start_key = "file_path:def_name":
+      Each iteration pops (current_key, current_file, current_name, current_hop)
+      If current_hop >= hops → skip (boundary enforcement)
+
+      direction="outgoing" or "both":
+        → Scan callee_usages of current file
+        → Filter usages whose line numbers fall within current definition's line range
+        → Each match → build target_key = "target_file:target_name"
+        → Look up target definition type from file_index
+        → Record edge {source, target, hop}
+        → If target_key unvisited → add to results, enqueue
+
+      direction="incoming" or "both":
+        → Scan caller_usages of current file, filter by name == current_name
+        → For each caller line, identify which definition in the source file contains it
+          → source_name = that definition's name (or "__module__" if none found)
+        → Build source_key = "source_file:source_name"
+        → Record edge {source, target, hop}
+        → If source_key unvisited → add to results, enqueue
+
+  → Return structured result dict with start, hops, direction, results[], edges[]
 ```
-
-**Output record structure:**
-
-| Field | Type | Content |
-|---|---|---|
-| `file` | `str` | Path of the file that has the dependency |
-| `usage` | `dict` | Raw `callee_usages` entry (includes `name`, `from`, `lines`) |
 
 ---
 
-## `graph_search(name, hops, direction)`
+## 3. Outputs
 
-### Input Resolution
-
-```
-name (str) ──► exact match in definitions → fallback to partial (case-insensitive)
-                        │
-                        ▼
-              start_key = "file_path:def_name"   (first match used)
-```
-
-### BFS Traversal
-
-```
-queue: deque of (current_key, current_file, current_name, current_hop)
-visited: set of keys already enqueued
-
-While queue not empty AND current_hop < hops:
-    │
-    ├─ direction "outgoing" / "both":
-    │       Scan callee_usages of current file
-    │       Filter: usage lines fall within current definition's line range
-    │       → target_key = "from_file:usage_name"
-    │       → Look up target type from file_index
-    │       → Append edge + result, enqueue target
-    │
-    └─ direction "incoming" / "both":
-            Scan caller_usages of current file where name == current_name
-            Identify which definition in source_file contains caller lines
-            → source_key = "source_file:def_name" (default: "__module__")
-            → Append edge + result, enqueue source
-```
-
-### Internal Data Structures
-
-**`file_index`** — built once per call for O(1) lookup:
-```
-{ "file_path": file_entry_dict, ... }
-```
-
-**`results` entry:**
-
-| Field | Type | Content |
+| Function | Output | Format |
 |---|---|---|
-| `key` | `str` | `"file_path:def_name"` — unique node identifier |
-| `file` | `str` | Source file path |
-| `name` | `str` | Definition name |
-| `type` | `str` | Definition type (from JSON, may be empty) |
-| `hop` | `int` | Distance from start node |
-| `via` | `str` | `"outgoing"` or `"incoming"` |
+| `read_source_file()` | File contents, or an error message string on failure | `str` |
+| `get_files_using()` | List of files that depend on the target file, with their matching usage entries | `list[dict]` — see Key Data Structures |
+| `graph_search()` | BFS traversal result with discovered nodes and edges | `dict` — see Key Data Structures |
 
-**`edges` entry:**
+No file writes or side effects are produced by any tool function. All output is returned to the caller as return values.
 
-| Field | Type | Content |
+---
+
+## 4. Key Data Structures
+
+### `project_data` (injected module variable)
+
+The top-level structure read from `project_knowledge.json`:
+
+| Field / Key | Type | Purpose |
 |---|---|---|
-| `source` | `str` | Source node key |
-| `target` | `str` | Target node key |
-| `hop` | `int` | Hop number at which edge was discovered |
+| `"project_name"` | `str` | Used to strip the leading path prefix in `read_source_file()` |
+| `"files"` | `list[dict]` | All file entries iterated by every tool function |
 
-**`seen_edges`** — set of `(source_key, target_key, direction)` tuples preventing duplicate edges.
+### File entry (element of `project_data["files"]`)
 
-### Output
+| Field / Key | Type | Purpose |
+|---|---|---|
+| `"file"` | `str` | Relative path of the source file |
+| `"file_dependencies"` | `dict` | Contains definitions, callee_usages, and caller_usages for the file |
 
-```
-{
-  "start":     str,    — starting node key
-  "hops":      int,    — requested hop depth
-  "direction": str,    — requested direction
-  "results":   [...],  — list of reachable definition nodes
-  "edges":     [...]   — list of traversed edges
-}
-```
+### `file_dependencies` dict
+
+| Field / Key | Type | Purpose |
+|---|---|---|
+| `"definitions"` | `list[dict]` | Definitions declared in this file |
+| `"callee_usages"` | `list[dict]` | Symbols this file calls/uses from other files |
+| `"caller_usages"` | `list[dict]` | Records of other files calling symbols defined in this file |
+
+### Definition entry (element of `definitions`)
+
+| Field / Key | Type | Purpose |
+|---|---|---|
+| `"name"` | `str` | Symbol name; used as a node identifier in BFS |
+| `"type"` | `str` | Symbol type (e.g., function, class); included in `graph_search` results |
+| `"start_line"` | `int` | Used in `graph_search` to determine if a usage falls within this definition |
+| `"end_line"` | `int` | Used in `graph_search` to determine if a usage falls within this definition |
+
+### Callee usage entry (element of `callee_usages`)
+
+| Field / Key | Type | Purpose |
+|---|---|---|
+| `"name"` | `str` | Name of the symbol being used |
+| `"from"` | `str` | File path where the symbol originates; matched against `target_file` in `get_files_using()` |
+| `"lines"` | `list[int]` | Line numbers of the usage; used in `graph_search` for range filtering |
+
+### Caller usage entry (element of `caller_usages`)
+
+| Field / Key | Type | Purpose |
+|---|---|---|
+| `"name"` | `str` | Name of the symbol being called; matched against `current_name` in BFS |
+| `"file"` | `str` | File path of the caller |
+| `"lines"` | `list[int]` | Line numbers of the call; used to identify the containing definition in the caller file |
+
+### `get_files_using()` return value — list element
+
+| Field / Key | Type | Purpose |
+|---|---|---|
+| `"file"` | `str` | Path of the file that depends on the target |
+| `"usage"` | `dict` | The full callee_usage entry that matched the target_file |
+
+### `graph_search()` return value
+
+| Field / Key | Type | Purpose |
+|---|---|---|
+| `"start"` | `str` | Start node key in `"file_path:def_name"` format |
+| `"hops"` | `int` | The `hops` argument passed to the function |
+| `"direction"` | `str` | The `direction` argument passed to the function |
+| `"results"` | `list[dict]` | All discovered nodes within the hop limit |
+| `"edges"` | `list[dict]` | All traversed edges between nodes |
+
+### `graph_search()` result node (element of `"results"`)
+
+| Field / Key | Type | Purpose |
+|---|---|---|
+| `"key"` | `str` | Node identifier in `"file_path:def_name"` format |
+| `"file"` | `str` | File path containing the definition |
+| `"name"` | `str` | Definition name |
+| `"type"` | `str` | Definition type looked up from `file_index` |
+| `"hop"` | `int` | BFS distance from start node |
+| `"via"` | `str` | `"outgoing"` or `"incoming"` indicating traversal direction |
+
+### `graph_search()` edge (element of `"edges"`)
+
+| Field / Key | Type | Purpose |
+|---|---|---|
+| `"source"` | `str` | Source node key in `"file_path:def_name"` format |
+| `"target"` | `str` | Target node key in `"file_path:def_name"` format |
+| `"hop"` | `int` | BFS hop level at which this edge was discovered |
 
 ## Error Handling
 
 # Error Handling
 
-## Overall Strategy
+## 1. Overall Strategy
 
-This module adopts a **graceful degradation** approach. Rather than raising exceptions and halting execution, functions return descriptive error values (strings or dicts) to the caller. This design allows interactive or agent-driven callers to inspect and react to failures without requiring try/except wrappers at the call site.
-
----
-
-## Error Patterns and Handling Policies
-
-| Error Type | Handling | Impact |
-|---|---|---|
-| Uninitialized module state (`base_dir` or `project_data` is `None`) | Returns an error string or `{"error": "..."}` dict immediately | Prevents further execution within the function; caller receives a descriptive message |
-| File read failure (e.g., file not found, permission denied) | Exception caught internally; returns an error string containing the path and exception message | Function returns a string instead of file content; no exception propagates |
-| Definition not found by exact match | Falls back to case-insensitive partial match search before returning an error | Reduces hard failures for minor naming variations; only errors if both strategies yield nothing |
-| Definition not found after partial match fallback | Returns `{"error": "..."}` dict | Caller receives a structured error; no exception raised |
-| Missing or absent keys in JSON data | Handled via `.get()` with empty defaults (`{}`, `[]`, `""`) throughout traversal | Silently skips malformed or incomplete entries rather than raising `KeyError` |
+The module adopts a **graceful degradation** approach. Rather than raising exceptions that would terminate the caller, errors are surfaced as in-band return values — either descriptive error strings (for string-returning functions) or error-keyed dicts (for dict-returning functions). This keeps the LLM agent's tool-call loop alive even when individual tool invocations encounter problems. Uninitialized module-level state (`project_data`, `base_dir`) is detected eagerly at the entry point of each function and short-circuited before any further processing occurs.
 
 ---
 
-## Design Considerations
+## 2. Error Pattern Table
 
-The consistent use of return-value-based error signaling (strings for `read_source_file`, dicts for `graph_search`) means callers must inspect the return type or content to detect failures — there is no unified error contract across functions. The reliance on `.get()` defaults for JSON traversal prioritizes robustness over strictness, accepting that incomplete data entries will be silently ignored rather than surfaced as explicit errors.
+| Error Type | Trigger Condition | Handling | Recoverable? | Impact |
+|---|---|---|---|---|
+| Uninitialized `base_dir` | `read_source_file` is called before `load_project()` sets `base_dir` | Returns a fixed error string indicating that `load_project()` must be called first | No | The file read is aborted; the caller receives an error string instead of file content |
+| Uninitialized `project_data` | `graph_search` is called before `load_project()` sets `project_data` | Returns a dict with an `"error"` key and a descriptive message | No | The entire graph search is aborted; the caller receives an error dict |
+| File read failure | The target file does not exist, cannot be opened, or any other OS/IO exception occurs during `open()` | Exception is caught and its message is embedded in a returned error string | No | The file read is aborted; the caller receives an error string describing the exception |
+| Definition not found (exact) | No definition in any file exactly matches the `name` argument passed to `graph_search` | Falls back silently to a partial (case-insensitive substring) match search | Yes | Search continues with partial-match candidates; no error is surfaced if any partial match exists |
+| Definition not found (partial) | Neither exact nor partial match finds any definition for `name` | Returns a dict with an `"error"` key stating the definition was not found | No | The graph search is aborted; the caller receives an error dict |
+| Missing file entry during BFS | A dependency edge references a file path that has no corresponding entry in `file_index` | The BFS iteration for that node is silently skipped via a `continue` | Yes | The unreachable node and its subtree are omitted from results; traversal continues for other nodes |
+
+---
+
+## 3. Design Notes
+
+- **In-band error signaling** is used consistently rather than raising exceptions, matching the expectation that tool functions called by an LLM agent return values the agent can inspect and reason about.
+- **State initialization guard** is applied at the function boundary rather than at module load time, because `project_data` and `base_dir` are intentionally set externally by `rlm_qa_agent.py` after import. Each function that depends on these variables independently checks their validity.
+- **Exact-then-partial fallback** in `graph_search` is a silent policy: no warning or indicator is returned to the caller to signal that a fallback occurred. The caller receives results as if the partial match were the intended start point.
+- **Missing BFS nodes** are silently skipped rather than flagged, meaning result completeness is not guaranteed when the dependency graph references files absent from the loaded project data.
 
 ## Summary
 
-`qa_tools.py` provides three tool functions for querying a project knowledge base: `read_source_file` reads source files from disk by resolving JSON-recorded paths under `base_dir`; `get_files_using` returns all files that depend on a target file via substring-matching callee usages; `graph_search` performs BFS over the definition-dependency graph, returning reachable nodes and traversed edges within a specified hop count and direction. All functions share implicit state through module-level `project_data` and `base_dir` variables initialized externally. Errors are returned as strings or dicts rather than raised as exceptions.
+**qa_tools.py** provides stateful tool functions for querying a project knowledge graph loaded from `project_knowledge.json`.
+
+Module-level variables `project_data: dict|None` and `base_dir: str|None` must be set externally before use.
+
+Public functions:
+- `read_source_file(path: str) -> str`
+- `get_files_using(target_file: str) -> list[{"file": str, "usage": dict}]`
+- `graph_search(name: str, hops: int, direction: str) -> {"start": str, "hops": int, "direction": str, "results": list[dict], "edges": list[dict]}`
+
+Consumes `project_data["files"]` entries containing `definitions`, `callee_usages`, and `caller_usages` dicts.

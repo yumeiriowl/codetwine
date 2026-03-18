@@ -4,40 +4,32 @@
 
 # Overview & Purpose
 
-## Role and Responsibilities
+## 1. Module Summary
 
-`pipeline.py` is the central orchestration module of the CodeTwine analysis pipeline. It exists as a separate file to encapsulate the end-to-end workflow that transforms a raw project directory into a fully analyzed output: dependency graphs, per-file dependency JSON files, LLM-generated design documents, a Mermaid diagram, and a consolidated knowledge JSON. All other modules handle individual concerns (parsing, extraction, LLM calls, output formatting); this module sequences and coordinates them.
+Orchestrate the full analysis pipeline for a software project, coordinating dependency graph construction, per-file dependency extraction, LLM-based document generation, and consolidated output artifact creation into a single async entry point.
 
-Its concrete responsibilities are:
+## 2. When to Use This Module
 
-- Converting paths between the `project_name/copy_path` output format and the internal relative-path format used during processing.
-- Detecting which files have changed since the last run (by hash comparison and presence of prior output artifacts), enabling incremental processing.
-- Driving per-file dependency extraction and persisting results to `file_dependencies.json` alongside a copy of the original source file.
-- Conditionally invoking LLM-based design document generation (controlled by `ENABLE_LLM_DOC`).
-- Coordinating the three aggregated output steps: dependency summary JSON, Mermaid graph, and consolidated knowledge JSON.
-- Clearing the tree-sitter parse cache after the run to free memory.
+- **Analyzing an entire project**: Call `process_all_files(project_dir, output_dir, llm_client)` to run the complete pipeline from raw source files to all output artifacts (`file_dependencies.json`, `project_knowledge.json`, `project_dependency_summary.json`, `dependency_graph.md`, and per-file design documents).
+- **Integrating into a CLI or runner**: `main.py` imports and invokes `process_all_files` via `asyncio.run(...)` as the sole entry point into the analysis pipeline.
 
-## Public Interface
+## 3. Public Interface Table
 
-| Name | Arguments | Return Value | Responsibility |
+| Name | Arguments (type) | Return type | Responsibility |
 |---|---|---|---|
-| `process_all_files` | `project_dir: str`, `output_dir: str`, `llm_client: LLMClient \| None`, `max_workers: int = MAX_WORKERS` | `None` (async) | Top-level pipeline entry point: runs all analysis steps (dependency graph, file extraction, doc generation, output saving) for the given project directory. |
+| `async process_all_files` | `project_dir: str`, `output_dir: str`, `llm_client: LLMClient \| None`, `max_workers: int` | `None` | Run the full project analysis pipeline: build the dependency graph, extract per-file dependencies, optionally generate LLM design documents, and write all consolidated output artifacts. |
 
-## Internal (Pipeline-Private) Functions
+## 4. Design Decisions
 
-| Name | Arguments | Return Value | Responsibility |
-|---|---|---|---|
-| `_convert_dep_list_to_internal_paths` | `project_dep_list_raw: list[dict]`, `project_name: str` | `list[dict]` | Strips the `project_name/` prefix and reverses the copy-path encoding so dependency entries use plain project-relative paths during processing. |
-| `_detect_changed_files` | `all_file_list: list[str]`, `project_dir: str`, `base_output_dir: str` | `set[str]` | Returns the set of relative file paths whose source hash differs from the output copy, or whose `file_dependencies.json` is absent (incomplete prior run). |
-| `_process_file_dependencies` | `files_to_process: list[str]`, `project_dir: str`, `base_output_dir: str`, `project_dep_list: list[dict]` | `None` | Invokes `get_file_dependencies` for each file, converts paths to output format, writes `file_dependencies.json`, and copies the source file to the output directory. |
+- **Incremental processing via change detection**: The pipeline detects changed files by comparing SHA256 hashes of source files against their output copies before processing. Changed file information is passed to `generate_all_docs`, which skips LLM calls for files whose content and transitive callees are unchanged, avoiding redundant API usage on re-runs.
 
-## Design Decisions
+- **Path format separation**: Paths are maintained in two distinct formats throughout the pipeline—internal relative paths (from the project root) used during processing, and `project_name/copy_path` output-format paths written to JSON artifacts. The private helper `_convert_dep_list_to_internal_paths` converts the raw output of `build_project_dependencies` (which uses the output format) to internal paths at the start of the pipeline, while `to_output_path` converts back when writing artifacts.
 
-- **Incremental processing via hash comparison**: `_detect_changed_files` uses SHA-256 hashes (via `is_file_unchanged`) to avoid redundant work. The set of changed files is passed downstream to `generate_all_docs`, which applies its own callee-propagation logic to expand the regeneration scope only as far as necessary.
-- **Path format boundary**: The pipeline maintains a strict internal/external path format boundary. The `project_name/copy_path` format is used in all persisted JSON files; internal processing uses plain relative paths. `_convert_dep_list_to_internal_paths` and `to_output_path` are the conversion points at that boundary.
-- **Shared pre-built maps**: `build_symbol_level_deps` and `build_summary_map` are each called once and their results passed explicitly to all three downstream `save_*` functions, avoiding redundant disk reads.
-- **Feature flag gating**: Design document generation is entirely skipped when `ENABLE_LLM_DOC` is `False`, making the LLM dependency optional with no structural change to the rest of the pipeline.
-- **Empty file exclusion**: Files whose content is empty (or whitespace-only) are filtered from `all_file_list` and `project_dep_list` before any processing begins, preventing downstream analysis errors.
+- **All files processed for dependency extraction, selective regeneration for docs**: Step 2 always processes all files for dependency extraction to maintain consistency of `file_dependencies.json`. Step 3 (LLM document generation) applies the incremental change detection to regenerate only the impact range of detected changes.
+
+- **Shared `symbol_deps` computation**: `build_symbol_level_deps` is called once and its result is reused across `save_dependency_summary`, `save_dependency_graph_as_mermaid`, and `save_consolidated_json` to avoid redundant I/O and computation.
+
+- **Parse cache cleared at pipeline end**: `parse_cache.clear()` is called after all processing to release tree-sitter AST memory held in the module-level cache in `ts_parser.py`.
 
 ## Definition Design Specifications
 
@@ -45,268 +37,346 @@ Its concrete responsibilities are:
 
 ---
 
-## `_convert_dep_list_to_internal_paths(project_dep_list_raw, project_name)`
+## `_convert_dep_list_to_internal_paths`
 
-**Arguments:**
-- `project_dep_list_raw: list[dict]` — Raw dependency list as returned by `build_project_dependencies`, where all paths use the `project_name/copy_path` format.
-- `project_name: str` — The base name of the project directory (e.g., `"my-project"`).
+**Signature:**
+```python
+def _convert_dep_list_to_internal_paths(
+    project_dep_list_raw: list[dict],
+    project_name: str,
+) -> list[dict]
+```
+- `project_dep_list_raw`: List of dicts, each with `"file"`, `"callers"`, and `"callees"` keys using `"project_name/copy_path"` formatted strings.
+- `project_name`: The bare project directory name (e.g., `"my-project"`).
+- Returns: A list of dicts in the same shape, with all paths converted to project-root-relative strings.
 
-**Returns:** `list[dict]` — A dependency list with identical structure (`file`, `callers`, `callees` keys) where all path strings have been converted to project-root-relative paths.
+**Responsibility:**  
+Bridges the output format used by `build_project_dependencies` (paths prefixed with `project_name/copy_path`) and the internal pipeline format (plain relative paths from the project root). Called once after the dependency graph is built so all subsequent pipeline stages operate on a consistent path format.
 
-**Responsibility:** Acts as a format bridge between `build_project_dependencies`'s output format (`project_name/copy_path`) and the internal representation used throughout the rest of the pipeline (plain relative paths). This decoupling allows the rest of the pipeline to remain agnostic of the output directory path encoding.
-
-**Design decisions:** Applies `copy_path_to_rel` (from `file_utils`) after stripping the project-name prefix, reusing the canonical path-decoding logic rather than duplicating it. The prefix strip is guarded with a `startswith` check to tolerate paths that may already lack the prefix.
-
----
-
-## `_detect_changed_files(all_file_list, project_dir, base_output_dir)`
-
-**Arguments:**
-- `all_file_list: list[str]` — Relative paths of all files in the project.
-- `project_dir: str` — Absolute path to the project root.
-- `base_output_dir: str` — Absolute path to the output root directory.
-
-**Returns:** `set[str]` — Relative paths of files considered changed.
-
-**Responsibility:** Implements incremental processing by identifying files that need to be re-analyzed, comparing source file hashes against their previously copied counterparts in the output directory.
-
-**Edge cases and constraints:** A file is included in the changed set if *either* its hash differs from the output copy *or* its `file_dependencies.json` is absent. The second condition handles partial-failure recovery — if a previous run crashed between copying the file and writing the JSON, the file is re-processed rather than silently left in an inconsistent state.
-
----
-
-## `_process_file_dependencies(files_to_process, project_dir, base_output_dir, project_dep_list)`
-
-**Arguments:**
-- `files_to_process: list[str]` — Relative paths of files to analyze.
-- `project_dir: str` — Absolute path to the project root.
-- `base_output_dir: str` — Absolute path to the output root directory.
-- `project_dep_list: list[dict]` — Project-wide dependency list in internal path format.
-
-**Returns:** `None`
-
-**Responsibility:** Drives per-file dependency extraction and persists two artifacts to the output directory for each file: a `file_dependencies.json` containing the structured dependency record, and a verbatim copy of the original source file. These artifacts serve as the stable intermediate representation consumed by all downstream pipeline steps.
-
-**Design decisions:** Path strings within the dependency result are converted to `project_name/copy_path` output format before serialization, so `file_dependencies.json` files are self-contained and portable relative to the output directory root. Errors for individual files are caught and logged without aborting the overall loop, so a single unparseable file does not block the rest of the project.
-
-**Edge cases and constraints:** Callee path conversion targets `usage["from"]` keys inside `callee_usages`, and caller path conversion targets `usage["file"]` keys inside `caller_usages`; keys absent from a usage entry are skipped silently.
-
----
-
-## `process_all_files(project_dir, output_dir, llm_client, max_workers)`
-
-**Arguments:**
-- `project_dir: str` — Absolute path to the root of the project being analyzed.
-- `output_dir: str` — Absolute path to the directory where all output artifacts will be written.
-- `llm_client: LLMClient | None` — An initialized LLM client used for design document generation, or `None` if LLM generation is disabled.
-- `max_workers: int` — Maximum number of files processed concurrently during document generation. Defaults to the `MAX_WORKERS` configuration value.
-
-**Returns:** `None`
-
-**Responsibility:** Top-level async orchestrator for the full project analysis pipeline. It sequences all pipeline stages from dependency graph construction through to consolidated JSON output, managing state shared across stages (file lists, changed-file sets, symbol-level dependency maps, summary maps).
+**When to use:**  
+Call immediately after receiving the raw result from `build_project_dependencies` and before passing the dependency list to any internal processing function.
 
 **Design decisions:**
-- Empty files are detected and excluded before any further processing to prevent downstream parsers from operating on trivially empty inputs.
-- Changed-file detection runs before dependency extraction, but Step 2 always re-processes *all* files regardless of change status, ensuring `file_dependencies.json` and source copies are consistent with the current project state. Incremental optimization is applied only in Step 3 (document generation), where regeneration is propagated transitively through the callee graph.
-- `symbol_deps` and `summary_map` are computed once after document generation and passed explicitly to the three subsequent output functions (`save_dependency_summary`, `save_dependency_graph_as_mermaid`, `save_consolidated_json`) to avoid redundant I/O.
-- `parse_cache.clear()` is called at the end to release the tree-sitter AST cache held in `ts_parser`, freeing memory after the pipeline completes.
-- LLM document generation is gated on the `ENABLE_LLM_DOC` configuration flag; when disabled, the stage is skipped entirely and a message is emitted rather than silently omitting it.
+- Path conversion is handled by a local closure `to_internal` that composes prefix stripping and `copy_path_to_rel` inversion. This keeps the transformation DRY across the `"file"`, `"callers"`, and `"callees"` fields.
+- Paths not starting with the expected prefix are passed through unchanged rather than raising an error, which tolerates edge cases from unusual project layouts.
 
-**Edge cases and constraints:** `llm_client` may be `None` when `ENABLE_LLM_DOC` is `False`; in that case, `generate_all_docs` is never called. The function is `async` because `generate_all_docs` uses `asyncio`-based concurrency; callers must use `asyncio.run` or an equivalent mechanism.
-
-## Dependency Description
-
-## Dependency Description
-
-### Dependencies (what this file uses)
-
-**`codetwine/extractors/dependency_graph.py`** (`build_project_dependencies`)
-Used to perform the initial project-wide static analysis that produces the raw caller/callee graph. This is the first step of the pipeline, providing the foundational file relationship data that all subsequent processing stages depend on.
-
-**`codetwine/file_analyzer.py`** (`get_file_dependencies`)
-Used to perform per-file deep analysis, extracting symbol definitions, callee usages, and caller usages for each individual source file. The results are serialized as `file_dependencies.json` in the output directory.
-
-**`codetwine/output.py`** (`save_consolidated_json`, `save_dependency_summary`, `save_dependency_graph_as_mermaid`, `build_symbol_level_deps`, `to_output_path`, `build_summary_map`)
-Used at the final stages of the pipeline to convert internal path formats and persist three output artifacts: the symbol-level dependency graph, the Mermaid flowchart Markdown, and the consolidated project knowledge JSON. `build_symbol_level_deps` and `build_summary_map` are used to pre-build shared data structures passed into all three save functions.
-
-**`codetwine/doc_creator.py`** (`generate_all_docs`)
-Used to invoke LLM-driven design document generation in topological order when `ENABLE_LLM_DOC` is enabled. Receives the set of changed files detected earlier in the pipeline to enable incremental regeneration.
-
-**`codetwine/llm/client.py`** (`LLMClient`)
-Used as a type annotation for the `llm_client` parameter of `process_all_files`, and passed through to `generate_all_docs`. The pipeline itself does not call LLM methods directly but acts as a carrier of the client instance.
-
-**`codetwine/utils/file_utils.py`** (`copy_path_to_rel`, `is_file_unchanged`, `resolve_file_output_dir`)
-Used for three distinct utility purposes: `copy_path_to_rel` converts the `project_name/copy_path` format back to project-relative paths for internal pipeline use; `is_file_unchanged` compares source and output file hashes to detect which files need reprocessing; `resolve_file_output_dir` computes the per-file output directory path used when writing `file_dependencies.json` and copying the original file.
-
-**`codetwine/config/settings.py`** (`MAX_WORKERS`, `ENABLE_LLM_DOC`)
-Used to read configuration values that control concurrency (`MAX_WORKERS` as the default for parallel document generation) and conditionally enable or skip the LLM documentation stage (`ENABLE_LLM_DOC`).
-
-**`codetwine/parsers/ts_parser.py`** (`parse_cache`)
-Used exclusively at the end of `process_all_files` to clear the module-level AST parse cache and free memory after all file processing is complete.
+**Constraints & edge cases:**
+- Assumes the `"project_name/"` prefix is exactly `os.path.basename(project_dir) + "/"`.
+- If a path does not start with the prefix, no stripping is performed; `copy_path_to_rel` is still applied.
+- Only `"file"`, `"callers"`, and `"callees"` keys are preserved; any additional keys in input dicts are dropped.
 
 ---
 
-### Dependents (what uses this file)
+## `_detect_changed_files`
 
-**`main.py`** (`process_all_files`)
-`main.py` is the sole dependent. It resolves the project and output directories from command-line arguments, conditionally instantiates an `LLMClient`, and delegates the entire analysis pipeline to `process_all_files`. The dependency is strictly unidirectional: `main.py` calls into `pipeline.py`, and `pipeline.py` has no knowledge of `main.py`.
+**Signature:**
+```python
+def _detect_changed_files(
+    all_file_list: list[str],
+    project_dir: str,
+    base_output_dir: str,
+) -> set[str]
+```
+- `all_file_list`: List of project-root-relative file paths to check.
+- `project_dir`: Absolute path to the project root directory.
+- `base_output_dir`: Absolute path to the output root directory.
+- Returns: A `set[str]` of relative paths for files that are considered changed.
+
+**Responsibility:**  
+Identifies which source files differ from their previously processed copies in the output directory, enabling downstream stages to skip redundant re-processing. A file is also marked as changed if its `file_dependencies.json` is absent, guarding against partial failures from prior runs.
+
+**When to use:**  
+Called once per pipeline run after the project dependency list is built, before any per-file processing, to establish the change set for incremental processing.
+
+**Design decisions:**
+- Two independent conditions trigger "changed" status: hash mismatch (via `is_file_unchanged`) and missing `file_dependencies.json`. The second condition catches interrupted runs where the source copy exists but analysis did not complete.
+- Returns a `set` for O(1) membership checks in subsequent stages.
+
+**Constraints & edge cases:**
+- Files inaccessible due to permissions are not explicitly handled here; `is_file_unchanged` will return `False` for a missing copy, so they will be included in the changed set.
+- Does not detect deletions (files present in the output but removed from the source); it operates only on `all_file_list`.
+
+---
+
+## `_process_file_dependencies`
+
+**Signature:**
+```python
+def _process_file_dependencies(
+    files_to_process: list[str],
+    project_dir: str,
+    base_output_dir: str,
+    project_dep_list: list[dict],
+) -> None
+```
+- `files_to_process`: Relative paths of files to analyze.
+- `project_dir`: Absolute path to the project root.
+- `base_output_dir`: Absolute path to the output root directory.
+- `project_dep_list`: Project-wide dependency list in internal path format (output of `_convert_dep_list_to_internal_paths`).
+
+**Responsibility:**  
+Performs per-file dependency extraction for a given list of files and writes the results (`file_dependencies.json` and a copy of the source file) to the structured output directory. Acts as the concrete execution step for Stage 2 of the pipeline.
+
+**When to use:**  
+Called once per pipeline run with the full `all_file_list` to ensure output consistency, regardless of which files changed.
+
+**Design decisions:**
+- Path fields within the returned `dep_result` dict (`"file"`, `"from"` in `callee_usages`, `"file"` in `caller_usages`) are converted to `"project_name/copy_path"` format via `to_output_path` before serialization. This ensures stored JSON uses a stable, portable path format.
+- Failures for individual files are caught and logged at ERROR level without aborting the loop, so a single unparseable file does not halt the entire run.
+- The source file is copied with `shutil.copy2` to preserve metadata.
+
+**Constraints & edge cases:**
+- Does not skip unchanged files; the caller is responsible for filtering `files_to_process` if incremental behavior is desired (currently the pipeline always passes `all_file_list`).
+- If `get_file_dependencies` raises an exception, neither `file_dependencies.json` nor the file copy is written for that file.
+- Output directories are created with `exist_ok=True`; no error is raised if they already exist.
+
+---
+
+## `process_all_files`
+
+**Signature:**
+```python
+async def process_all_files(
+    project_dir: str,
+    output_dir: str,
+    llm_client: LLMClient | None,
+    max_workers: int = MAX_WORKERS,
+) -> None
+```
+- `project_dir`: Root directory of the project to analyze.
+- `output_dir`: Root directory where all analysis artifacts are written.
+- `llm_client`: An instantiated `LLMClient` for LLM-based document generation, or `None` to skip that stage.
+- `max_workers`: Maximum number of files processed concurrently within each topological level during document generation. Defaults to the `MAX_WORKERS` config value.
+
+**Responsibility:**  
+Top-level async orchestrator for the full analysis pipeline: builds the dependency graph, detects changes, extracts per-file dependencies, optionally generates LLM design documents, and writes all consolidated output artifacts. This is the sole public entry point consumed by `main.py`.
+
+**Async semantics:**  
+This function is `async` because it delegates to `generate_all_docs`, which is itself async and uses `asyncio.gather` for concurrent LLM calls within topological levels. All other stages within `process_all_files` are synchronous and execute sequentially.
+
+**When to use:**  
+Called once by `main.py` via `asyncio.run(process_all_files(...))` to execute a full project analysis pass.
+
+**Design decisions:**
+
+| Stage | Key decision |
+|---|---|
+| 1 – Dependency graph | `build_project_dependencies` is always called; there is no caching of the graph itself across runs. |
+| Empty file exclusion | Files with no non-whitespace content are filtered from `project_dep_list` and `all_file_list` before all subsequent stages, preventing spurious dependency entries. |
+| 1.5 – Change detection | Change detection runs before Step 2 but the result is used only for Stage 3 (LLM doc generation); Stage 2 always processes all files to maintain consistent `file_dependencies.json` output. |
+| 2 – Dependency extraction | Always processes `all_file_list`, not just `changed_files`, ensuring no stale `file_dependencies.json` remains after structural changes to unmodified files. |
+| 3 – LLM docs | Gated by `ENABLE_LLM_DOC`; when disabled, the stage is skipped entirely without error. |
+| 3.5–5 – Consolidated output | `build_symbol_level_deps` and `build_summary_map` are each called once and their results shared across `save_dependency_summary`, `save_dependency_graph_as_mermaid`, and `save_consolidated_json` to avoid redundant JSON re-reads. |
+| Cache clearing | `parse_cache.clear()` is called at the end to release tree-sitter parse results from memory after the full run. |
+
+**Constraints & edge cases:**
+- `base_output_dir` is derived as `os.path.join(output_dir, project_name)` where `project_name = os.path.basename(project_dir)`; two projects sharing the same directory name would collide.
+- If `llm_client` is `None` but `ENABLE_LLM_DOC` is `True`, `generate_all_docs` is still called with `None` as the client; behavior in that scenario is governed by `generate_all_docs`.
+- Empty files are detected by reading with UTF-8 encoding; files that cannot be opened due to `OSError` or `UnicodeDecodeError` are silently skipped in the empty-file check and remain in the processing list.
+- The function does not return any value; all results are written to the filesystem.
+
+## Dependency Description
+
+## Dependency Description
+
+### Dependencies (modules this file imports)
+
+**`codetwine/pipeline_py/pipeline.py` → `codetwine/parsers/ts_parser.py`**
+: Imports `parse_cache` to clear the module-level AST parse cache after all processing is complete, freeing memory.
+
+**`codetwine/pipeline_py/pipeline.py` → `codetwine/extractors/dependency_graph.py`**
+: Imports `build_project_dependencies` to construct the project-wide file dependency graph (callers/callees per file) as the first step of the pipeline.
+
+**`codetwine/pipeline_py/pipeline.py` → `codetwine/file_analyzer.py`**
+: Imports `get_file_dependencies` to perform per-file dependency analysis (definitions, callee usages, caller usages) for each file in the project.
+
+**`codetwine/pipeline_py/pipeline.py` → `codetwine/output.py`**
+: Imports `save_consolidated_json`, `save_dependency_summary`, `save_dependency_graph_as_mermaid`, `build_symbol_level_deps`, `to_output_path`, and `build_summary_map` to convert internal paths to output format, compute symbol-level dependencies, collect per-file summaries, and write the three project-level output artifacts (`project_knowledge.json`, `project_dependency_summary.json`, `dependency_graph.md`).
+
+**`codetwine/pipeline_py/pipeline.py` → `codetwine/doc_creator.py`**
+: Imports `generate_all_docs` to drive LLM-based design document generation for all files in topological dependency order, respecting the detected change set.
+
+**`codetwine/pipeline_py/pipeline.py` → `codetwine/llm/client.py`**
+: Imports `LLMClient` as the type annotation for the LLM client parameter passed into `process_all_files` and forwarded to `generate_all_docs`.
+
+**`codetwine/pipeline_py/pipeline.py` → `codetwine/utils/file_utils.py`**
+: Imports `copy_path_to_rel` to restore output-format paths back to project-relative paths, `is_file_unchanged` to detect whether a source file has changed by comparing SHA256 hashes with its output copy, and `resolve_file_output_dir` to determine the output directory path for each file.
+
+**`codetwine/pipeline_py/pipeline.py` → `codetwine/config/settings.py`**
+: Imports `MAX_WORKERS` as the default concurrency limit for document generation and `ENABLE_LLM_DOC` to conditionally skip the LLM document generation step entirely.
+
+---
+
+### Dependents (modules that import this file)
+
+**`main.py` → `codetwine/pipeline_py/pipeline.py`**
+: Imports `process_all_files` as the top-level entry point to execute the full project analysis pipeline. `main.py` resolves the project and output directories, conditionally instantiates an `LLMClient`, and drives the entire pipeline by calling `asyncio.run(process_all_files(project_dir, output_dir, llm_client))`.
+
+---
+
+### Dependency Direction
+
+All relationships are **unidirectional**:
+
+- `pipeline.py` depends on `ts_parser.py`, `dependency_graph.py`, `file_analyzer.py`, `output.py`, `doc_creator.py`, `llm/client.py`, `utils/file_utils.py`, and `config/settings.py` — none of these modules import back from `pipeline.py`.
+- `main.py` depends on `pipeline.py` — `pipeline.py` does not import from `main.py`.
 
 ## Data Flow
 
 # Data Flow
 
-## Overview
+## 1. Inputs
 
-`pipeline.py` is the top-level orchestrator. It accepts a project directory, runs analysis stages in sequence, and writes structured JSON and Markdown files to an output directory.
-
----
-
-## Input Sources
-
-| Input | Format | Source |
-|---|---|---|
-| `project_dir` | Absolute directory path | Caller (`main.py`) |
-| `output_dir` | Absolute directory path | Caller (`main.py`) |
-| `llm_client` | `LLMClient \| None` | Caller (`main.py`) |
-| Source files | Language source files on disk | `project_dir` tree |
-| Existing output copies | Files + `file_dependencies.json` | Previous run under `output_dir` |
+| Source | Format | Description |
+|--------|--------|-------------|
+| `project_dir` (argument) | `str` (absolute path) | Root directory of the project to analyze |
+| `output_dir` (argument) | `str` (absolute path) | Destination root for all output artifacts |
+| `llm_client` (argument) | `LLMClient \| None` | LLM client for design document generation; `None` when `ENABLE_LLM_DOC=False` |
+| `max_workers` (argument) | `int` | Maximum parallel workers for document generation |
+| `ENABLE_LLM_DOC` (config) | `bool` | Controls whether LLM document generation runs |
+| `MAX_WORKERS` (config) | `int` | Default value for `max_workers` |
+| Source files on disk | Binary/text | Read by `build_project_dependencies` and `get_file_dependencies` via tree-sitter parsing |
+| `file_dependencies.json` (disk, per file) | JSON | Re-read by `build_symbol_level_deps` and `save_consolidated_json` after being written in Step 2 |
+| `doc.json` (disk, per file) | JSON | Read by `build_summary_map` and `save_consolidated_json` if LLM docs were previously generated |
 
 ---
 
-## Main Transformation Flow
+## 2. Transformation Overview
 
-```
-project_dir (source tree)
-        │
-        ▼
-build_project_dependencies()
-        │ list[dict] — "project_name/copy_path" format
-        ▼
-_convert_dep_list_to_internal_paths()
-        │ list[dict] — relative path format (internal)
-        │   project_dep_list: [{file, callers, callees}]
-        ▼
-_detect_changed_files()
-        │ set[str] — relative paths of changed files
-        ▼
-_process_file_dependencies()  ← writes file_dependencies.json + file copy per file
-        │
-        ▼
-generate_all_docs()  (if ENABLE_LLM_DOC)  ← writes doc.json + doc.md per file
-        │
-        ▼
-build_symbol_level_deps()
-        │ symbol_deps: {rel_path → {callers: set, callees: set}}
-        ▼
-build_summary_map()
-        │ summary_map: {rel_path → str | None}
-        ▼
-save_dependency_summary()      → project_dependency_summary.json
-save_dependency_graph_as_mermaid() → dependency_graph.md
-save_consolidated_json()       → project_knowledge.json
-```
+### Stage 1 — Build project-wide dependency graph
+`build_project_dependencies(project_dir)` walks all supported source files and returns `project_dep_list_raw`: a list of dicts using `"project_name/copy_path"` formatted paths. `_convert_dep_list_to_internal_paths` strips the project-name prefix and reverses the copy-path encoding via `copy_path_to_rel`, producing `project_dep_list` with plain project-relative paths used throughout the rest of the pipeline. The flat list of all file relative paths (`all_file_list`) is derived from this structure.
 
----
+Empty files are detected by reading each source file and filtered out of both `project_dep_list` and `all_file_list` before further processing.
 
-## Path Format Conversions
+### Stage 1.5 — Change detection
+`_detect_changed_files` compares SHA256 hashes of each source file against its previously copied counterpart in the output directory, and also checks whether `file_dependencies.json` already exists. The result is `changed_files: set[str]` — a set of relative paths requiring reprocessing.
 
-The pipeline uses two path formats internally and converts between them at boundaries:
+### Stage 2 — Per-file dependency extraction
+`_process_file_dependencies` iterates over all files in `all_file_list` (not just changed files). For each file, `get_file_dependencies` parses the source and returns a dict containing definitions, callee usages, and caller usages — all using project-relative paths. Paths inside the result are then converted to `"project_name/copy_path"` format using `to_output_path` before writing:
+- `file_dependencies.json` is written to the per-file output directory.
+- The original source file is copied alongside it.
 
-| Format | Example | Used where |
-|---|---|---|
-| **Internal relative path** | `src/foo.py` | Inside pipeline functions, `project_dep_list` |
-| **Output format** | `my-project/src_py/foo.py` | `file_dependencies.json` fields, consolidated JSON |
+### Stage 3 — LLM design document generation (conditional)
+If `ENABLE_LLM_DOC` is `True`, `generate_all_docs` runs. It reads `file_dependencies.json` for each file, uses `changed_files` to decide which documents need regeneration (files whose callees were also regenerated are included transitively), and writes `doc.json` and `doc.md` per file. This stage consumes `project_dep_list` and `base_output_dir`; it reads and writes the per-file output directories on disk.
 
-`_convert_dep_list_to_internal_paths` strips the `project_name/` prefix and calls `copy_path_to_rel` to reverse the `{stem}_{ext}` directory insertion, converting output-format paths from `build_project_dependencies` into internal relative paths.
+### Stage 3.5 — Symbol-level dependency and summary aggregation
+`build_symbol_level_deps` re-reads every `file_dependencies.json` to extract only the dependencies implied by actual symbol usages (rather than raw imports), producing `symbol_deps`. `build_summary_map` reads each `doc.json` (if present) to collect LLM-generated summaries into `summary_map`. Both structures are computed once and shared across the three output-writing functions that follow.
 
-`to_output_path` performs the inverse when writing results.
+`save_dependency_summary` combines `symbol_deps` and `summary_map` into `project_dependency_summary.json`.
+
+### Stage 4 — Mermaid diagram generation
+`save_dependency_graph_as_mermaid` reads `symbol_deps` and converts the graph into a Mermaid `graph LR` flowchart written to `dependency_graph.md`.
+
+### Stage 5 — Consolidated knowledge JSON
+`save_consolidated_json` merges `symbol_deps`, `summary_map`, and the full content of each file's `file_dependencies.json` and `doc.json` into a single `project_knowledge.json`.
+
+### Teardown
+`parse_cache.clear()` releases the in-memory tree-sitter parse cache held by `ts_parser.py`.
 
 ---
 
-## Key Data Structures
+## 3. Outputs
 
-### `project_dep_list` (internal format)
-```
-[
-  {
-    "file":    "src/foo.py",        # relative path from project root
-    "callers": ["src/bar.py"],      # files that import this file
-    "callees": ["src/baz.py"],      # files this file imports
-  },
-  ...
-]
-```
-Drives all downstream stages: change detection, per-file analysis, doc generation, and graph building.
+| Artifact | Location | Format | Description |
+|----------|----------|--------|-------------|
+| `file_dependencies.json` | `<output_dir>/<project_name>/<copy_path>/` (per file) | JSON | Definitions, callee usages, and caller usages for one file |
+| Copied source file | Same per-file directory as above | Original format | Used for hash-based change detection on the next run |
+| `doc.json` / `doc.md` | Same per-file directory (when `ENABLE_LLM_DOC=True`) | JSON / Markdown | LLM-generated design document sections and summary |
+| `project_dependency_summary.json` | `<output_dir>/<project_name>/` | JSON | Lightweight summary combining symbol-level deps and LLM summaries |
+| `dependency_graph.md` | `<output_dir>/<project_name>/` | Markdown (Mermaid) | Visual dependency graph |
+| `project_knowledge.json` | `<output_dir>/<project_name>/` | JSON | Full consolidated analysis: dependency graph + per-file deps + docs |
 
 ---
 
-### `changed_files: set[str]`
-Relative paths where either the source hash differs from the output copy or `file_dependencies.json` is absent. Controls incremental doc regeneration in `generate_all_docs`.
+## 4. Key Data Structures
 
----
+### `project_dep_list_raw` — raw output of `build_project_dependencies`
 
-### `symbol_deps`
-```
-{
-  "src/foo.py": {
-    "callers": {"src/bar.py"},   # files that actually use symbols from foo
-    "callees": {"src/baz.py"},   # files whose symbols foo actually uses
-  }
-}
-```
-Built from `callee_usages[*].from` and `caller_usages[*].file` fields in each `file_dependencies.json`. Represents actual symbol-level usage rather than raw import edges. Shared across `save_dependency_summary`, `save_dependency_graph_as_mermaid`, and `save_consolidated_json`.
+| Field / Key | Type | Purpose |
+|-------------|------|---------|
+| `file` | `str` | File path in `"project_name/copy_path"` format |
+| `callers` | `list[str]` | Paths of files that import this file (same format) |
+| `callees` | `list[str]` | Paths of files this file imports (same format) |
 
----
+### `project_dep_list` — internal pipeline format (after `_convert_dep_list_to_internal_paths`)
 
-### `summary_map`
-```
-{
-  "src/foo.py": "One-line LLM summary text",
-  "src/bar.py": None,   # no doc.json or generation failed
-}
-```
-Read from each file's `doc.json`. Injected into the three consolidated output files.
+| Field / Key | Type | Purpose |
+|-------------|------|---------|
+| `file` | `str` | Project-relative path (e.g., `"src/foo.py"`) |
+| `callers` | `list[str]` | Project-relative paths of caller files |
+| `callees` | `list[str]` | Project-relative paths of callee files |
 
----
+### `dep_result` — output of `get_file_dependencies` (before path conversion)
 
-## Output Destinations
+| Field / Key | Type | Purpose |
+|-------------|------|---------|
+| `file` | `str` | Project-relative path of the analyzed file |
+| `definitions` | `list[dict]` | Extracted symbols: `name`, `type`, `start_line`, `end_line`, `context` |
+| `callee_usages` | `list[dict]` | Usages of symbols from dependency files; each entry has a `"from"` key |
+| `caller_usages` | `list[dict]` | Locations in other files that use this file's symbols; each entry has a `"file"` key |
 
-| File | Location | Contents |
-|---|---|---|
-| `file_dependencies.json` | `base_output_dir/<copy_path_dir>/` per file | Definitions, callee_usages, caller_usages (output-format paths) |
-| File copy | Same directory as above | Verbatim copy of source file (used for hash-based change detection) |
-| `doc.json` / `doc.md` | Same per-file directory | LLM-generated design document |
-| `project_dependency_summary.json` | `base_output_dir/` | Symbol-level dep graph + summaries, lightweight |
-| `dependency_graph.md` | `base_output_dir/` | Mermaid flowchart of file-level dependencies |
-| `project_knowledge.json` | `base_output_dir/` | Full consolidated JSON merging all per-file artifacts |
+After path conversion the `file`, `"from"`, and `"file"` fields inside `dep_result` are rewritten to `"project_name/copy_path"` format before being written to `file_dependencies.json`.
+
+### `symbol_deps` — output of `build_symbol_level_deps`
+
+| Field / Key | Type | Purpose |
+|-------------|------|---------|
+| key (file relative path) | `str` | Project-relative path of a file |
+| `"callers"` | `set[str]` | Relative paths of files that actually use symbols from this file |
+| `"callees"` | `set[str]` | Relative paths of files whose symbols this file actually uses |
+
+### `summary_map` — output of `build_summary_map`
+
+| Field / Key | Type | Purpose |
+|-------------|------|---------|
+| key (file relative path) | `str` | Project-relative path of a file |
+| value | `str \| None` | LLM-generated summary text, or `None` if no `doc.json` exists |
+
+### `changed_files` — output of `_detect_changed_files`
+
+| Type | Purpose |
+|------|---------|
+| `set[str]` | Project-relative paths of files whose source hash differs from their output copy, or whose `file_dependencies.json` is missing |
 
 ## Error Handling
 
 # Error Handling
 
-## Overall Strategy
+## 1. Overall Strategy
 
-`pipeline.py` adopts a **mixed strategy**: individual file processing uses graceful degradation to allow the pipeline to continue despite per-file failures, while the overall orchestration flow (`process_all_files`) applies no top-level exception handling and will propagate unexpected errors to the caller (`main.py`).
+The pipeline applies a **logging-and-continue** strategy at the per-file processing level, while delegating retry logic to external dependencies (notably the LLM client). The overall pipeline execution does not terminate on individual file failures; instead, failures are logged and the pipeline proceeds to the next file or step. Errors in setup or configuration (such as an unset `LLM_MODEL`) propagate as exceptions from dependency constructors and are not caught within this file.
 
-The guiding principle is that a failure in one file should not abort analysis of the remaining files, but structural failures at the project or pipeline level are allowed to surface as uncaught exceptions.
+---
 
-## Error Patterns and Handling Policies
+## 2. Error Pattern Table
 
-| Error Type | Handling | Impact |
-|---|---|---|
-| Exception during per-file dependency extraction (`get_file_dependencies`, JSON write, file copy) | Caught by a broad `except Exception`; error is logged at `ERROR` level and processing continues with the next file | The failed file's `file_dependencies.json` and output copy are not produced; it may be retried on the next run due to missing artifacts |
-| `OSError` / `UnicodeDecodeError` when reading a file to check if it is empty | Silently suppressed (`pass`) | The file is not added to the empty-files exclusion set; it remains in the processing list and may fail later at extraction time |
-| Missing or unreadable `file_dependencies.json` during change detection | Detected via `os.path.exists` check; the file is added to `changed_files` rather than raising an error | The file is conservatively treated as changed and will be re-processed |
-| Failures inside `generate_all_docs`, `save_dependency_summary`, `save_dependency_graph_as_mermaid`, `save_consolidated_json` | No handling at the pipeline level; exceptions propagate upward | The pipeline aborts at the failing step; partial results from earlier steps remain on disk |
-| LLM-related errors | Delegated entirely to `LLMClient` and `generate_all_docs`; not handled in this file | Handled by the dependency layer; `pipeline.py` is insulated from LLM-specific error types |
+| Error Type | Trigger Condition | Handling | Recoverable? | Impact |
+|---|---|---|---|---|
+| File read error (`OSError`, `UnicodeDecodeError`) | Opening a file to check whether it is empty fails | Exception silently swallowed; file is not added to the empty-files set | Yes | File remains in the processing list and proceeds normally |
+| Per-file dependency extraction failure (`Exception`) | Any exception raised during `get_file_dependencies`, JSON serialization, or file copy for a single file | Logged at ERROR level via `logger.error`; loop continues to the next file | Yes | That file's `file_dependencies.json` and output copy are not produced; downstream steps that rely on them may produce incomplete results |
+| LLM rate limit / API error | Raised within `LLMClient.generate` during document generation | Handled entirely within `LLMClient` (retry on rate limit, immediate failure on API error); not caught in this file | Yes (rate limit) / No (API error returns `None`) | Individual doc generation skipped or returns `None`; pipeline continues |
+| Missing output directory for a file | `output_dir` for a file does not exist when generating docs | Detected and logged as a warning inside `generate_all_docs` (dependency) | Yes | That file's design document is skipped |
+| Invalid or incomplete `doc.json` | Design document is missing expected sections or summary | Detected inside `generate_all_docs`; triggers regeneration | Yes | File is reprocessed rather than reused |
+| `parse_cache` memory accumulation | Large project processed in a single run | `parse_cache.clear()` called unconditionally at the end of `process_all_files` | Yes | No error raised; memory freed after full pipeline completion |
 
-## Design Considerations
+---
 
-The per-file `try/except` in `_process_file_dependencies` deliberately uses a broad catch rather than specific exception types. This reflects a pragmatic decision: the variety of reasons a single file might fail (parse errors, encoding issues, OS errors, unexpected data shapes) is open-ended, and the cost of skipping one file is low compared to aborting the entire pipeline run.
+## 3. Design Notes
 
-Conversely, no equivalent guard is applied to the pipeline-level aggregation steps (steps 3.5–5). This asymmetry implies that individual file failures are considered recoverable operational noise, whereas failures in the consolidation or output phase indicate a more serious structural problem that warrants surfacing to the caller.
+The per-file `try/except Exception` in `_process_file_dependencies` is intentionally broad to prevent a single malformed or unparseable file from aborting the entire analysis run. This reflects a **best-effort** philosophy: the pipeline produces as much output as possible even when some files fail, trading completeness guarantees for resilience across heterogeneous codebases.
 
-The conservative change-detection policy—treating a file with a missing `file_dependencies.json` as changed—acts as an implicit recovery mechanism: if a previous run was interrupted mid-way, the next run will re-process affected files rather than silently skipping them with incomplete state.
+Error visibility relies entirely on the logging subsystem (`logger.error`, `logger.info`). There is no mechanism within this file to surface per-file failures to the caller of `process_all_files`; the function always completes normally from the caller's perspective regardless of how many individual files failed.
+
+The LLM-related error handling (retry, rate-limit back-off) is fully encapsulated in `LLMClient` and `generate_all_docs`, keeping the pipeline orchestration layer free of network-level concerns. The pipeline itself only gates LLM steps behind the `ENABLE_LLM_DOC` flag and passes a `None` client when the feature is disabled, avoiding any error surface from that path entirely.
 
 ## Summary
 
-**codetwine/pipeline.py** is the central orchestrator that transforms a project directory into analyzed outputs. Its sole public function, `process_all_files(project_dir, output_dir, llm_client, max_workers)`, sequences: project-wide dependency graph construction, incremental change detection (SHA-256 hashes), per-file dependency extraction (writing `file_dependencies.json`), optional LLM doc generation, and three consolidated outputs (`project_dependency_summary.json`, `dependency_graph.md`, `project_knowledge.json`). Key data structures include `project_dep_list` (file/callers/callees), `changed_files` (set of modified paths), `symbol_deps` (actual symbol-level usage map), and `summary_map` (per-file LLM summaries).
+**pipeline.py** orchestrates the full project analysis pipeline from source files to all output artifacts.
+
+**Public API:** `process_all_files(project_dir: str, output_dir: str, llm_client: LLMClient | None, max_workers: int) -> None`
+
+**Key data structures:**
+- `project_dep_list` (`list[dict]`): per-file callers/callees in project-relative paths
+- `changed_files` (`set[str]`): relative paths of modified files
+- `symbol_deps` (`dict`): symbol-level caller/callee sets per file
+- `summary_map` (`dict[str, str | None]`): LLM summaries per file

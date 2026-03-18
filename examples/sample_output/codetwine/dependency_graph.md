@@ -1,6 +1,6 @@
 ```mermaid
 graph LR
-    codetwine_codetwine_config_logging_py_logging_py["codetwine/config/logging.py"]
+    codetwine_codetwine_config_logger_py_logger_py["codetwine/config/logger.py"]
     codetwine_codetwine_config_settings_py_settings_py["codetwine/config/settings.py"]
     codetwine_codetwine_doc_creator_py_doc_creator_py["codetwine/doc_creator.py"]
     codetwine_codetwine_extractors_definitions_py_definitions_py["codetwine/extractors/definitions.py"]
@@ -55,7 +55,8 @@ graph LR
     codetwine_codetwine_pipeline_py_pipeline_py --> codetwine_codetwine_output_py_output_py
     codetwine_codetwine_pipeline_py_pipeline_py --> codetwine_codetwine_parsers_ts_parser_py_ts_parser_py
     codetwine_codetwine_pipeline_py_pipeline_py --> codetwine_codetwine_utils_file_utils_py_file_utils_py
-    codetwine_main_py_main_py --> codetwine_codetwine_config_logging_py_logging_py
+    codetwine_examples_rlm_qa_rlm_qa_agent_py_rlm_qa_agent_py --> codetwine_examples_rlm_qa_qa_tools_py_qa_tools_py
+    codetwine_main_py_main_py --> codetwine_codetwine_config_logger_py_logger_py
     codetwine_main_py_main_py --> codetwine_codetwine_config_settings_py_settings_py
     codetwine_main_py_main_py --> codetwine_codetwine_llm_client_py_client_py
     codetwine_main_py_main_py --> codetwine_codetwine_pipeline_py_pipeline_py

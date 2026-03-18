@@ -53,7 +53,7 @@
         72
       ],
       "name": "setup_logging",
-      "from": "codetwine/codetwine/config/logging_py/logging.py",
+      "from": "codetwine/codetwine/config/logger_py/logger.py",
       "target_context": "def setup_logging(level: int = logging.INFO) -> None:\n    \"\"\"Configure both console output and log file output.\n\n    Call this function once at the beginning of main() in entry points\n    (main.py, rlm_qa_agent.py).\n\n    Args:\n        level: Log level. Defaults to logging.INFO.\n    \"\"\"\n    # Get the root logger and set the log level\n    root_logger = logging.getLogger()\n    root_logger.setLevel(level)\n\n    # Create a formatter used by both console and file handlers\n    formatter = _SkipBlankFormatter(_LOG_FORMAT)\n\n    # ===== Console handler =====\n    # Only WARNING and above are output to the console; details are recorded in the log file.\n    console_handler = logging.StreamHandler()\n    console_handler.setLevel(logging.WARNING)\n    console_handler.setFormatter(formatter)\n    root_logger.addHandler(console_handler)\n\n    # ===== File handler =====\n    os.makedirs(_LOG_DIR, exist_ok=True)\n    file_handler = RotatingFileHandler(\n        os.path.join(_LOG_DIR, \"codetwine.log\"),\n        maxBytes=_MAX_BYTES,\n        backupCount=_BACKUP_COUNT,\n        encoding=\"utf-8\",\n    )\n    file_handler.setFormatter(formatter)\n    root_logger.addHandler(file_handler)\n\n    # ===== Restrict external library log levels to WARNING =====\n    logging.getLogger(\"httpx\").setLevel(logging.WARNING)\n    logging.getLogger(\"httpcore\").setLevel(logging.WARNING)\n    logging.getLogger(\"LiteLLM\").setLevel(logging.WARNING)"
     },
     {
