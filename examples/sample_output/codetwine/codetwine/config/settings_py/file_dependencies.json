@@ -465,7 +465,7 @@
     },
     {
       "lines": [
-        24
+        26
       ],
       "name": "LLM_MODEL",
       "file": "codetwine/codetwine/llm/client_py/client.py",
@@ -473,7 +473,7 @@
     },
     {
       "lines": [
-        25
+        27
       ],
       "name": "LLM_API_KEY",
       "file": "codetwine/codetwine/llm/client_py/client.py",
@@ -481,7 +481,7 @@
     },
     {
       "lines": [
-        26
+        28
       ],
       "name": "LLM_API_BASE",
       "file": "codetwine/codetwine/llm/client_py/client.py",
@@ -489,8 +489,8 @@
     },
     {
       "lines": [
-        57,
-        78
+        59,
+        80
       ],
       "name": "MAX_RETRIES",
       "file": "codetwine/codetwine/llm/client_py/client.py",
@@ -498,8 +498,8 @@
     },
     {
       "lines": [
-        79,
-        80
+        81,
+        82
       ],
       "name": "RETRY_WAIT",
       "file": "codetwine/codetwine/llm/client_py/client.py",
@@ -507,7 +507,7 @@
     },
     {
       "lines": [
-        92
+        97
       ],
       "name": "DOC_MAX_TOKENS",
       "file": "codetwine/codetwine/llm/client_py/client.py",

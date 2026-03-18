@@ -1,6 +1,8 @@
 import asyncio
 import logging
+import openai
 import litellm
+from litellm import ContextWindowExceededError
 from codetwine.config.settings import (
     LLM_MODEL,
     LLM_API_KEY,
@@ -83,7 +85,10 @@ class LLMClient:
                     logger.error("Rate limit exceeded: max retries reached")
                     return None
 
-            except litellm.APIError as e:
+            except ContextWindowExceededError:
+                raise
+
+            except openai.APIError as e:
                 # Do not retry on API errors; fail immediately
                 logger.error(f"LLM call failed: {e}")
                 return None

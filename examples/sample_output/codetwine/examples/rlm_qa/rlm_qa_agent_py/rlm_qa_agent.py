@@ -37,7 +37,7 @@ LLM_API_KEY = os.environ.get("LLM_API_KEY", "")
 OUTPUT_LANGUAGE = "English"
 
 # Path to the target project_knowledge.json
-TARGET_JSON_PATH = "/path/to/project_knowledge.json"
+TARGET_JSON_PATH = f"{os.path.dirname(__file__)}/../sample_output/codetwine/project_knowledge.json"
 
 
 # ===== Signature instructions template =====

@@ -126,7 +126,7 @@
     },
     {
       "lines": [
-        811
+        824
       ],
       "name": "resolve_file_output_dir",
       "file": "codetwine/codetwine/doc_creator_py/doc_creator.py",

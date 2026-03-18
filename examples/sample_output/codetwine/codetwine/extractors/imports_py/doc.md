@@ -4,34 +4,26 @@
 
 # Overview & Purpose
 
-## Role Within the Project
+This file implements the import statement extraction layer for the CodeTwine project. It provides a language-agnostic mechanism to parse AST nodes produced by tree-sitter and convert raw import syntax into structured `ImportInfo` objects. It exists as a separate module because import extraction is a reusable, cross-language concern consumed by at least three distinct analysis pipelines—`file_analyzer.py`, `usage_analysis.py`, and `dependency_graph.py`—each of which needs to resolve what a file imports without duplicating parsing logic.
 
-This file implements the **import statement extraction layer** for the CodeTwine static analysis pipeline. It exists as a dedicated module to centralize the logic for parsing and normalizing import declarations across multiple programming languages using tree-sitter AST queries. By isolating this responsibility, it provides a uniform `ImportInfo` data structure to three distinct consumers — `file_analyzer.py`, `usage_analysis.py`, and `dependency_graph.py` — each of which relies on resolved import data to build symbol maps, trace call relationships, and construct dependency graphs respectively.
-
-The file bridges the gap between raw tree-sitter query results (heterogeneous across languages) and a normalized, language-agnostic representation of import statements.
-
----
-
-## Public Interface
+## Main Public Interfaces
 
 | Name | Arguments | Return Value | Responsibility |
 |---|---|---|---|
-| `ImportInfo` | `module: str`, `names: list[str]`, `line: int`, `module_alias: str \| None`, `alias_map: dict[str, str] \| None` | dataclass instance | Data container holding all extracted metadata for a single import statement |
-| `extract_imports` | `root_node: Node`, `language: Language`, `import_query_str: str \| None` | `list[ImportInfo]` | Runs tree-sitter queries against an AST root node and returns a deduplicated, grouped list of import records |
+| `ImportInfo` | `module`, `names`, `line`, `module_alias`, `alias_map` (dataclass fields) | — | Data container holding all structured information about a single import statement |
+| `extract_imports` | `root_node: Node`, `language: Language`, `import_query_str: str \| None` | `list[ImportInfo]` | Runs a tree-sitter query against the AST root and returns deduplicated, grouped `ImportInfo` objects for every import statement found in the file |
 
----
+The four private helpers (`_detect_module_alias`, `_resolve_imported_name`, `_get_original_name`, `_strip_quotes`) are internal utilities supporting `extract_imports` and are not part of the public interface.
 
 ## Design Decisions
 
-- **Tree-sitter query abstraction**: The extraction logic is driven entirely by an externally supplied query string (`import_query_str`), making the core function language-agnostic. Language-specific handling is delegated to query definitions elsewhere (`config.py`), with this file only interpreting the standardized capture names `@module`, `@name`, and `@import_node`.
+- **Query-driven, language-agnostic dispatch**: `extract_imports` accepts the query string as a parameter (`import_query_str`) rather than embedding language-specific logic. Language differences are encoded in the query strings defined elsewhere (`config.py`), keeping this file free of per-language branching beyond unavoidable AST structural variations (Python `aliased_import`, JS/TS `import_specifier`, Kotlin `import_alias`, Java/Kotlin `asterisk`).
 
-- **Grouping by `(module, line)` key**: Multiple `@name` captures from a single `from X import A, B` statement are consolidated into one `ImportInfo` entry via a `dict` keyed on `(module, line)`, avoiding redundant entries for multi-name imports.
+- **Grouping by `(module, line)` key**: Because a single `from X import A, B` statement produces multiple `@name` captures in separate query matches, results are accumulated into a `dict[tuple[str, int], ImportInfo]` before being returned as a list. This prevents one import statement from generating multiple `ImportInfo` entries.
 
-- **Private helper decomposition**: Language-specific edge cases (alias detection, quote stripping, original-name resolution) are extracted into private functions (`_detect_module_alias`, `_resolve_imported_name`, `_get_original_name`, `_strip_quotes`), keeping `extract_imports` readable while encapsulating per-language quirks.
+- **Alias tracking via dual fields**: Aliasing is represented at two levels—`module_alias` for `import X as Y` (whole-module rename) and `alias_map` (a `{alias → original}` dict) for name-level aliases such as `from X import a as b`—allowing callers to reconstruct both the in-code name and the canonical definition name.
 
-- **Graceful no-op on missing query**: Passing `None` as `import_query_str` returns an empty list immediately, allowing callers to safely invoke the function for languages that have no import query defined without additional guard logic.
-
-- **`require()` filtering**: A special `@_require_func` capture name is reserved to filter out non-`require` function calls when handling CommonJS-style patterns, preventing false positives from similarly structured call expressions.
+- **Early exit on absent query**: Passing `None` as `import_query_str` immediately returns an empty list, providing a safe no-op path for languages that have no import query defined.
 
 ## Definition Design Specifications
 
@@ -41,114 +33,99 @@ The file bridges the gap between raw tree-sitter query results (heterogeneous ac
 
 ## `ImportInfo` (dataclass)
 
-A data container representing a single parsed import statement. Designed to be language-agnostic so that the same structure can represent Python `import`/`from ... import`, JavaScript `import`, Java/Kotlin `import`, C/C++ `#include`, and other forms.
+A value object representing a single resolved import statement. Designed to be language-agnostic: fields that are not applicable to a given language are represented as empty collections or `None` rather than being omitted.
 
 | Field | Type | Meaning |
 |---|---|---|
-| `module` | `str` | The resolved module name/path, with surrounding quotes or angle brackets stripped |
-| `names` | `list[str]` | Individually imported symbols (e.g. `Y` in `from X import Y`); empty list for bare module imports |
-| `line` | `int` | 1-based line number of the import statement in the source file |
-| `module_alias` | `str \| None` | The local alias name when the module itself is aliased (e.g. `Y` in `import X as Y`) |
-| `alias_map` | `dict[str, str] \| None` | Maps each alias name to its original name for per-symbol aliases (e.g. `{"path_join": "join"}` for `from X import join as path_join`); `None` when no such aliases exist |
-
-**Design decision:** `names` being an empty list (rather than `None`) for non-`from`-style imports allows callers to check the presence of named imports with a simple truthiness test, without guarding against `None`.
+| `module` | `str` | The import source path/name after quote stripping |
+| `names` | `list[str]` | Names explicitly imported from the module (empty list if the language has no such syntax, or for bare module imports) |
+| `line` | `int` | 1-based line number of the import statement |
+| `module_alias` | `str \| None` | The alias name `Y` in `import X as Y`; `None` if no alias |
+| `alias_map` | `dict[str, str] \| None` | Maps alias name → original name for named imports (e.g., `from X import a as b` → `{"b": "a"}`); `None` when no aliased named imports exist |
 
 ---
 
 ## `extract_imports`
 
-```
-extract_imports(root_node: Node, language: Language, import_query_str: str | None) -> list[ImportInfo]
-```
+**Signature:** `(root_node: Node, language: Language, import_query_str: str | None) -> list[ImportInfo]`
 
-**Responsibility:** The primary entry point of this module. Runs a tree-sitter query over the AST and converts all matched import statements in a source file into a flat list of `ImportInfo` objects. It is the single place that bridges raw AST query results and the structured `ImportInfo` representation consumed by dependents (`file_analyzer.py`, `usage_analysis.py`, `dependency_graph.py`).
+Entry point for import extraction. Runs a tree-sitter query against the file's AST and produces a flat, deduplicated list of `ImportInfo` objects. This function is responsible for abstracting over syntactic differences between languages so that callers can handle import information uniformly.
 
 **Arguments:**
-- `root_node`: The root `Node` of a fully parsed AST for a source file.
-- `language`: The tree-sitter `Language` required to compile the query.
-- `import_query_str`: A tree-sitter S-expression query string. Passing `None` or an empty string short-circuits and returns `[]`, allowing callers to safely pass the value from a language config that may not define an import query.
+- `root_node`: The root AST node of a fully parsed file.
+- `language`: The tree-sitter `Language` object required to compile the query.
+- `import_query_str`: A tree-sitter S-expression query string. When `None`, the function returns an empty list without error, allowing callers to skip import analysis for unsupported languages gracefully.
 
-**Returns:** A list of `ImportInfo`, one entry per unique `(module, line)` pair. Multiple `@name` captures from the same import statement (e.g. `from X import A, B`) are consolidated into a single `ImportInfo` rather than producing separate entries.
+**Returns:** A list of `ImportInfo`, one per unique `(module, line)` pair. Multiple `@name` captures from the same statement are merged into a single entry.
 
 **Design decisions:**
-- The `(module, line)` grouping key ensures that `from X import A, B` on one line yields one entry, while two separate imports of the same module on different lines yield two entries.
-- The `@_require_func` capture is a private convention used to filter CommonJS `require()` patterns: any match where the captured function name is not literally `"require"` is discarded, preventing false positives from similarly-shaped call expressions.
-- Wildcard imports (Java `*`, Kotlin `*`) are detected by inspecting the children of `@import_node` for nodes of type `"asterisk"` or `"*"` rather than text-matching, making the detection structural rather than lexical.
+- The grouping key `(module, line)` is chosen over the AST node identity to consolidate multi-name imports (e.g., `from os import path, getcwd`) into one `ImportInfo`.
+- The `_require_func` capture name is a reserved convention for filtering CommonJS-style patterns; any match where the captured function name is not literally `"require"` is discarded.
+- When `@import_node` is present it takes priority over `@module` for line number resolution, since the import statement node's start position is more accurate for multi-line imports.
+- Wildcard imports (`*` in Java/Kotlin) are detected via child node type inspection rather than via a dedicated query capture, because AST node types differ between languages.
 
-**Edge cases / constraints:**
-- When `import_query_str` is falsy, returns `[]` immediately without touching the AST.
-- If a match contains no `@module` capture, it is silently skipped.
-- The `@import_node` capture is used for line number and wildcard detection; when absent, the `@module` node's start position is used as a fallback for the line number.
-- Duplicate names within the same `names` list are suppressed; the first occurrence wins.
+**Constraints:** Expects `root_node` to be the root of a complete, successfully parsed file. Behavior with partial or error-recovery AST nodes is undefined.
 
 ---
 
 ## `_detect_module_alias`
 
-```
-_detect_module_alias(module_node: Node, import_nodes: list[Node]) -> str | None
-```
+**Signature:** `(module_node: Node, import_nodes: list[Node]) -> str | None`
 
-**Responsibility:** Extracts the alias name in module-level aliasing constructs (`import X as Y`), isolating the language-specific AST structure differences from the main extraction loop.
+Extracts the alias name from a module-level alias (`import X as Y`). Exists because the alias is structurally attached to different parent nodes depending on the language (Python vs. Kotlin), requiring branching resolution logic to be isolated from the main loop.
 
 **Arguments:**
-- `module_node`: The node captured by `@module`, used to walk up to a possible `aliased_import` parent (Python).
-- `import_nodes`: The list of nodes captured by `@import_node`, used to look for an `import_alias` child (Kotlin).
+- `module_node`: The node captured by `@module`; its parent is inspected for the Python `aliased_import` pattern.
+- `import_nodes`: Nodes captured by `@import_node`; the first element is inspected for the Kotlin `import_alias` field.
 
-**Returns:** The alias name string, or `None` if no alias is present.
+**Returns:** The alias string as it appears in source, or `None` if no alias is present.
 
-**Design decision:** Two independent detection paths are tried in sequence—Python's `aliased_import` parent pattern, then Kotlin's `import_alias` field child—so the function handles both languages without branching on a language identifier.
+**Design decisions:** Python and Kotlin paths are distinguished by node type (`aliased_import` vs. field name `alias` on the import node), not by language parameter, keeping the function stateless with respect to the active language.
 
 ---
 
 ## `_resolve_imported_name`
 
-```
-_resolve_imported_name(name_node: Node) -> str | None
-```
+**Signature:** `(name_node: Node) -> str | None`
 
-**Responsibility:** Returns the name by which an imported symbol is referenced in the consuming code, accounting for per-symbol aliases. This is the "effective" name (the alias if one exists, the original otherwise).
+Returns the name as it will be referenced in code after import. When an alias exists, the alias is returned; otherwise the declared name is returned. Centralises the alias-or-original resolution so that the caller only needs to store one effective name per named import.
 
 **Arguments:**
 - `name_node`: A node captured by `@name`.
 
-**Returns:** The string name as it appears in the file's local scope; never `None` in practice (falls back to the node's raw text).
+**Returns:** The effective name string. Never returns `None` in practice (falls back to the raw node text), but the return type is `str | None` for consistency with its sibling `_get_original_name`.
 
-**Design decision:** Handles two structurally distinct aliasing patterns—Python's `aliased_import` node (where `@name` captures the whole aliased construct) and JavaScript/TypeScript's `import_specifier`/`export_specifier` parent with an `alias` field—within a single function to keep the caller's loop uniform.
+**Design decisions:** Three structural cases are handled: Python `aliased_import` nodes, JS/TS `import_specifier`/`export_specifier` parent nodes, and all other nodes (raw text fallback). The JS/TS alias is retrieved from the parent node because the `@name` capture points to the identifier child, not the specifier.
 
 ---
 
 ## `_get_original_name`
 
-```
-_get_original_name(name_node: Node) -> str | None
-```
+**Signature:** `(name_node: Node) -> str | None`
 
-**Responsibility:** Returns the pre-alias original name for an imported symbol, intended to be paired with `_resolve_imported_name` to populate `ImportInfo.alias_map`. Returns `None` when no alias exists, signalling to the caller that no map entry is needed.
+Returns the pre-alias original name only when an alias actually exists. Returning `None` when there is no alias prevents redundant `alias_map` entries for non-aliased names, keeping `alias_map` meaningful as a signal that renaming occurred.
 
 **Arguments:**
 - `name_node`: A node captured by `@name`.
 
-**Returns:** The original (pre-alias) name string when an alias is present; `None` otherwise.
+**Returns:** The original name string if an alias is present, otherwise `None`.
 
-**Design decision:** Returning `None` for non-aliased names (rather than returning the name itself) lets the caller use the `None` result as the condition for deciding whether to write to `alias_map`, avoiding spurious identity-mapping entries.
+**Design decisions:** The `None` sentinel has semantic meaning: callers use it to decide whether to populate `alias_map`, so it must not be conflated with the case where the original and effective names happen to be identical.
 
 ---
 
 ## `_strip_quotes`
 
-```
-_strip_quotes(text: str) -> str
-```
+**Signature:** `(text: str) -> str`
 
-**Responsibility:** Normalises raw module path strings captured from AST nodes by removing surrounding punctuation (double quotes, single quotes, or angle brackets), producing a bare module name suitable for resolution by callers.
+Normalises a raw module string captured from the AST by removing surrounding quote characters or angle brackets. Exists because different languages encode import paths with different delimiters in their AST text representation, and downstream consumers expect a bare path string.
 
 **Arguments:**
-- `text`: The raw text of a `@module` capture node.
+- `text`: The raw text from an `@module` capture node, potentially wrapped in `"..."`, `'...'`, or `<...>`.
 
-**Returns:** The unquoted string, or the original string unchanged if it has no recognised surrounding delimiters or is shorter than two characters.
+**Returns:** The inner string with delimiters removed, or the original string unchanged if no recognised delimiter pair is found.
 
-**Edge cases / constraints:** Only the outermost pair of matching delimiters is removed; no recursive stripping is performed. Strings of length less than 2 are returned as-is.
+**Constraints:** Only single-character symmetric delimiters are handled; inputs shorter than two characters are returned as-is.
 
 ## Dependency Description
 
@@ -156,24 +133,26 @@ _strip_quotes(text: str) -> str
 
 ### Dependencies (what this file uses)
 
-This file has no project-internal file dependencies. All imports are from external libraries (`dataclasses`, `tree_sitter`) and the standard library. There are no imports of other files within this project.
+This file relies on the following external modules:
+
+- **`dataclasses` (standard library)**: Used to define the `ImportInfo` data class, which serves as the structured container for holding extracted import information (module name, imported names, line number, alias data).
+- **`tree_sitter` (`Language`, `Query`, `QueryCursor`, `Node`)**: The core dependency for AST-based import extraction. `Query` and `QueryCursor` are used to execute S-expression pattern matching against the parsed AST, and `Node` is used as the type for traversing and inspecting AST nodes throughout all helper functions.
+
+No project-internal file dependencies exist in this file. It is a self-contained module that depends only on external libraries.
 
 ---
 
 ### Dependents (what uses this file)
 
-Three files within the project depend on this file, all consuming the `extract_imports` function and `ImportInfo` dataclass.
+Three project-internal files consume `extract_imports` from this module, all in a unidirectional dependency relationship (they depend on this file; this file does not depend on them).
 
-- **`codetwine/file_analyzer.py`**
-  Uses `extract_imports` to parse import statements from a file's AST, then feeds the resulting `ImportInfo` list into `build_symbol_to_file_map` to construct a mapping from imported symbol names to their source files. This is part of the per-file analysis pipeline.
+- **`codetwine/file_analyzer.py`**: Uses `extract_imports` to obtain the list of import statements for a target file, which is then passed to `build_symbol_to_file_map` to construct a mapping from imported symbol names and aliases to their corresponding dependency files. This is the primary consumer driving per-file import resolution.
 
-- **`codetwine/extractors/usage_analysis.py`**
-  Uses `extract_imports` to retrieve the import list of a caller file, which is then used during usage/call analysis to understand what symbols a given file has imported.
+- **`codetwine/extractors/usage_analysis.py`**: Uses `extract_imports` to retrieve the import list of a caller file during usage analysis. The resulting `ImportInfo` list is used to understand which external symbols a caller file brings in, enabling cross-file usage tracing.
 
-- **`codetwine/extractors/dependency_graph.py`**
-  Uses `extract_imports` to enumerate all import statements in a file and resolve each imported module to a project-local file path, thereby building the edges of the project's dependency graph.
+- **`codetwine/extractors/dependency_graph.py`**: Uses `extract_imports` to enumerate all import statements of a given project file, then resolves each import's module path to a project-internal file path in order to build callee relationships in a dependency graph.
 
-**Direction of dependency:** All dependencies are unidirectional — `file_analyzer.py`, `usage_analysis.py`, and `dependency_graph.py` each depend on this file, but this file does not depend on any of them.
+All three relationships are strictly unidirectional: `file_analyzer.py`, `usage_analysis.py`, and `dependency_graph.py` each import from this file, while this file has no knowledge of its dependents.
 
 ## Data Flow
 
@@ -181,15 +160,11 @@ Three files within the project depend on this file, all consuming the `extract_i
 
 ## Input
 
-| Parameter | Type | Source |
-|---|---|---|
-| `root_node` | `Node` | AST root node of a parsed source file |
-| `language` | `Language` | tree-sitter Language object |
-| `import_query_str` | `str \| None` | S-expression query string from config |
-
-Callers: `file_analyzer.py`, `usage_analysis.py`, `dependency_graph.py`
-
----
+| Input | Type | Source |
+|-------|------|--------|
+| `root_node` | `Node` | Tree-sitter AST root of a parsed source file |
+| `language` | `Language` | Tree-sitter Language object for the target language |
+| `import_query_str` | `str \| None` | S-expression query string from `IMPORT_QUERIES` config |
 
 ## Main Transformation Flow
 
@@ -197,65 +172,76 @@ Callers: `file_analyzer.py`, `usage_analysis.py`, `dependency_graph.py`
 import_query_str + language
         │
         ▼
-  Query + QueryCursor
+  Query(language, import_query_str)
         │
         ▼
-  cursor.matches(root_node)
-        │  yields (_, captures) per match
+  QueryCursor.matches(root_node)
+        │   Yields (_, captures) per match
         ▼
-  ┌─────────────────────────────────────────┐
-  │  Per match:                             │
-  │  @_require_func → guard filter          │
-  │  @module  → raw text → _strip_quotes()  │
-  │  @import_node → line number             │
-  │  @name    → _resolve_imported_name()    │
-  │             _get_original_name()        │
-  │  @import_node children → wildcard check │
-  └──────────────────┬──────────────────────┘
-                     │
-                     ▼
-        grouped: dict[(module, line) → ImportInfo]
-        (multiple @name captures per statement
-         collapsed into a single ImportInfo.names list)
-                     │
-                     ▼
-        list(grouped.values())  →  list[ImportInfo]
+  ┌─────────────────────────────────────────────┐
+  │  Per match:                                 │
+  │  1. Filter: skip non-require() captures     │
+  │  2. Extract @module  → strip quotes → str   │
+  │  3. Extract @import_node → line number      │
+  │  4. Group key = (module_str, line_num)      │
+  │  5. Detect module alias (import X as Y)     │
+  │  6. For each @name node:                    │
+  │     - resolve alias name (used in code)     │
+  │     - resolve original name (pre-alias)     │
+  │     - append to ImportInfo.names            │
+  │     - populate ImportInfo.alias_map         │
+  │  7. Detect wildcard (*) in import children  │
+  └─────────────────────────────────────────────┘
+        │
+        ▼
+  grouped: dict[(module, line), ImportInfo]
+        │  (multiple @name captures from the same
+        │   statement are merged into one entry)
+        ▼
+  list(grouped.values())
 ```
 
----
+## Output
 
-## Intermediate Data Structure
+A `list[ImportInfo]` returned to callers in:
+- `codetwine/file_analyzer.py` → feeds `build_symbol_to_file_map`
+- `codetwine/extractors/usage_analysis.py` → caller import resolution
+- `codetwine/extractors/dependency_graph.py` → resolved as project-internal dependencies
 
-### `grouped: dict[tuple[str, int], ImportInfo]`
+## Key Data Structures
 
-| Key | Purpose |
-|---|---|
-| `(module, line)` | De-duplicates multiple `@name` captures from the same import statement |
+### `ImportInfo` (dataclass)
 
----
-
-## Output: `ImportInfo`
-
-| Field | Type | Description |
-|---|---|---|
-| `module` | `str` | Module path/name with quotes or angle brackets stripped |
-| `names` | `list[str]` | Imported symbol names (alias-resolved); `["*"]` for wildcard imports; empty for bare `import X` |
+| Field | Type | Purpose |
+|-------|------|---------|
+| `module` | `str` | Import source path/name, quotes and angle brackets stripped |
+| `names` | `list[str]` | Names imported from the module (from X import **Y, Z**); empty for bare imports |
 | `line` | `int` | 1-based line number of the import statement |
-| `module_alias` | `str \| None` | Local alias for the whole module (`import X as Y` → `"Y"`) |
-| `alias_map` | `dict[str, str] \| None` | Maps alias → original name (`{"path_join": "join"}`); `None` when no per-name aliases exist |
+| `module_alias` | `str \| None` | Alias assigned to the entire module (`import X as Y` → `"Y"`) |
+| `alias_map` | `dict[str, str] \| None` | Maps alias → original name for named imports (`{"path_join": "join"}`) |
 
-Return value: `list[ImportInfo]` — consumed by callers to resolve imported symbols to project files.
+### `grouped` (internal accumulator)
 
----
+```
+dict[
+  (module: str, line: int),   # key: uniquely identifies one import statement
+  ImportInfo                  # value: accumulated from all @name captures of that statement
+]
+```
 
-## Helper Transformations
+Multiple query matches that share the same `(module, line)` key—caused by multiple `@name` captures on a single `from X import A, B` statement—are merged into a single `ImportInfo` rather than producing duplicate entries.
 
-| Helper | Input | Output |
-|---|---|---|
-| `_strip_quotes` | Raw module text (`"react"`, `<stdio.h>`) | Bare module string (`react`, `stdio.h`) |
-| `_detect_module_alias` | `@module` node + `@import_node` list | Alias string or `None` |
-| `_resolve_imported_name` | `@name` node | Name as used in code (alias if present) |
-| `_get_original_name` | `@name` node | Pre-alias original name, or `None` if no alias |
+## Helper Transformation Chain
+
+```
+@module node  ──text──▶  raw_module  ──_strip_quotes()──▶  module (str)
+
+@name node    ──────────────────────────────────────────────────────────┐
+              _resolve_imported_name() → alias name (used in code)      │→ ImportInfo.names
+              _get_original_name()    → pre-alias name or None          │→ ImportInfo.alias_map
+
+@module node  ──_detect_module_alias()──▶  module_alias or None         → ImportInfo.module_alias
+```
 
 ## Error Handling
 
@@ -263,26 +249,31 @@ Return value: `list[ImportInfo]` — consumed by callers to resolve imported sym
 
 ## Overall Strategy
 
-This file adopts a **graceful degradation** strategy throughout. Rather than raising exceptions on invalid or missing data, the functions return empty collections or `None` to signal the absence of results. Processing continues for remaining items even when individual captures or nodes yield no usable information.
+This file adopts a **graceful degradation** approach. Rather than raising exceptions when input is missing, malformed, or unexpected, the functions return empty collections or `None` values, allowing callers to continue processing without interruption. No explicit `try/except` blocks are used; instead, defensive guard clauses and safe fallback paths handle unexpected states silently.
+
+---
 
 ## Main Error Patterns and Handling Policies
 
 | Error Type | Handling | Impact |
 |---|---|---|
-| `import_query_str` is `None` or empty | Early return of an empty list | No imports are extracted; callers receive an empty result without exception |
-| `@module` capture absent from a match | Match is silently skipped via `continue` | That particular import statement is omitted from results; other matches proceed normally |
-| Non-`require` function matched by the CommonJS pattern | Match is silently skipped via `continue` | False-positive `require`-like calls are excluded; legitimate imports are unaffected |
-| `@name` or `@import_node` captures absent | Fallback to empty list / module node for line number | Import is still recorded with an empty `names` list and a best-effort line number |
-| Alias or parent node fields missing on a `Node` | `_detect_module_alias`, `_resolve_imported_name`, and `_get_original_name` return `None` | Alias information is omitted; the base name or module is still recorded |
-| Duplicate `@name` values within one import statement | Duplicate check before appending | Each name appears at most once in `ImportInfo.names`; no exception is raised |
-| Node text that contains surrounding quotes or angle brackets | `_strip_quotes` removes them defensively | Module strings shorter than two characters are returned unchanged |
+| `import_query_str` is `None` or empty | Returns an empty list immediately via guard clause | The caller receives no import data; processing continues normally |
+| `@module` capture is absent from a match | Match is skipped via guard clause | That import statement is not recorded; remaining matches continue to be processed |
+| `@import_node` capture is absent | Falls back to using the `@module` node for line number extraction | Line number is still recorded; no data loss for core fields |
+| `@name` capture node yields an empty or `None` name string | The name is not appended to the names list | That specific imported name is silently omitted from the result |
+| Duplicate name in the same import group | Duplicate is filtered out by an existence check before appending | Exactly one entry per name is recorded; no error is raised |
+| `module_alias` or `alias_map` field is absent on a node | Returns `None` from helper functions; field remains `None` on `ImportInfo` | Alias information is simply absent; the core import record is unaffected |
+| `_require_func` capture resolves to a function other than `"require"` | Entire match is skipped | Non-`require` call expressions are excluded from results without error |
+| Wildcard (`*`) already present in names list | Duplicate check prevents re-insertion | Idempotent; no duplicate wildcard entries |
+
+---
 
 ## Design Considerations
 
-The error handling policy is designed to ensure that **partial or malformed AST data never propagates as an exception to callers** (`file_analyzer.py`, `usage_analysis.py`, `dependency_graph.py`). Because tree-sitter query results can vary across language grammars and file conditions, every capture lookup uses `.get()` with a default of an empty list, and every optional field is guarded before access. This makes the extractor tolerant of query definitions that omit optional capture names for certain languages, without requiring per-language exception handling in the caller.
+The absence of exception handling is intentional: the extractors are read-only static analysis tools consumed by multiple dependents (`file_analyzer.py`, `usage_analysis.py`, `dependency_graph.py`). A single malformed or unrecognized AST node should not abort an entire file analysis pass. By returning `None` or empty structures at the boundary of each helper function, failures are contained to the smallest possible unit—an individual import statement or even a single captured node—while the rest of the extraction result remains valid and usable by callers.
 
 ## Summary
 
-**codetwine/extractors/imports.py**
+## codetwine/extractors/imports.py
 
-Extracts and normalizes import statements from tree-sitter ASTs across multiple languages. Accepts a root AST node, a tree-sitter Language, and an optional query string; returns a deduplicated `list[ImportInfo]`. The `ImportInfo` dataclass holds: `module` (unquoted path), `names` (imported symbols), `line` (1-based), `module_alias` (whole-module alias), and `alias_map` (per-symbol alias→original mapping). Multiple named imports from one statement are consolidated by `(module, line)` key. Private helpers handle quote stripping, alias detection, and per-language AST quirks. Returns `[]` gracefully when no query is provided.
+Extracts import statements from tree-sitter ASTs into structured `ImportInfo` objects. Language-agnostic: query strings are passed in as parameters rather than hardcoded. The public `extract_imports(root_node, language, import_query_str)` function runs a tree-sitter query, groups results by `(module, line)` key to merge multi-name imports, and returns a deduplicated `list[ImportInfo]`. `ImportInfo` fields: `module` (bare path), `names` (imported identifiers), `line` (1-based), `module_alias` (whole-module rename), `alias_map` (alias→original for named imports). Consumed by `file_analyzer.py`, `usage_analysis.py`, and `dependency_graph.py`.

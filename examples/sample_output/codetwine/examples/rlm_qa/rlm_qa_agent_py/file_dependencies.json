@@ -27,7 +27,7 @@
       "type": "expression_statement",
       "start_line": 40,
       "end_line": 40,
-      "context": "TARGET_JSON_PATH = \"/path/to/project_knowledge.json\""
+      "context": "TARGET_JSON_PATH = f\"{os.path.dirname(__file__)}/../sample_output/codetwine/project_knowledge.json\""
     },
     {
       "name": "INSTRUCTIONS_TEMPLATE",

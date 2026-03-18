@@ -6,16 +6,14 @@
 
 ## Role and Responsibilities
 
-`import_to_path.py` is the **import-resolution layer** of the codetwine pipeline. Its sole responsibility is to translate raw import statement strings (as extracted from source files) into concrete file paths within the project. It exists as a dedicated module because import resolution is a non-trivial, language-specific concern that is consumed by multiple independent parts of the pipeline (`file_analyzer.py`, `usage_analysis.py`, `dependency_graph.py`), and centralising the logic avoids duplication while keeping each consumer clean.
+`import_to_path.py` is the **import resolution layer** of CodeTwine. Its sole responsibility is translating raw import/include module strings extracted from source files into concrete file paths within the project. It exists as a separate module because this concern—mapping language-specific module naming conventions to filesystem paths—is distinct from both AST parsing and definition/usage extraction, and is reused by multiple consumers (`file_analyzer.py`, `dependency_graph.py`, `usage_analysis.py`).
 
-The module handles the full resolution pipeline:
-1. **Parse** a module string into path components (relative vs. absolute, Python-style dots vs. JS/TS-style slashes).
-2. **Expand** those components into an ordered list of candidate file paths according to per-language rules (index files, package init files, alternative extensions, etc.).
-3. **Match** candidates against the set of known project files and return the first hit.
+The module handles three layered sub-problems:
+1. **Relative vs. absolute import parsing** — converting Python-style (`..utils`) and JS/TS-style (`./helper`, `../lib`) relative specifiers into path component lists.
+2. **Candidate path generation** — applying language-specific resolution rules (index files, alternative extensions, `__init__.py`, current-directory fallback, bare paths) declared in `IMPORT_RESOLVE_CONFIG` without any language-specific branching in the generation logic itself.
+3. **Symbol-to-file mapping** — building a dictionary from imported names to their definition files, including wildcard imports, alias tracking, same-package visibility (Java/Kotlin), and C/C++ `#include`-style whole-file incorporation.
 
-Beyond single-module resolution, the module builds the **symbol-to-file map** that downstream usage trackers rely on to determine which file each imported name originates from. It also provides the utility function used to obtain the tree-sitter `Language` object and query string required before any import extraction can take place.
-
-All language-specific branching is driven by the declarative configuration in `IMPORT_RESOLVE_CONFIG` (from `settings.py`); no hard-coded per-language `if`-chains exist in the resolution or candidate-generation logic.
+All language-specific behavior is driven by configuration (`IMPORT_RESOLVE_CONFIG`, `SAME_PACKAGE_VISIBLE`, `DEFINITION_DICTS`, `IMPORT_QUERIES`, `TREE_SITTER_LANGUAGES`) rather than hard-coded branching, except for the explicitly documented Java/Kotlin and C/C++ special cases in `build_symbol_to_file_map`.
 
 ---
 
@@ -23,25 +21,20 @@ All language-specific branching is driven by the declarative configuration in `I
 
 | Name | Arguments | Return Value | Responsibility |
 |---|---|---|---|
-| `resolve_relative_import` | `module: str`, `separator: str`, `current_dir_part_list: list[str]` | `list[str]` | Converts a raw module string into an ordered list of path components, handling Python dot-relative, JS/TS slash-relative, and absolute import forms. |
-| `generate_candidate_path_list` | `base_path: str`, `src_ext_with_dot: str`, `resolve_config: dict`, `current_dir_part_list: list[str]` | `list[str]` | Produces a deduplicated, priority-ordered list of candidate file paths from a base path, applying per-language rules (init files, index files, alt extensions, bare paths, current-dir fallback) declared in `resolve_config`. |
-| `resolve_module_to_project_path` | `module: str`, `current_file_rel: str`, `project_file_set: set[str]` | `str \| None` | Orchestrates steps 1–3 (parse → expand → match) to resolve a module name to a project-internal file path; returns `None` for stdlib/external modules. |
-| `build_symbol_to_file_map` | `import_info_list`, `current_file_rel: str`, `project_file_set: set[str]`, `file_ext: str`, `project_dir: str` | `tuple[dict[str, str], dict[str, str]]` | Builds `(symbol_to_file_map, alias_to_original)` by resolving every import and registering imported names (with language-specific rules for Python, Java, C/C++) against their source files, including wildcard and same-package visibility handling. |
-| `get_import_params` | `file_ext: str` | `tuple[Language, str] \| tuple[None, None]` | Returns the tree-sitter `Language` object and import query string for a given extension; returns `(None, None)` for unsupported languages so callers can skip import analysis. |
+| `resolve_relative_import` | `module: str`, `separator: str`, `current_dir_part_list: list[str]` | `list[str]` | Convert a raw module string into path components, handling Python-style (`..`) and JS/TS-style (`./`, `../`) relative imports as well as absolute imports. |
+| `generate_candidate_path_list` | `base_path: str`, `src_ext_with_dot: str`, `resolve_config: dict`, `current_dir_part_list: list[str]` | `list[str]` | Produce an ordered, deduplicated list of candidate file paths from a base path using declarative per-language resolve config (index files, alt extensions, `__init__.py`, bare path, current-dir fallback). |
+| `resolve_module_to_project_path` | `module: str`, `current_file_rel: str`, `project_file_set: set[str]` | `str \| None` | Orchestrate the three resolution steps (relative parse → candidate generation → set lookup) and return the first matching project-internal file path, or `None` for stdlib/external modules. |
+| `build_symbol_to_file_map` | `import_info_list`, `current_file_rel: str`, `project_file_set: set[str]`, `file_ext: str`, `project_dir: str` | `tuple[dict[str, str], dict[str, str]]` | Build a `(symbol_to_file_map, alias_to_original)` pair mapping imported names to their definition files, applying language-specific rules for wildcards, aliases, same-package visibility, and whole-file inclusion. |
+| `get_import_params` | `file_ext: str` | `tuple[Language, str] \| tuple[None, None]` | Look up the tree-sitter `Language` object and import query string for a given file extension; returns `(None, None)` for unsupported languages to signal callers to skip import analysis. |
 
 ---
 
 ## Design Decisions
 
-- **Declarative, config-driven resolution**: `generate_candidate_path_list` contains no language-specific `if`-branches; all variation (Python `__init__.py`, JS `index.ts`, C bare paths, alternative extensions) is expressed through fields in `IMPORT_RESOLVE_CONFIG`. Adding support for a new language requires only a new config entry, not changes to this file.
-
-- **Three-step pipeline with single-responsibility helpers**: `resolve_module_to_project_path` is intentionally thin—it delegates each step to a focused helper (`resolve_relative_import`, `generate_candidate_path_list`) and performs only the final set-membership check itself. This makes each step independently testable.
-
-- **Extension-already-present guard**: `generate_candidate_path_list` checks whether `base_path` already carries a known extension (e.g. C's `#include "stdio.h"`) before appending alternative extensions, preventing nonsensical candidates like `stdio.h.h`.
-
-- **`_put_symbol` with overwrite warning**: All symbol registrations funnel through `_put_symbol`, which emits a `logger.warning` when a symbol name would be remapped to a different file. This surfaces ambiguous import shadowing during analysis without raising exceptions.
-
-- **Lazy definition extraction for `*` and `#include`**: Rather than pre-indexing all definitions up front, `_register_definitions_from_file` parses and extracts definitions on demand (with results cached at the `parse_file` level in `ts_parser.py`) only when a wildcard import or `#include` is encountered.
+- **Configuration-driven candidate generation**: `generate_candidate_path_list` contains no language-specific `if`-branches. All variation (index files, alternative extensions, `__init__.py`, bare path, current-directory fallback) is expressed through the `resolve_config` dict sourced from `IMPORT_RESOLVE_CONFIG`, making it straightforward to add new languages without modifying this function.
+- **Fail-fast for unknown extensions**: Both `resolve_module_to_project_path` and `get_import_params` return `None`/`(None, None)` immediately when the file extension is not present in config, delegating the skip decision to callers.
+- **Deduplication with order preservation**: `generate_candidate_path_list` uses `dict.fromkeys()` to remove duplicates while maintaining priority order, ensuring the most specific candidates (same extension, `__init__.py`) are checked first.
+- **Private helpers for file-level symbol registration**: `_register_definitions_from_file` and `_register_definitions_from_package` are module-private (underscore-prefixed), encapsulating the pattern of parsing a file via `parse_file`/`extract_definitions` and bulk-inserting its definitions into `symbol_to_file_map`. `_put_symbol` centralizes duplicate-registration warning logic.
 
 ## Definition Design Specifications
 
@@ -53,23 +46,23 @@ All language-specific branching is driven by the declarative configuration in `I
 
 **Signature:** `resolve_relative_import(module: str, separator: str, current_dir_part_list: list[str]) -> list[str]`
 
-**Responsibility:** Converts an import module string into a list of path components, handling both relative and absolute import syntax for Python (`.`-separated) and JS/TS (`/`-separated).
+**Responsibility:** Converts an import statement's module name into a list of filesystem path components, handling both relative and absolute import syntaxes.
 
 **Arguments:**
-- `module`: The raw module string from an import statement (e.g. `"..utils"`, `"./helper"`, `"os"`).
-- `separator`: The delimiter used to split module names; either `"."` for Python/Java/Kotlin or `"/"` for JS/TS/C/C++.
-- `current_dir_part_list`: Path components of the directory containing the current file, used as the starting point for resolving relative paths.
+- `module`: The raw module string from the import statement (e.g. `"..utils"`, `"./helper"`, `"os"`).
+- `separator`: The module naming delimiter for the language — `"."` for Python/Java/Kotlin, `"/"` for JS/TS/C/C++.
+- `current_dir_part_list`: Path components of the directory containing the current file, used as the traversal anchor for relative imports.
 
-**Return value:** A list of path components that, when joined with `"/"`, yields the `base_path` for candidate generation.
+**Return value:** A list of path components that, when joined with `"/"`, yields the base path for candidate generation.
 
 **Design decisions:**
-- Python dot-counting semantics: one dot means current directory (zero pops), each additional dot pops one more level from `current_dir_part_list`. This matches Python's `importlib` resolution rules.
-- JS/TS paths delegate normalization to `os.path.normpath` (with backslash normalization) rather than implementing manual `..` traversal, leveraging the OS path library for correctness.
-- Absolute imports (no leading dots or slashes) are handled uniformly by splitting on the separator, making the function a single entry point regardless of import style.
+- Python relative imports use dot-counting semantics: one dot is the current directory, each additional dot traverses one level up. The function pops from a copy of `current_dir_part_list` to avoid mutating the original.
+- JS/TS relative imports are normalized via `os.path.normpath` to correctly resolve `../` chains without manual path arithmetic.
+- Absolute imports (no leading dot or `./`) are handled uniformly by splitting on the separator, making no distinction between standard library, external package, or project-internal modules at this stage.
 
 **Edge cases:**
-- A Python single dot (`"."`) with an empty `clean_module` returns the current directory unchanged.
-- An empty `current_dir_part_list` with a JS/TS relative import results in normpath operating on the module string alone.
+- A single-dot Python import (`"."`) results in `clean_module` being empty, so no additional path components are appended beyond the current directory.
+- If `current_dir_part_list` is empty for a JS/TS relative import, the module string is normalized directly without a prefix.
 
 ---
 
@@ -77,24 +70,25 @@ All language-specific branching is driven by the declarative configuration in `I
 
 **Signature:** `generate_candidate_path_list(base_path: str, src_ext_with_dot: str, resolve_config: dict, current_dir_part_list: list[str]) -> list[str]`
 
-**Responsibility:** Produces an ordered, deduplicated list of file path candidates that a given import might resolve to, driven entirely by declarative per-language configuration rather than language-specific branching.
+**Responsibility:** Produces an ordered, deduplicated list of candidate file paths from a base path, applying language-specific resolution rules declared in `resolve_config` rather than hard-coded language branches.
 
 **Arguments:**
-- `base_path`: The path string derived from the module name (e.g. `"src/utils"`, `"stdio.h"`).
-- `src_ext_with_dot`: File extension of the importing file including the leading dot (e.g. `".py"`, `".ts"`).
-- `resolve_config`: An entry from `IMPORT_RESOLVE_CONFIG` containing keys such as `try_init`, `index_ext_list`, `alt_ext_list`, `try_bare_path`, and `try_current_dir`.
-- `current_dir_part_list`: Path components of the current file's directory, used when `try_current_dir` is enabled to generate relative candidates.
+- `base_path`: The filesystem path derived from the module name (e.g. `"src/utils"`, `"stdio.h"`).
+- `src_ext_with_dot`: Extension of the importing file including the leading dot (e.g. `".py"`, `".ts"`).
+- `resolve_config`: A per-language configuration dict from `IMPORT_RESOLVE_CONFIG`, controlling which resolution strategies to apply.
+- `current_dir_part_list`: Path components of the current file's directory, used when `try_current_dir` is enabled.
 
-**Return value:** A list of candidate paths in priority order with no duplicates, preserving insertion order via `dict.fromkeys`.
+**Return value:** A list of candidate paths in priority order with no duplicates, suitable for sequential matching against a project file set.
 
 **Design decisions:**
-- The deduplication guard (`has_known_ext`) prevents nonsensical candidates like `"stdio.h.h"` when `base_path` already carries a recognized extension; in that case both the same-extension and alt-extension candidates are skipped.
-- When `try_current_dir` is enabled, current-directory-relative variants of every root candidate are appended after all root candidates, ensuring project-root resolution always takes priority.
-- The same-extension candidate is always placed first in the candidate list to give it highest priority.
+- All language-specific behaviors (`try_init`, `index_ext_list`, `alt_ext_list`, `try_bare_path`, `try_current_dir`) are driven by config fields, keeping this function free of per-language conditionals.
+- When `base_path` already carries a known extension (detected via `alt_ext_list`), appending further extensions is suppressed to prevent nonsensical candidates such as `"stdio.h.h"`.
+- The same-extension candidate (current file's extension) is added first to prioritize the most likely match. Within `alt_ext_list`, the current file's extension is skipped to avoid duplication.
+- `try_current_dir` appends a second set of candidates prefixed with the current directory, supporting languages where imports are resolved relative to the source file's location (C/C++).
+- Deduplication uses `dict.fromkeys` to preserve insertion order.
 
 **Edge cases:**
-- If `current_dir_part_list` is empty and `try_current_dir` is `True`, the current-directory prefix is an empty string and is omitted from the combined path.
-- The alt extension list skips the entry equal to `src_ext_with_dot` since that candidate was already added first.
+- If `current_dir_part_list` is empty and `try_current_dir` is enabled, the current directory prefix is an empty string and that candidate variant is skipped.
 
 ---
 
@@ -102,22 +96,22 @@ All language-specific branching is driven by the declarative configuration in `I
 
 **Signature:** `resolve_module_to_project_path(module: str, current_file_rel: str, project_file_set: set[str]) -> str | None`
 
-**Responsibility:** Determines whether an import module string refers to a file within the project by generating path candidates and testing membership in `project_file_set`, acting as the primary resolution entry point used across the codebase.
+**Responsibility:** Determines whether an import's module name refers to a file within the project and returns its relative path, filtering out standard library and external package imports implicitly.
 
 **Arguments:**
-- `module`: Raw module string from an import statement; may refer to project files, standard library modules, or third-party packages.
-- `current_file_rel`: Relative path of the importing file from the project root (e.g. `"src/app/main.py"`).
-- `project_file_set`: The complete set of project-relative file paths used for membership testing.
+- `module`: The raw module string from the import statement; may be any kind of import (relative, absolute, internal, external).
+- `current_file_rel`: Project-root-relative path of the file containing the import.
+- `project_file_set`: The complete set of project file paths in `"path/to/file.ext"` format.
 
-**Return value:** The project-relative path of the resolved file (e.g. `"src/utils.py"`), or `None` if the module cannot be matched to any project file.
+**Return value:** The matching project-relative file path, or `None` if no candidate path matches any entry in `project_file_set`.
 
 **Design decisions:**
-- Returns `None` for standard library and external package imports naturally: they produce no matching candidate in `project_file_set` without any explicit allowlist/denylist.
-- Returns `None` immediately if no `IMPORT_RESOLVE_CONFIG` entry exists for the file's extension, avoiding any processing for unsupported languages.
-- The first matching candidate is returned, preserving the priority order established by `generate_candidate_path_list`.
+- Returns `None` immediately if `IMPORT_RESOLVE_CONFIG` has no entry for the current file's extension, preventing analysis of unsupported file types.
+- The three-step pipeline (relative resolution → candidate generation → set membership test) cleanly separates concerns and delegates each step to a focused helper, making the overall logic auditable without encoding resolution heuristics here.
+- External and standard library modules produce candidates that never appear in `project_file_set`, so they are naturally excluded without explicit filtering.
 
 **Edge cases:**
-- If `resolve_config` is absent for the extension, the function returns `None` without proceeding.
+- If `resolve_config` is absent for the extension, returns `None` without generating any candidates.
 
 ---
 
@@ -125,15 +119,15 @@ All language-specific branching is driven by the declarative configuration in `I
 
 **Signature:** `_put_symbol(symbol_map: dict[str, str], name: str, path: str) -> None`
 
-**Responsibility:** Centralizes symbol registration into `symbol_to_file_map` with a warning when a name is being reassigned to a different file, preventing silent overwrites from going unnoticed.
+**Responsibility:** Centralizes symbol registration with a warning on overwrite, ensuring that conflicting symbol origins are surfaced rather than silently discarded.
 
 **Arguments:**
-- `symbol_map`: The mutable dict mapping symbol names to file paths; modified in place.
+- `symbol_map`: The mutable symbol-to-file-path dict being built; modified in place.
 - `name`: The symbol name to register.
 - `path`: The file path where the symbol is defined.
 
 **Design decisions:**
-- Overwriting to the same file is silently allowed (idempotent re-registration); only cross-file overwriting emits a warning, since same-file re-registration is harmless and expected in wildcard import scenarios.
+- A warning is emitted only when an existing entry points to a *different* file, allowing idempotent re-registration of the same name-path pair without noise.
 
 ---
 
@@ -141,30 +135,30 @@ All language-specific branching is driven by the declarative configuration in `I
 
 **Signature:** `build_symbol_to_file_map(import_info_list, current_file_rel: str, project_file_set: set[str], file_ext: str, project_dir: str) -> tuple[dict[str, str], dict[str, str]]`
 
-**Responsibility:** Constructs the complete mapping of imported names to their defining project files for a single source file, enabling downstream usage tracking to identify which file any referenced name originates from.
+**Responsibility:** Converts a list of parsed import statements into two maps — one associating imported names with their definition files, and one recording rename aliases — to support downstream usage tracking.
 
 **Arguments:**
-- `import_info_list`: Parsed import records (as returned by `extract_imports`) for the current file.
-- `current_file_rel`: Relative path of the current file from the project root.
-- `project_file_set`: Set of all project-relative file paths.
-- `file_ext`: Extension of the current file without the leading dot (e.g. `"py"`, `"java"`).
+- `import_info_list`: Parsed import records from `extract_imports`.
+- `current_file_rel`: Project-root-relative path of the current file.
+- `project_file_set`: Complete set of project file paths.
+- `file_ext`: Extension of the current file without the leading dot.
 - `project_dir`: Absolute path to the project root, needed for reading definition files.
 
-**Return value:** A two-element tuple:
-- `symbol_to_file_map`: `{ imported_name: definition_file_path }` for all resolvable names.
-- `alias_to_original`: `{ alias: original_name }` for all aliased imports (e.g. `import a as b` yields `{"b": "a"}`).
+**Return value:** A `(symbol_to_file_map, alias_to_original)` tuple.
+- `symbol_to_file_map`: maps each imported or accessible name to the file that defines it.
+- `alias_to_original`: maps alias names to their original names (e.g. `import a as b` → `{"b": "a"}`).
 
 **Design decisions:**
-- Standard library and third-party modules are excluded implicitly: `resolve_module_to_project_path` returns `None` for them and the loop skips them with `continue`.
-- Java/Kotlin wildcard imports (`import com.example.*`) that cannot resolve to a single file fall back to scanning the package directory, since the module name represents a package rather than a file.
-- The module root is registered via `setdefault` (not `_put_symbol`) when names are present, to avoid overwriting an already-registered direct import with a `from X import y` reference.
-- Java/Kotlin root-part registration is explicitly skipped because those languages reference classes by their unqualified trailing name, not by package root prefixes like `com` or `org`.
-- Same-package visibility (Java/Kotlin): files in the same directory with the same extension are automatically scanned for definitions, replicating the language's implicit same-package accessibility without requiring explicit imports.
+- Language-specific symbol-registration strategies are selected via `separator` and `file_ext` checks rather than a strategy object, keeping the logic inline while still being explicit.
+- For Python `import X.Y`, both the root (`X`) and the leaf (`Y`) are registered: the root supports attribute-access patterns (`X.Y.func()`), the leaf supports direct class-name references. `file_ext` guards prevent Java/Kotlin package roots from being registered as referenceable names.
+- `from X import *` and `#include` (separator `"/"`) both delegate to `_register_definitions_from_file`, which reads and parses the target file to enumerate all defined names.
+- Java/Kotlin wildcard imports that cannot resolve to a single file fall back to scanning all files directly under the package directory via `_register_definitions_from_package`.
+- `setdefault` is used when registering the module root alongside explicit named imports, preventing a direct `import mylib` registration from being overwritten.
+- Same-package visibility (Java/Kotlin) is applied as a post-pass after all import-based registrations are complete.
 
 **Edge cases:**
-- `import *` within resolved names triggers full definition registration from the resolved file.
-- When `import_info.names` is empty and no alias is present, both the root and leaf parts of the module name are registered (with Java/Kotlin root registration skipped).
-- The `SAME_PACKAGE_VISIBLE` check skips the current file itself to avoid self-registration.
+- `import_info.names` being empty triggers root/leaf or full-file registration depending on separator.
+- `import_info.module_alias` takes precedence over root/leaf registration when present.
 
 ---
 
@@ -172,19 +166,16 @@ All language-specific branching is driven by the declarative configuration in `I
 
 **Signature:** `_register_definitions_from_file(file_rel: str, project_dir: str, symbol_to_file_map: dict[str, str]) -> None`
 
-**Responsibility:** Extracts all definition names from a project file and registers them in `symbol_to_file_map`, supporting C/C++ `#include` semantics and wildcard import resolution where an entire file's namespace is incorporated.
+**Responsibility:** Parses a project file and registers all of its named definitions into `symbol_to_file_map`, supporting `from X import *`, C/C++ `#include`, and same-package visibility scenarios where all names from a file become accessible.
 
 **Arguments:**
-- `file_rel`: Project-relative path of the file to scan.
+- `file_rel`: Project-root-relative path of the file to extract definitions from.
 - `project_dir`: Absolute path to the project root.
 - `symbol_to_file_map`: Target dict modified in place.
 
 **Design decisions:**
-- The function silently returns if the file does not exist on disk or if no `DEFINITION_DICTS` entry exists for its extension, making it safe to call speculatively.
-- Uses `parse_file` (which caches results) to avoid redundant re-parsing across multiple calls.
-
-**Edge cases:**
-- Definitions with a falsy `name` attribute are skipped.
+- Silently returns if the file does not exist on disk or if no `DEFINITION_DICTS` entry exists for its extension, making this safe to call speculatively.
+- Delegates parsing to `parse_file` (which caches results) and definition extraction to `extract_definitions`, reusing the same infrastructure used elsewhere in the codebase.
 
 ---
 
@@ -192,20 +183,18 @@ All language-specific branching is driven by the declarative configuration in `I
 
 **Signature:** `_register_definitions_from_package(package_dir: str, file_ext: str, project_dir: str, project_file_set: set[str], symbol_to_file_map: dict[str, str]) -> None`
 
-**Responsibility:** Handles Java/Kotlin wildcard package imports by scanning all files of the matching extension directly under `package_dir` and registering their definitions, without descending into sub-packages.
+**Responsibility:** Handles Java/Kotlin wildcard imports by registering all definitions from files immediately within a package directory, without descending into sub-packages.
 
 **Arguments:**
-- `package_dir`: The directory path corresponding to the imported package (e.g. `"com/example/model"`).
-- `file_ext`: Extension of the current file without the leading dot, used to filter files to scan.
+- `package_dir`: Slash-separated directory path corresponding to the wildcard import's package (e.g. `"com/example/model"`).
+- `file_ext`: Extension of the current file, used to filter candidate files to the same language.
 - `project_dir`: Absolute path to the project root.
-- `project_file_set`: Set of project-relative file paths to iterate over.
+- `project_file_set`: Complete set of project file paths used to enumerate package members.
 - `symbol_to_file_map`: Target dict modified in place.
 
 **Design decisions:**
-- Sub-package files are excluded by checking for `"/"` in the remainder after stripping the `package_dir` prefix, matching Java's semantics where `import com.example.*` does not import from sub-packages.
-
-**Edge cases:**
-- Files in nested sub-directories of `package_dir` are explicitly excluded.
+- Sub-package files are excluded by checking that the path remainder after the package prefix contains no `"/"`, faithfully reflecting Java's non-recursive wildcard import semantics.
+- Only files whose extension matches `file_ext` are processed, preventing cross-language contamination when a directory contains mixed-language files.
 
 ---
 
@@ -213,16 +202,16 @@ All language-specific branching is driven by the declarative configuration in `I
 
 **Signature:** `get_import_params(file_ext: str) -> tuple[Language, str] | tuple[None, None]`
 
-**Responsibility:** Provides the tree-sitter `Language` object and import query string for a given file extension, acting as a gating function that lets callers cleanly skip import analysis for unsupported languages.
+**Responsibility:** Provides callers with the tree-sitter `Language` object and import query string needed to parse import statements, returning `(None, None)` as a sentinel for unsupported file types so callers can skip import analysis cleanly.
 
 **Arguments:**
-- `file_ext`: File extension without the leading dot (e.g. `"py"`, `"java"`, `"c"`).
+- `file_ext`: File extension without the leading dot (e.g. `"py"`, `"java"`).
 
-**Return value:** A `(Language, import_query_str)` tuple for supported extensions, or `(None, None)` if either the import query or the language is absent.
+**Return value:** `(Language, import_query_str)` for supported languages; `(None, None)` if either `IMPORT_QUERIES` or `TREE_SITTER_LANGUAGES` has no entry for the extension.
 
 **Design decisions:**
-- Returns `(None, None)` rather than raising an exception so callers can use a simple truthiness check (`if language and import_query_str`) without try/except blocks, keeping call sites clean.
-- The `KeyError` from `TREE_SITTER_LANGUAGES` is caught and converted to `(None, None)` for consistency with the missing-query case.
+- The `(None, None)` sentinel avoids requiring callers to catch exceptions or perform their own config lookups, enabling a simple `if language and import_query_str:` guard pattern at call sites.
+- A missing query string is treated identically to a missing language object — both result in `(None, None)` — because neither alone is sufficient to perform import extraction.
 
 ## Dependency Description
 
@@ -230,152 +219,183 @@ All language-specific branching is driven by the declarative configuration in `I
 
 ### Dependencies (what this file uses)
 
-**`codetwine/config/settings.py`**
-Five configuration dictionaries are imported from this module:
-- `IMPORT_RESOLVE_CONFIG` — provides per-language import resolution settings (separator character, index file extensions, alternative extensions, etc.) that drive the logic in `resolve_relative_import`, `generate_candidate_path_list`, and `resolve_module_to_project_path`.
-- `IMPORT_QUERIES` — supplies the tree-sitter query strings per file extension, used by `get_import_params` to retrieve the query needed for import statement analysis.
-- `TREE_SITTER_LANGUAGES` — supplies the tree-sitter `Language` objects per file extension, also used by `get_import_params` to construct the return value for import analysis.
-- `DEFINITION_DICTS` — provides per-language definition node configurations, used by `_register_definitions_from_file` to know which AST node types represent definitions when scanning included/imported files.
-- `SAME_PACKAGE_VISIBLE` — indicates which languages (Java, Kotlin) allow referencing same-package symbols without explicit imports, used in `build_symbol_to_file_map` to auto-register definitions from files in the same directory.
+- **codetwine/config/settings.py**
+  This file relies on five configuration dictionaries exported from `settings.py`:
+  - `IMPORT_RESOLVE_CONFIG` — consulted to obtain the per-language import resolution rules (separator character, extension lists, index-file strategies, etc.) that drive both `resolve_module_to_project_path` and `build_symbol_to_file_map`.
+  - `IMPORT_QUERIES` — used by `get_import_params` to retrieve the tree-sitter query string for extracting import statements from a given file extension.
+  - `TREE_SITTER_LANGUAGES` — used by `get_import_params` to retrieve the `Language` object required to run the import query.
+  - `DEFINITION_DICTS` — used inside `_register_definitions_from_file` to obtain the node-type-to-strategy mapping needed to extract definition names from a resolved file.
+  - `SAME_PACKAGE_VISIBLE` — consulted in `build_symbol_to_file_map` to determine whether same-package files (Java/Kotlin) should have their definitions automatically registered without an explicit import statement.
 
-**`codetwine/parsers/ts_parser.py`**
-`parse_file` is used by `_register_definitions_from_file` to parse a project file into an AST root node. This is necessary when the full set of definitions must be extracted from an included or wildcard-imported file.
+- **codetwine/parsers/ts_parser.py** (`parse_file`)
+  Used in `_register_definitions_from_file` to parse a project file into a tree-sitter AST. The returned root node is then passed to `extract_definitions` to enumerate the symbols defined in that file.
 
-**`codetwine/extractors/definitions.py`**
-`extract_definitions` is used by `_register_definitions_from_file` to walk the AST produced by `parse_file` and yield all named definitions. The resulting names are then registered into `symbol_to_file_map`, enabling symbol-to-file resolution for `#include`-style or wildcard imports.
+- **codetwine/extractors/definitions.py** (`extract_definitions`)
+  Used in `_register_definitions_from_file` to walk the AST (obtained via `parse_file`) and extract named definitions. The resulting `DefinitionInfo` records supply the symbol names that are registered into `symbol_to_file_map`.
 
 ---
 
 ### Dependents (what uses this file)
 
-**`codetwine/file_analyzer.py`**
-Uses `get_import_params` to obtain the tree-sitter `Language` object and import query string required before parsing import statements in a file. Uses `build_symbol_to_file_map` to produce the `symbol_to_file_map` and `alias_to_original` dictionaries that map imported names to their source files, which are consumed downstream for usage tracking. The dependency is unidirectional: `file_analyzer.py` depends on this file; this file does not reference `file_analyzer.py`.
+- **codetwine/file_analyzer.py**
+  Uses `get_import_params` to obtain the `Language` object and import query string needed to extract import statements from a file being analyzed. Subsequently uses `build_symbol_to_file_map` to turn the extracted import list into a dict mapping imported names to their definition files, which drives symbol-level usage tracking within the analyzer. The dependency is unidirectional: `file_analyzer.py` calls into this file; this file has no knowledge of `file_analyzer.py`.
 
-**`codetwine/extractors/usage_analysis.py`**
-Uses `get_import_params` to retrieve parsing parameters when analyzing caller files for usage detection. Uses `resolve_module_to_project_path` to check whether a caller's import statement resolves to a specific target file, determining whether that caller file is a dependent of the target. The dependency is unidirectional.
+- **codetwine/extractors/usage_analysis.py**
+  Uses `get_import_params` to obtain import-extraction parameters when analyzing a caller file's imports, and uses `resolve_module_to_project_path` directly to check whether a caller's import resolves to a specific target file (determining whether the caller file imports the target). The dependency is unidirectional.
 
-**`codetwine/extractors/dependency_graph.py`**
-Uses `get_import_params` to obtain import parsing parameters when building the project-wide dependency graph. Uses `resolve_module_to_project_path` to resolve each import statement in a file to a project-internal path, adding the resolved path as a callee edge in the graph. The dependency is unidirectional.
+- **codetwine/extractors/dependency_graph.py**
+  Uses `get_import_params` to retrieve parsing parameters for each file when building the project-wide dependency graph, and uses `resolve_module_to_project_path` to convert each parsed import statement into a resolved project file path, thereby constructing the callee set for every file. The dependency is unidirectional.
 
 ## Data Flow
 
 # Data Flow
 
-## Input Data
+## Overview
 
-| Source | Data | Format |
-|--------|------|--------|
-| Caller (import statement parser) | `module` string from import statement | `str` (e.g. `"..utils"`, `"./helper"`, `"os"`) |
-| Caller | `current_file_rel` | Relative path string from project root |
-| Caller | `project_file_set` | `set[str]` of all project-relative file paths |
-| Caller | `import_info_list` | List of `ImportInfo` objects (module, names, alias_map, module_alias) |
-| `settings.py` | `IMPORT_RESOLVE_CONFIG` | `dict[ext → config_dict]` with keys: `separator`, `try_init`, `index_ext_list`, `alt_ext_list`, `try_bare_path`, `try_current_dir` |
-| `settings.py` | `IMPORT_QUERIES`, `TREE_SITTER_LANGUAGES`, `DEFINITION_DICTS`, `SAME_PACKAGE_VISIBLE` | Per-extension lookup dicts |
-| Filesystem (via `parse_file`) | Source files for definition extraction | Binary file content → AST root node |
+This file transforms import statement information into resolved project-internal file paths and symbol-to-file mappings. Data flows through three progressive transformation stages.
+
+---
+
+## Input Sources
+
+| Input | Format | Source |
+|---|---|---|
+| `module` | string (e.g. `"..utils"`, `"./helper"`, `"os"`) | Import statement extracted from AST |
+| `current_file_rel` | relative path string (e.g. `"src/app/main.py"`) | Caller (file analyzer / dependency graph) |
+| `project_file_set` | `set[str]` of relative path strings | Caller-constructed set of all project files |
+| `import_info_list` | list of `ImportInfo` objects | `extract_imports()` output from AST parsing |
+| `file_ext` | string without dot (e.g. `"py"`, `"java"`) | Derived from `current_file_rel` |
+| `project_dir` | absolute path string | Caller (project root) |
 
 ---
 
 ## Main Transformation Pipeline
 
+### Stage 1 — Module string → path components (`resolve_relative_import`)
+
 ```
 module string
-    │
-    ▼
-resolve_relative_import()
-    │  Converts module name + current_dir_part_list
-    │  into path_part_list (list[str])
-    │  using separator ("." or "/")
-    ▼
-base_path  ("/".join(path_part_list))
-    │
-    ▼
-generate_candidate_path_list()
-    │  Applies resolve_config rules to base_path:
-    │  append src_ext, try __init__.py,
-    │  index files, alt_ext_list, bare path,
-    │  current-dir prefixed copies
-    │  → deduplication via dict.fromkeys()
-    ▼
-candidate_path_list (list[str], priority-ordered)
-    │
-    ▼
-Match against project_file_set (first hit wins)
-    │
-    ▼
-resolved_path (str | None)
+    + separator ("." or "/")
+    + current_dir_part_list (["src", "app"])
+         │
+         ▼
+    path_part_list: list[str]   e.g. ["src", "utils"]
+         │
+    "/".join()
+         ▼
+    base_path: str              e.g. "src/utils"
 ```
 
-`build_symbol_to_file_map` applies the above pipeline for each `ImportInfo`, then performs a second transformation:
-
-```
-resolved_path + ImportInfo.names
-    │
-    ├─ names is empty, separator="."  → register module_root and/or module_leaf
-    ├─ names is empty, separator="/"  → _register_definitions_from_file()
-    ├─ name == "*"                    → _register_definitions_from_file()
-    ├─ names present                  → register each name directly
-    └─ wildcard + unresolved + "."    → _register_definitions_from_package()
-    │
-    ▼
-symbol_to_file_map { name → file_rel }
-alias_to_original  { alias → original_name }
-```
-
-`_register_definitions_from_file` adds a further sub-flow:
-
-```
-file_rel + project_dir
-    │
-    ▼
-parse_file(abs_path) → AST root_node
-    │
-    ▼
-extract_definitions(root_node, definition_dict)
-    │
-    ▼
-Each DefinitionInfo.name → _put_symbol() → symbol_to_file_map
-```
+- Python relative (`"..utils"`, separator `"."`): counts leading dots, pops parent components, appends remaining parts.
+- JS/TS relative (`"./x"`, `"../x"`, separator `"/"`): concatenates current dir + module, normalizes via `os.path.normpath`.
+- Absolute: splits by separator directly.
 
 ---
 
-## Output Data
+### Stage 2 — base_path → candidate file paths (`generate_candidate_path_list`)
 
-| Function | Output | Destination |
-|----------|--------|-------------|
-| `resolve_relative_import` | `list[str]` path components | consumed by `resolve_module_to_project_path` |
-| `generate_candidate_path_list` | `list[str]` candidate paths (priority-ordered, deduplicated) | consumed by `resolve_module_to_project_path` |
-| `resolve_module_to_project_path` | `str \| None` project-relative file path | `dependency_graph.py`, `usage_analysis.py`, `build_symbol_to_file_map` |
-| `build_symbol_to_file_map` | `(symbol_to_file_map, alias_to_original)` tuple | `file_analyzer.py` |
-| `get_import_params` | `(Language, import_query_str) \| (None, None)` | `file_analyzer.py`, `usage_analysis.py`, `dependency_graph.py` |
+```
+base_path
+    + src_ext_with_dot
+    + resolve_config (from IMPORT_RESOLVE_CONFIG)
+    + current_dir_part_list
+         │
+         ▼
+    root_candidate_list: list[str]
+```
+
+Candidates are appended in priority order controlled by `resolve_config` flags:
+
+| Config flag | Candidate generated |
+|---|---|
+| `has_known_ext = False` | `base_path + src_ext_with_dot` |
+| `try_init = True` | `base_path + "/__init__.py"` |
+| `index_ext_list` | `base_path + "/index" + idx_ext` for each |
+| `alt_ext_list` (no known ext) | `base_path + alt_ext` for each |
+| `try_bare_path = True` | `base_path` as-is |
+| `try_current_dir = True` | `current_dir + "/" + candidate` for each above |
+
+Deduplication is applied at the end via `dict.fromkeys()`.
+
+---
+
+### Stage 3 — Candidate paths → resolved project path (`resolve_module_to_project_path`)
+
+```
+candidate_path_list
+    + project_file_set (set lookup O(1))
+         │
+         ▼
+    first matching candidate path: str | None
+```
+
+Returns `None` for standard library / external packages (no match in `project_file_set`).
+
+---
+
+### Stage 4 — Import list → symbol maps (`build_symbol_to_file_map`)
+
+```
+import_info_list
+    ──► resolve_module_to_project_path()  ──► resolved_path: str | None
+         │
+         ▼
+    Per ImportInfo, populate:
+    symbol_to_file_map: dict[str, str]
+    alias_to_original:  dict[str, str]
+```
+
+Registration rules by language/import form:
+
+| Condition | Action |
+|---|---|
+| `import_info.names` contains specific names | Each name → `resolved_path` |
+| `name == "*"` | All definitions from file → `_register_definitions_from_file()` |
+| `names` empty, separator `"."`, has alias | `module_alias` → `resolved_path` |
+| `names` empty, separator `"."`, no alias | `module_parts[0]` (root) and `module_parts[-1]` (leaf) → `resolved_path` |
+| `names` empty, separator `"/"` (C/C++) | All definitions from file → `_register_definitions_from_file()` |
+| `names` non-empty, any language | `module_parts[0]` via `setdefault` (no overwrite) |
+| Wildcard `*` import unresolvable, separator `"."` | All definitions from package directory files |
+| `SAME_PACKAGE_VISIBLE[file_ext]` is true | All definitions from same-directory, same-extension files |
+
+`_register_definitions_from_file` calls `parse_file()` → `extract_definitions()` and inserts each `defn.name → file_rel` into `symbol_to_file_map`.
 
 ---
 
 ## Key Data Structures
 
-### `IMPORT_RESOLVE_CONFIG` entry (per extension)
+### `symbol_to_file_map: dict[str, str]`
+Maps an imported/visible symbol name to the relative path of the file where it is defined.
+- Key: symbol name as it appears in source code (e.g. `"User"`, `"os"`, `"parse_file"`)
+- Value: relative project path (e.g. `"src/models/user.py"`)
+
+### `alias_to_original: dict[str, str]`
+Maps alias names back to original names from `import_info.alias_map`.
+- Key: alias name (e.g. `"b"` from `import a as b`)
+- Value: original name (e.g. `"a"`)
+
+### `resolve_config` (from `IMPORT_RESOLVE_CONFIG`)
+Per-extension dict controlling candidate generation behavior:
 
 | Field | Type | Purpose |
-|-------|------|---------|
-| `separator` | `str` | `"."` for Python/Java/Kotlin, `"/"` for JS/TS/C/C++ |
-| `try_init` | `bool` | Try `base_path/__init__.py` (Python packages) |
-| `index_ext_list` | `list[str]` | Try `base_path/index<ext>` (JS/TS barrel files) |
-| `alt_ext_list` | `list[str]` | Try `base_path<ext>` for alternative extensions |
-| `try_bare_path` | `bool` | Try `base_path` as-is (C/C++ `#include "stdio.h"`) |
-| `try_current_dir` | `bool` | Also prepend current directory to all root candidates |
+|---|---|---|
+| `separator` | `str` | `"."` (Python/Java/Kotlin) or `"/"` (JS/TS/C/C++) |
+| `try_init` | `bool` | Try `__init__.py` for Python packages |
+| `index_ext_list` | `list[str]` | Try `index<ext>` files (JS/TS) |
+| `alt_ext_list` | `list[str]` | Alternative extensions to probe |
+| `try_bare_path` | `bool` | Try path without extension (C/C++ headers) |
+| `try_current_dir` | `bool` | Also probe relative to current file's directory |
 
-### `symbol_to_file_map`
+---
 
-```
-{ symbol_name: str → project_relative_file_path: str }
-```
-Maps every imported (or same-package) name to the file where it is defined. Used by `file_analyzer.py` to trace "which file does this identifier come from" during usage tracking.
+## Outputs
 
-### `alias_to_original`
-
-```
-{ alias_name: str → original_name: str }
-```
-Captures `from X import a as b` → `{"b": "a"}`. Built directly from `ImportInfo.alias_map` entries.
+| Output | Format | Destination |
+|---|---|---|
+| Resolved path | `str \| None` (relative project path) | `file_analyzer.py`, `usage_analysis.py`, `dependency_graph.py` |
+| `symbol_to_file_map` | `dict[str, str]` | `file_analyzer.py` for usage tracking |
+| `alias_to_original` | `dict[str, str]` | `file_analyzer.py` for alias resolution |
+| `(Language, query_str)` | `tuple` | Callers to drive import AST extraction |
 
 ## Error Handling
 
@@ -383,27 +403,35 @@ Captures `from X import a as b` → `{"b": "a"}`. Built directly from `ImportInf
 
 ## Overall Strategy
 
-This file follows a **graceful degradation** strategy. No exceptions are raised to callers; instead, unresolvable or unsupported inputs cause the affected operation to be silently skipped or to return a sentinel value (`None`, empty dict, or empty list). The caller retains full control over whether to treat the absence of a result as an error.
+This file adopts a **graceful degradation** strategy throughout. Rather than raising exceptions when an import cannot be resolved or a file cannot be parsed, functions return `None` or silently skip the unresolvable entry and continue processing the remaining items. This is appropriate for the domain: import resolution routinely encounters standard library modules and third-party packages that have no corresponding project file, so the inability to resolve a module is the expected common case rather than an exceptional one.
 
-## Main Error Patterns and Handling Policies
+No exceptions are explicitly raised by this file. Exceptional conditions from dependencies (e.g., `parse_file`, `extract_definitions`) are not caught here; those propagate to callers per the fail-fast policy of `ts_parser.py`.
+
+---
+
+## Error Patterns and Handling Policies
 
 | Error Type | Handling | Impact |
 |---|---|---|
-| Extension not present in `IMPORT_RESOLVE_CONFIG` | Return `None` immediately | The import is treated as non-project-internal and ignored for the current file |
-| Extension not present in `IMPORT_QUERIES` or `TREE_SITTER_LANGUAGES` | Return `(None, None)` | Caller skips import analysis entirely for the file |
-| Extension not present in `DEFINITION_DICTS` | Return early without registering any symbols | No definitions from that file are added to the symbol map |
-| Referenced file does not exist on disk (`os.path.isfile` check) | Return early without parsing | No definitions from that file are added to the symbol map |
-| Module name resolves to no candidate matching `project_file_set` | Return `None` | Import is classified as external/stdlib and excluded from tracking |
-| `KeyError` on `TREE_SITTER_LANGUAGES` lookup | Caught explicitly, return `(None, None)` | Caller skips import analysis for the unsupported extension |
-| Symbol name collision (same name resolves to a different file) | Log a `WARNING` via `logger`, overwrite with the new path | Later-seen definition wins; the discrepancy is surfaced in logs but processing continues |
+| Module not resolvable to a project file (stdlib, external package, etc.) | `resolve_module_to_project_path` returns `None`; callers skip the entry | Symbol not registered in `symbol_to_file_map`; no crash |
+| No `IMPORT_RESOLVE_CONFIG` entry for a file extension | Returns `None` early | Entire import resolution skipped for that file |
+| No `IMPORT_QUERIES` entry for a file extension | `get_import_params` returns `(None, None)` | Callers detect the sentinel and skip import analysis for that file |
+| No `TREE_SITTER_LANGUAGES` entry for a file extension | `KeyError` caught, `get_import_params` returns `(None, None)` | Same as above; import analysis silently skipped |
+| Referenced file does not exist on disk (`_register_definitions_from_file`) | Early return after `os.path.isfile` check | No definitions registered; no crash |
+| No `DEFINITION_DICTS` entry for a file's extension | Early return | No definitions registered from that file |
+| Symbol name collision across files | Warning logged via `logger.warning`; later registration overwrites earlier | Potential inaccuracy in `symbol_to_file_map`; operator is notified via log |
+| Wildcard import (`*`) with unresolvable module path (Java/Kotlin) | Falls back to scanning all files directly under the package directory | Best-effort resolution; silently no-ops if directory contains no matching files |
+
+---
 
 ## Design Considerations
 
-- **No exception propagation to callers.** All boundary checks (missing config entries, missing files, unresolvable modules) produce a clean falsy return rather than raising, which keeps the calling pipeline resilient against gaps in language configuration or project structure.
-- **Explicit `KeyError` guard vs. `dict.get`.** The majority of config lookups use `.get()` (returning `None` on miss). The single `KeyError`-based `try/except` in `get_import_params` reflects a deliberate distinction: `TREE_SITTER_LANGUAGES` is expected to be fully populated if an import query exists, so an unexpected miss is treated as an error condition worth catching explicitly rather than quietly returning `None` through `.get()`.
-- **Warning-only on symbol collision.** Overwriting a symbol's source file is a data-integrity concern (e.g., two files defining the same name), but it does not halt analysis. The warning log provides observability without interrupting the pipeline.
-- **No input validation exceptions.** Functions assume well-formed inputs (valid path strings, properly structured config dicts). Malformed inputs are not detected proactively; they cause silent misses rather than explicit errors.
+The `(None, None)` sentinel return from `get_import_params` is a deliberate interface contract rather than an exception, allowing callers to gate all import analysis with a simple truthiness check without needing try/except blocks.
+
+The symbol collision warning in `_put_symbol` is the only place observability is provided for a data-integrity issue. All other degradations are entirely silent, consistent with the design assumption that unresolvable imports are routine and not worth logging.
+
+The file existence check in `_register_definitions_from_file` provides a defensive guard against stale or inconsistent `project_file_set` entries without propagating any error signal, keeping the caller's processing loop uninterrupted.
 
 ## Summary
 
-`import_to_path.py` resolves raw import strings to project file paths. It parses module strings into path components (`resolve_relative_import`), generates prioritized candidate paths via declarative config (`generate_candidate_path_list`), and matches against the project file set (`resolve_module_to_project_path`). `build_symbol_to_file_map` constructs `{symbol→file}` and `{alias→original}` mappings for downstream usage tracking, handling wildcards, same-package visibility, and `#include` semantics. `get_import_params` returns tree-sitter Language/query pairs for supported extensions. All language-specific behavior is driven by `IMPORT_RESOLVE_CONFIG`; unresolvable imports return `None` without exceptions.
+**codetwine/import_to_path.py** — Import resolution layer translating raw module strings into project file paths. Public interface: `resolve_relative_import` (module string → path components), `generate_candidate_path_list` (configuration-driven candidate paths), `resolve_module_to_project_path` (full resolution pipeline returning matched path or None), `build_symbol_to_file_map` (returns `symbol_to_file_map` and `alias_to_original` dicts), and `get_import_params` (returns tree-sitter Language/query or None sentinel). All language-specific behavior is driven by `IMPORT_RESOLVE_CONFIG` rather than hardcoded branches. Unresolvable imports degrade silently.
