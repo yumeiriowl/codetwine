@@ -28,7 +28,7 @@ import qa_tools
 
 # LLM model name used by dspy.LM (litellm format)
 # Examples: "anthropic/<model>", "openai/<model>", "gemini/<model>", "ollama/<model>"
-LLM_MODEL = "anthropic/claude-sonnet-4-6"
+LLM_MODEL = "anthropic/claude-opus-4-6"
 
 # API key (obtained from environment variable)
 LLM_API_KEY = os.environ.get("LLM_API_KEY", "")
