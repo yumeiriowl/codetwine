@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.1.3 - 2026-03-19
+
+### Fixed
+- README: `--output-dir` default description did not match actual behavior when only `--project-dir` is specified
+- README: `examples/rlm_qa/qa_tools.py` was missing from Project Structure
+
+### Changed
+- README: Clarified `file` / `callers` / `callees` field descriptions in JSON Schema tables to indicate they are paths within the output directory
+- README: Added `OUTPUT_LANGUAGE` to Quick Start `.env` example
+- README: Added Note in RLM QA section explaining that `file` field paths differ from original source tree paths
+- RLM QA agent: Removed usage guidance from `context` field description in JSON Schema, keeping only data structure info
+
+### Added
+- RLM QA agent: Added Investigation rules with concrete methods for code investigation (`definitions[].context` / `read_source_file()`)
+
 ## 0.1.2 - 2026-03-19
 
 ### Fixed

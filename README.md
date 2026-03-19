@@ -95,6 +95,9 @@ LLM_MODEL=anthropic/claude-sonnet-4-6
 
 # Root directory of the project to analyze (absolute path)
 DEFAULT_PROJECT_DIR=/path/to/your/project
+
+# LLM output language (default: English)
+OUTPUT_LANGUAGE=English
 ```
 
 ### 3. Usage
@@ -116,7 +119,7 @@ uv run main.py --project-dir /path/to/your/project --output-dir /path/to/output
 | Argument | Description | Default |
 |------|------|------------|
 | `--project-dir` | Root directory of the project to analyze | `DEFAULT_PROJECT_DIR` from `.env` |
-| `--output-dir` | Output directory for analysis results | `DEFAULT_OUTPUT_DIR` from `.env` (defaults to `output/` if not set) |
+| `--output-dir` | Output directory for analysis results | `DEFAULT_OUTPUT_DIR` from `.env` (defaults to `output/` if not set). When only `--project-dir` is specified, `DEFAULT_OUTPUT_DIR` is ignored and `output/` is used |
 
 ## Configuration Options
 
@@ -252,11 +255,11 @@ Consolidated JSON integrating all file dependencies and design documents.
 | Field | Type | Description |
 |-----------|-----|------|
 | `project_name` | string | Project name |
-| `project_dependencies[].file` | string | File path |
+| `project_dependencies[].file` | string | Path of the source file copied to the output directory |
 | `project_dependencies[].summary` | string\|null | Summary of the file (null when design document is not generated) |
-| `project_dependencies[].callers` | string[] | List of dependent file paths |
-| `project_dependencies[].callees` | string[] | List of dependency file paths |
-| `files[].file` | string | File path |
+| `project_dependencies[].callers` | string[] | Paths of dependent files copied to the output directory |
+| `project_dependencies[].callees` | string[] | Paths of dependency files copied to the output directory |
+| `files[].file` | string | Path of the source file copied to the output directory |
 | `files[].file_dependencies` | object | Same structure as file_dependencies.json (excluding `file` field) |
 | `files[].doc` | object | Same structure as doc.json (excluding `file` field) |
 
@@ -281,10 +284,10 @@ Consolidated JSON of the dependency graph and per-file summaries.
 | Field | Type | Description |
 |-----------|-----|------|
 | `project_name` | string | Project name |
-| `files[].file` | string | File path |
+| `files[].file` | string | Path of the source file copied to the output directory |
 | `files[].summary` | string\|null | Summary of the file |
-| `files[].callers` | string[] | List of dependent file paths |
-| `files[].callees` | string[] | List of dependency file paths |
+| `files[].callers` | string[] | Paths of dependent files copied to the output directory |
+| `files[].callees` | string[] | Paths of dependency files copied to the output directory |
 
 ### file_dependencies.json
 
@@ -323,18 +326,18 @@ Per-file definition and dependency information.
 
 | Field | Type | Description |
 |-----------|-----|------|
-| `file` | string | File path |
+| `file` | string | Path of the source file copied to the output directory |
 | `definitions[].name` | string | Function/class name |
 | `definitions[].type` | string | Definition type (tree-sitter node type, varies by language. Python: `function_definition`, `class_definition` / Java: `class_declaration`, `method_declaration` / JS/TS: `function_declaration`, `class_declaration`, etc.) |
 | `definitions[].start_line` | int | Start line number |
 | `definitions[].end_line` | int | End line number |
 | `definitions[].context` | string | Full source code of the definition |
 | `callee_usages[].name` | string | Name of the used symbol |
-| `callee_usages[].from` | string | Dependency file path |
+| `callee_usages[].from` | string | Path of the dependency file copied to the output directory |
 | `callee_usages[].target_context` | string | Full source code of the dependency symbol |
 | `callee_usages[].lines` | int[] | Line numbers of usage within this file |
 | `caller_usages[].name` | string | Name of the symbol being used |
-| `caller_usages[].file` | string | Dependent file path |
+| `caller_usages[].file` | string | Path of the dependent file copied to the output directory |
 | `caller_usages[].usage_context` | string | Source code of the usage location in the dependent |
 | `caller_usages[].lines` | int[] | Line numbers of usage in the dependent file |
 
@@ -358,7 +361,7 @@ Per-file design document.
 
 | Field | Type | Description |
 |-----------|-----|------|
-| `file` | string | File path |
+| `file` | string | Path of the source file copied to the output directory |
 | `summary` | string | Summary of the file |
 | `sections[].id` | string | Section identifier (corresponds to id in doc_template.json) |
 | `sections[].title` | string | Section heading |
@@ -421,6 +424,8 @@ The design document generation step is skipped. Dependency information (`file_de
 
 `examples/sample_output/` contains sample output produced by analyzing the codetwine repository itself. This output was generated using a Python-specific template (`examples/doc_template_python.json`) created for this sample. `rlm_qa_agent.py` references this output by default, so you can try out RLM QA immediately without running any analysis.
 
+> **Note:** The `file` field paths in `project_knowledge.json` refer to sources copied into the output directory and differ from the original source tree paths (e.g. `codetwine/import_to_path.py` → `codetwine/import_to_path_py/import_to_path.py`).
+
 ### Additional Prerequisites
 
 - [Deno](https://deno.land/) runtime
@@ -469,6 +474,8 @@ codetwine/
 └── examples/
     ├── doc_template_python.json  # Python-optimized design document template
     ├── rlm_qa/                   # RLM QA agent sample
+    │   ├── rlm_qa_agent.py       # Interactive Q&A agent
+    │   └── qa_tools.py           # Tool definitions for the agent
     └── sample_output/            # Sample output (codetwine analyzed against itself)
 ```
 

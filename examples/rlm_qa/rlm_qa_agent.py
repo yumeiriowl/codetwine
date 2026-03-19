@@ -51,6 +51,12 @@ Always write your answer in <<<RLM_OUTPUT_LANGUAGE>>>.
 ## Important rules
 **Do not print() the entire project_data**: The data is too large and the output will be truncated. Extract and print() only the parts you need.
 
+## Investigation rules
+- Answer based on the codebase. Investigate the actual code before answering.
+  - Use `definitions[].context` to check specific function/class source code
+  - Use `read_source_file(file_path)` when you need the entire file content
+- If information is not found, say so. Never fabricate.
+
 ## JSON Schema
 
 ### Top level
@@ -74,7 +80,7 @@ Always write your answer in <<<RLM_OUTPUT_LANGUAGE>>>.
 - `type` (str): Definition type ("function_definition", "class_definition", etc.)
 - `start_line` (int): Start line number (1-indexed)
 - `end_line` (int): End line number (1-indexed)
-- `context` (str): Full source code of the definition (prefer this field for source code reference; use read_source_file only when the entire file is needed)
+- `context` (str): Full source code of the definition
 
 ### file_dependencies.callee_usages[] (dependencies used by this file)
 - `lines` (int[]): Usage line numbers within this file
