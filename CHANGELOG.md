@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.4 - 2026-03-24
+
+### Changed
+- `doc_template.json`: Removed character limit (400-600 chars) from `summary_prompt`
+- RLM QA agent: Strengthened Investigation rules to require verifying answers against actual source code before responding
+- RLM QA agent: Increased `max_iterations` from 10 to 12
+
+### Added
+- RLM QA agent: Added `SUB_LLM_MODEL` to separate sub-LLM for `llm_query` / `llm_query_batched` within RLM sandbox
+
 ## 0.1.3 - 2026-03-19
 
 ### Fixed

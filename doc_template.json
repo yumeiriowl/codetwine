@@ -26,5 +26,5 @@
       "prompt": "Summarize the error handling policy in this file.\n- Overall error handling strategy (fail-fast / graceful degradation, etc.)\n- Summarize main error patterns and handling policies in a table format (Error type / Handling / Impact)\n- Briefly note any design considerations\n\n[What NOT to describe (strictly enforced)]\n- Detailed explanation of individual exception handling blocks or error check branches (describe at the policy level)\n- Code examples or improved code examples (describe only the policy and rationale)\n- Line number references (they become outdated immediately when source changes)\n- Improvement suggestions or recommended improvement policies (focus on explaining the current policy)"
     }
   ],
-  "summary_prompt": "Summarize the content of the above design document in 400-600 characters, focusing on this file's responsibilities, public interfaces, and main data structures, so it can be used as context when creating design documents for other files. Do not include code details or line numbers."
+  "summary_prompt": "Summarize the content of the above design document, focusing on this file's responsibilities, public interfaces, and main data structures, so it can be used as context when creating design documents for other files. Do not include code details or line numbers."
 }
