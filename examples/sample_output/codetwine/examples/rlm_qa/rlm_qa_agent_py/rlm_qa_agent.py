@@ -28,7 +28,10 @@ import qa_tools
 
 # LLM model name used by dspy.LM (litellm format)
 # Examples: "anthropic/<model>", "openai/<model>", "gemini/<model>", "ollama/<model>"
-LLM_MODEL = "anthropic/claude-sonnet-4-6"
+LLM_MODEL = "anthropic/claude-opus-4-6"
+
+# Sub-LLM model name used for llm_query/llm_query_batched within RLM sandbox
+SUB_LLM_MODEL = "anthropic/claude-sonnet-4-6"
 
 # API key (obtained from environment variable)
 LLM_API_KEY = os.environ.get("LLM_API_KEY", "")
@@ -50,6 +53,13 @@ Always write your answer in <<<RLM_OUTPUT_LANGUAGE>>>.
 
 ## Important rules
 **Do not print() the entire project_data**: The data is too large and the output will be truncated. Extract and print() only the parts you need.
+
+## Investigation rules
+- Always verify your answer against the actual source code before responding. Do not answer from memory or assumption alone.
+  - Use `definitions[].context` to check specific function/class source code
+  - Use `read_source_file(file_path)` when you need the entire file content
+  - When answering about behavior, logic, or data flow, read the relevant code and confirm the implementation matches your answer.
+- If information is not found in the codebase, say so. Never fabricate or guess.
 
 ## JSON Schema
 
@@ -74,7 +84,7 @@ Always write your answer in <<<RLM_OUTPUT_LANGUAGE>>>.
 - `type` (str): Definition type ("function_definition", "class_definition", etc.)
 - `start_line` (int): Start line number (1-indexed)
 - `end_line` (int): End line number (1-indexed)
-- `context` (str): Full source code of the definition (prefer this field for source code reference; use read_source_file only when the entire file is needed)
+- `context` (str): Full source code of the definition
 
 ### file_dependencies.callee_usages[] (dependencies used by this file)
 - `lines` (int[]): Usage line numbers within this file
@@ -224,6 +234,7 @@ def create_qa_agent(json_path: str) -> dspy.RLM:
 
     # Initialize LLM and set as dspy default
     lm = dspy.LM(LLM_MODEL, api_key=LLM_API_KEY)
+    sub_lm = dspy.LM(SUB_LLM_MODEL, api_key=LLM_API_KEY)
     dspy.configure(lm=lm)
 
     # Embed doc schema and output language into the template to build instructions
@@ -245,13 +256,14 @@ def create_qa_agent(json_path: str) -> dspy.RLM:
     # Assemble and return the RLM agent
     rlm = dspy.RLM(
         signature,
-        max_iterations=10,
+        max_iterations=12,
         tools=[
             qa_tools.read_source_file,
             qa_tools.get_files_using,
             qa_tools.graph_search,
         ],
         verbose=True,
+        sub_lm=sub_lm,
         interpreter=interpreter,
     )
 

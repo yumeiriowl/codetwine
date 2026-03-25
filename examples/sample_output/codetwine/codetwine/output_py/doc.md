@@ -6,33 +6,33 @@
 
 ## 1. Module Summary
 
-Converts per-file analysis results (dependency JSON and design documents) stored under the output directory into consolidated project-level output files: a dependency summary JSON, a full knowledge JSON, and a Mermaid dependency graph Markdown.
+Aggregates per-file analysis results (dependency graphs and design document summaries) into project-level output artifacts — a dependency summary JSON, a consolidated knowledge JSON, and a Mermaid flowchart Markdown file.
 
 ## 2. When to Use This Module
 
-- **After per-file analysis is complete**, call `build_symbol_level_deps(base_output_dir, all_file_list)` to derive actual symbol-level caller/callee relationships by reading each file's `file_dependencies.json`.
-- **To collect file summaries**, call `build_summary_map(base_output_dir, all_file_list)` to read the `summary` field from each file's `doc.json`, returning a mapping of relative path → summary text (or `None` if absent).
-- **To produce a lightweight dependency + summary overview**, call `save_dependency_summary(...)` to write `project_dependency_summary.json` combining symbol-level deps and summaries.
-- **To produce the full consolidated knowledge file**, call `save_consolidated_json(...)` to write `project_knowledge.json` merging `file_dependencies.json`, `doc.json`, and project-level dependency info for every file.
-- **To visualize the dependency graph**, call `save_dependency_graph_as_mermaid(...)` to write a Mermaid `graph LR` flowchart to a Markdown file.
-- **To convert a relative file path to the project-scoped output path format**, call `to_output_path(base_output_dir, rel_path)` to obtain a `"project_name/copy_path"` string used throughout all output files.
+- **Building symbol-level dependency maps**: Call `build_symbol_level_deps(base_output_dir, all_file_list)` to read each file's `file_dependencies.json` and produce a `{file_rel: {"callers": set, "callees": set}}` map based on actual symbol usage.
+- **Collecting per-file summaries**: Call `build_summary_map(base_output_dir, all_file_list)` to read each file's `doc.json` and produce a `{file_rel: summary_text | None}` map.
+- **Generating a lightweight dependency + summary JSON**: Call `save_dependency_summary(...)` with the results of the above two functions to write `project_dependency_summary.json`.
+- **Generating a full consolidated knowledge JSON**: Call `save_consolidated_json(...)` to merge all `file_dependencies.json` and `doc.json` contents into a single `project_knowledge.json`.
+- **Generating a Mermaid dependency diagram**: Call `save_dependency_graph_as_mermaid(...)` to write a Markdown file containing a `graph LR` Mermaid flowchart of the project's dependency edges.
+- **Converting a relative path to output format**: Call `to_output_path(base_output_dir, rel_path)` to produce a `project_name/copy_path` string used consistently across all output artifacts.
 
 ## 3. Public Interface Table
 
 | Name | Arguments (type) | Return type | Responsibility |
 |---|---|---|---|
-| `to_output_path` | `base_output_dir: str`, `rel_path: str` | `str` | Converts a project-relative path to `"project_name/copy_path"` format used in all output files. |
-| `build_summary_map` | `base_output_dir: str`, `all_file_list: list[str]` | `dict[str, str \| None]` | Reads each file's `doc.json` and returns a mapping of relative path → summary text or `None`. |
-| `build_symbol_level_deps` | `base_output_dir: str`, `all_file_list: list[str]` | `dict[str, dict[str, set[str]]]` | Reads each file's `file_dependencies.json` and returns a mapping of relative path → `{"callers": set, "callees": set}` based on actual symbol usage. |
-| `save_dependency_summary` | `base_output_dir: str`, `all_file_list: list[str]`, `output_path: str`, `symbol_deps: dict[str, dict[str, set[str]]]`, `summary_map: dict[str, str \| None]` | `None` | Writes a lightweight JSON combining symbol-level dependencies and summaries for every file. |
-| `save_consolidated_json` | `base_output_dir: str`, `all_file_list: list[str]`, `output_path: str`, `symbol_deps: dict[str, dict[str, set[str]]]`, `summary_map: dict[str, str \| None]` | `None` | Writes a full consolidated JSON merging `file_dependencies.json`, `doc.json`, and project-level dependency graph for every file. |
-| `save_dependency_graph_as_mermaid` | `base_output_dir: str`, `output_path: str`, `symbol_deps: dict[str, dict[str, set[str]]]` | `None` | Writes a Mermaid `graph LR` flowchart Markdown file from the symbol-level dependency graph. |
+| `to_output_path` | `base_output_dir: str`, `rel_path: str` | `str` | Converts a project-relative file path to the `project_name/copy_path` format used in all output JSON files. |
+| `build_summary_map` | `base_output_dir: str`, `all_file_list: list[str]` | `dict[str, str \| None]` | Reads each file's `doc.json` and returns a map of relative path to summary text (or `None` if absent). |
+| `build_symbol_level_deps` | `base_output_dir: str`, `all_file_list: list[str]` | `dict[str, dict[str, set[str]]]` | Reads each file's `file_dependencies.json` and returns a map of relative path to its caller and callee sets. |
+| `save_dependency_summary` | `base_output_dir: str`, `all_file_list: list[str]`, `output_path: str`, `symbol_deps: dict[str, dict[str, set[str]]]`, `summary_map: dict[str, str \| None]` | `None` | Writes a lightweight JSON combining symbol-level dependency edges and per-file summaries. |
+| `save_consolidated_json` | `base_output_dir: str`, `all_file_list: list[str]`, `output_path: str`, `symbol_deps: dict[str, dict[str, set[str]]]`, `summary_map: dict[str, str \| None]` | `None` | Merges all per-file `file_dependencies.json` and `doc.json` contents with the dependency graph into a single project-wide JSON. |
+| `save_dependency_graph_as_mermaid` | `base_output_dir: str`, `output_path: str`, `symbol_deps: dict[str, dict[str, set[str]]]` | `None` | Generates a Mermaid `graph LR` flowchart from the symbol-level dependency graph and writes it as a Markdown file. |
 
 ## 4. Design Decisions
 
-- **All output paths use the `"project_name/copy_path"` format.** This mirrors the directory structure created during source copying (via `rel_to_copy_path`) and ensures path references within output files are self-consistent and project-scoped. `to_output_path` is the single point responsible for this conversion, and it is used both internally and by `pipeline.py` when writing individual file results.
-- **`build_symbol_level_deps` and `build_summary_map` are computed once and shared.** Both `save_dependency_summary` and `save_consolidated_json` accept pre-built `symbol_deps` and `summary_map` as arguments rather than recomputing them, avoiding redundant disk reads across the multiple output-generation steps.
-- **Files with no analysis results are excluded from the `files` list in the consolidated JSON with a warning**, while still appearing in `project_dependencies`. This preserves a complete dependency graph while clearly marking gaps in documentation coverage.
+- **Shared pre-computation**: `build_symbol_level_deps` and `build_summary_map` are intentionally separated from the save functions so their results can be computed once and passed to multiple output functions (`save_dependency_summary`, `save_consolidated_json`, `save_dependency_graph_as_mermaid`) without re-reading files.
+- **Uniform path format**: All file paths in every output artifact are normalized to the `project_name/copy_path` format via `to_output_path`. This format mirrors the physical output directory structure established by `rel_to_copy_path` in `file_utils.py`, keeping on-disk layout and JSON references consistent.
+- **Graceful handling of missing artifacts**: Files with no `doc.json` or `file_dependencies.json` are represented with `null` summaries or omitted from the `files` list in the consolidated JSON (with a warning logged), rather than causing a failure.
 
 ## Definition Design Specifications
 
@@ -42,9 +42,9 @@ Converts per-file analysis results (dependency JSON and design documents) stored
 
 ## Module-Level
 
-| Item | Value |
+| Item | Detail |
 |---|---|
-| Logger | `logging.getLogger(__name__)` — module-scoped logger used for info and warning messages throughout this file |
+| Logger | `logger = logging.getLogger(__name__)` — module-scoped logger used for info and warning messages throughout all output functions. |
 
 ---
 
@@ -57,21 +57,21 @@ def to_output_path(base_output_dir: str, rel_path: str) -> str
 
 | Parameter | Type | Description |
 |---|---|---|
-| `base_output_dir` | `str` | Absolute or relative path to the base output directory; its final component is used as the project name |
-| `rel_path` | `str` | Relative path from the project root to a source file |
-| **Returns** | `str` | Path in `"project_name/copy_path"` format |
+| `base_output_dir` | `str` | Absolute or relative path to the base output directory; its trailing component is treated as the project name. |
+| `rel_path` | `str` | A file path relative to the project root. |
+| **Returns** | `str` | A path in `"project_name/copy_path"` format. |
 
-**Responsibility:** Converts a source-relative file path into the canonical output-path format used throughout all JSON outputs and the Mermaid graph, so every path reference in generated artifacts is consistently namespaced under the project name.
+**Responsibility:** Produces the canonical output-format path used consistently throughout all JSON and Mermaid output, ensuring every file reference carries the project name prefix.
 
-**When to use:** Call this whenever a file's relative path must be written into a JSON or Markdown output as a stable, human-readable identifier.
+**When to use:** Call this whenever a file's relative path must be serialized into an output artifact (JSON entry, Mermaid node, etc.).
 
 **Design decisions:**
-- The project name is derived solely from the trailing directory component of `base_output_dir` via `os.path.basename`, making it independent of how the caller constructed the path.
-- Delegates copy-path formatting entirely to `rel_to_copy_path`, keeping path-shape logic in one place.
+- The project name is derived solely from `os.path.basename(base_output_dir)`; no additional configuration is required.
+- Delegates copy-path conversion to `rel_to_copy_path`, keeping path-structure logic centralized in `file_utils`.
 
 **Constraints & edge cases:**
-- `base_output_dir` must have at least one path component; passing an empty string results in an empty project-name prefix.
-- The `copy_path` segment follows the `{parent}/{stem}_{ext}/{filename}` convention defined by `rel_to_copy_path`.
+- `base_output_dir` must end with the intended project name directory; if it ends with a path separator, `os.path.basename` may return an empty string.
+- `rel_path` must be a valid project-relative path accepted by `rel_to_copy_path`.
 
 ---
 
@@ -87,21 +87,21 @@ def build_summary_map(
 
 | Parameter | Type | Description |
 |---|---|---|
-| `base_output_dir` | `str` | Base output directory used to locate per-file `doc.json` files |
-| `all_file_list` | `list[str]` | Relative paths (from project root) of all files to consider |
-| **Returns** | `dict[str, str \| None]` | Mapping from each relative path to its summary string, or `None` if `doc.json` is absent or has no `"summary"` key |
+| `base_output_dir` | `str` | Base output directory used to locate each file's `doc.json`. |
+| `all_file_list` | `list[str]` | Project-relative paths of all files to include. |
+| **Returns** | `dict[str, str \| None]` | Maps each project-relative path to its summary string, or `None` if no `doc.json` exists or the summary key is absent. |
 
-**Responsibility:** Provides a single consolidated lookup of per-file LLM-generated summaries so that downstream functions (`save_dependency_summary`, `save_consolidated_json`) do not each need to read `doc.json` independently.
+**Responsibility:** Provides a pre-built lookup table of per-file summaries so that downstream functions (`save_dependency_summary`, `save_consolidated_json`) do not each re-read `doc.json` independently.
 
-**When to use:** Call once after all per-file analysis has run, before calling any function that needs to attach summaries to output entries.
+**When to use:** Call once per pipeline run, immediately after all per-file analysis is complete and before any consolidated output is written.
 
 **Design decisions:**
-- Every file in `all_file_list` is guaranteed a key in the returned dict, even when its `doc.json` is missing; the value is `None` in that case, enabling uniform downstream handling.
-- Uses `doc.get("summary")` so that a `doc.json` that lacks the `"summary"` key also yields `None` rather than raising an error.
+- Every file in `all_file_list` is guaranteed a key in the returned dict; missing or unreadable `doc.json` maps to `None` rather than being omitted.
+- Summary extraction uses `dict.get("summary")`, so an absent key and an explicit `null` value in the JSON both yield `None`.
 
 **Constraints & edge cases:**
-- Files whose `doc.json` exists but is malformed JSON will raise a `json.JSONDecodeError`.
-- The `"summary"` value is returned exactly as stored; no type coercion is applied.
+- If `doc.json` is malformed JSON, `json.load` will raise; no error handling is applied.
+- The `"summary"` field's presence inside `doc.json` is not enforced; a missing key silently produces `None`.
 
 ---
 
@@ -120,48 +120,36 @@ def save_consolidated_json(
 
 | Parameter | Type | Description |
 |---|---|---|
-| `base_output_dir` | `str` | Base output directory for locating per-file artifacts |
-| `all_file_list` | `list[str]` | Ordered list of source-relative file paths |
-| `output_path` | `str` | Filesystem path where the consolidated JSON will be written |
-| `symbol_deps` | `dict[str, dict[str, set[str]]]` | Keyed by relative path; each value has `"callers"` and `"callees"` sets of relative paths (return value of `build_symbol_level_deps`) |
-| `summary_map` | `dict[str, str \| None]` | Relative path → summary text or `None` (return value of `build_summary_map`) |
+| `base_output_dir` | `str` | Base output directory. |
+| `all_file_list` | `list[str]` | Project-relative paths of all files to consolidate. |
+| `output_path` | `str` | Destination file path for the written JSON. |
+| `symbol_deps` | `dict[str, dict[str, set[str]]]` | Maps each project-relative path to a `{"callers": set[str], "callees": set[str]}` dict of project-relative dependency paths. |
+| `summary_map` | `dict[str, str \| None]` | Maps each project-relative path to a summary string or `None`. |
+| **Returns** | `None` | Writes to disk; no return value. |
 
-**Responsibility:** Produces the complete project knowledge artifact by merging the symbol-level dependency graph, per-file `file_dependencies.json` content, and per-file `doc.json` content into a single structured JSON file.
+**Responsibility:** Produces the single comprehensive `project_knowledge.json` artifact by merging per-file `file_dependencies.json` and `doc.json` data with the symbol-level dependency graph.
 
-**When to use:** Call as the final step in the pipeline when a self-contained, all-in-one project knowledge file is needed.
+**When to use:** Called once at the end of the pipeline to generate the project-wide knowledge file.
 
 **Design decisions:**
-- The output JSON contains two parallel top-level arrays: `project_dependencies` (lightweight graph entries with summary) and `files` (full per-file artifacts). This separation allows consumers to scan the graph without loading full docs.
-- Callers and callees in `project_dependencies` are sorted deterministically.
-- A file is included in `files` only when it contributes at least one additional field beyond `"file"` (i.e., at least one of `file_dependencies.json` or `doc.json` was found). Files failing this condition emit a warning log instead of a silent omission.
-- The `"file"` key is stripped from both `file_dependencies.json` and `doc.json` before embedding them to avoid redundancy with the top-level `"file"` field.
-- Paths in `file_dependencies.json` are stored in output-path format at write time (by `pipeline.py`), so they are used as-is here without reconversion.
+- The output JSON contains two top-level arrays: `project_dependencies` (one entry per file, derived from `symbol_deps` and `summary_map`) and `files` (one entry per file that has at least one of `file_dependencies.json` or `doc.json`).
+- Files for which neither `file_dependencies.json` nor `doc.json` exists are excluded from `files` with a `logger.warning`; they still appear in `project_dependencies`.
+- The `"file"` key is removed from individually loaded JSONs before embedding them, as the canonical `"file"` value is set at the entry's top level.
+- Caller/callee sets are converted to sorted lists for deterministic output.
+- All file paths in the output use the `"project_name/copy_path"` format via `to_output_path`.
+- Paths stored inside `file_dependencies.json` on disk are already in output format (converted during individual file save), so they are embedded as-is without re-conversion.
 
 **Constraints & edge cases:**
-- `symbol_deps` must contain a key for every entry in `all_file_list`; a missing key raises a `KeyError`.
-- If neither `file_dependencies.json` nor `doc.json` exists for a file, it is excluded from `files` and a warning is logged.
-- The output file is overwritten without confirmation if it already exists.
+- `symbol_deps` must contain a key for every element of `all_file_list`; a missing key raises `KeyError`.
+- If `output_path`'s parent directory does not exist, `open` will raise.
+- Caller/callee paths stored in `symbol_deps` must be valid project-relative paths accepted by `to_output_path`.
 
 **Output structure:**
-
 ```
 {
   "project_name": str,
-  "project_dependencies": [
-    {
-      "file": str,         // output-path format
-      "summary": str|null,
-      "callers": [str],    // sorted, output-path format
-      "callees": [str]     // sorted, output-path format
-    }
-  ],
-  "files": [
-    {
-      "file": str,
-      "file_dependencies": { ... },  // present if file_dependencies.json exists
-      "doc": { ... }                 // present if doc.json exists
-    }
-  ]
+  "project_dependencies": [ { "file", "summary", "callers", "callees" }, ... ],
+  "files": [ { "file", "file_dependencies"?, "doc"? }, ... ]
 }
 ```
 
@@ -179,23 +167,23 @@ def build_symbol_level_deps(
 
 | Parameter | Type | Description |
 |---|---|---|
-| `base_output_dir` | `str` | Base output directory for locating per-file `file_dependencies.json` |
-| `all_file_list` | `list[str]` | Relative paths of all files to consider |
-| **Returns** | `dict[str, dict[str, set[str]]]` | Keyed by relative path; each value is `{"callers": set[str], "callees": set[str]}` where set members are source-relative paths |
+| `base_output_dir` | `str` | Base output directory used to locate each file's `file_dependencies.json`. |
+| `all_file_list` | `list[str]` | Project-relative paths of all files to analyze. |
+| **Returns** | `dict[str, dict[str, set[str]]]` | Maps each project-relative path to `{"callers": set[str], "callees": set[str]}`, where set elements are project-relative paths of dependent files. |
 
-**Responsibility:** Aggregates actual symbol-level usage relationships (rather than import-level relationships) across all files into a single dependency map that can be shared by multiple downstream output functions.
+**Responsibility:** Derives a file-level dependency graph from the symbol-level usage data in each file's `file_dependencies.json`, which is more precise than import-level analysis.
 
-**When to use:** Call once before any of the output functions that require `symbol_deps`, so the data is built and traversed only once.
+**When to use:** Called once per pipeline run before any consolidated output function, so that the result can be shared across `save_dependency_summary`, `save_dependency_graph_as_mermaid`, and `save_consolidated_json`.
 
 **Design decisions:**
-- Callees are derived from the `"from"` field of `callee_usages` entries; callers from the `"file"` field of `caller_usages` entries. Both fields hold output-path format strings and are converted back to relative paths via `output_path_to_rel`.
-- Uses `set` for callers and callees to naturally deduplicate multi-symbol references to the same file.
-- Every file in `all_file_list` is pre-seeded with empty sets, so callers/callees missing from `file_dependencies.json` never cause `KeyError` in downstream consumers.
-- Files without a `file_dependencies.json` are silently skipped (their entries remain with empty sets).
+- All files in `all_file_list` are pre-initialized with empty `callers`/`callees` sets, ensuring every key is present in the result regardless of whether a `file_dependencies.json` exists.
+- Callee paths come from `callee_usages[*].from`; caller paths come from `caller_usages[*].file`. Both are stored in output format on disk and are converted back to project-relative paths via `output_path_to_rel` before being stored in the returned dict.
+- Uses `set` to deduplicate multiple symbol usages pointing to the same file.
 
 **Constraints & edge cases:**
-- Paths stored in `file_dependencies.json` must be in output-path format; if they are not, `output_path_to_rel` may return unexpected values.
-- `all_file_list` must be exhaustive; files not in the list are not allocated entries and cannot appear as keys in the result.
+- Files without a `file_dependencies.json` remain with empty sets; no warning is emitted.
+- If `callee_usages` or `caller_usages` entries lack the expected key (`"from"` or `"file"`), they are silently skipped.
+- The returned sets contain project-relative paths, not output-format paths.
 
 ---
 
@@ -214,38 +202,31 @@ def save_dependency_summary(
 
 | Parameter | Type | Description |
 |---|---|---|
-| `base_output_dir` | `str` | Used to derive project name and convert paths |
-| `all_file_list` | `list[str]` | Ordered list of source-relative file paths |
-| `output_path` | `str` | Filesystem path where the output JSON will be written |
-| `symbol_deps` | `dict[str, dict[str, set[str]]]` | Symbol-level dependency map (return value of `build_symbol_level_deps`) |
-| `summary_map` | `dict[str, str \| None]` | Relative path → summary text or `None` (return value of `build_summary_map`) |
+| `base_output_dir` | `str` | Base output directory (used for project name derivation via `to_output_path`). |
+| `all_file_list` | `list[str]` | Project-relative paths of all files to include. |
+| `output_path` | `str` | Destination file path for the written JSON. |
+| `symbol_deps` | `dict[str, dict[str, set[str]]]` | Symbol-level dependency map (same shape as returned by `build_symbol_level_deps`). |
+| `summary_map` | `dict[str, str \| None]` | Per-file summary map (same shape as returned by `build_summary_map`). |
+| **Returns** | `None` | Writes to disk; no return value. |
 
-**Responsibility:** Produces a lightweight project-level JSON combining only the dependency graph and summaries, without the full `file_dependencies.json` and `doc.json` content, for use cases that need a compact overview.
+**Responsibility:** Produces a lightweight `project_dependency_summary.json` combining only dependency edges and summaries, without the full per-file documentation content included in the consolidated JSON.
 
-**When to use:** Call when a small, quickly-loadable artifact summarizing project structure is needed, as distinct from the full `save_consolidated_json` output.
+**When to use:** Called once per pipeline run for consumers that need dependency structure and summaries but not the full `file_dependencies.json`/`doc.json` content.
 
 **Design decisions:**
-- Callers and callees are sorted for deterministic output.
-- The info log includes the count of files with non-null summaries, making it easy to audit how many files successfully went through LLM analysis.
-- All files in `all_file_list` are unconditionally included in `files`, regardless of whether summaries or dependencies are present; absent values appear as empty lists or `null`.
+- Every file in `all_file_list` is always included, regardless of whether it has a summary; files without summaries appear with `"summary": null`.
+- Caller/callee sets are converted to sorted lists for deterministic output.
+- Logs the count of files with non-null summaries for observability.
 
 **Constraints & edge cases:**
-- `symbol_deps` must contain a key for every entry in `all_file_list`.
-- The output file is overwritten without confirmation if it already exists.
+- `symbol_deps` must contain a key for every element of `all_file_list`; a missing key raises `KeyError`.
+- Caller/callee paths in `symbol_deps` must be valid project-relative paths accepted by `to_output_path`.
 
 **Output structure:**
-
 ```
 {
   "project_name": str,
-  "files": [
-    {
-      "file": str,         // output-path format
-      "summary": str|null,
-      "callers": [str],    // sorted, output-path format
-      "callees": [str]     // sorted, output-path format
-    }
-  ]
+  "files": [ { "file", "summary", "callers", "callees" }, ... ]
 }
 ```
 
@@ -264,31 +245,33 @@ def save_dependency_graph_as_mermaid(
 
 | Parameter | Type | Description |
 |---|---|---|
-| `base_output_dir` | `str` | Used to derive project name and convert file paths to output-path format |
-| `output_path` | `str` | Filesystem path where the Mermaid Markdown file will be written |
-| `symbol_deps` | `dict[str, dict[str, set[str]]]` | Symbol-level dependency map (return value of `build_symbol_level_deps`) |
+| `base_output_dir` | `str` | Base output directory (used for project name derivation). |
+| `output_path` | `str` | Destination `.md` file path for the Mermaid diagram. |
+| `symbol_deps` | `dict[str, dict[str, set[str]]]` | Symbol-level dependency map (same shape as returned by `build_symbol_level_deps`). |
+| **Returns** | `None` | Writes to disk; no return value. |
 
-**Responsibility:** Renders the symbol-level dependency graph as a Mermaid `graph LR` flowchart embedded in a Markdown code fence, producing a human-readable and renderable dependency diagram.
+**Responsibility:** Renders the file-level dependency graph as a Mermaid `graph LR` flowchart embedded in a Markdown code fence, enabling visualization in Markdown-aware tools.
 
-**When to use:** Call after `build_symbol_level_deps` when a visual dependency graph artifact is required.
+**When to use:** Called once per pipeline run after `build_symbol_level_deps` to generate the `dependency_graph.md` artifact.
 
 **Design decisions:**
-- Only `callees` edges are traversed to build the graph; `callers` edges are implicitly captured as the reverse of some other file's callee, avoiding duplicate edges.
-- Nodes and edges are both sorted before output to ensure deterministic, diff-friendly files.
-- Node labels use `copy_path_to_rel` (via `to_display_label`) to show the original source-relative path, making the diagram more readable than the internal output-path format.
-- Node IDs are sanitized by replacing `/` and `.` with `_` (via `to_mermaid_node_id`) to comply with Mermaid syntax constraints.
+- Nodes and edges are collected into `set` structures before rendering, so duplicate nodes (a file that is both a caller and a callee of other files) appear only once.
+- Node IDs in Mermaid syntax are derived by replacing `/` and `.` with `_` to avoid characters illegal in Mermaid identifiers.
+- Node display labels use `copy_path_to_rel` (via the inner `to_display_label`) to show human-readable source-relative paths rather than the internal output-format paths.
+- Only callee edges are rendered (directed from caller to callee); caller entries in `symbol_deps` contribute nodes implicitly through the edge source, not through separate iteration of `callers`.
+- Nodes and edges are sorted before output for deterministic file content.
+
+**Inner functions:**
+
+| Name | Signature | Purpose |
+|---|---|---|
+| `to_mermaid_node_id` | `(path: str) -> str` | Replaces `/` and `.` with `_` to produce a valid Mermaid node identifier from an output-format path. |
+| `to_display_label` | `(path: str) -> str` | Strips the project-name prefix from an output-format path and converts the remainder back to a source-relative path via `copy_path_to_rel`. |
 
 **Constraints & edge cases:**
-- If a callee path in `symbol_deps` does not belong to `all_file_list`, it is still added as a node; no filtering against a known-file set is applied.
-- Files that have no callees and are not referenced as a callee by any other file do not appear as nodes in the graph.
-- The output file is overwritten without confirmation if it already exists.
-
-### Nested helper functions
-
-| Function | Signature | Purpose |
-|---|---|---|
-| `to_mermaid_node_id` | `(path: str) -> str` | Converts an output-path string to a valid Mermaid node identifier by replacing `/` and `.` with `_` |
-| `to_display_label` | `(path: str) -> str` | Strips the project-name prefix and converts the copy-path remainder back to the original source-relative path for use as a human-readable node label |
+- Files with no callees still appear as isolated nodes because the outer loop adds every `file_rel` to `node_set`.
+- If `base_output_dir`'s basename contains characters that are invalid in Mermaid IDs, those characters propagate into node IDs (only `/` and `.` are sanitized by `to_mermaid_node_id`).
+- The output file is written as plain text joined by `\n`; no trailing newline is added after the closing fence.
 
 ## Dependency Description
 
@@ -296,28 +279,32 @@ def save_dependency_graph_as_mermaid(
 
 ## Dependencies (modules this file imports)
 
-- **`codetwine/output_py/output.py` → `codetwine/utils/file_utils.py`** : Requires path conversion and output directory resolution utilities.
-  - `rel_to_copy_path` — used in `to_output_path()` to convert a project-relative file path into the copy-destination path structure when constructing the `"project_name/copy_path"` format string.
-  - `copy_path_to_rel` — used in `save_dependency_graph_as_mermaid()` (via `to_display_label()`) to restore a copy-destination path back to a human-readable source-relative path for Mermaid node labels.
-  - `output_path_to_rel` — used in `build_symbol_level_deps()` to convert output-format paths stored in `file_dependencies.json` (`from` and `file` fields) back to project-relative paths when populating the caller/callee sets.
-  - `resolve_file_output_dir` — used in `build_summary_map()`, `save_consolidated_json()`, and `build_symbol_level_deps()` to resolve the absolute path of the per-file output directory (where `doc.json` and `file_dependencies.json` reside).
+**`codetwine/output_py/output.py` → `codetwine/utils/file_utils.py`** : path conversion and output directory resolution
+
+The following symbols are imported and used:
+
+- `rel_to_copy_path` — used in `to_output_path()` to convert a project-relative path into the copy-destination directory structure path (`{stem}_{ext}/{filename}` format) before prepending the project name.
+- `copy_path_to_rel` — used indirectly via `to_display_label()` in `save_dependency_graph_as_mermaid()` to restore a copy-destination path back to a human-readable source-relative path for Mermaid node labels.
+- `output_path_to_rel` — used in `build_symbol_level_deps()` to convert the `from` and `file` fields stored in `file_dependencies.json` (which are in `project_name/copy_path` format) back to project-relative paths when building the caller/callee dependency maps.
+- `resolve_file_output_dir` — used in `build_summary_map()`, `save_consolidated_json()`, and `build_symbol_level_deps()` to resolve the absolute output directory path for each file, enabling location of `doc.json` and `file_dependencies.json` artifacts.
 
 ## Dependents (modules that import this file)
 
-- **`codetwine/pipeline.py` → `codetwine/output_py/output.py`** : Uses this module as the primary output-generation layer for the analysis pipeline.
-  - `to_output_path` — called to convert project-relative file paths to the `"project_name/copy_path"` format when rewriting path fields in dependency results (`file`, `from`, and `file` within `callee_usages` and `caller_usages`).
-  - `build_symbol_level_deps` — called once to build the shared symbol-level dependency graph (`symbol_deps`) that is subsequently passed to the output-saving functions.
-  - `build_summary_map` — called to collect per-file summary text from `doc.json` files into a shared `summary_map` dict.
-  - `save_dependency_summary` — called to write the lightweight `project_dependency_summary.json` file combining dependencies and summaries.
-  - `save_dependency_graph_as_mermaid` — called to write the `dependency_graph.md` Mermaid flowchart file.
-  - `save_consolidated_json` — called to write the full `project_knowledge.json` consolidating all per-file analysis results.
+**`codetwine/pipeline.py` → `codetwine/output_py/output.py`** : orchestrating the full project-level output generation pipeline
+
+- Uses `to_output_path` to convert file paths in dependency analysis results (`file`, `from` in `callee_usages`, `file` in `caller_usages`) to the canonical `project_name/copy_path` format before saving individual `file_dependencies.json` files.
+- Uses `build_symbol_level_deps` to construct symbol-level caller/callee dependency maps once, sharing the result across the subsequent output steps.
+- Uses `build_summary_map` to collect per-file summaries from `doc.json` files, also shared across output steps.
+- Uses `save_dependency_summary` to write a lightweight `project_dependency_summary.json` combining dependencies and summaries.
+- Uses `save_dependency_graph_as_mermaid` to produce `dependency_graph.md` as a Mermaid flowchart.
+- Uses `save_consolidated_json` to write `project_knowledge.json` combining all dependency info and design documents into a single file.
 
 ## Dependency Direction
 
-All relationships are **unidirectional**:
+Both relationships are **unidirectional**:
 
-- `codetwine/output_py/output.py` → `codetwine/utils/file_utils.py` : one-way; `file_utils.py` has no knowledge of `output.py`.
-- `codetwine/pipeline.py` → `codetwine/output_py/output.py` : one-way; `output.py` has no knowledge of `pipeline.py`.
+- `codetwine/output_py/output.py` → `codetwine/utils/file_utils.py` : one-way; `file_utils.py` has no dependency on `output.py`.
+- `codetwine/pipeline.py` → `codetwine/output_py/output.py` : one-way; `output.py` has no dependency on `pipeline.py`.
 
 ## Data Flow
 
@@ -325,122 +312,105 @@ All relationships are **unidirectional**:
 
 ## 1. Inputs
 
-| Input | Source | Format |
-|-------|--------|--------|
-| `base_output_dir` | Caller argument | `str` — absolute path to the project's output root directory; its trailing component is the project name |
-| `all_file_list` | Caller argument | `list[str]` — project-relative file paths (e.g., `"src/foo.py"`) |
-| `symbol_deps` | Caller argument (return value of `build_symbol_level_deps`) | `dict[str, dict[str, set[str]]]` — per-file caller/callee sets keyed by relative path |
-| `summary_map` | Caller argument (return value of `build_summary_map`) | `dict[str, str | None]` — per-file summary text keyed by relative path |
-| `file_dependencies.json` | File read inside `build_symbol_level_deps` and `save_consolidated_json` | JSON object containing `callee_usages` and `caller_usages` arrays with `from` and `file` fields holding output-format paths |
-| `doc.json` | File read inside `build_summary_map` and `save_consolidated_json` | JSON object containing at least a `summary` key and a `file` key |
+| Source | Format | Description |
+|--------|--------|-------------|
+| `base_output_dir` argument | `str` | Filesystem path to the project's output root directory; its trailing component is treated as the project name |
+| `all_file_list` argument | `list[str]` | Ordered list of project-relative file paths (e.g. `"src/foo.py"`) |
+| `file_dependencies.json` (file read) | JSON object on disk | Per-file dependency record written by an earlier pipeline stage; contains `callee_usages` and `caller_usages` arrays with path fields already in `project_name/copy_path` format |
+| `doc.json` (file read) | JSON object on disk | Per-file design document; contains at minimum a `"summary"` string field |
+| `symbol_deps` argument | `dict[str, dict[str, set[str]]]` | Pre-built symbol-level dependency map keyed by relative path |
+| `summary_map` argument | `dict[str, str \| None]` | Pre-built map from relative path to summary text or `None` |
 
 ---
 
 ## 2. Transformation Overview
 
-### `build_symbol_level_deps`
+### Stage 1 — Path normalisation (`to_output_path`)
+Every relative path entering the module is converted to a canonical `"project_name/copy_path"` string. This is done by extracting `os.path.basename(base_output_dir)` as the project name and delegating the copy-path segment to `rel_to_copy_path`.
 
-1. **Initialize** an empty `{callers: set(), callees: set()}` map for every entry in `all_file_list`.
-2. **Read** each file's `file_dependencies.json` from the resolved output directory (`resolve_file_output_dir` → join `"file_dependencies.json"`).
-3. **Extract callees** from each element of `callee_usages[*].from`; convert the output-format path back to a relative path via `output_path_to_rel`, and add it to the file's `callees` set.
-4. **Extract callers** from each element of `caller_usages[*].file`; convert similarly and add to `callers` set.
-5. **Return** the fully populated `deps_map`.
+### Stage 2 — Resolve per-file output directories (`build_symbol_level_deps`, `build_summary_map`)
+For each entry in `all_file_list`, `resolve_file_output_dir` maps the relative path to the on-disk directory where that file's analysis artefacts live.
 
-### `build_summary_map`
+### Stage 3 — Read and invert dependency records (`build_symbol_level_deps`)
+Each `file_dependencies.json` is read. The `"from"` field of every `callee_usages` entry is extracted and converted back to a relative path via `output_path_to_rel`, populating the **callees** set for that file. Likewise, the `"file"` field of every `caller_usages` entry populates the **callers** set. The result is a fully populated `deps_map` covering all files in `all_file_list`.
 
-1. **Resolve** the output directory for each file and locate `doc.json`.
-2. **Read** `doc.json` if it exists and extract the `"summary"` value; otherwise record `None`.
-3. **Return** the `{file_rel: summary | None}` dict.
+### Stage 4 — Collect summaries (`build_summary_map`)
+Each `doc.json` is read and its `"summary"` value extracted. Files whose `doc.json` is absent receive `None`. The result is a flat `{rel_path: summary_or_None}` dict.
 
-### `save_dependency_summary`
+### Stage 5 — Assemble output records
+Three independent serialisation functions consume the two maps produced in stages 3–4:
 
-1. **Receive** `symbol_deps` and `summary_map` as pre-built inputs.
-2. **Convert** each file's entry to output-format paths via `to_output_path`; sort caller/callee lists.
-3. **Assemble** a result dict with `project_name` and a `files` list.
-4. **Write** to `output_path` as formatted JSON.
-
-### `save_consolidated_json`
-
-1. **Build `project_dependencies`**: iterate `all_file_list`, look up `symbol_deps` and `summary_map`, convert all paths to output format, sort callers/callees → produce `converted_deps` list.
-2. **Build `files`**: for each file, load `file_dependencies.json` and `doc.json` from the resolved output directory, strip the redundant `"file"` key from each, and merge both into a single entry dict keyed by output-format `"file"`. Skip files where neither JSON exists (emit a warning).
-3. **Assemble** the top-level consolidated dict with `project_name`, `project_dependencies`, and `files`.
-4. **Write** to `output_path` as formatted JSON.
-
-### `save_dependency_graph_as_mermaid`
-
-1. **Collect nodes and edges** by iterating `symbol_deps`: every file and every callee becomes a node; every (file → callee) pair becomes a directed edge. Both are stored in sets to deduplicate.
-2. **Generate node ID strings** by replacing `/` and `.` with `_` (via `to_mermaid_node_id`).
-3. **Generate display labels** by stripping the project-name prefix and converting the copy-path back to a relative path (via `copy_path_to_rel` inside `to_display_label`).
-4. **Emit sorted** node declarations and edge arrows into a Mermaid fenced code block.
-5. **Write** the Markdown text to `output_path`.
-
-### `to_output_path` (utility, used by all stages above)
-
-Combines `os.path.basename(base_output_dir)` (project name) with `rel_to_copy_path(rel_path)` to produce the canonical `"project_name/copy_path"` string used throughout all output files.
+- **`save_dependency_summary`** — zips `symbol_deps` and `summary_map` into a lightweight list of per-file dicts and writes `project_dependency_summary.json`.
+- **`save_dependency_graph_as_mermaid`** — traverses the callee edges in `symbol_deps` to collect a `node_set` and `edge_set`, converts every path to a Mermaid-safe node ID and a human-readable label, then writes `dependency_graph.md`.
+- **`save_consolidated_json`** — builds both a `project_dependencies` list (from `symbol_deps` + `summary_map`) and a `files` list (by re-reading `file_dependencies.json` and `doc.json` for each file and merging them under a single top-level `"file"` key), then writes `project_knowledge.json`.
 
 ---
 
 ## 3. Outputs
 
-| Output | Function | Format |
-|--------|----------|--------|
-| `dict[str, dict[str, set[str]]]` (return value) | `build_symbol_level_deps` | In-memory dependency map; keys are relative paths, values hold `callers`/`callees` sets of relative paths |
-| `dict[str, str | None]` (return value) | `build_summary_map` | In-memory map; keys are relative paths, values are summary strings or `None` |
-| `project_dependency_summary.json` (file write) | `save_dependency_summary` | JSON with `project_name` and a `files` array; paths in output format, callers/callees as sorted arrays |
-| `project_knowledge.json` (file write) | `save_consolidated_json` | JSON with `project_name`, `project_dependencies` array, and `files` array merging dependency and doc data |
-| `dependency_graph.md` (file write) | `save_dependency_graph_as_mermaid` | Markdown file containing a single Mermaid `graph LR` fenced block |
-| Log warnings | `save_consolidated_json` | Warning emitted for each file in `all_file_list` that has neither `file_dependencies.json` nor `doc.json` |
+| Output | Format | Description |
+|--------|--------|-------------|
+| Return value of `build_symbol_level_deps` | `dict[str, dict[str, set[str]]]` | Callers/callees sets keyed by relative path |
+| Return value of `build_summary_map` | `dict[str, str \| None]` | Summary text (or `None`) keyed by relative path |
+| Return value of `to_output_path` | `str` | Single `"project_name/copy_path"` string |
+| `project_dependency_summary.json` (file write) | JSON | Lightweight dependency + summary list |
+| `dependency_graph.md` (file write) | Markdown with fenced Mermaid block | Flowchart of file-level callee edges |
+| `project_knowledge.json` (file write) | JSON | Full consolidated analysis: `project_dependencies`, `files` with embedded `file_dependencies` and `doc` sub-objects |
 
 ---
 
 ## 4. Key Data Structures
 
-### `deps_map` / `symbol_deps` — returned by `build_symbol_level_deps`
-
-| Field / Key | Type | Purpose |
-|-------------|------|---------|
-| *(outer key)* | `str` | Project-relative file path (e.g., `"src/foo.py"`) |
-| `"callers"` | `set[str]` | Relative paths of files that call symbols defined in this file |
-| `"callees"` | `set[str]` | Relative paths of files whose symbols are called by this file |
-
-### `summary_map` — returned by `build_summary_map`
-
+### `deps_map` / `symbol_deps` — `dict[str, dict[str, set[str]]]`
 | Field / Key | Type | Purpose |
 |-------------|------|---------|
 | *(outer key)* | `str` | Project-relative file path |
-| *(value)* | `str | None` | Summary text from `doc.json`, or `None` if absent |
+| `"callers"` | `set[str]` | Relative paths of files that call into this file |
+| `"callees"` | `set[str]` | Relative paths of files this file calls into |
 
-### Entry in `project_dependencies` / `files_list` of `save_dependency_summary`
+---
 
+### `summary_map` — `dict[str, str | None]`
 | Field / Key | Type | Purpose |
 |-------------|------|---------|
-| `"file"` | `str` | Output-format path (`"project_name/copy_path"`) |
-| `"summary"` | `str | None` | Summary text from `summary_map` |
-| `"callers"` | `list[str]` | Sorted list of output-format caller paths |
-| `"callees"` | `list[str]` | Sorted list of output-format callee paths |
+| *(outer key)* | `str` | Project-relative file path |
+| *(value)* | `str \| None` | Summary text from `doc.json`, or `None` if absent |
 
-### Entry in `files` list of `save_consolidated_json`
+---
 
+### Per-file entry in `project_dependencies` / `save_dependency_summary` `files` list
 | Field / Key | Type | Purpose |
 |-------------|------|---------|
-| `"file"` | `str` | Output-format path for the file |
-| `"file_dependencies"` | `dict` | Contents of `file_dependencies.json` minus its original `"file"` key |
-| `"doc"` | `dict` | Contents of `doc.json` minus its original `"file"` key |
+| `"file"` | `str` | File path in `"project_name/copy_path"` format |
+| `"summary"` | `str \| None` | Summary text from `doc.json` |
+| `"callers"` | `list[str]` | Sorted caller paths in `"project_name/copy_path"` format |
+| `"callees"` | `list[str]` | Sorted callee paths in `"project_name/copy_path"` format |
+
+---
+
+### Per-file entry in `save_consolidated_json` `files` list
+| Field / Key | Type | Purpose |
+|-------------|------|---------|
+| `"file"` | `str` | File path in `"project_name/copy_path"` format |
+| `"file_dependencies"` | `dict` | Full contents of `file_dependencies.json` with the `"file"` key removed |
+| `"doc"` | `dict` | Full contents of `doc.json` with the `"file"` key removed |
+
+---
 
 ### Top-level consolidated JSON object
-
 | Field / Key | Type | Purpose |
 |-------------|------|---------|
 | `"project_name"` | `str` | Trailing directory name of `base_output_dir` |
-| `"project_dependencies"` | `list[dict]` | Per-file caller/callee summary with output-format paths |
-| `"files"` | `list[dict]` | Per-file merged dependency and doc data |
+| `"project_dependencies"` | `list[dict]` | One entry per file with callers/callees/summary |
+| `"files"` | `list[dict]` | One entry per file with merged `file_dependencies` and `doc` sub-objects |
 
-### Mermaid graph data (internal to `save_dependency_graph_as_mermaid`)
+---
 
+### Mermaid intermediate sets
 | Structure | Type | Purpose |
 |-----------|------|---------|
-| `node_set` | `set[str]` | Deduplicated output-format paths representing graph nodes |
-| `edge_set` | `set[tuple[str, str]]` | Deduplicated `(caller_output_path, callee_output_path)` pairs representing directed edges |
+| `node_set` | `set[str]` | All unique file paths (in `"project_name/copy_path"` format) that appear as nodes |
+| `edge_set` | `set[tuple[str, str]]` | All directed callee edges as `(caller_output_path, callee_output_path)` pairs |
 
 ## Error Handling
 
@@ -448,7 +418,7 @@ Combines `os.path.basename(base_output_dir)` (project name) with `rel_to_copy_pa
 
 ## 1. Overall Strategy
 
-This file adopts a **logging-and-continue** (graceful degradation) strategy. Missing output artifacts (e.g., `doc.json`, `file_dependencies.json`) are treated as expected conditions rather than fatal errors. When a file's analysis results are absent, the file is either silently skipped or included in output with `null`/empty values, and a warning is logged. The pipeline continues processing all remaining files regardless of individual missing artifacts.
+The file adopts a **graceful degradation with logging-and-continue** strategy. Missing files or absent data are treated as non-fatal conditions: the affected entry is either populated with a `null` value or silently skipped, while processing continues for all remaining files. No exceptions are raised to the caller; the only active error signal is a `logger.warning` emitted when an expected analysis result is entirely absent for a given file.
 
 ---
 
@@ -456,29 +426,22 @@ This file adopts a **logging-and-continue** (graceful degradation) strategy. Mis
 
 | Error Type | Trigger Condition | Handling | Recoverable? | Impact |
 |---|---|---|---|---|
-| Missing `doc.json` | `doc.json` does not exist in a file's output directory | `summary` is set to `None`; file continues to be processed | Yes | That file appears in output with a `null` summary |
-| Missing `file_dependencies.json` | `file_dependencies.json` does not exist in a file's output directory | The file's dependency entry is skipped; callers/callees remain empty sets | Yes | That file has no dependency data in the symbol-level deps map |
-| No analysis results for a file in consolidated JSON | Neither `file_dependencies.json` nor `doc.json` exists for a file (entry has only the `file` key) | Entry is excluded from `files_list`; a `WARNING` is logged | Yes | File is absent from `files` array in `project_knowledge.json` |
-| Missing `from` or `file` field in usage entries | A usage object in `callee_usages` or `caller_usages` lacks the expected key | The usage is silently skipped (falsy check on the value) | Yes | That specific dependency edge is omitted from the graph |
+| Missing `doc.json` | `doc.json` does not exist for a file in `base_output_dir` | `summary` is set to `None` and processing continues | Yes | That file's summary is `null` in all output JSON |
+| Missing `file_dependencies.json` (build_symbol_level_deps) | `file_dependencies.json` does not exist for a file | File is skipped via `continue`; its deps remain empty sets | Yes | File has empty `callers`/`callees` in dependency output |
+| Missing `file_dependencies.json` (save_consolidated_json) | `file_dependencies.json` does not exist for a file | `file_dependencies` key is simply omitted from the entry | Yes | Entry appears without dependency data in consolidated JSON |
+| Missing `doc.json` (save_consolidated_json) | `doc.json` does not exist for a file | `doc` key is omitted from the entry | Yes | Entry appears without doc data in consolidated JSON |
+| Entry with no analysis results (save_consolidated_json) | Both `file_dependencies.json` and `doc.json` are absent, leaving `entry` with only the `file` key | Entry is excluded from `files_list`; `logger.warning` is emitted | Yes | File is absent from `files` array; count mismatch logged |
+| Missing `from`/`file` field in usage records | A usage dict in `callee_usages` or `caller_usages` lacks the expected key | Entry is silently skipped via truthiness check | Yes | That specific dependency edge is not recorded |
 
 ---
 
 ## 3. Design Notes
 
-- **No exceptions are raised by this file.** All error conditions are handled through existence checks (`os.path.exists`) before file I/O, and via `.get()` with implicit `None` defaults for missing dictionary keys. This means I/O errors on files that *do* exist (e.g., permission errors, malformed JSON) are **not** explicitly caught and would propagate as unhandled exceptions to the caller.
-- The distinction between a file with no results (excluded from `files_list` with a warning) and a file with partial results (included with `null` summary or empty deps) reflects a deliberate tiered degradation: complete absence is flagged, partial absence is silently tolerated.
-- The `summary_map` always contains an entry for every file in `all_file_list` (value is `None` if absent), ensuring that downstream consumers never encounter a `KeyError` when accessing summary data.
+- **No try-except blocks are present anywhere in the file.** All error tolerance is achieved exclusively through `os.path.exists` guards before file I/O, preventing `FileNotFoundError` from ever being raised rather than catching it after the fact.
+- The choice to emit `null` for missing summaries rather than omitting the key entirely reflects a deliberate data-contract decision: downstream consumers can always rely on the `summary` key existing, with `None` signaling absence of LLM-generated content.
+- The `logger.warning` for fully absent analysis results is the only case where the handling is made externally observable beyond the structural absence of data, providing a minimal audit trail without disrupting pipeline execution.
+- The file count logged at the end of `save_consolidated_json` (`files: {len(files_list)}/{len(all_file_list)}`) serves as a passive diagnostic of how many files were silently degraded.
 
 ## Summary
 
-**`codetwine/output.py`** consolidates per-file analysis artifacts into project-level output files.
-
-**Public functions:**
-- `to_output_path(base_output_dir: str, rel_path: str) -> str`
-- `build_symbol_level_deps(base_output_dir: str, all_file_list: list[str]) -> dict[str, dict[str, set[str]]]`
-- `build_summary_map(base_output_dir: str, all_file_list: list[str]) -> dict[str, str | None]`
-- `save_dependency_summary(base_output_dir, all_file_list, output_path, symbol_deps, summary_map)`
-- `save_consolidated_json(base_output_dir, all_file_list, output_path, symbol_deps, summary_map)`
-- `save_dependency_graph_as_mermaid(base_output_dir, output_path, symbol_deps)`
-
-**Key structures:** `symbol_deps` (`dict[str, {"callers": set[str], "callees": set[str]}]`), `summary_map` (`dict[str, str | None]`). Writes `project_dependency_summary.json`, `project_knowledge.json`, and `dependency_graph.md`.
+Aggregates per-file analysis results into project-level output artifacts. Public functions: `to_output_path(base_output_dir:str, rel_path:str)→str`; `build_summary_map(base_output_dir:str, all_file_list:list[str])→dict[str,str|None]`; `build_symbol_level_deps(base_output_dir:str, all_file_list:list[str])→dict[str,dict[str,set[str]]]`; `save_dependency_summary(base_output_dir, all_file_list, output_path, symbol_deps, summary_map)`; `save_consolidated_json(...)`, `save_dependency_graph_as_mermaid(base_output_dir, output_path, symbol_deps)`. Produces `project_dependency_summary.json`, `project_knowledge.json`, and `dependency_graph.md`.

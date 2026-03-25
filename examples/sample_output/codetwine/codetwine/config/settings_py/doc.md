@@ -6,56 +6,57 @@
 
 ## 1. Module Summary
 
-Centralizes all configuration values, language-specific AST settings, and per-extension lookup tables required to parse, analyze, and document source code across multiple programming languages.
+Centralizes all application-wide configuration by reading environment variables and defining per-language static mappings (tree-sitter grammars, definition dictionaries, import queries, usage node types, and import resolution settings) that every other module in the codetwine package consumes.
 
 ## 2. When to Use This Module
 
-- **Retrieving LLM credentials and model settings**: Import `LLM_API_KEY`, `LLM_MODEL`, `LLM_API_BASE`, `DOC_MAX_TOKENS`, `MAX_RETRIES`, and `RETRY_WAIT` to initialize and operate `LLMClient`.
-- **Resolving project and output directories**: Import `DEFAULT_PROJECT_DIR`, `DEFAULT_OUTPUT_DIR`, and `REPO_ROOT` to determine where to read source files and write results (used in `main.py`).
-- **Looking up the tree-sitter `Language` object for a file extension**: Access `TREE_SITTER_LANGUAGES[ext]` to obtain the parser object needed before calling `parse_file` (used in `ts_parser.py`).
-- **Extracting definitions from an AST**: Access `DEFINITION_DICTS.get(ext)` to get the node-type mapping passed to `extract_definitions` (used in `file_analyzer.py`, `usage_analysis.py`, and `dependency_graph.py`).
-- **Running import extraction queries**: Access `IMPORT_QUERIES.get(ext)` to get the tree-sitter S-expression query string for a given language (used in `import_to_path.py`).
-- **Resolving import paths to file paths**: Access `IMPORT_RESOLVE_CONFIG.get(ext)` to get separator, extension lists, and path-resolution flags for a language (used in `import_to_path.py` and `usage_analysis.py`).
-- **Tracking symbol usages in AST nodes**: Access `USAGE_NODE_TYPES.get(ext)` to get call types, attribute types, and skip-parent sets for a language (used in `usage_analysis.py`).
-- **Enabling same-package implicit visibility (Java/Kotlin)**: Check `SAME_PACKAGE_VISIBLE.get(ext)` to decide whether to include same-directory definitions without an explicit import (used in `import_to_path.py`, `usage_analysis.py`, and `dependency_graph.py`).
-- **Filtering excluded directories and files during traversal**: Access `EXCLUDE_PATTERNS` to skip paths matching glob patterns like `__pycache__` or `.git` (used in `dependency_graph.py`).
-- **Controlling parallelism and document generation**: Import `MAX_WORKERS` and `ENABLE_LLM_DOC` to configure worker counts and conditionally enable LLM-based documentation (used in `pipeline.py`, `doc_creator.py`, and `main.py`).
-- **Building LLM prompts with language and length constraints**: Import `OUTPUT_LANGUAGE`, `SUMMARY_MAX_CHARS`, and `DOC_TEMPLATE_PATH` to parameterize prompt construction (used in `doc_creator.py`).
+- **Accessing LLM credentials and behavior** — import `LLM_API_KEY`, `LLM_MODEL`, `LLM_API_BASE`, `MAX_RETRIES`, `RETRY_WAIT`, and `DOC_MAX_TOKENS` to initialize and operate `LLMClient`.
+- **Resolving project and output directories** — import `DEFAULT_PROJECT_DIR`, `DEFAULT_OUTPUT_DIR`, and `REPO_ROOT` to determine where source files are read from and where results are written.
+- **Selecting the doc template and language** — import `DOC_TEMPLATE_PATH` to locate the JSON template file, and `OUTPUT_LANGUAGE` and `SUMMARY_MAX_CHARS` to control generated documentation content.
+- **Looking up a tree-sitter parser for a file extension** — index `TREE_SITTER_LANGUAGES[ext]` to obtain the `Language` object required to parse a source file.
+- **Extracting definitions from an AST** — call `DEFINITION_DICTS.get(ext)` to retrieve the AST-node-type → name-node-type mapping for a given extension.
+- **Running import extraction queries** — call `IMPORT_QUERIES.get(ext)` to get the S-expression query string for a given extension.
+- **Tracking symbol usages** — call `USAGE_NODE_TYPES.get(ext)` to get call types, attribute types, and skip-parent rules for usage analysis.
+- **Resolving import paths to file paths** — call `IMPORT_RESOLVE_CONFIG.get(ext)` to get the separator, extension lists, and path-resolution flags for a given language.
+- **Enabling same-package visibility** — call `SAME_PACKAGE_VISIBLE.get(ext)` to determine whether implicit same-directory references apply (Java, Kotlin).
+- **Filtering files during directory traversal** — read `EXCLUDE_PATTERNS` to skip directories and files that match glob patterns.
+- **Controlling parallelism** — read `MAX_WORKERS` to set the thread/task concurrency limit for pipeline and doc-generation functions.
+- **Checking whether LLM documentation is active** — read `ENABLE_LLM_DOC` to decide whether to instantiate an `LLMClient` and run the documentation generation step.
 
 ## 3. Public Interface Table
 
 | Name | Arguments (type) | Return type | Responsibility |
 |---|---|---|---|
-| `get_config_value` | `key: str`, `default: any`, `var_type: type` | `str \| int \| float \| bool \| None` | Reads an environment variable and returns it converted to the specified type; raises `ValueError` if a required variable is missing |
-| `LangConfig` | `language: Language`, `definition_dict: dict[str, str]`, `import_query: str \| None`, `usage_node_types: dict \| None`, `import_resolve: dict \| None`, `same_package_visible: bool` | — | Immutable dataclass bundling all AST and resolution settings for a single language extension |
-| `LLM_API_KEY` | — | `str` | LLM API key loaded from the environment |
-| `LLM_MODEL` | — | `str` | LLM model identifier loaded from the environment |
-| `LLM_API_BASE` | — | `str` | LLM API base URL loaded from the environment |
-| `OUTPUT_LANGUAGE` | — | `str` | Natural language for generated documentation output |
-| `DOC_MAX_TOKENS` | — | `int` | Maximum token count for LLM document generation |
-| `REPO_ROOT` | — | `str` | Absolute normalized path to the repository root |
-| `DEFAULT_PROJECT_DIR` | — | `str` | Default source project directory |
-| `DEFAULT_OUTPUT_DIR` | — | `str` | Default output directory for generated artifacts |
-| `DOC_TEMPLATE_PATH` | — | `str` | Path to the JSON documentation template file |
-| `MAX_WORKERS` | — | `int` | Maximum number of parallel workers |
-| `MAX_RETRIES` | — | `int` | Maximum number of LLM request retry attempts |
-| `RETRY_WAIT` | — | `int` | Seconds to wait between LLM retries |
-| `ENABLE_LLM_DOC` | — | `bool` | Whether LLM-based document generation is enabled |
-| `SUMMARY_MAX_CHARS` | — | `int` | Maximum character count for file summary text |
-| `EXCLUDE_PATTERNS` | — | `list[str]` | Glob patterns for directories and files to skip during project traversal |
-| `TREE_SITTER_LANGUAGES` | — | `dict[str, Language]` | Maps file extension to its tree-sitter `Language` object |
-| `DEFINITION_DICTS` | — | `dict[str, dict[str, str]]` | Maps file extension to AST node-type → name-node-type mapping for definition extraction |
-| `IMPORT_QUERIES` | — | `dict[str, str \| None]` | Maps file extension to its tree-sitter import extraction query string |
-| `USAGE_NODE_TYPES` | — | `dict[str, dict \| None]` | Maps file extension to AST node type settings for usage tracking |
-| `IMPORT_RESOLVE_CONFIG` | — | `dict[str, dict]` | Maps file extension to import path resolution settings (separator, extension lists, flags) |
-| `SAME_PACKAGE_VISIBLE` | — | `dict[str, bool]` | Maps file extension to whether same-package implicit visibility applies (Java/Kotlin only) |
+| `get_config_value` | `key: str`, `default: any` (optional), `var_type: type` (default `str`) | `str \| int \| float \| bool \| None` | Reads an environment variable and converts it to the requested type; raises `ValueError` if the variable is missing and no default is provided. |
+| `LangConfig` | `language: Language`, `definition_dict: dict[str, str]`, `import_query: str \| None`, `usage_node_types: dict \| None`, `import_resolve: dict \| None`, `same_package_visible: bool` | dataclass instance | Immutable bundle of all language-specific settings associated with one file extension. |
+| `LLM_API_KEY` | — | `str` | API key for the LLM provider, read from the environment. |
+| `LLM_MODEL` | — | `str` | Model identifier forwarded to the LLM client. |
+| `LLM_API_BASE` | — | `str` | Base URL for the LLM API endpoint. |
+| `OUTPUT_LANGUAGE` | — | `str` | Natural language in which generated documentation is written. |
+| `DOC_MAX_TOKENS` | — | `int` | Maximum token budget for a single LLM generation call. |
+| `REPO_ROOT` | — | `str` | Absolute, normalized path to the repository root. |
+| `DEFAULT_PROJECT_DIR` | — | `str` | Default source directory to analyze when none is specified on the command line. |
+| `DEFAULT_OUTPUT_DIR` | — | `str` | Default directory where analysis output is written. |
+| `DOC_TEMPLATE_PATH` | — | `str` | Path to the JSON file that defines documentation section templates. |
+| `MAX_WORKERS` | — | `int` | Maximum number of concurrent workers for parallel processing. |
+| `MAX_RETRIES` | — | `int` | Maximum number of retry attempts for LLM calls. |
+| `RETRY_WAIT` | — | `int` | Seconds to wait between retry attempts. |
+| `ENABLE_LLM_DOC` | — | `bool` | Feature flag controlling whether LLM-based document generation runs. |
+| `SUMMARY_MAX_CHARS` | — | `int` | Maximum character length for generated file summaries. |
+| `EXCLUDE_PATTERNS` | — | `list[str]` | Glob patterns for directories and files to skip during project traversal. |
+| `TREE_SITTER_LANGUAGES` | — | `dict[str, Language]` | Maps file extension (including aliases) to the corresponding tree-sitter `Language` object. |
+| `DEFINITION_DICTS` | — | `dict[str, dict[str, str]]` | Maps file extension to AST-node-type → name-node-type dictionary for definition extraction. |
+| `IMPORT_QUERIES` | — | `dict[str, str \| None]` | Maps file extension to the tree-sitter S-expression query string for import extraction. |
+| `USAGE_NODE_TYPES` | — | `dict[str, dict \| None]` | Maps file extension to node-type settings (call types, attribute types, skip rules) for usage tracking. |
+| `IMPORT_RESOLVE_CONFIG` | — | `dict[str, dict]` | Maps file extension to import-path resolution parameters (separator, extension lists, path-resolution flags). |
+| `SAME_PACKAGE_VISIBLE` | — | `dict[str, bool]` | Maps file extension to whether same-package implicit references are enabled (Java, Kotlin only). |
 
 ## 4. Design Decisions
 
-- **`_LANG_REGISTRY` as the single source of truth**: All per-language settings are defined once in `_LANG_REGISTRY` as `LangConfig` entries. The five public mapping dictionaries (`TREE_SITTER_LANGUAGES`, `DEFINITION_DICTS`, `IMPORT_QUERIES`, `USAGE_NODE_TYPES`, `IMPORT_RESOLVE_CONFIG`) are derived from the registry automatically, eliminating the need to maintain parallel structures when adding a new language.
-- **Extension alias expansion via `_EXT_ALIASES`**: Extensions that share language settings (e.g., `.h` → `cpp`, `.jsx` → `js`, `.kts` → `kt`) are declared separately in `_EXT_ALIASES` and injected into every public dictionary by `_expand_ext_aliases`, keeping the registry entries deduplicated.
-- **Sentinel strings in `definition_dict` values**: Values prefixed with `__` (e.g., `__function_declarator__`, `__variable_declarator__`, `__assignment__`) are sentinel strings rather than literal AST node types. They signal to the definition extractor that the name is nested more than one level deep and requires a dedicated extraction path.
-- **`_REQUIRED` sentinel for mandatory environment variables**: A private module-level object (`_REQUIRED`) is used as the default sentinel instead of `None`, allowing `None` itself to be a valid explicit default while still distinguishing the "no default provided" case.
+- **Single `_LANG_REGISTRY` as the source of truth** — all per-language settings are defined once inside `_LANG_REGISTRY` as `LangConfig` instances, and every public mapping dictionary (`TREE_SITTER_LANGUAGES`, `DEFINITION_DICTS`, etc.) is derived from it automatically. Adding a new language requires only one registry entry.
+- **Extension aliases via `_EXT_ALIASES`** — extensions that share an existing language configuration (`.h` → `cpp`, `.kts` → `kt`, `.jsx` → `js`) are registered separately from the primary registry and expanded into all public dictionaries by `_expand_ext_aliases`, avoiding duplication of `LangConfig` objects.
+- **Sentinel values in definition dictionaries** — values prefixed with `__` (e.g., `"__function_declarator__"`, `"__variable_declarator__"`) are sentinel strings signaling that name extraction requires a dedicated code path rather than a direct child lookup, keeping the dictionary-driven dispatch extensible without adding special-case logic here.
+- **`_REQUIRED` sentinel for mandatory environment variables** — a private module-level object is used as the default argument sentinel instead of `None`, allowing `None` itself to be a valid explicit default while still detecting truly missing required variables.
 
 ## Definition Design Specifications
 
@@ -65,198 +66,218 @@ Centralizes all configuration values, language-specific AST settings, and per-ex
 
 ## Module-Level Constants
 
-### Sentinel Object
+### Sentinel Object: `_REQUIRED`
 
-| Name | Value | Purpose |
-|------|-------|---------|
-| `_REQUIRED` | `object()` | Unique sentinel used as the default for `get_config_value` to distinguish "no default provided" from `None`. |
+| Property | Detail |
+|---|---|
+| Type | `object` |
+| Purpose | Acts as a unique sentinel distinguishing "no default provided" from `None` as a default |
 
----
-
-### LLM Settings
-
-| Name | Type | Default | Purpose |
-|------|------|---------|---------|
-| `LLM_API_KEY` | `str` | `""` | API key for the LLM provider. |
-| `LLM_MODEL` | `str` | `""` | Model identifier string passed to the LLM client. |
-| `LLM_API_BASE` | `str` | `""` | Base URL for the LLM API endpoint. |
-| `OUTPUT_LANGUAGE` | `str` | `"English"` | Natural language for generated documentation output. |
-| `DOC_MAX_TOKENS` | `int` | `8192` | Maximum token limit per LLM generation call. |
+**Design decision:** Uses a private module-level object rather than `None` so that `None` can itself be a valid explicit default.
 
 ---
 
-### Path Settings
+### LLM Settings Constants
 
-| Name | Type | Default | Purpose |
-|------|------|---------|---------|
-| `REPO_ROOT` | `str` | Computed from `__file__` | Absolute normalized path to the repository root, used as a base for all relative paths. |
-| `DEFAULT_PROJECT_DIR` | `str` | `REPO_ROOT` | Default source project directory when none is specified on the command line. |
-| `DEFAULT_OUTPUT_DIR` | `str` | `REPO_ROOT/output` | Default directory for generated output files. |
-| `DOC_TEMPLATE_PATH` | `str` | `REPO_ROOT/doc_template.json` | Path to the JSON file defining documentation section templates and prompts. |
-
----
-
-### Performance Settings
-
-| Name | Type | Default | Purpose |
-|------|------|---------|---------|
-| `MAX_WORKERS` | `int` | `4` | Maximum number of parallel worker threads/coroutines for concurrent processing. |
-| `MAX_RETRIES` | `int` | `3` | Number of retry attempts for LLM API calls on transient failures. |
-| `RETRY_WAIT` | `int` | `2` | Seconds to wait between retry attempts after a rate-limit error. |
+| Name | Type | Source Env Var | Default |
+|---|---|---|---|
+| `LLM_API_KEY` | `str` | `LLM_API_KEY` | `""` |
+| `LLM_MODEL` | `str` | `LLM_MODEL` | `""` |
+| `LLM_API_BASE` | `str` | `LLM_API_BASE` | `""` |
+| `OUTPUT_LANGUAGE` | `str` | `OUTPUT_LANGUAGE` | `"English"` |
+| `DOC_MAX_TOKENS` | `int` | `DOC_MAX_TOKENS` | `8192` |
 
 ---
 
-### Analysis Settings
+### Path Settings Constants
 
-| Name | Type | Default | Purpose |
-|------|------|---------|---------|
-| `ENABLE_LLM_DOC` | `bool` | `True` | Controls whether LLM-based documentation generation is enabled. |
-| `SUMMARY_MAX_CHARS` | `int` | `600` | Maximum character length for per-file summary text. |
-| `_EXCLUDE_PATTERNS_ENV` | `str` | `""` | Raw comma-separated exclude pattern string read from the environment. |
-| `EXCLUDE_PATTERNS` | `list[str]` | See below | List of glob patterns for files and directories to skip during traversal. |
+| Name | Type | Description |
+|---|---|---|
+| `REPO_ROOT` | `str` | Absolute normalized path to the repository root, derived from this file's location |
+| `DEFAULT_PROJECT_DIR` | `str` | Default project directory; overridable via env var |
+| `DEFAULT_OUTPUT_DIR` | `str` | Default output directory; defaults to `<REPO_ROOT>/output` |
+| `DOC_TEMPLATE_PATH` | `str` | Path to `doc_template.json`; defaults to `<REPO_ROOT>/doc_template.json` |
 
-**`EXCLUDE_PATTERNS` default value** (when `_EXCLUDE_PATTERNS_ENV` is empty):
-```
-["__pycache__", ".git", ".github", ".venv", "node_modules"]
-```
-When the environment variable is set, the list is built by splitting on commas and stripping whitespace from each element, discarding empty strings.
+---
+
+### Performance Settings Constants
+
+| Name | Type | Source Env Var | Default |
+|---|---|---|---|
+| `MAX_WORKERS` | `int` | `MAX_WORKERS` | `4` |
+| `MAX_RETRIES` | `int` | `MAX_RETRIES` | `3` |
+| `RETRY_WAIT` | `int` | `RETRY_WAIT` | `2` |
+
+---
+
+### Analysis Settings Constants
+
+| Name | Type | Description |
+|---|---|---|
+| `ENABLE_LLM_DOC` | `bool` | Controls whether LLM-based document generation is active |
+| `SUMMARY_MAX_CHARS` | `int` | Maximum character count for generated summary text |
+| `_EXCLUDE_PATTERNS_ENV` | `str` | Raw comma-separated exclude patterns string from env |
+| `EXCLUDE_PATTERNS` | `list[str]` | List of glob patterns for directories/files to skip during traversal |
+
+**Edge case for `EXCLUDE_PATTERNS`:** When `_EXCLUDE_PATTERNS_ENV` is empty or unset, a hardcoded default list (`__pycache__`, `.git`, `.github`, `.venv`, `node_modules`) is used instead.
 
 ---
 
 ### Per-Language Definition Dictionaries
 
-Each dictionary maps **AST node type → child node type** that holds the definition name, used by definition extraction logic.
+Each dictionary maps AST node type strings to the child node type string that contains the name of the definition. Used by tree-sitter-based definition extraction.
 
-#### Special sentinel values
+**Special sentinel values:**
+- `"__assignment__"` — name is nested in an assignment expression (Python)
+- `"__function_declarator__"` — name is nested inside a function declarator (C/C++)
+- `"__init_declarator__"` — name is nested inside an init declarator (C/C++)
+- `"__variable_declarator__"` — name is nested inside a variable declarator (JS/TS)
 
-| Sentinel | Meaning |
-|----------|---------|
-| `"__assignment__"` | Name is nested inside an assignment expression; a dedicated extraction function is dispatched. |
-| `"__function_declarator__"` | Name is inside a nested `function_declarator` child node. |
-| `"__init_declarator__"` | Name is inside a nested `init_declarator` child node. |
-| `"__variable_declarator__"` | Name is inside a nested `variable_declarator` child node. |
-
-| Constant | Language |
-|----------|----------|
-| `PYTHON_DEFINITION_DICT` | Python |
-| `JAVA_DEFINITION_DICT` | Java |
-| `CPP_DEFINITION_DICT` | C++ |
-| `C_DEFINITION_DICT` | C |
-| `KOTLIN_DEFINITION_DICT` | Kotlin |
-| `JS_DEFINITION_DICT` | JavaScript |
-| `TS_DEFINITION_DICT` | TypeScript / TSX |
+| Constant | Language | Notable Entries |
+|---|---|---|
+| `PYTHON_DEFINITION_DICT` | Python | `function_definition`, `class_definition`, `decorated_definition`, `expression_statement` |
+| `JAVA_DEFINITION_DICT` | Java | `class_declaration`, `method_declaration`, `interface_declaration`, `constructor_declaration`, `enum_declaration` |
+| `CPP_DEFINITION_DICT` | C++ | `class_specifier`, `function_definition` (sentinel), `namespace_definition`, `declaration` (sentinel) |
+| `C_DEFINITION_DICT` | C | `function_definition` (sentinel), `declaration` (sentinel), `type_definition`, `enum_specifier` |
+| `KOTLIN_DEFINITION_DICT` | Kotlin | `class_declaration`, `function_declaration`, `object_declaration` |
+| `JS_DEFINITION_DICT` | JavaScript | `function_declaration`, `class_declaration`, `lexical_declaration` (sentinel), `variable_declaration` (sentinel) |
+| `TS_DEFINITION_DICT` | TypeScript | Superset of JS; adds `interface_declaration`, `type_alias_declaration`, `enum_declaration` |
 
 ---
 
 ### Per-Language Import Query Strings
 
-Each constant is a tree-sitter S-expression query string used to extract import information from parsed ASTs.
+Private string constants containing tree-sitter S-expression queries. Each query uses capture names `@module`, `@name`, and `@import_node`.
 
-| Constant | Language | Capture Names Used |
-|----------|----------|--------------------|
-| `_PYTHON_IMPORT_QUERY` | Python | `@module`, `@name`, `@import_node` |
-| `_JS_IMPORT_QUERY` | JavaScript / TypeScript | `@module`, `@name`, `@import_node`, `@_require_func` |
-| `_JAVA_IMPORT_QUERY` | Java | `@module`, `@import_node` |
-| `_C_IMPORT_QUERY` | C / C++ | `@module`, `@import_node` |
-| `_KOTLIN_IMPORT_QUERY` | Kotlin | `@module`, `@import_node` |
-
-**Capture semantics:**
-- `@module` — the import source module or path
-- `@name` — an individually imported symbol (e.g., the `Y` in `from X import Y`)
-- `@import_node` — the entire import statement node, used for line number retrieval
-- `@_require_func` — internal capture used to match `require` calls; not surfaced to callers
+| Constant | Language | Patterns Covered |
+|---|---|---|
+| `_PYTHON_IMPORT_QUERY` | Python | `import X`, `import X as Y`, `from X import Y` |
+| `_JS_IMPORT_QUERY` | JavaScript/TypeScript | ES module imports, named imports, re-exports, CommonJS `require`, destructured `require` |
+| `_JAVA_IMPORT_QUERY` | Java | `import com.example.Foo` |
+| `_C_IMPORT_QUERY` | C/C++ | `#include <...>` and `#include "..."` |
+| `_KOTLIN_IMPORT_QUERY` | Kotlin | `import com.example.Foo` |
 
 ---
 
 ### Per-Language Usage Node Type Dictionaries
 
-Each dictionary configures which AST node types participate in usage tracking.
+Each dictionary configures usage-tracking behavior for one language.
 
-| Constant | Language |
-|----------|----------|
-| `_PYTHON_USAGE_NODE_TYPES` | Python |
-| `_JAVA_USAGE_NODE_TYPES` | Java |
-| `_JS_USAGE_NODE_TYPES` | JavaScript / TypeScript |
-| `_C_USAGE_NODE_TYPES` | C / C++ |
-| `_KOTLIN_USAGE_NODE_TYPES` | Kotlin |
-
-**Common keys across all usage node type dicts:**
+**Keys present in each dict:**
 
 | Key | Type | Purpose |
-|-----|------|---------|
-| `call_types` | `set[str]` | AST node types representing function/method calls. |
-| `attribute_types` | `set[str]` | AST node types representing attribute or member access. |
-| `skip_parent_types` | `set[str]` | When an identifier's parent is one of these types, the identifier is not recorded as a usage (it is part of syntax, not a reference). |
-| `skip_parent_types_for_type_ref` | `set[str]` | Same as `skip_parent_types` but applied only to type identifier and namespace identifier nodes. |
+|---|---|---|
+| `call_types` | `set[str]` | AST node types representing function/method calls |
+| `attribute_types` | `set[str]` | AST node types representing attribute/member access |
+| `skip_parent_types` | `set[str]` | Parent node types under which an identifier is not a usage (definitions, parameters, imports) |
+| `skip_parent_types_for_type_ref` | `set[str]` | Parent types under which a type identifier or namespace identifier is not a usage |
+| `skip_name_field_types` *(Python only)* | `set[str]` | Parent types where the `name` field is not a usage |
+| `typed_alias_parent_types` *(Java, C, Kotlin)* | `set[str]` | Parent node types that introduce a typed variable alias |
 
-**Optional keys (language-specific):**
-
-| Key | Languages | Purpose |
-|-----|-----------|---------|
-| `typed_alias_parent_types` | Java, C, Kotlin | Parent node types in which a typed variable alias may appear, enabling type-name tracking through local variable declarations. |
-| `skip_name_field_types` | Python | Parent node types where the `name` field of an identifier should be skipped (e.g., keyword arguments). |
-
----
-
-### Registry and Extension Lists
-
-| Constant | Type | Purpose |
-|----------|------|---------|
-| `_JS_TS_EXT_LIST` | `list[str]` | Shared list of JS/TS extensions (`[".ts", ".tsx", ".js", ".jsx"]`) used as `index_ext_list` and `alt_ext_list` for module resolution. |
-| `_C_CPP_EXT_LIST` | `list[str]` | Shared list of C/C++ extensions (`[".h", ".c", ".cpp"]`) used as `alt_ext_list` for header resolution. |
-| `_LANG_REGISTRY` | `dict[str, LangConfig]` | Central registry mapping canonical extension strings to their complete `LangConfig` instances. |
-| `_EXT_ALIASES` | `dict[str, str]` | Maps alias extensions to their canonical registry key (e.g., `"h" → "cpp"`, `"kts" → "kt"`, `"jsx" → "js"`). |
+| Constant | Language |
+|---|---|
+| `_PYTHON_USAGE_NODE_TYPES` | Python |
+| `_JAVA_USAGE_NODE_TYPES` | Java |
+| `_JS_USAGE_NODE_TYPES` | JavaScript/TypeScript |
+| `_C_USAGE_NODE_TYPES` | C/C++ |
+| `_KOTLIN_USAGE_NODE_TYPES` | Kotlin |
 
 ---
 
-### Public Mapping Dictionaries (auto-generated)
+### Extension Lists
 
-All are produced by `_expand_ext_aliases` applied to values extracted from `_LANG_REGISTRY`. Adding a new language requires only a new entry in `_LANG_REGISTRY`; all public dictionaries update automatically.
+| Constant | Type | Value |
+|---|---|---|
+| `_JS_TS_EXT_LIST` | `list[str]` | `[".ts", ".tsx", ".js", ".jsx"]` |
+| `_C_CPP_EXT_LIST` | `list[str]` | `[".h", ".c", ".cpp"]` |
 
-| Constant | Key | Value Type | Purpose |
-|----------|-----|-----------|---------|
-| `TREE_SITTER_LANGUAGES` | extension `str` | `Language` | Maps file extension to the tree-sitter `Language` object for parsing. |
-| `DEFINITION_DICTS` | extension `str` | `dict[str, str]` | Maps file extension to the definition node type dictionary. |
-| `IMPORT_QUERIES` | extension `str` | `str \| None` | Maps file extension to the import extraction query string. |
-| `USAGE_NODE_TYPES` | extension `str` | `dict \| None` | Maps file extension to the usage tracking configuration. |
-| `IMPORT_RESOLVE_CONFIG` | extension `str` | `dict` | Maps file extension to the module path resolution configuration. Excludes languages where `import_resolve` is `None`. |
-| `SAME_PACKAGE_VISIBLE` | extension `str` | `bool` | Maps file extension to whether implicit same-package visibility is enabled. Excludes languages where `same_package_visible` is `False`. |
+Used as shared references within `import_resolve` configurations for related language families.
 
 ---
 
-## Function: `get_config_value`
+### Extension Alias Map: `_EXT_ALIASES`
 
-```python
-def get_config_value(key: str, default=_REQUIRED, var_type: type = str) -> str | int | float | bool | None
+| Type | Value |
+|---|---|
+| `dict[str, str]` | `{"h": "cpp", "kts": "kt", "jsx": "js"}` |
+
+Maps non-canonical extensions to the canonical extension whose settings they inherit. Used exclusively by `_expand_ext_aliases`.
+
+---
+
+### Registry: `_LANG_REGISTRY`
+
+- **Type:** `dict[str, LangConfig]`
+- **Keys:** Canonical file extensions without dot: `"py"`, `"java"`, `"cpp"`, `"c"`, `"kt"`, `"js"`, `"ts"`, `"tsx"`
+- **Responsibility:** Single authoritative source for all per-language settings. Adding a new language requires only one new entry here.
+- **Design decision:** Centralizing settings in one registry and auto-generating all public mapping dictionaries from it eliminates duplication and ensures consistency across all consumers.
+
+---
+
+### Public Mapping Dictionaries
+
+Auto-generated from `_LANG_REGISTRY` via `_expand_ext_aliases`. All include alias extensions (`h`, `kts`, `jsx`).
+
+| Constant | Type | Maps Extension To |
+|---|---|---|
+| `TREE_SITTER_LANGUAGES` | `dict[str, Language]` | tree-sitter `Language` object |
+| `DEFINITION_DICTS` | `dict[str, dict[str, str]]` | Definition node type mapping dictionary |
+| `IMPORT_QUERIES` | `dict[str, str \| None]` | Import extraction query string |
+| `USAGE_NODE_TYPES` | `dict[str, dict \| None]` | Usage-tracking node type settings |
+| `IMPORT_RESOLVE_CONFIG` | `dict[str, dict]` | Import path resolution settings (only extensions with non-`None` config) |
+| `SAME_PACKAGE_VISIBLE` | `dict[str, bool]` | Whether same-package implicit visibility is enabled (only `True` entries: `java`, `kt`, and aliases) |
+
+---
+
+## Functions
+
+### `get_config_value`
+
+```
+get_config_value(key: str, default=_REQUIRED, var_type: type = str) -> str | int | float | bool | None
 ```
 
-**Responsibility:** Reads a named environment variable and returns it converted to the requested type. Centralizes all environment variable access and type coercion for configuration values.
+- **Responsibility:** Retrieves a configuration value from environment variables and converts it to the requested type. Provides a single, uniform entry point for all configuration reads.
+- **When to use:** Called at module load time to populate every configuration constant in this file.
+- **Parameters:**
 
-**When to use:** Called at module load time for every configuration constant that may be overridden via environment variable or `.env` file.
+  | Parameter | Type | Description |
+  |---|---|---|
+  | `key` | `str` | Environment variable name to look up |
+  | `default` | any | Fallback value; omit to make the variable required |
+  | `var_type` | `type` | Target Python type: `str`, `int`, `float`, or `bool` |
 
-**Parameters:**
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `key` | `str` | Environment variable name to look up. |
-| `default` | Any | Value to use when the variable is absent. Omitting this argument marks the variable as required. |
-| `var_type` | `type` | Target Python type for the return value (`str`, `int`, `float`, or `bool`). |
-
-**Return type:** The converted value, whose concrete type matches `var_type`.
-
-**Design decisions:**
-- The `_REQUIRED` sentinel (a unique `object()` instance) distinguishes "no default given" from `None` as an explicit default, since `None` is a valid intentional default.
-- Boolean conversion accepts `"true"`, `"1"`, `"yes"`, and `"on"` as truthy (case-insensitive); all other strings are falsy.
-- When `default` is not `None` and not `_REQUIRED`, it is converted to `str` before type coercion, so non-string defaults are handled uniformly.
-
-**Constraints & edge cases:**
-- Raises `ValueError` when the variable is absent and no default was supplied.
-- Returns `None` immediately when `default is None` and the variable is unset, without attempting type conversion.
-- `var_type` must be one of `str`, `int`, `float`, or `bool`; other types fall through to the `str` path.
+- **Returns:** The converted value, or `None` if `default=None` and the variable is unset.
+- **Raises:** `ValueError` when a required variable (no default provided) is absent from the environment.
+- **Design decisions:**
+  - `bool` conversion treats `"true"`, `"1"`, `"yes"`, `"on"` (case-insensitive) as `True`; all other non-empty strings are `False`.
+  - When a default is provided and the env var is absent, the default is stringified before type conversion, ensuring consistent conversion behavior regardless of the default's original type.
+- **Constraints:** `var_type` must be one of `str`, `int`, `float`, or `bool`; other types fall through to the `str` path without conversion.
 
 ---
 
-## Dataclass: `LangConfig`
+### `_expand_ext_aliases`
+
+```
+_expand_ext_aliases(base_dict: dict) -> dict
+```
+
+- **Responsibility:** Produces a new dictionary that includes alias extension entries copied from their canonical counterparts, so callers do not need to enumerate aliases explicitly.
+- **When to use:** Called once per public mapping dictionary to add alias entries (`h`, `kts`, `jsx`) before exposing the dictionary to consumers.
+- **Parameters:**
+
+  | Parameter | Type | Description |
+  |---|---|---|
+  | `base_dict` | `dict` | A dictionary keyed by canonical extensions |
+
+- **Returns:** A shallow copy of `base_dict` with alias extensions added where the canonical key exists and the alias key is not already present.
+- **Constraints:** Does not modify `base_dict` in place. Alias keys that already exist in `base_dict` are left unchanged.
+
+---
+
+## Classes
+
+### `LangConfig`
 
 ```python
 @dataclass(frozen=True)
@@ -264,61 +285,33 @@ class LangConfig:
     ...
 ```
 
-**Responsibility:** Bundles all language-specific settings needed to parse, analyze, and resolve imports for a single file extension into one immutable unit. Enables `_LANG_REGISTRY` to be the single source of truth for language configuration.
-
-**When to use:** Instantiated once per language inside `_LANG_REGISTRY`; never constructed by callers outside this module.
-
-**Frozen:** Yes — all fields are immutable after construction.
+- **Responsibility:** Immutable value object that bundles all language-specific settings needed by the analysis pipeline under a single, named, type-safe structure.
+- **When to use:** Instantiated once per supported language within `_LANG_REGISTRY`; never instantiated outside this module.
+- **Decorator:** `@dataclass(frozen=True)` — instances are immutable after creation; field assignment raises `FrozenInstanceError`.
 
 **Fields:**
 
-| Field | Type | Required | Purpose |
-|-------|------|----------|---------|
-| `language` | `Language` | Yes | The tree-sitter `Language` object used to parse source files of this type. |
-| `definition_dict` | `dict[str, str]` | Yes | Maps AST node types to the child node type that holds the definition name. |
-| `import_query` | `str \| None` | No (default `None`) | S-expression query string for extracting import statements from the AST. |
-| `usage_node_types` | `dict \| None` | No (default `None`) | Configuration dict for usage tracking (call types, skip types, etc.). |
-| `import_resolve` | `dict \| None` | No (default `None`) | Module path resolution settings. Keys vary by language (see table below). |
-| `same_package_visible` | `bool` | No (default `False`) | When `True`, definitions in the same directory are reachable without an explicit import (Java / Kotlin semantics). |
+| Field | Type | Purpose |
+|---|---|---|
+| `language` | `Language` | tree-sitter `Language` object used for parsing source files |
+| `definition_dict` | `dict[str, str]` | Maps AST node types to the child node type holding the definition name |
+| `import_query` | `str \| None` | tree-sitter S-expression query for import extraction; `None` for unsupported languages |
+| `usage_node_types` | `dict \| None` | Node type configuration for usage tracking; `None` for unsupported languages |
+| `import_resolve` | `dict \| None` | Module path resolution settings (see keys below); `None` if resolution is unsupported |
+| `same_package_visible` | `bool` | `True` for Java/Kotlin where symbols in the same package are visible without explicit import |
 
-**`import_resolve` dict keys:**
+**`import_resolve` dictionary keys:**
 
-| Key | Type | Applies to | Meaning |
-|-----|------|-----------|---------|
-| `separator` | `str` | All | Delimiter used in module names (`"."` or `"/"`). |
-| `try_init` | `bool` | Python | When `True`, also checks for `__init__.py` when resolving a package path. |
-| `index_ext_list` | `list[str]` | JS / TS | Extensions to probe as index files (e.g., `index.ts`) when resolving a directory import. |
-| `alt_ext_list` | `list[str]` | JS / TS, C / C++ | Alternative extensions to try when the exact extension does not match. |
-| `try_bare_path` | `bool` | C / C++ | When `True`, attempts resolution without appending an extension. |
-| `try_current_dir` | `bool` | Python, C / C++ | When `True`, also probes paths relative to the importing file's directory. |
+| Key | Type | Description |
+|---|---|---|
+| `separator` | `str` | Delimiter used in module names (`"."` for Python/Java/Kotlin, `"/"` for JS/TS/C/C++) |
+| `try_init` | `bool` | When `True`, attempts to resolve a module as a package via `__init__.py` (Python only) |
+| `index_ext_list` | `list[str]` | Extensions to try as index files when resolving directory imports (JS/TS only) |
+| `alt_ext_list` | `list[str]` | Alternative file extensions to try during resolution (JS/TS and C/C++) |
+| `try_bare_path` | `bool` | When `True`, attempts path lookup without any extension (C/C++ only) |
+| `try_current_dir` | `bool` | When `True`, also tries relative paths from the current file's directory (Python, C/C++) |
 
----
-
-## Function: `_expand_ext_aliases`
-
-```python
-def _expand_ext_aliases(base_dict: dict) -> dict
-```
-
-**Responsibility:** Adds alias extension entries to a settings dictionary so that variant extensions (e.g., `.h`, `.kts`, `.jsx`) automatically inherit the same configuration as their canonical counterpart without duplicating data.
-
-**When to use:** Applied once to each per-extension mapping during module initialization to produce the public dictionaries (`TREE_SITTER_LANGUAGES`, `DEFINITION_DICTS`, etc.).
-
-**Parameters:**
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `base_dict` | `dict` | A dictionary keyed by canonical extension strings. |
-
-**Returns:** `dict` — a new dictionary containing all entries from `base_dict` plus any alias entries whose canonical key exists in `base_dict` and whose alias key is not already present.
-
-**Design decisions:**
-- Returns a new dict rather than mutating the input, keeping intermediate dicts used to construct public mappings stable.
-- An alias is only added when the alias key is absent from the expanded dict, preventing accidental overwrites if an alias is explicitly registered in `_LANG_REGISTRY`.
-
-**Constraints & edge cases:**
-- Alias entries not found in `base_dict` (because their canonical key is absent, e.g., in `IMPORT_RESOLVE_CONFIG` where some languages have `None`) are silently skipped.
-- The alias and its canonical entry share the exact same value object (no deep copy).
+**Design decision:** Using a frozen dataclass rather than a plain dict enforces that language configurations are never mutated after registry initialization and enables attribute-access syntax (`cfg.language`) over key lookup.
 
 ## Dependency Description
 
@@ -328,31 +321,31 @@ def _expand_ext_aliases(base_dict: dict) -> dict
 
 This file (`codetwine/config/settings.py`) does not import any project-internal modules. All imports are from the standard library (`os`, `dataclasses`) or third-party packages (`dotenv`, `tree_sitter`, `tree_sitter_c`, `tree_sitter_cpp`, `tree_sitter_java`, `tree_sitter_javascript`, `tree_sitter_kotlin`, `tree_sitter_python`, `tree_sitter_typescript`).
 
-**No project-internal dependencies exist for this file.**
+**No project-internal dependencies exist.**
 
 ---
 
 ## Dependents (modules that import this file)
 
-The following project-internal modules depend on `codetwine/config/settings.py`:
+The following project-internal modules import symbols from this file:
 
-- **`main.py` → `codetwine/config/settings.py`** : Uses `DEFAULT_PROJECT_DIR`, `DEFAULT_OUTPUT_DIR`, `REPO_ROOT`, and `ENABLE_LLM_DOC` to resolve project and output directories and to conditionally instantiate the LLM client.
+- **`main.py` → `codetwine/config/settings.py`** : Uses `DEFAULT_PROJECT_DIR`, `REPO_ROOT`, `DEFAULT_OUTPUT_DIR`, and `ENABLE_LLM_DOC` to resolve project/output directory paths and to decide whether to instantiate an LLM client.
 
-- **`codetwine/import_to_path.py` → `codetwine/config/settings.py`** : Uses `IMPORT_RESOLVE_CONFIG`, `SAME_PACKAGE_VISIBLE`, `DEFINITION_DICTS`, `IMPORT_QUERIES`, and `TREE_SITTER_LANGUAGES` to resolve import paths, determine same-package visibility, extract definition names, retrieve import query strings, and obtain tree-sitter language objects per file extension.
+- **`codetwine/import_to_path.py` → `codetwine/config/settings.py`** : Uses `IMPORT_RESOLVE_CONFIG`, `SAME_PACKAGE_VISIBLE`, `DEFINITION_DICTS`, `IMPORT_QUERIES`, and `TREE_SITTER_LANGUAGES` to perform language-specific module path resolution, same-package visibility checks, definition extraction, and import query execution during import-to-path mapping.
 
-- **`codetwine/file_analyzer.py` → `codetwine/config/settings.py`** : Uses `DEFINITION_DICTS` to retrieve the per-language definition extraction configuration for a given file extension.
+- **`codetwine/file_analyzer.py` → `codetwine/config/settings.py`** : Uses `DEFINITION_DICTS` to retrieve per-language definition extraction settings when analyzing a target source file.
 
-- **`codetwine/pipeline.py` → `codetwine/config/settings.py`** : Uses `MAX_WORKERS` as the default parallelism level and `ENABLE_LLM_DOC` to conditionally trigger design document generation.
+- **`codetwine/pipeline.py` → `codetwine/config/settings.py`** : Uses `MAX_WORKERS` as the default parallelism level for file processing, and `ENABLE_LLM_DOC` to conditionally trigger design document generation.
 
-- **`codetwine/doc_creator.py` → `codetwine/config/settings.py`** : Uses `OUTPUT_LANGUAGE` to append language instructions to prompts, `SUMMARY_MAX_CHARS` to cap summary length, `MAX_WORKERS` as the default worker count, and `DOC_TEMPLATE_PATH` to load the documentation template file.
+- **`codetwine/doc_creator.py` → `codetwine/config/settings.py`** : Uses `OUTPUT_LANGUAGE`, `SUMMARY_MAX_CHARS`, `MAX_WORKERS`, and `DOC_TEMPLATE_PATH` to control documentation generation language, summary length limits, worker concurrency, and template file location.
 
-- **`codetwine/llm/client.py` → `codetwine/config/settings.py`** : Uses `LLM_MODEL`, `LLM_API_KEY`, and `LLM_API_BASE` as default constructor arguments for the LLM client, `MAX_RETRIES` and `RETRY_WAIT` to control retry behavior on rate limit errors, and `DOC_MAX_TOKENS` as the default token limit for generation requests.
+- **`codetwine/llm/client.py` → `codetwine/config/settings.py`** : Uses `LLM_MODEL`, `LLM_API_KEY`, `LLM_API_BASE`, `MAX_RETRIES`, `RETRY_WAIT`, and `DOC_MAX_TOKENS` as default constructor arguments and runtime parameters controlling LLM API access, retry behavior, and token limits.
 
-- **`codetwine/extractors/usage_analysis.py` → `codetwine/config/settings.py`** : Uses `USAGE_NODE_TYPES` to retrieve AST node type settings per language, `IMPORT_RESOLVE_CONFIG` and `SAME_PACKAGE_VISIBLE` to resolve import-based and same-package symbol references, and `DEFINITION_DICTS` to load target file definition names.
+- **`codetwine/extractors/usage_analysis.py` → `codetwine/config/settings.py`** : Uses `USAGE_NODE_TYPES`, `IMPORT_RESOLVE_CONFIG`, `SAME_PACKAGE_VISIBLE`, and `DEFINITION_DICTS` to drive language-specific AST node type selection, import path resolution, same-package reference detection, and target definition loading during usage analysis.
 
-- **`codetwine/extractors/dependency_graph.py` → `codetwine/config/settings.py`** : Uses `DEFINITION_DICTS` to determine the set of supported file extensions, `EXCLUDE_PATTERNS` to filter directories and files during project traversal, and `SAME_PACKAGE_VISIBLE` to identify languages that support implicit same-package references.
+- **`codetwine/extractors/dependency_graph.py` → `codetwine/config/settings.py`** : Uses `DEFINITION_DICTS` to determine the set of supported file extensions, `EXCLUDE_PATTERNS` to filter directories and files during project traversal, and `SAME_PACKAGE_VISIBLE` to group files by directory for same-package dependency inference.
 
-- **`codetwine/parsers/ts_parser.py` → `codetwine/config/settings.py`** : Uses `TREE_SITTER_LANGUAGES` as the module-level mapping from file extension to tree-sitter `Language` object, assigned directly to the internal `_language_map` variable.
+- **`codetwine/parsers/ts_parser.py` → `codetwine/config/settings.py`** : Uses `TREE_SITTER_LANGUAGES` to obtain the extension-to-Language-object mapping used for tree-sitter parsing.
 
 ---
 
@@ -360,10 +353,10 @@ The following project-internal modules depend on `codetwine/config/settings.py`:
 
 All relationships are **unidirectional**:
 
-- `codetwine/config/settings.py` has **no dependencies** on other project-internal modules; it is a pure configuration leaf node.
-- All dependent modules import **from** `codetwine/config/settings.py`; `settings.py` does not import from any of them.
+- `codetwine/config/settings.py` has **no project-internal dependencies** — it is a pure configuration leaf that depends only on the standard library and third-party packages.
+- All nine dependent modules listed above import from `settings.py`; `settings.py` does not import from any of them.
 
-This makes `codetwine/config/settings.py` a **shared configuration root** in the dependency graph — depended upon widely across the project but itself depending on nothing internal.
+The dependency direction is strictly: **dependent modules → `codetwine/config/settings.py`**, making this file a shared configuration root consumed by the rest of the project.
 
 ## Data Flow
 
@@ -372,73 +365,63 @@ This makes `codetwine/config/settings.py` a **shared configuration root** in the
 ## 1. Inputs
 
 | Source | Format | Description |
-|--------|--------|-------------|
-| Environment variables / `.env` file | Strings read via `os.getenv` | Runtime configuration values (API keys, paths, feature flags, tuning parameters) |
-| `dotenv` `.env` file | Key-value text file | Loaded at module import time by `load_dotenv()`, populating environment variables |
-| Hardcoded defaults | Python literals | Fallback values embedded in `get_config_value` call sites when environment variables are absent |
-| Third-party grammar packages | Compiled grammar objects | `tree_sitter_python`, `tree_sitter_c`, `tree_sitter_cpp`, `tree_sitter_java`, `tree_sitter_javascript`, `tree_sitter_kotlin`, `tree_sitter_typescript` — each exposes a `.language()` callable that produces a grammar handle wrapped into `Language` objects |
+|---|---|---|
+| `.env` file / shell environment | Key-value string pairs | Loaded via `load_dotenv()` at module import time; all `LLM_*`, `OUTPUT_*`, `DOC_*`, `MAX_*`, `RETRY_*`, `ENABLE_*`, `SUMMARY_*`, `EXCLUDE_*`, `DEFAULT_*` variables |
+| `tree_sitter_*` native modules | C extension objects | Each language module exposes a `language()` (or `language_typescript()` / `language_tsx()`) factory that produces a raw language pointer wrapped by `tree_sitter.Language` |
+| Hardcoded literals in module body | Python dicts, lists, strings | Definition dicts, import query strings, and usage node type dicts are defined as module-level constants |
 
 ---
 
 ## 2. Transformation Overview
 
 ```
-Stage 1: Environment resolution
-    load_dotenv()
-        → environment variables available to os.getenv
+Stage 1: Environment ingestion
+  os.getenv() → get_config_value() → typed scalar values
+      (str, int, float, bool with default/required semantics)
 
-Stage 2: Scalar configuration extraction
-    get_config_value(key, default, var_type)
-        → raw string from os.getenv
-        → type-cast to str / int / float / bool
-        → scalar config constants (LLM_API_KEY, LLM_MODEL, MAX_WORKERS, …)
+Stage 2: Path materialisation
+  REPO_ROOT derived from __file__
+  → DEFAULT_PROJECT_DIR, DEFAULT_OUTPUT_DIR, DOC_TEMPLATE_PATH
+  resolved relative to REPO_ROOT if not overridden by env
 
-Stage 3: Derived path construction
-    REPO_ROOT ← os.path.normpath(__file__ relative path)
-    DEFAULT_PROJECT_DIR, DEFAULT_OUTPUT_DIR, DOC_TEMPLATE_PATH
-        ← REPO_ROOT + get_config_value (path strings)
+Stage 3: Pattern list normalisation
+  EXCLUDE_PATTERNS env string (comma-separated)
+  → split + strip → list[str]
+  (fallback: hardcoded default list)
 
-Stage 4: List construction
-    _EXCLUDE_PATTERNS_ENV (str) → split + strip → EXCLUDE_PATTERNS (list[str])
-    (falls back to a hardcoded list if the env var is empty)
+Stage 4: Language object construction
+  tree_sitter_* native factory calls
+  → Language(...) wrappers
+  → stored in per-language LangConfig instances inside _LANG_REGISTRY
 
-Stage 5: Per-language static data assembly
-    - Per-language dicts (PYTHON_DEFINITION_DICT, …)    plain dict literals
-    - Per-language query strings (_PYTHON_IMPORT_QUERY, …)  plain string literals
-    - Per-language usage-type dicts (_PYTHON_USAGE_NODE_TYPES, …) plain dict literals
-    → All remain as module-level constants at this stage
+Stage 5: Registry assembly
+  Per-language constant dicts + Language objects
+  → frozen LangConfig dataclass per canonical extension key
+  → _LANG_REGISTRY: dict[str, LangConfig]
 
-Stage 6: LangConfig construction
-    For each canonical extension ("py", "java", "cpp", "c", "kt", "js", "ts", "tsx"):
-        Language(grammar.language())          tree-sitter Language object
-        + definition_dict                     per-language dict
-        + import_query                        per-language query string
-        + usage_node_types                    per-language usage dict
-        + import_resolve                      plain dict of resolver parameters
-        + same_package_visible                bool
-        → LangConfig frozen dataclass
-    → _LANG_REGISTRY: dict[str, LangConfig]
+Stage 6: Alias expansion
+  _LANG_REGISTRY + _EXT_ALIASES
+  → _expand_ext_aliases() copies canonical entries under alias keys
+  → applied independently to each public mapping
 
-Stage 7: Public mapping dictionary generation
-    _LANG_REGISTRY (dict[str, LangConfig])
-        → extract one field per entry          dict[str, <field type>]
-        → _expand_ext_aliases()                adds alias keys ("h"→"cpp", "kts"→"kt", "jsx"→"js")
-        → TREE_SITTER_LANGUAGES                dict[str, Language]
-        → DEFINITION_DICTS                     dict[str, dict[str, str]]
-        → IMPORT_QUERIES                       dict[str, str | None]
-        → USAGE_NODE_TYPES                     dict[str, dict | None]
-        → IMPORT_RESOLVE_CONFIG                dict[str, dict]
-        → SAME_PACKAGE_VISIBLE                 dict[str, bool]
+Stage 7: Public mapping generation
+  _LANG_REGISTRY (expanded)
+  → TREE_SITTER_LANGUAGES   (ext → Language)
+  → DEFINITION_DICTS        (ext → definition dict)
+  → IMPORT_QUERIES          (ext → query string | None)
+  → USAGE_NODE_TYPES        (ext → usage dict | None)
+  → IMPORT_RESOLVE_CONFIG   (ext → resolve dict)  [only non-None entries]
+  → SAME_PACKAGE_VISIBLE    (ext → bool)           [only True entries]
 ```
 
 ---
 
 ## 3. Outputs
 
-All outputs are module-level names exported implicitly when the module is imported. There are no file writes or network calls; all outputs are in-process Python objects.
+All outputs are module-level names that consumer modules import directly. No files are written and no network calls are made by this module.
 
-| Name | Type | Consumed By |
-|------|------|-------------|
+| Name | Type | Consumed by |
+|---|---|---|
 | `LLM_API_KEY` | `str` | `codetwine/llm/client.py` |
 | `LLM_MODEL` | `str` | `codetwine/llm/client.py` |
 | `LLM_API_BASE` | `str` | `codetwine/llm/client.py` |
@@ -454,8 +437,8 @@ All outputs are module-level names exported implicitly when the module is import
 | `ENABLE_LLM_DOC` | `bool` | `main.py`, `codetwine/pipeline.py` |
 | `SUMMARY_MAX_CHARS` | `int` | `codetwine/doc_creator.py` |
 | `EXCLUDE_PATTERNS` | `list[str]` | `codetwine/extractors/dependency_graph.py` |
-| `TREE_SITTER_LANGUAGES` | `dict[str, Language]` | `codetwine/import_to_path.py`, `codetwine/parsers/ts_parser.py` |
-| `DEFINITION_DICTS` | `dict[str, dict[str, str]]` | `codetwine/file_analyzer.py`, `codetwine/import_to_path.py`, `codetwine/extractors/usage_analysis.py`, `codetwine/extractors/dependency_graph.py` |
+| `TREE_SITTER_LANGUAGES` | `dict[str, Language]` | `codetwine/parsers/ts_parser.py`, `codetwine/import_to_path.py` |
+| `DEFINITION_DICTS` | `dict[str, dict]` | `codetwine/file_analyzer.py`, `codetwine/import_to_path.py`, `codetwine/extractors/usage_analysis.py`, `codetwine/extractors/dependency_graph.py` |
 | `IMPORT_QUERIES` | `dict[str, str \| None]` | `codetwine/import_to_path.py` |
 | `USAGE_NODE_TYPES` | `dict[str, dict \| None]` | `codetwine/extractors/usage_analysis.py` |
 | `IMPORT_RESOLVE_CONFIG` | `dict[str, dict]` | `codetwine/import_to_path.py`, `codetwine/extractors/usage_analysis.py` |
@@ -468,70 +451,63 @@ All outputs are module-level names exported implicitly when the module is import
 ### `LangConfig` (frozen dataclass)
 
 | Field | Type | Purpose |
-|-------|------|---------|
-| `language` | `Language` | tree-sitter `Language` object used to parse source files of this type |
-| `definition_dict` | `dict[str, str]` | Maps AST node type → child node type (or sentinel) identifying the definition's name |
-| `import_query` | `str \| None` | tree-sitter S-expression query string for extracting import statements |
-| `usage_node_types` | `dict \| None` | AST node type groups controlling usage tracking (see below) |
-| `import_resolve` | `dict \| None` | Module path resolution parameters (see below) |
-| `same_package_visible` | `bool` | Whether same-directory files are implicitly visible without imports (Java / Kotlin) |
+|---|---|---|
+| `language` | `Language` | tree-sitter `Language` object used to parse and query source files of this extension |
+| `definition_dict` | `dict[str, str]` | Maps AST node type → child node type (or sentinel string) for extracting definition names |
+| `import_query` | `str \| None` | S-expression tree-sitter query string for extracting import statements |
+| `usage_node_types` | `dict \| None` | AST node type sets controlling which nodes are treated as calls, attributes, or skipped during usage tracking |
+| `import_resolve` | `dict \| None` | Module path resolution parameters (keys documented below) |
+| `same_package_visible` | `bool` | Whether definitions in the same directory/package are referenceable without explicit imports |
 
 ---
 
-### `definition_dict` values (e.g., `PYTHON_DEFINITION_DICT`)
-
-| Key (AST node type) | Value | Meaning |
-|---------------------|-------|---------|
-| `"function_definition"` | `"identifier"` | Direct child node type holding the name |
-| `"class_definition"` | `"identifier"` | Direct child node type holding the name |
-| `"decorated_definition"` | `"identifier"` | Direct child node type holding the name |
-| `"expression_statement"` | `"__assignment__"` | Sentinel: name is extracted by a dedicated handler |
-
-The same two-value schema applies to all per-language definition dicts. Sentinel strings (prefixed and suffixed with `__`) signal that normal child-node lookup is bypassed.
-
----
-
-### `usage_node_types` dict (e.g., `_PYTHON_USAGE_NODE_TYPES`)
+### `import_resolve` dict (nested inside `LangConfig`)
 
 | Key | Type | Purpose |
-|-----|------|---------|
-| `call_types` | `set[str]` | AST node types that represent function/method calls |
-| `attribute_types` | `set[str]` | AST node types that represent attribute or member access |
-| `skip_parent_types` | `set[str]` | Parent node types under which an identifier is not treated as a usage |
-| `skip_name_field_types` | `set[str]` | Parent node types under which the `name` field is skipped (Python only) |
-| `skip_parent_types_for_type_ref` | `set[str]` | Parent types under which type identifiers / namespace identifiers are not treated as usages |
-| `typed_alias_parent_types` | `set[str]` | Parent node types from which typed variable → type name aliases are extracted (Java, C, Kotlin) |
-
----
-
-### `import_resolve` dict
-
-| Key | Type | Purpose |
-|-----|------|---------|
+|---|---|---|
 | `separator` | `str` | Delimiter used in module names (`"."` for Python/Java/Kotlin, `"/"` for C/C++/JS/TS) |
-| `try_init` | `bool` | When `True`, look for `__init__.py` to resolve package paths (Python) |
-| `index_ext_list` | `list[str]` | Extensions to try as index files when resolving directory imports (JS/TS) |
-| `alt_ext_list` | `list[str]` | Alternative extensions to try when the exact extension is not found |
-| `try_bare_path` | `bool` | When `True`, attempt path resolution without any extension appended (C/C++) |
-| `try_current_dir` | `bool` | When `True`, also resolve relative to the current file's directory (Python, C/C++) |
+| `try_init` | `bool` | When `True`, attempts to resolve a module as a package by looking for `__init__.py` (Python only) |
+| `try_current_dir` | `bool` | When `True`, also attempts resolution relative to the current file's directory (Python, C/C++) |
+| `index_ext_list` | `list[str]` | Extensions to try as directory index files (JS/TS: `.ts`, `.tsx`, `.js`, `.jsx`) |
+| `alt_ext_list` | `list[str]` | Alternative extensions to try when the resolved path has no extension (C/C++/JS/TS) |
+| `try_bare_path` | `bool` | When `True`, attempts the path without any extension appended (C/C++) |
+
+---
+
+### `usage_node_types` dict (e.g. `_PYTHON_USAGE_NODE_TYPES`)
+
+| Key | Type | Purpose |
+|---|---|---|
+| `call_types` | `set[str]` | AST node types representing function/method call expressions |
+| `attribute_types` | `set[str]` | AST node types representing attribute or member access |
+| `skip_parent_types` | `set[str]` | Parent node types under which an `identifier` node should not be recorded as a usage |
+| `skip_parent_types_for_type_ref` | `set[str]` | Parent node types under which a type identifier or namespace identifier should not be recorded as a usage |
+| `skip_name_field_types` *(Python only)* | `set[str]` | Parent node types whose `name` field child should be skipped |
+| `typed_alias_parent_types` *(Java, C, Kotlin only)* | `set[str]` | Parent node types used to build a variable-name → type-name alias map |
+
+---
+
+### Definition dicts (e.g. `PYTHON_DEFINITION_DICT`)
+
+| Key | Type | Purpose |
+|---|---|---|
+| AST node type string (e.g. `"function_definition"`) | `str` | Maps to either a direct child node type name (e.g. `"identifier"`) or a sentinel string (e.g. `"__assignment__"`, `"__function_declarator__"`, `"__init_declarator__"`, `"__variable_declarator__"`) triggering dedicated extraction logic in the definition extractor |
 
 ---
 
 ### `_LANG_REGISTRY`
 
 | Key | Type | Purpose |
-|-----|------|---------|
-| `"py"`, `"java"`, `"cpp"`, `"c"`, `"kt"`, `"js"`, `"ts"`, `"tsx"` | `LangConfig` | Complete configuration for each canonical file extension |
+|---|---|---|
+| Canonical file extension string (e.g. `"py"`, `"java"`, `"ts"`) | `LangConfig` | Central registry mapping each supported extension to its complete language configuration bundle |
 
 ---
 
 ### `_EXT_ALIASES`
 
-| Key (alias ext) | Value (canonical ext) | Purpose |
-|-----------------|-----------------------|---------|
-| `"h"` | `"cpp"` | Header files share C++ settings |
-| `"kts"` | `"kt"` | Kotlin script files share Kotlin settings |
-| `"jsx"` | `"js"` | JSX files share JavaScript settings |
+| Key | Type | Purpose |
+|---|---|---|
+| Alias extension string (e.g. `"h"`, `"kts"`, `"jsx"`) | `str` (canonical extension) | Declares that an alias extension reuses the `LangConfig` of its canonical counterpart; used by `_expand_ext_aliases()` to populate the public mappings |
 
 ## Error Handling
 
@@ -539,7 +515,7 @@ The same two-value schema applies to all per-language definition dicts. Sentinel
 
 ## 1. Overall Strategy
 
-This file applies a **fail-fast** strategy for required configuration and a **silent default fallback** strategy for optional configuration. Missing required environment variables cause an immediate `ValueError` at module load time, preventing any downstream module from operating with an undefined configuration. Optional variables silently fall back to hardcoded defaults, allowing the application to proceed without user intervention. No retry logic or logging exists within this file itself; error propagation is left entirely to the caller.
+The settings module applies a **fail-fast** strategy for required configuration values and **graceful degradation with defaults** for optional ones. Errors are surfaced at startup (module import time), ensuring that misconfiguration is caught immediately before any downstream processing begins. Once configuration is loaded successfully, the module itself performs no further runtime error handling — all values are treated as validated constants by dependents.
 
 ---
 
@@ -547,25 +523,28 @@ This file applies a **fail-fast** strategy for required configuration and a **si
 
 | Error Type | Trigger Condition | Handling | Recoverable? | Impact |
 |---|---|---|---|---|
-| `ValueError` | A required environment variable (declared without a `default`) is not set in the environment or `.env` file | Raised immediately with a descriptive message identifying the missing variable | No | Module import fails; entire application startup aborts |
-| Missing optional env var | An optional environment variable is absent but has a `default` value supplied | Silently replaced with the provided default value | Yes | No impact; default is used transparently |
-| `int` / `float` conversion failure | An environment variable is set but contains a non-numeric string when `var_type=int` or `var_type=float` | `int()` / `float()` raises `ValueError`; no internal catch | No | Module import fails; application startup aborts |
-| `None` default passthrough | `default=None` is explicitly passed and the variable is not set | Returns `None` without attempting type conversion | Yes | Caller receives `None` and must handle it |
-| Missing language extension in registry | A file extension is requested from a public mapping dict (e.g., `TREE_SITTER_LANGUAGES`) that has no entry | `KeyError` (dict access) or `None` (`.get()`) raised or returned in dependent modules; not caught here | Yes (in dependents) | Dependent module skips processing for that extension |
+| `ValueError` | A required environment variable (marked with `_REQUIRED` sentinel) is not set in the environment or `.env` file | Raises `ValueError` with a descriptive message indicating the missing key and how to resolve it | No | Process terminates at import time |
+| Missing optional env var | An optional environment variable is not set but has a declared default | Silently substitutes the default value; no exception raised | Yes (default used) | None — processing continues with the default |
+| `None` default explicitly passed | `default=None` is passed to `get_config_value` and the env var is absent | Returns `None` directly without conversion | Yes | Caller receives `None`; caller is responsible for handling |
+| Type conversion failure | A non-`str` `var_type` (e.g., `int`, `float`, `bool`) is specified and the raw string value cannot be converted | Native Python conversion exceptions (e.g., `ValueError` from `int()`) propagate uncaught | No | Process terminates at import time |
+| Unsupported extension lookup | A dependent calls `.get()` on `TREE_SITTER_LANGUAGES`, `DEFINITION_DICTS`, `IMPORT_QUERIES`, `USAGE_NODE_TYPES`, or `IMPORT_RESOLVE_CONFIG` with an unregistered extension | Returns `None` or raises `KeyError` (for direct index access on `TREE_SITTER_LANGUAGES`); dependents are responsible for checking the result | Yes (handled by callers) | The dependent skips processing for that file/extension |
 
 ---
 
 ## 3. Design Notes
 
-- **Module-load-time validation**: `get_config_value` is called at the top level of the module, not lazily. This means all configuration errors surface at import time, making misconfiguration immediately visible rather than discovered mid-execution.
-- **Sentinel object for required values**: The `_REQUIRED` sentinel object (a plain `object()`) distinguishes "no default provided" from `default=None`, allowing `None` to be a legitimate explicit default without being confused with "not set."
-- **Type conversion is unchecked beyond booleans**: Boolean conversion is handled defensively via a string membership test. Integer and float conversions delegate directly to built-in constructors with no internal guard, meaning malformed values propagate as unhandled exceptions—consistent with the fail-fast intent.
-- **Alias expansion is non-validating**: `_expand_ext_aliases` silently skips an alias if its canonical extension is absent from the base dictionary, producing no error. This is a graceful degradation choice limited to the registry expansion step.
+- **Sentinel object for required values**: The module uses a private `_REQUIRED = object()` sentinel rather than a special string or `None` to distinguish "no default provided" from an explicit `None` default. This prevents ambiguity when `None` is a valid and intentional default.
+- **Fail-fast at import time**: By evaluating all `get_config_value()` calls at module load time (not lazily), the module ensures that any missing required configuration or type conversion failure is reported immediately when the application starts, rather than surfacing as a runtime error deep in processing.
+- **Type conversion errors are intentionally uncaught**: No try-except wraps the `int()`, `float()`, or boolean coercion logic. A malformed value (e.g., `"abc"` for an `int` variable) is considered a configuration defect that should halt startup, consistent with the fail-fast strategy.
+- **Boolean coercion is explicit and permissive**: Boolean conversion accepts `"true"`, `"1"`, `"yes"`, and `"on"` (case-insensitive) as truthy, avoiding the pitfall of Python's `bool("false") == True` behavior on raw strings.
+- **Delegation to callers for lookup failures**: The public mapping dictionaries (`TREE_SITTER_LANGUAGES`, etc.) do not embed any error handling. The responsibility for handling missing keys is delegated entirely to dependent modules, which consistently use `.get()` and guard against `None` returns before proceeding.
 
 ## Summary
 
-**`codetwine/config/settings.py`** — Centralizes all configuration constants, language-specific AST settings, and per-extension lookup tables for parsing and analyzing multi-language source code.
+**`codetwine/config/settings.py`** centralizes all application-wide configuration by reading environment variables and defining per-language static mappings consumed by every other module.
 
-**Public interface:** `get_config_value(key:str, default, var_type:type)→scalar`; frozen dataclass `LangConfig(language, definition_dict:dict, import_query:str|None, usage_node_types:dict|None, import_resolve:dict|None, same_package_visible:bool)`.
+**Functions:** `get_config_value(key:str, default, var_type:type)→scalar`; `_expand_ext_aliases(base_dict:dict)→dict`
 
-**Key outputs:** `TREE_SITTER_LANGUAGES:dict[str,Language]`, `DEFINITION_DICTS:dict[str,dict]`, `IMPORT_QUERIES:dict[str,str|None]`, `USAGE_NODE_TYPES:dict[str,dict|None]`, `IMPORT_RESOLVE_CONFIG:dict[str,dict]`, `SAME_PACKAGE_VISIBLE:dict[str,bool]`, scalar constants (`LLM_API_KEY`, `MAX_WORKERS`, `EXCLUDE_PATTERNS:list[str]`, etc.). All public dicts are auto-derived from `_LANG_REGISTRY:dict[str,LangConfig]` via `_expand_ext_aliases(base_dict:dict)→dict`.
+**Classes:** `LangConfig(frozen dataclass)` — fields: `language:Language`, `definition_dict:dict[str,str]`, `import_query:str|None`, `usage_node_types:dict|None`, `import_resolve:dict|None`, `same_package_visible:bool`
+
+**Key outputs:** `TREE_SITTER_LANGUAGES:dict[str,Language]`, `DEFINITION_DICTS:dict[str,dict]`, `IMPORT_QUERIES:dict[str,str|None]`, `USAGE_NODE_TYPES:dict[str,dict|None]`, `IMPORT_RESOLVE_CONFIG:dict[str,dict]`, `SAME_PACKAGE_VISIBLE:dict[str,bool]`, `_LANG_REGISTRY:dict[str,LangConfig]`

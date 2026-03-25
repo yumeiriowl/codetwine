@@ -6,27 +6,26 @@
 
 ## 1. Module Summary
 
-Analyze inter-file dependencies across a multi-language project by walking the file system, resolving import statements to project-internal files, and extracting definition source code from dependency target files.
+Analyze inter-file dependencies across an entire project by parsing import statements and same-package references, and extract individual definition source code from dependency target files.
 
 ## 2. When to Use This Module
 
-- **Building a project-wide dependency graph**: Call `build_project_dependencies(project_dir)` to obtain a list of dicts describing each file's callers and callees. Used by `pipeline.py` as the first step of the analysis pipeline to establish relationships among all supported-language files in the project.
-- **Retrieving a specific definition's source code from a dependency file**: Call `extract_callee_source(callee_file_path, callee_name, project_dir)` to look up the AST of a dependency file and return the source text of the named definition (function, class, variable, etc.). Used by `usage_analysis.py` when resolving a referenced symbol back to its implementation.
+- **Building a project-wide dependency graph**: Call `build_project_dependencies(project_dir)` to obtain a list of dicts describing, for every supported source file, which files it imports (`callees`) and which files import it (`callers`). This is the entry point used by `pipeline.py` to initialize the dependency graph before per-file processing.
+- **Retrieving a specific definition's source code from a dependency file**: Call `extract_callee_source(callee_file_path, callee_name, project_dir)` to get the raw source text of a named definition (function, class, variable, etc.) from a given file. This is used by `usage_analysis.py` when resolving what an imported symbol's implementation looks like.
 
 ## 3. Public Interface Table
 
 | Name | Arguments (type) | Return type | Responsibility |
 |---|---|---|---|
-| `extract_callee_source` | `callee_file_path: str`, `callee_name: str`, `project_dir: str` | `str \| None` | Parse the AST of the given file and return the source code of the node that defines `callee_name`. Falls back from the trailing part to the leading part of dotted names if the first search fails. |
-| `build_project_dependencies` | `project_dir: str` | `list[dict]` | Walk the project directory, resolve all import statements to project-internal files, add implicit same-package dependencies for Java/Kotlin, and return a list of dicts with `"file"`, `"callers"`, and `"callees"` keys using `project_name/copy_path` formatted paths. |
+| `extract_callee_source` | `callee_file_path: str`, `callee_name: str`, `project_dir: str` | `str \| None` | Parse the target file's AST and return the source text of the node whose name matches `callee_name`; tries the trailing part of dotted names first, then the leading part. Returns `None` if not found. |
+| `build_project_dependencies` | `project_dir: str` | `list[dict]` | Walk all supported source files under `project_dir`, resolve their imports to project-internal paths, add implicit same-package dependencies for Java/Kotlin, and return a list of `{"file", "callers", "callees"}` dicts using `project_name/copy_path` formatted paths. |
 
 ## 4. Design Decisions
 
-- **BFS-based definition lookup**: `_find_definition_node` searches the AST breadth-first and targets only `identifier`, `type_identifier`, and `namespace_identifier` node types, skipping nodes that appear inside import statements. This avoids false matches on imported names that share the same identifier as a local definition.
-- **Dotted-name fallback strategy**: `extract_callee_source` splits dotted callee names (e.g. `helper.process`) and searches first by the trailing component, then by the leading component. This handles both attribute access on objects and calls to built-in methods on named constants without requiring the caller to pre-classify the name.
-- **Implicit same-package dependency injection (Java/Kotlin)**: Because Java and Kotlin allow referencing classes in the same directory without explicit imports, `build_project_dependencies` performs a regex word-boundary scan of each file's source text against class names derived from sibling filenames within the same directory and extension group, adding unidirectional edges only when a name match is found.
-- **Reuse of parse cache**: Both functions rely on `parse_file` from `ts_parser.py`, which maintains a module-level cache keyed by absolute path, so each file is parsed at most once across the entire pipeline run.
-- **`copy_path` output format**: All paths in the returned dependency list use the `project_name/{parent_dir}/{stem}_{ext}/{filename}` format via `rel_to_copy_path`, matching the physical output directory structure used when copying files, ensuring paths remain valid if the output folder is relocated.
+- **Dotted-name fallback in `extract_callee_source`**: For an attribute access like `helper.process`, the trailing component (`process`) is tried first as the definition name. If not found, the leading component (`helper`) is tried. This handles the case where the leading part is a module-level constant whose built-in method (e.g., `TEMPLATE.format`) is what is actually called.
+- **BFS over import-aware AST traversal**: Definition lookup uses BFS rather than a targeted tree-sitter query so that the same search logic works uniformly across all supported languages. Nodes inside import statements are explicitly skipped to avoid matching import references as definitions.
+- **Same-package implicit dependency injection (Step 3.5)**: For languages where `SAME_PACKAGE_VISIBLE` is set (Java/Kotlin), files in the same directory are checked for textual references to sibling class names via regex, and matching pairs are added as directed dependencies without requiring an explicit import statement.
+- **`parse_file` cache reuse**: Both `extract_callee_source` and `build_project_dependencies` call `parse_file`, which maintains a module-level cache keyed by absolute path, so each file is parsed at most once across the entire pipeline run.
 
 ## Definition Design Specifications
 
@@ -34,14 +33,16 @@ Analyze inter-file dependencies across a multi-language project by walking the f
 
 ---
 
-## Module-level Constant
+## Module-Level Constant
 
 ### `_DEFINITION_NAME_NODE_TYPES`
-**Type:** `set[str]`
 
-The set of tree-sitter node type strings that represent definition names in the AST. Contains `"identifier"`, `"type_identifier"`, and `"namespace_identifier"`.
+| Property | Value |
+|---|---|
+| Type | `set[str]` |
+| Contents | `{"identifier", "type_identifier", "namespace_identifier"}` |
 
-**Responsibility:** Centralizes the node types used during BFS traversal in `_find_definition_node` so that the matching logic is not scattered inline.
+**Responsibility:** Centralizes the set of tree-sitter node types that may carry a definition name, avoiding repetition across BFS logic.
 
 ---
 
@@ -51,170 +52,153 @@ The set of tree-sitter node type strings that represent definition names in the 
 
 ### `_is_inside_import`
 
-**Signature:**
-```python
-def _is_inside_import(node) -> bool
-```
+**Signature:** `_is_inside_import(node) -> bool`
 
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `node` | tree-sitter `Node` | The AST node to check ancestry for |
+- `node`: A tree-sitter AST node (any node type).
+- Returns `bool`: `True` if the node is a descendant of an import/include statement.
 
-**Returns:** `bool` — `True` if any ancestor node has a type containing `"import"` or is `"preproc_include"`.
+**Responsibility:** Guards definition searches from false-positive matches on names that appear inside import statements rather than as actual definitions.
 
-**Responsibility:** Prevents definition-search from incorrectly matching identifiers that appear inside import/include statements rather than in actual definition sites.
-
-**When to use:** Called internally by `_find_definition_node` on every candidate node before accepting it as a definition match.
+**When to use:** Called internally by `_find_definition_node` before accepting a candidate identifier node as a real definition.
 
 **Design decisions:**
-- Traverses the parent chain using tree-sitter's `Node.parent` field (upward traversal) rather than inspecting node children, because ancestry determines syntactic context.
-- The `"import"` substring check covers multiple node type variants across languages (`import_statement`, `import_from_statement`, `import_declaration`) without enumerating each explicitly.
+- Traverses the ancestor chain via `node.parent` up to the root rather than inspecting children; this is efficient because import statement depth is shallow.
+- Detects import-related node types by checking whether the string `"import"` is a substring of the node type name, plus an explicit check for `"preproc_include"` (C/C++ `#include`). This substring check makes the guard language-agnostic across Python, Java, JS, and C/C++ without enumerating every exact node type name.
 
 **Constraints & edge cases:**
-- Relies on tree-sitter's `parent` attribute being populated; nodes without a parent chain terminate the loop cleanly.
-- Only checks node type strings, not semantic meaning.
+- Relies on tree-sitter's `node.parent` API; a node detached from a tree would cause the loop to terminate immediately, returning `False`.
+- The substring match on `"import"` could theoretically match hypothetical future node type names that contain the word "import" but are not import statements.
 
 ---
 
 ### `_find_definition_node`
 
-**Signature:**
-```python
-def _find_definition_node(root_node, definition_name: str)
-```
+**Signature:** `_find_definition_node(root_node, definition_name: str) -> node | None`
 
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `root_node` | tree-sitter `Node` | Root node of the parsed AST |
-| `definition_name` | `str` | The bare name to find (e.g. `"parse_file"`, `"Point"`) |
+- `root_node`: The tree-sitter AST root node for an entire file.
+- `definition_name: str`: The bare name to search for (e.g., `"parse_file"`, `"Point"`).
+- Returns: The **parent** AST node of the matched identifier node, or `None` if not found.
 
-**Returns:** tree-sitter `Node` (the parent of the matched identifier node), or `None` if not found.
+**Responsibility:** Locates the AST subtree that constitutes a definition (function, class, variable assignment, etc.) for a given name, so its source text can be extracted.
 
-**Responsibility:** Locates the enclosing definition node (function, class, assignment, etc.) for a given symbol name in the AST via BFS.
-
-**When to use:** Called by `extract_callee_source` to locate the source span of a named definition within a dependency file.
+**When to use:** Called by `extract_callee_source` to find which top-level (or nested) construct declares `definition_name` inside a dependency file.
 
 **Design decisions:**
-- Uses BFS (via `collections.deque`) rather than DFS to find the shallowest occurrence, which is more likely to be a top-level definition.
-- Tracks the parent alongside each node in the queue so that the containing definition node can be returned directly without a second traversal.
-- Only nodes with types in `_DEFINITION_NAME_NODE_TYPES` are matched, filtering out structural nodes.
-- Import-context nodes are excluded via `_is_inside_import` to avoid false matches on aliased or re-exported names.
+- Uses breadth-first search (BFS) so shallower/top-level definitions are found before deeper nested ones.
+- The BFS queue carries `(node, parent)` pairs, meaning the return value is always the **parent** of the matched name node (e.g., the `function_definition` containing the `identifier`), not the identifier itself—this is what provides the full source text.
+- Nodes inside import statements are filtered via `_is_inside_import` to avoid treating imported names as definitions.
+- Restricts matches to `_DEFINITION_NAME_NODE_TYPES` to skip unrelated text nodes.
 
 **Constraints & edge cases:**
-- Returns the first (shallowest, leftmost) match found; if a name is defined multiple times, only the first occurrence is returned.
-- Returns the *parent* of the identifier node, not the identifier node itself; the parent is assumed to be the definition container.
-- Returns `None` if the name does not appear outside an import context.
+- Returns the first BFS match; if the same name is defined multiple times, only the shallowest occurrence is returned.
+- Returns `None` when the name is not present in the file at all.
 
 ---
 
 ### `extract_callee_source`
 
 **Signature:**
-```python
-def extract_callee_source(
+```
+extract_callee_source(
     callee_file_path: str,
     callee_name: str,
     project_dir: str,
 ) -> str | None
 ```
 
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `callee_file_path` | `str` | Project-relative path to the file containing the definition (e.g. `"src/foo.py"`) |
-| `callee_name` | `str` | The name to look up, possibly dotted (e.g. `"helper.process"`, `"TEMPLATE.format"`) |
-| `project_dir` | `str` | Absolute path to the project root directory |
+- `callee_file_path: str`: Path of the dependency file **relative to the project root** (e.g., `"src/foo.py"`).
+- `callee_name: str`: The name of the definition to retrieve; may be a dotted attribute expression (e.g., `"helper.process"`, `"TEMPLATE.format"`).
+- `project_dir: str`: Absolute path to the project root directory.
+- Returns `str | None`: The full source text of the matched definition node, or `None` if not found.
 
-**Returns:** `str | None` — The source text of the matched definition node, or `None` if not found.
+**Responsibility:** Retrieves the source code of a specific named definition from a project-internal dependency file, enabling callers to embed callee implementation text in analysis output.
 
-**Responsibility:** Retrieves the full source text of a named definition from a dependency file, supporting both direct names and dotted attribute-access names.
-
-**When to use:** Called by `usage_analysis.py` when it needs to embed the source code of a callee definition into analysis output.
+**When to use:** Invoked by `usage_analysis.py` when the first occurrence of a callee name is encountered and its source code needs to be recorded.
 
 **Design decisions:**
-- For a dotted name such as `"helper.process"`, the function tries the trailing component (`"process"`) first, under the assumption it is the defined symbol. If that fails, it retries with the leading component (`"helper"`), to handle cases like `"TEMPLATE.format"` where the leading name is the project-defined variable.
-- Parsing is delegated to `parse_file`, which caches results at module level, so repeated calls on the same file are free.
-- Returns the `.text` of the parent node decoded from UTF-8, giving the complete source span of the definition.
+- Constructs the absolute path by joining `project_dir` and `callee_file_path`; relies on `parse_file`'s module-level cache so the file is not re-parsed on repeated calls.
+- Dotted names (e.g., `"helper.process"`) are handled by a two-attempt fallback strategy: first search for the trailing part (`"process"`), then if not found, search for the leading part (`"helper"`). This covers both method calls on objects and built-in method calls on module-level constants.
+- `search_names` always contains at least one element; the second element is added only when the name contains a dot.
 
 **Constraints & edge cases:**
-- `callee_file_path` must be relative to `project_dir`; it is joined with `os.path.join` to form the absolute path passed to `parse_file`.
-- Only the first matching definition is returned (inherits `_find_definition_node`'s first-match behavior).
-- Dotted names with more than two parts use only `parts[-1]` and `parts[0]`; middle components are ignored.
-- Returns `None` if neither search name produces a match.
+- `callee_file_path` must be relative to `project_dir`; an incorrect path causes `parse_file` to fail.
+- Returns the source text of the **parent** node of the matched identifier; for an `assignment` node this includes the entire right-hand side.
+- Only the first matched definition (BFS order) is returned if the name appears multiple times.
+- Returns `None` for names with more than two dotted components where neither the last nor the first part matches any definition.
 
 ---
 
 ### `build_project_dependencies`
 
 **Signature:**
-```python
-def build_project_dependencies(project_dir: str) -> list[dict]
+```
+build_project_dependencies(project_dir: str) -> list[dict]
 ```
 
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `project_dir` | `str` | Absolute path to the root directory of the project to analyze |
-
-**Returns:** `list[dict]` — A list of dependency-info dictionaries. Each dictionary has three keys:
+- `project_dir: str`: Absolute path to the root directory of the project to analyze.
+- Returns `list[dict]`: A list of dependency-info dictionaries. Each dict has the shape:
 
 | Key | Type | Description |
-|-----|------|-------------|
-| `"file"` | `str` | Copy-path of the file, prefixed with project name (`"{project_name}/{copy_path}"`) |
+|---|---|---|
+| `"file"` | `str` | Copy-path of this file, prefixed with `project_name/` |
 | `"callers"` | `list[str]` | Copy-paths of files that import this file |
-| `"callees"` | `list[str]` | Copy-paths of files imported by this file |
+| `"callees"` | `list[str]` | Copy-paths of files that this file imports |
 
-**Responsibility:** Performs a full static analysis of all supported-language source files in the project to construct a bidirectional file-level dependency graph.
+All paths follow the `project_name/{parent_dir}/{stem}_{ext}/{filename}` copy-path convention produced by `rel_to_copy_path`.
 
-**When to use:** Called once per pipeline run (from `pipeline.py`) at the start of processing to establish the dependency graph used by all downstream steps.
+**Responsibility:** Constructs the complete inter-file dependency graph for an entire project by combining explicit import analysis with same-package implicit reference detection, and expresses the result using stable copy-destination paths.
+
+**When to use:** Called once at pipeline startup by `pipeline.py` to produce the project-wide dependency graph consumed by all downstream processing steps.
 
 **Design decisions:**
 
-- **File collection:** Uses `os.walk` with in-place `dir_names` filtering against `EXCLUDE_PATTERNS` to prune entire subtrees efficiently.
-- **Callee map:** For each file, import statements are extracted via `extract_imports` and each module string is resolved to a project file via `resolve_module_to_project_path`. Only modules that resolve to a project file are recorded.
-- **Same-package implicit dependencies (Java/Kotlin):** Files in the same directory with the same extension are grouped. For each file in a group, the source text is scanned with a word-boundary regex to detect references to class names (bare filenames without extension) from sibling files. Matching adds a unidirectional callee edge without requiring an explicit import statement. This behavior is gated by `SAME_PACKAGE_VISIBLE` and applies only to extensions where it is enabled.
-- **Caller map:** Built as a reverse index of the callee map; no additional file I/O is performed.
-- **Path format:** All output paths use the `"{project_name}/{rel_to_copy_path(rel)}"` format to match the copy-destination directory structure used elsewhere in the pipeline, ensuring paths remain valid when the output folder is relocated.
-- All file paths are converted to absolute paths internally before being stored in maps to avoid relative-path ambiguity.
+- **File collection:** `os.walk` with in-place `dir_names` pruning against `EXCLUDE_PATTERNS` prevents descent into excluded directories (e.g., `.git`, `node_modules`, `__pycache__`).
+- **Import-based edges:** For each file, import statements are extracted via `extract_imports` and each module string is resolved to a project file path via `resolve_module_to_project_path`; only modules that resolve within the project become callee edges.
+- **Same-package implicit edges (Java/Kotlin):** Files in the same directory with the same extension are grouped when `SAME_PACKAGE_VISIBLE` is true for that extension. A plain-text regex word-boundary search for each peer's class name (basename without extension) determines whether an implicit dependency exists, adding a unidirectional edge only when the name appears in source.
+- **Caller index:** Built as the reverse of the callee map; a file appears in another file's `callers` list if and only if it references that other file.
+- **Path format:** All returned paths use the `rel_to_copy_path` convention rather than raw relative paths, ensuring consistency with the rest of the pipeline's file references.
+- All internal maps are keyed by **absolute** paths to avoid cross-platform `os.path.relpath` inconsistencies; conversion to relative/copy paths occurs only in the final output step.
 
 **Constraints & edge cases:**
-- Only files with extensions present in `DEFINITION_DICTS.keys()` are included.
-- Files matching any pattern in `EXCLUDE_PATTERNS` (checked against both filenames and directory names) are skipped.
-- If a callee path resolved from an import does not appear in `file_caller_map` (i.e., it is outside the collected file set), it is silently omitted from caller registration.
-- Same-package detection reads files as UTF-8 text; files that raise `OSError` or `UnicodeDecodeError` are skipped without aborting the analysis.
-- The function does not perform recursive or transitive closure; only direct import relationships are recorded.
+- Only files whose extension (without leading `.`) appears as a key in `DEFINITION_DICTS` are included; unsupported file types are silently ignored.
+- Files matching `EXCLUDE_PATTERNS` at the file level (not only directory level) are also excluded.
+- If `language` or `import_query_str` is `None` for a given extension (returned by `get_import_params`), import analysis is skipped for that file and its callee set remains empty.
+- Same-package implicit edge detection reads file content via `open`; files that raise `OSError` or `UnicodeDecodeError` are silently skipped.
+- The `callers` lists in the returned dicts are **not** deduplicated at the construction level; a caller that imports the same file via multiple aliases would be added multiple times.
+- The function does not persist results; serialization is the caller's responsibility.
 
 ## Dependency Description
 
-# Dependency Description
+## Dependency Description
 
-## Dependencies (modules this file imports)
+### Dependencies (modules this file imports)
 
-- `codetwine/extractors/dependency_graph_py/dependency_graph.py` → `codetwine/parsers/ts_parser.py` : Uses `parse_file` to parse source files into tree-sitter ASTs. Called both when searching for callee definitions (`extract_callee_source`) and when scanning all project files for import statements (`build_project_dependencies`).
+- `codetwine/extractors/dependency_graph_py/dependency_graph.py` → `codetwine/parsers/ts_parser.py` : Uses `parse_file` to parse source files into tree-sitter ASTs. Called both during callee source extraction (`extract_callee_source`) and during the import analysis phase of `build_project_dependencies`.
 
-- `codetwine/extractors/dependency_graph_py/dependency_graph.py` → `codetwine/extractors/imports.py` : Uses `extract_imports` to extract structured import information from a parsed AST node, supplying the language and query string required for the tree-sitter query engine.
+- `codetwine/extractors/dependency_graph_py/dependency_graph.py` → `codetwine/extractors/imports.py` : Uses `extract_imports` to extract structured import information from parsed ASTs, enabling resolution of inter-file dependencies within `build_project_dependencies`.
 
-- `codetwine/extractors/dependency_graph_py/dependency_graph.py` → `codetwine/import_to_path.py` : Uses `resolve_module_to_project_path` to determine whether an imported module resolves to a file within the project, and `get_import_params` to retrieve the tree-sitter `Language` object and import query string for a given file extension.
+- `codetwine/extractors/dependency_graph_py/dependency_graph.py` → `codetwine/import_to_path.py` : Uses `resolve_module_to_project_path` to resolve import module strings to project-internal file paths, and `get_import_params` to retrieve the tree-sitter `Language` object and query string required for import analysis for a given file extension.
 
-- `codetwine/extractors/dependency_graph_py/dependency_graph.py` → `codetwine/utils/file_utils.py` : Uses `rel_to_copy_path` to convert project-relative file paths into the copy-destination path format (`{parent}/{stem}_{ext}/{filename}`) when constructing the final dependency graph output.
+- `codetwine/extractors/dependency_graph_py/dependency_graph.py` → `codetwine/config/settings.py` : Uses `DEFINITION_DICTS` (specifically `.keys()`) to determine the set of supported file extensions when collecting project files, `EXCLUDE_PATTERNS` to filter out directories and files during the file walk, and `SAME_PACKAGE_VISIBLE` to identify languages (Java/Kotlin) where same-package class references are implicit without imports.
 
-- `codetwine/extractors/dependency_graph_py/dependency_graph.py` → `codetwine/config/settings.py` : Uses `DEFINITION_DICTS` to determine the set of supported file extensions for project-wide file collection, `EXCLUDE_PATTERNS` to filter out directories and files during traversal, and `SAME_PACKAGE_VISIBLE` to identify language extensions (e.g. Java, Kotlin) that require same-package implicit dependency resolution.
+- `codetwine/extractors/dependency_graph_py/dependency_graph.py` → `codetwine/utils/file_utils.py` : Uses `rel_to_copy_path` to convert project-relative file paths into the copy-destination directory structure format used in the output dependency graph.
 
-## Dependents (modules that import this file)
+---
 
-- `codetwine/pipeline.py` → `codetwine/extractors/dependency_graph_py/dependency_graph.py` : Uses `build_project_dependencies` as the first step of the pipeline to construct the project-wide dependency graph. The returned list of file dependency dicts is subsequently converted to internal paths and used as the master file list for all downstream processing.
+### Dependents (modules that import this file)
 
-- `codetwine/extractors/usage_analysis.py` → `codetwine/extractors/dependency_graph_py/dependency_graph.py` : Uses `extract_callee_source` to retrieve the source code of a named definition from a resolved dependency file, providing the definition source text during usage/call analysis.
+- `codetwine/pipeline.py` → `codetwine/extractors/dependency_graph_py/dependency_graph.py` : Uses `build_project_dependencies` to construct the project-wide dependency graph as the first step of the pipeline, producing the list of file dependency records (callers/callees) used throughout subsequent processing.
 
-## Dependency Direction
+- `codetwine/extractors/usage_analysis.py` → `codetwine/extractors/dependency_graph_py/dependency_graph.py` : Uses `extract_callee_source` to retrieve the source code of a named definition from a dependency file, supporting usage analysis of cross-file symbol references.
 
-All relationships are unidirectional:
+---
 
-- `dependency_graph.py` → `ts_parser.py` : unidirectional (dependency_graph.py consumes parse_file; ts_parser.py has no knowledge of this module)
-- `dependency_graph.py` → `imports.py` : unidirectional (dependency_graph.py consumes extract_imports; imports.py has no knowledge of this module)
-- `dependency_graph.py` → `import_to_path.py` : unidirectional (dependency_graph.py consumes resolution utilities; import_to_path.py has no knowledge of this module)
-- `dependency_graph.py` → `file_utils.py` : unidirectional (dependency_graph.py consumes path conversion; file_utils.py has no knowledge of this module)
-- `dependency_graph.py` → `settings.py` : unidirectional (dependency_graph.py reads configuration constants; settings.py has no knowledge of this module)
-- `pipeline.py` → `dependency_graph.py` : unidirectional (pipeline.py calls into this module; dependency_graph.py has no knowledge of pipeline.py)
-- `usage_analysis.py` → `dependency_graph.py` : unidirectional (usage_analysis.py calls into this module; dependency_graph.py has no knowledge of usage_analysis.py)
+### Dependency Direction
+
+All relationships are **unidirectional**:
+
+- This module depends on `ts_parser.py`, `imports.py`, `import_to_path.py`, `settings.py`, and `file_utils.py` — none of those modules import from this file.
+- `pipeline.py` and `usage_analysis.py` depend on this module — this module does not import from either of them.
 
 ## Data Flow
 
@@ -223,17 +207,19 @@ All relationships are unidirectional:
 ## 1. Inputs
 
 **`build_project_dependencies(project_dir: str)`**
-- `project_dir`: absolute path to the project root directory (string)
-- File system: all files reachable under `project_dir` via `os.walk`
-- Config values: `DEFINITION_DICTS` (supported extensions), `EXCLUDE_PATTERNS` (directories/files to skip), `SAME_PACKAGE_VISIBLE` (extensions that allow implicit same-package references)
-- AST data: tree-sitter parse results via `parse_file` (returns `(root_node, bytes)`)
-- Import metadata: `ImportInfo` records from `extract_imports`
+- `project_dir`: Absolute path to the project root directory (string).
+- Configuration values from `settings.py`: `DEFINITION_DICTS` (supported file extensions), `EXCLUDE_PATTERNS` (directory/file glob patterns to skip), `SAME_PACKAGE_VISIBLE` (per-extension flag for same-package implicit visibility).
+- File system: all files reachable under `project_dir` via `os.walk`.
+- Source file contents: read as UTF-8 text for same-package class-name matching; read as binary by `parse_file` for AST construction.
+- Import query parameters from `get_import_params`: `(Language, import_query_str)` per file extension.
+- AST root nodes returned by `parse_file(file_path)`.
+- `ImportInfo` objects returned by `extract_imports(root_node, language, import_query_str)`.
 
 **`extract_callee_source(callee_file_path, callee_name, project_dir)`**
-- `callee_file_path`: project-relative path to the file containing the definition (string)
-- `callee_name`: name of the symbol to find, possibly dotted (e.g. `"helper.process"`) (string)
-- `project_dir`: absolute path to the project root (string)
-- AST data: tree-sitter parse result for `callee_file_path` via `parse_file`
+- `callee_file_path`: Project-relative path to the target file (string).
+- `callee_name`: Dot-separated name of the definition to retrieve (string, e.g. `"helper.process"` or `"TEMPLATE.format"`).
+- `project_dir`: Absolute path to the project root (string).
+- AST root node from `parse_file` (cached).
 
 ---
 
@@ -241,105 +227,104 @@ All relationships are unidirectional:
 
 ### `build_project_dependencies`
 
-**Stage 1 — File discovery**
-`os.walk` traverses `project_dir`, pruning directories matching `EXCLUDE_PATTERNS` in-place. Individual files are also filtered against `EXCLUDE_PATTERNS`. Files whose extension (without leading `.`) appears in `DEFINITION_DICTS.keys()` are collected into `all_file_list` as absolute paths.
+**Stage 1 — File collection:**  
+`os.walk` traverses `project_dir`, pruning directories and files matching `EXCLUDE_PATTERNS`. Files whose extensions appear in `DEFINITION_DICTS` are collected into `all_file_list` (list of absolute paths).
 
-**Stage 2 — Project file set construction**
-Each absolute path in `all_file_list` is converted to a project-relative POSIX string and accumulated into `project_file_set` (a `set[str]`). This set is the membership oracle used during import resolution.
+**Stage 2 — Project file set construction:**  
+Each absolute path in `all_file_list` is converted to a forward-slash relative path (relative to `project_dir`) and inserted into `project_file_set` (a `set[str]`). This set is used downstream as the universe of known project files for import resolution.
 
-**Stage 3 — Callee map construction (explicit imports)**
-For each file in `all_file_list`, `get_import_params` fetches the tree-sitter `Language` and query string for that file's extension. If both are available, `parse_file` produces the AST, and `extract_imports` yields `ImportInfo` records. Each record's `module` field is passed to `resolve_module_to_project_path` together with the file's relative path and `project_file_set`. Resolved paths are converted to absolute form and accumulated into a per-file `callee_set`. The result is stored in `file_callee_map` keyed by absolute path.
+**Stage 3 — Callee map construction:**  
+For each file in `all_file_list`, `get_import_params` supplies the language and query string. `parse_file` produces the AST, and `extract_imports` extracts `ImportInfo` objects. Each `ImportInfo.module` is passed to `resolve_module_to_project_path` along with the file's relative path and `project_file_set`; resolved results (absolute paths) are accumulated into `callee_set`. The result is stored in `file_callee_map: dict[str, set[str]]` keyed by absolute caller path.
 
-**Stage 4 — Callee map augmentation (same-package implicit references)**
-Files whose extension appears in `SAME_PACKAGE_VISIBLE` are grouped by `(directory, extension)` into `dir_ext_groups`. Within each group, the raw source of each file is read and searched for the class name (filename stem) of every other file in the group using a pre-compiled word-boundary regex. When a match is found, the other file's absolute path is added to the caller file's entry in `file_callee_map`.
+**Stage 3.5 — Same-package implicit dependency injection:**  
+Files whose extension is flagged in `SAME_PACKAGE_VISIBLE` are grouped by `(directory, extension)` into `dir_ext_groups`. Within each group, source text is read and scanned with pre-compiled regex patterns (`\b<ClassName>\b`) for every peer file's stem. When a match is found, the peer's absolute path is added to the caller's entry in `file_callee_map`.
 
-**Stage 5 — Caller map construction (reverse index)**
-`file_caller_map` is initialized with an empty list for every file. The `file_callee_map` is iterated: for each `(caller, callee)` pair, the caller is appended to `file_caller_map[callee]` if the callee is a known project file.
+**Stage 4 — Caller (reverse) map construction:**  
+`file_caller_map: dict[str, list[str]]` is initialized with one entry per file (empty list). `file_callee_map` is iterated: for each `(caller, callee)` pair, `caller` is appended to `file_caller_map[callee]`.
 
-**Stage 6 — Serialization to relative copy-destination paths**
-Each entry in `all_file_list` is converted to a project-relative path. Caller and callee sets are similarly converted. All paths are then passed through `rel_to_copy_path` and prefixed with `project_name/` to produce the final `"project_name/{parent}/{stem}_{ext}/{filename}"` format. Each file's record is assembled as a dict and appended to `file_info_list`.
-
----
+**Stage 5 — Path conversion and output assembly:**  
+Absolute paths are converted to project-relative strings, then transformed through `rel_to_copy_path` into copy-destination path format. Each file's entry is assembled as a dict with `"file"`, `"callers"`, and `"callees"` keys, all prefixed with `project_name/`. The complete list is returned.
 
 ### `extract_callee_source`
 
-**Stage 1 — AST retrieval**
-The absolute path is formed by joining `project_dir` and `callee_file_path`. `parse_file` returns the cached or freshly parsed `(root_node, bytes)` tuple; only `root_node` is used.
+**Stage 1 — AST retrieval:**  
+`callee_file_path` is joined with `project_dir` to form an absolute path. `parse_file` returns the cached or freshly parsed AST root node.
 
-**Stage 2 — Search name derivation**
-`callee_name` is split on `.`. The search list is `[last_part]`; if there are multiple parts, `first_part` is appended as a fallback.
+**Stage 2 — Name decomposition:**  
+`callee_name` is split on `"."`. A search list is built: the trailing part is tried first (handles attribute access like `helper.process`), then the leading part (handles cases like `TEMPLATE.format` where the trailing part is a built-in method).
 
-**Stage 3 — BFS definition search**
-For each candidate name, `_find_definition_node` performs a breadth-first traversal of the AST. At each node, if the node's type is one of `{"identifier", "type_identifier", "namespace_identifier"}` and its decoded text matches the candidate name, and the node is not inside an import statement (checked by `_is_inside_import`), the node's **parent** is returned immediately.
+**Stage 3 — BFS definition search:**  
+`_find_definition_node` performs a breadth-first traversal of the AST. For each node whose type is in `{identifier, type_identifier, namespace_identifier}` and whose text matches the search name, `_is_inside_import` checks ancestor chain to exclude import-statement nodes. The first qualifying node's **parent** is returned as the definition node.
 
-**Stage 4 — Source extraction**
-The parent node's `.text` bytes are decoded to UTF-8 and returned as the definition source string. If no candidate name yields a match, `None` is returned.
+**Stage 4 — Source extraction:**  
+The definition node's `.text` is decoded as UTF-8 and returned. If no match is found across all search names, `None` is returned.
 
 ---
 
 ## 3. Outputs
 
-**`build_project_dependencies`**
-Returns `list[dict]` — one dict per supported source file in the project. Paths are in `"project_name/{copy_path}"` format. No files are written; no side effects beyond file reads and parse caching inside `parse_file`.
+**`build_project_dependencies`** returns `list[dict]`:
+```
+[
+  {
+    "file":    "project_name/parent/stem_ext/filename",
+    "callers": ["project_name/...", ...],
+    "callees": ["project_name/...", ...],
+  },
+  ...
+]
+```
+One entry per supported source file; paths use the `rel_to_copy_path` copy-destination format prefixed with the project name.
 
-**`extract_callee_source`**
-Returns `str | None` — the UTF-8 source text of the matched definition node (function, class, assignment, etc.), or `None` if no definition is found.
+**`extract_callee_source`** returns `str | None`:  
+The full source text of the matched definition node (function, class, assignment, etc.), or `None` if no definition is found.
+
+Both functions have no file-write side effects; all output is via return values.
 
 ---
 
 ## 4. Key Data Structures
 
-### `file_info_list` entry (output of `build_project_dependencies`)
-
+### `all_file_list`
 | Field / Key | Type | Purpose |
 |---|---|---|
-| `"file"` | `str` | Copy-destination path of this file, prefixed with `project_name/` |
-| `"callers"` | `list[str]` | Copy-destination paths of files that import this file |
-| `"callees"` | `list[str]` | Copy-destination paths of files imported by this file |
-
----
-
-### `file_callee_map`
-
-| Field / Key | Type | Purpose |
-|---|---|---|
-| key | `str` (absolute path) | The importing file |
-| value | `set[str]` (absolute paths) | All project files imported (directly or implicitly) by the key file |
-
----
-
-### `file_caller_map`
-
-| Field / Key | Type | Purpose |
-|---|---|---|
-| key | `str` (absolute path) | A project file |
-| value | `list[str]` (absolute paths) | All project files that import the key file |
-
----
-
-### `dir_ext_groups`
-
-| Field / Key | Type | Purpose |
-|---|---|---|
-| key | `tuple[str, str]` | `(directory_path, file_extension)` grouping key |
-| value | `list[str]` | Absolute paths of all files in that directory with that extension |
-
----
+| elements | `str` | Absolute filesystem paths of all supported source files found under `project_dir` |
 
 ### `project_file_set`
-
 | Field / Key | Type | Purpose |
 |---|---|---|
-| elements | `str` | Project-relative POSIX paths (`"src/foo.py"` format) of all supported files; used as membership oracle during import resolution |
+| elements | `str` | Forward-slash project-relative paths (`"src/foo.py"`); used as membership lookup for import resolution |
 
----
-
-### `class_patterns` (within same-package augmentation)
-
+### `file_callee_map`
 | Field / Key | Type | Purpose |
 |---|---|---|
-| key | `str` (absolute path) | File whose class name is being searched for |
-| value | `re.Pattern[str]` | Word-boundary regex matching that file's class name (filename stem) |
+| key | `str` | Absolute path of the caller file |
+| value | `set[str]` | Absolute paths of all files this caller imports (explicit via import statements + implicit same-package references) |
+
+### `file_caller_map`
+| Field / Key | Type | Purpose |
+|---|---|---|
+| key | `str` | Absolute path of the callee file |
+| value | `list[str]` | Absolute paths of all files that import this callee |
+
+### `dir_ext_groups`
+| Field / Key | Type | Purpose |
+|---|---|---|
+| key | `tuple[str, str]` | `(directory_path, file_extension)` grouping key for same-package detection |
+| value | `list[str]` | Absolute paths of all files sharing the same directory and extension |
+
+### Output dict (per file entry in `build_project_dependencies` result)
+| Field / Key | Type | Purpose |
+|---|---|---|
+| `"file"` | `str` | Copy-destination path of this file, prefixed with project name |
+| `"callers"` | `list[str]` | Copy-destination paths of files that import this file |
+| `"callees"` | `list[str]` | Copy-destination paths of files this file imports |
+
+### `search_names` (inside `extract_callee_source`)
+| Field / Key | Type | Purpose |
+|---|---|---|
+| element 0 | `str` | Trailing part of dot-split `callee_name`; tried first as definition name |
+| element 1 (optional) | `str` | Leading part of dot-split `callee_name`; tried as fallback |
 
 ## Error Handling
 
@@ -347,7 +332,7 @@ Returns `str | None` — the UTF-8 source text of the matched definition node (f
 
 ## 1. Overall Strategy
 
-The file follows a **graceful degradation / logging-and-continue** approach. The primary goal is to produce a complete dependency graph even when individual files or import resolutions fail. Unresolvable imports and unreadable files are silently skipped, allowing the overall analysis to proceed with the remaining files. There is no retry logic; failures at the file or symbol level result in that item being omitted from the output rather than aborting the process.
+The file follows a **graceful degradation / logging-and-continue** strategy. Individual file failures are isolated so that the overall dependency graph construction completes even when specific files or definitions cannot be processed. The only explicit exception handling is a targeted `try/except` block in the same-package visibility scan; all other operations rely on the caller or dependency layer to propagate unexpected failures naturally (no catch-all suppression at the top level).
 
 ---
 
@@ -355,31 +340,26 @@ The file follows a **graceful degradation / logging-and-continue** approach. The
 
 | Error Type | Trigger Condition | Handling | Recoverable? | Impact |
 |---|---|---|---|---|
-| `OSError` / `UnicodeDecodeError` | A same-package file cannot be opened or decoded when reading source text for intra-package reference detection (Step 3.5) | Caught silently via `except (OSError, UnicodeDecodeError): continue` | Yes | That file is skipped for same-package dependency detection; all other files in the group are still processed |
-| Unresolvable import module | `resolve_module_to_project_path` returns `None` (module is external, standard library, or not found in `project_file_set`) | The resolved value is checked with `if resolved:` and the import is silently skipped | Yes | That import produces no callee entry; all other imports for the file are still processed |
-| Unsupported file extension for import analysis | `get_import_params` returns `(None, None)` for a file extension not covered by `IMPORT_QUERIES` | Guarded by `if language and import_query_str:`, the import extraction block is bypassed entirely | Yes | No callee entries are added for that file; the file still appears in the dependency graph with empty callee list |
-| Definition not found in callee file | `_find_definition_node` returns `None` (the searched name is absent from the AST), including the fallback search on the leading name part | Returns `None` from `extract_callee_source` | Yes | The caller receives `None`; no source code snippet is returned for that symbol |
-| Import-context false positive | An identifier matching `definition_name` is found inside an import statement rather than a definition | `_is_inside_import` returns `True` and the node is skipped; BFS continues | Yes | The import-context node is ignored; the search continues for a genuine definition node |
-| Callee path not in `file_caller_map` | An absolute resolved callee path does not correspond to any tracked project file (e.g., resolved to a path outside the collected file list) | Guarded by `if callee_path in file_caller_map:` before appending | Yes | That callee is not registered as a caller of any file; no crash occurs |
+| `OSError` / `UnicodeDecodeError` | A same-package source file cannot be opened or decoded during the raw-text scan (Step 3.5) | Silently caught; the file is skipped via `continue` | Yes | That file is excluded from same-package callee detection; all other files in the group are still processed |
+| Definition not found | `_find_definition_node` returns `None` for both the trailing and leading name parts in `extract_callee_source` | Returns `None` to the caller | Yes | The caller receives `None` and must handle the missing source; no exception is raised |
+| Unresolvable import | `resolve_module_to_project_path` returns `None` for a given import | The resolved result is simply not added to `callee_set` | Yes | The import is treated as an external (non-project) dependency and omitted from the graph |
+| Unsupported file extension | `get_import_params` returns `(None, None)` for the file's extension | The import-extraction block is skipped via the `if language and import_query_str:` guard | Yes | No callees are recorded for that file; the file still appears in the graph with empty callee/caller lists |
+| File not in `file_caller_map` | A resolved callee path is not among the collected project files | The `if callee_path in file_caller_map:` guard prevents the append | Yes | The orphaned reference is silently dropped; no caller entry is created for that path |
 
 ---
 
 ## 3. Design Notes
 
-- **No explicit logging on skip events.** When imports fail to resolve or files cannot be read, the module silently continues without emitting log messages. The `logger` object is defined at module level but is not invoked within the error-handling paths present in this file, meaning failures are invisible in logs unless surfaced by a caller.
-- **Two-pass name search in `extract_callee_source`.** The split-name fallback (trailing part → leading part) is a design choice to handle both attribute-access patterns (e.g., `helper.process`) and cases where the trailing component is a built-in method (e.g., `TEMPLATE.format`). This avoids a hard failure when the first search attempt yields nothing.
-- **In-place `dir_names` mutation for `os.walk`.** Excluding directories matching `EXCLUDE_PATTERNS` by mutating `dir_names[:]` is the only structural guard applied during file collection; any directory not matching a pattern is traversed unconditionally, with no error handling for permission or access failures at the directory level.
-- **Dependency on external modules for error propagation.** Errors that could arise inside `parse_file`, `extract_imports`, or `resolve_module_to_project_path` are not caught here; they propagate to the caller. Only errors specific to file I/O during same-package detection are caught locally.
+- **Scope of explicit exception handling is narrow.** Only file I/O during the same-package text scan is wrapped in `try/except`. All other error paths are handled through return-value checks (`None` guards, truthiness checks) rather than exception catching, keeping control flow predictable.
+- **Silent skipping is preferred over logging at this layer.** Neither the `OSError`/`UnicodeDecodeError` path nor the unresolvable-import path emits a log message in this file; the module-level `logger` is declared but not invoked, indicating that surfacing these events is delegated to dependency layers (e.g., `parse_file` caching, `resolve_module_to_project_path`) or left to the caller.
+- **Partial results are always returned.** `build_project_dependencies` never raises an exception due to a single bad file; it always returns the list accumulated so far, ensuring the pipeline can proceed with whatever dependency information was successfully extracted.
 
 ## Summary
 
-**dependency_graph.py**: Builds a project-wide file dependency graph and retrieves callee source code from dependency files.
+**dependency_graph.py**: Builds a project-wide inter-file dependency graph and extracts named definition source code from dependency files.
 
 **Public functions:**
-- `build_project_dependencies(project_dir: str) → list[dict]` — returns dicts with `"file"`, `"callers"`, `"callees"` keys (copy-destination paths)
-- `extract_callee_source(callee_file_path: str, callee_name: str, project_dir: str) → str | None` — returns source text of a named definition
+- `build_project_dependencies(project_dir: str) → list[dict]`: returns `{"file", "callers", "callees"}` dicts with copy-path formatted strings
+- `extract_callee_source(callee_file_path: str, callee_name: str, project_dir: str) → str | None`: returns source text of a named definition via BFS AST search
 
-**Key data structures:**
-- `file_callee_map`: `dict[str, set[str]]` (abs path → callee abs paths)
-- `file_caller_map`: `dict[str, list[str]]` (abs path → caller abs paths)
-- Output entries use `"project_name/{copy_path}"` formatted strings
+**Key structures:** `file_callee_map: dict[str, set[str]]`, `file_caller_map: dict[str, list[str]]`, output list of per-file dependency dicts.

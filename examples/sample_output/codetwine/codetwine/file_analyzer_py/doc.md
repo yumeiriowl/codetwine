@@ -5,30 +5,25 @@
 # Overview & Purpose
 
 ## 1. Module Summary
-
-Analyzes a single source file to extract its definitions, callee usages (symbols this file imports and uses from other project files), and caller usages (locations in other project files that use symbols defined in this file), returning all results as a structured dict.
+Analyze a single source file to extract its definitions, outbound symbol usages (callee), and inbound symbol usages (caller), returning a structured dict that serves as the per-file record in `file_dependencies.json`.
 
 ## 2. When to Use This Module
-
-- **Generating per-file dependency data for the pipeline**: Call `get_file_dependencies(target_file, project_dir, project_dep_list)` from `pipeline.py` to obtain a structured record of definitions, callee usages, and caller usages for a given file. The returned dict is the source data written to `file_dependencies.json`.
+- **Generating per-file dependency data**: Call `get_file_dependencies(target_file, project_dir, project_dep_list)` from `codetwine/pipeline.py` (or any pipeline stage) to obtain a dict describing what a file defines, what project-internal symbols it uses, and which other project files use its symbols.
 
 ## 3. Public Interface Table
 
 | Name | Arguments (type) | Return type | Responsibility |
 |---|---|---|---|
-| `get_file_dependencies` | `target_file: str`, `project_dir: str`, `project_dep_list: list[dict]` | `dict` | Parses the target file, extracts its definitions and import-based usage relationships (both directions), and returns a dict with keys `"file"`, `"definitions"`, `"callee_usages"`, and `"caller_usages"`. |
+| `get_file_dependencies` | `target_file: str`, `project_dir: str`, `project_dep_list: list[dict]` | `dict` | Parse a source file, extract its definitions and import-based usage relationships, and return a unified record with `file`, `definitions`, `callee_usages`, and `caller_usages` keys. |
 
 ## 4. Design Decisions
-
-- **Short-circuit on unsupported languages**: Import and usage analysis is conditionally executed only when `get_import_params` returns a non-`None` result for the file's extension. Files in languages without import query support still receive definition extraction but produce empty `callee_usages` and `caller_usages` lists, keeping the return shape consistent across all file types.
-- **Relative path normalization**: All file paths in the output use forward-slash-separated paths relative to `project_dir` (backslashes replaced), ensuring the output is platform-independent regardless of the host OS.
-- **Definition source code embedding**: Each definition entry includes a `"context"` field containing the raw source lines spanning its line range, extracted directly from the decoded file content rather than re-reading the file, since `parse_file` already returns the byte content.
+- **Language-gated import analysis**: Import and usage analysis is only performed when `get_import_params` returns a non-`None` `(language, import_query_str)` pair, allowing the module to silently skip unsupported file extensions without raising errors.
+- **Delegation to focused extractors**: Each concern (parsing, definition extraction, import extraction, symbol-to-file resolution, usage analysis) is handled by a dedicated external module. This file acts solely as an orchestration layer, composing their outputs into the final dict rather than implementing any extraction logic itself.
+- **Relative path normalization**: All file paths stored in the output use forward-slash-normalized relative paths (`os.relpath` + `replace("\\", "/")`) to ensure cross-platform consistency in the JSON output.
 
 ## Definition Design Specifications
 
 # Definition Design Specifications
-
----
 
 ## `get_file_dependencies`
 
@@ -46,60 +41,47 @@ def get_file_dependencies(
 |---|---|---|
 | `target_file` | `str` | Absolute path of the source file to analyze |
 | `project_dir` | `str` | Absolute path to the project root directory |
-| `project_dep_list` | `list[dict]` | Pre-built dependency list from `save_project_dependencies`; each dict contains at minimum `"file"` and `"callers"` keys |
+| `project_dep_list` | `list[dict]` | Pre-built dependency list from the pipeline; each dict contains at minimum `"file"` and `"callers"` keys |
 
 **Return type:** `dict` with the following fixed keys:
 
 | Key | Value type | Description |
 |---|---|---|
 | `"file"` | `str` | Project-root-relative path of the analyzed file (forward-slash normalized) |
-| `"definitions"` | `list[dict]` | All named definitions extracted from the file |
-| `"callee_usages"` | `list[dict]` | Usages of project-internal symbols imported by this file |
-| `"caller_usages"` | `list[dict]` | Locations in other files where symbols from this file are used |
-
-Each entry in `"definitions"` contains:
-
-| Field | Type | Description |
-|---|---|---|
-| `"name"` | `str` | Symbol name |
-| `"type"` | `str` | AST node type of the definition |
-| `"start_line"` | `int` | 1-based start line |
-| `"end_line"` | `int` | 1-based end line |
-| `"context"` | `str` | Raw source text of the definition spanning `start_line`–`end_line` |
+| `"definitions"` | `list[dict]` | All named definitions found in the file, each with `name`, `type`, `start_line`, `end_line`, `context` |
+| `"callee_usages"` | `list[dict]` | Usage records for project-internal symbols this file calls/references |
+| `"caller_usages"` | `list[dict]` | Usage records describing where this file's definitions are used by other project files |
 
 ---
 
 ### Responsibility
 
-Orchestrates the full per-file analysis pipeline — AST parsing, definition extraction, import resolution, callee usage tracking, and caller usage tracking — and returns all results in a single structured dict suitable for serialization into `file_dependencies.json`.
+Orchestrates the full per-file analysis pipeline—parsing, definition extraction, import resolution, and bidirectional usage tracking—and returns the structured result that becomes the source data for `file_dependencies.json`.
 
 ### When to Use
 
-Called once per project file by the pipeline (`pipeline.py`) as part of a multi-file analysis run, receiving the project-wide dependency list that was previously assembled for cross-file lookup.
+Called once per project file by the pipeline (via `process_all_files`) after the project-level dependency list has already been constructed.
 
 ---
 
 ### Design Decisions
 
-- **Language-conditional import analysis:** Import resolution and usage analysis are skipped entirely when `get_import_params` returns `(None, None)` for the file's extension, leaving `callee_usages` and `caller_usages` as empty lists. This avoids crashing on unsupported file types while still producing definition data.
-
-- **`definition_dict` lookup by extension:** The appropriate AST node-to-name mapping is selected from `DEFINITION_DICTS` using the file extension, yielding `None` for unsupported languages and allowing `extract_definitions` to be called with `None` without requiring an explicit guard here.
-
-- **Path normalization:** The relative path stored in `"file"` is normalized to forward slashes via `.replace("\\", "/")` to ensure consistent keys regardless of the host OS.
-
-- **`project_file_set` derived inline:** The set of known project file paths is constructed from `project_dep_list` inside this function rather than being passed in, keeping the caller's interface minimal.
-
-- **`context` field extraction:** Definition source text is derived by slicing the decoded, line-split file content using the 1-based `start_line`/`end_line` from `DefinitionInfo`, avoiding a second file read by reusing the bytes already returned by `parse_file`.
+- **Relative path normalization:** The target file path is converted to a project-root-relative path with forward slashes at the start, ensuring cross-platform consistency in the output keys and lookups.
+- **Language-gated import analysis:** Import extraction and usage tracking are skipped entirely when `get_import_params` returns `(None, None)`, allowing graceful handling of file types with no defined import query. The `usage_list` and `caller_usages` fields remain empty lists in that case rather than being absent.
+- **Definition context embedding:** Each definition record includes a `"context"` field containing the raw source lines spanning the definition's full line range, extracted by slicing the decoded content lines. This avoids a second file read.
+- **Project file set construction:** A `set[str]` of relative file paths is derived inline from `project_dep_list` to enable O(1) membership tests during symbol-to-file resolution.
+- **Separation of callee and caller directions:** Outbound symbol usage (`callee_usages`) and inbound usage by other files (`caller_usages`) are computed by separate functions (`build_usage_info_list` and `build_caller_usages` respectively), each consuming different subsets of the shared `project_dep_list`.
 
 ---
 
 ### Constraints & Edge Cases
 
-- `target_file` must be an absolute path readable by the filesystem; `parse_file` will raise an error for missing or unreadable files.
-- `project_dep_list` must already contain an entry for `target_file`'s relative path if caller usage data is expected; if no matching entry exists, `build_caller_usages` returns an empty list without error.
-- For file extensions not present in `DEFINITION_DICTS`, `definition_dict` is `None`, which is passed directly to `extract_definitions` — the behavior for a `None` dict is defined by that function.
-- File content is decoded as UTF-8; files with other encodings will raise a `UnicodeDecodeError` at the `content.decode("utf-8")` call.
-- `callee_usages` and `caller_usages` both remain empty lists for any file extension for which `get_import_params` returns `(None, None)`.
+- `target_file` must be an absolute path readable by `parse_file`; no validation is performed inside this function.
+- `project_dep_list` must already be fully populated before this function is called; it is consumed read-only for file-set construction and caller lookup, but `build_caller_usages` searches it by `"file"` key equality.
+- For file extensions not present in `DEFINITION_DICTS`, `definition_dict` resolves to `None`, which is passed directly to `extract_definitions`—the behavior for a `None` dict is delegated to that function.
+- The `content` bytes returned by `parse_file` are decoded as UTF-8; files with non-UTF-8 encodings will raise a `UnicodeDecodeError`.
+- Line slicing for `"context"` uses a 1-based `start_line` adjusted to a 0-based index; a definition reported at `start_line == end_line` produces a single-line context string.
+- `symbol_to_file_map` is mutated by `build_usage_info_list` (typed alias entries are added to it); this mutation does not affect subsequent steps because the map is not reused after that call.
 
 ## Dependency Description
 
@@ -107,33 +89,28 @@ Called once per project file by the pipeline (`pipeline.py`) as part of a multi-
 
 ## Dependencies (modules this file imports)
 
-- `codetwine/file_analyzer.py` → `codetwine/parsers/ts_parser.py` : uses `parse_file` to read and parse the target source file into a tree-sitter AST root node and raw byte content for downstream analysis.
+- `codetwine/file_analyzer_py/file_analyzer.py` → `codetwine/parsers/ts_parser.py` : uses `parse_file` to read and parse the target source file into a tree-sitter AST root node and raw byte content.
 
-- `codetwine/file_analyzer.py` → `codetwine/extractors/definitions.py` : uses `extract_definitions` to extract named definitions (functions, classes, variables, etc.) from the parsed AST, using a per-language `definition_dict` obtained from settings.
+- `codetwine/file_analyzer_py/file_analyzer.py` → `codetwine/extractors/definitions.py` : uses `extract_definitions` to traverse the AST and produce a list of named definitions (functions, classes, variables, etc.) from the target file.
 
-- `codetwine/file_analyzer.py` → `codetwine/extractors/imports.py` : uses `extract_imports` (indirectly via `build_symbol_to_file_map` and `build_caller_usages`) to parse import statements from the AST into structured `ImportInfo` records.
+- `codetwine/file_analyzer_py/file_analyzer.py` → `codetwine/extractors/usage_analysis.py` : uses `build_usage_info_list` to identify where project-internal imported symbols are used within the target file, and `build_caller_usages` to collect locations in other project files where symbols defined in the target file are used.
 
-- `codetwine/file_analyzer.py` → `codetwine/extractors/usage_analysis.py` : uses `build_usage_info_list` to produce callee usage records (where imported names are used in this file) and `build_caller_usages` to produce caller usage records (where names defined in this file are used by other project files).
+- `codetwine/file_analyzer_py/file_analyzer.py` → `codetwine/import_to_path.py` : uses `get_import_params` to retrieve the tree-sitter `Language` object and import query string for the target file's extension, and `build_symbol_to_file_map` to construct a mapping from imported symbol names to their definition file paths.
 
-- `codetwine/file_analyzer.py` → `codetwine/import_to_path.py` : uses `build_symbol_to_file_map` to construct a mapping from imported symbol names to their definition file paths, and `get_import_params` to retrieve the tree-sitter `Language` object and import query string for the file's extension.
+- `codetwine/file_analyzer_py/file_analyzer.py` → `codetwine/extractors/imports.py` : uses `extract_imports` to parse import statements from the AST into structured `ImportInfo` objects, which are then consumed by `build_symbol_to_file_map`.
 
-- `codetwine/file_analyzer.py` → `codetwine/config/settings.py` : uses `DEFINITION_DICTS` to look up the per-language definition extraction configuration keyed by file extension.
+- `codetwine/file_analyzer_py/file_analyzer.py` → `codetwine/config/settings.py` : uses `DEFINITION_DICTS` to retrieve the per-language definition extraction configuration dict keyed by file extension.
 
 ## Dependents (modules that import this file)
 
-- `codetwine/pipeline.py` → `codetwine/file_analyzer.py` : calls `get_file_dependencies` for each project file, passing the absolute file path, project root directory, and the project-wide dependency list, and consumes the returned dict (containing `file`, `definitions`, `callee_usages`, and `caller_usages`) to build the `file_dependencies.json` output.
+- `codetwine/pipeline.py` → `codetwine/file_analyzer_py/file_analyzer.py` : calls `get_file_dependencies` as part of a per-file analysis pipeline, passing the absolute file path, project root directory, and project dependency list to obtain the structured dependency result dict (definitions, callee_usages, caller_usages) for each file being processed.
 
 ## Dependency Direction
 
 All relationships are **unidirectional**:
 
-- `codetwine/file_analyzer.py` → `codetwine/parsers/ts_parser.py` : unidirectional (file_analyzer depends on ts_parser; ts_parser has no dependency on file_analyzer)
-- `codetwine/file_analyzer.py` → `codetwine/extractors/definitions.py` : unidirectional
-- `codetwine/file_analyzer.py` → `codetwine/extractors/imports.py` : unidirectional
-- `codetwine/file_analyzer.py` → `codetwine/extractors/usage_analysis.py` : unidirectional
-- `codetwine/file_analyzer.py` → `codetwine/import_to_path.py` : unidirectional
-- `codetwine/file_analyzer.py` → `codetwine/config/settings.py` : unidirectional
-- `codetwine/pipeline.py` → `codetwine/file_analyzer.py` : unidirectional (pipeline depends on file_analyzer; file_analyzer has no dependency on pipeline)
+- `file_analyzer.py` depends on `ts_parser.py`, `definitions.py`, `usage_analysis.py`, `import_to_path.py`, `imports.py`, and `settings.py` — none of these modules import from `file_analyzer.py`.
+- `pipeline.py` depends on `file_analyzer.py` — `file_analyzer.py` does not import from `pipeline.py`.
 
 ## Data Flow
 
@@ -145,113 +122,97 @@ All relationships are **unidirectional**:
 |---|---|---|
 | `target_file` | Caller (`pipeline.py`) | Absolute file path string |
 | `project_dir` | Caller (`pipeline.py`) | Absolute directory path string |
-| `project_dep_list` | Caller (`pipeline.py`) | List of dicts from `save_project_dependencies`, each with at least `"file"` and `"callers"` keys |
-| File content | Disk read via `parse_file` | Binary bytes, decoded to UTF-8 |
-| `DEFINITION_DICTS` | `codetwine/config/settings.py` | `dict[str, dict[str, str]]` mapping file extension to AST node-type config |
-| Language/query config | `get_import_params` → `codetwine/config/settings.py` | `(Language, str)` tuple or `(None, None)` |
+| `project_dep_list` | Caller (`pipeline.py`), produced by `save_project_dependencies` | `list[dict]`, each dict containing at minimum `"file"` and `"callers"` keys |
+| File content | Disk read via `parse_file` | Raw bytes, decoded to UTF-8 for line splitting |
+| `DEFINITION_DICTS` | `codetwine/config/settings.py` | `dict[str, dict[str, str]]` mapping file extension to definition extraction config |
 
 ---
 
 ## 2. Transformation Overview
 
-### Stage 1: Resolve File Identity
-`target_file` is converted to a relative path (`target_file_rel`) and its extension (`file_ext`) is extracted. The per-language `definition_dict` is looked up from `DEFINITION_DICTS` using `file_ext`.
+### Stage 1 — Path and Extension Normalization
+`target_file` is converted to a project-relative path (`target_file_rel`) using `project_dir`, and the file extension is extracted. The extension is used to look up `definition_dict` from `DEFINITION_DICTS`, which may be `None` for unsupported languages.
 
-### Stage 2: Parse File
-`parse_file(target_file)` reads the file from disk, parses it via tree-sitter, and returns `(root_node, content)`. The binary `content` is decoded and split into `content_lines` for later source extraction.
+### Stage 2 — AST Parsing
+`parse_file(target_file)` reads the file from disk and returns a tree-sitter AST root node (`root_node`) and the raw file content as bytes. The bytes are decoded and split into lines (`content_lines`) for later source extraction.
 
-### Stage 3: Extract Definitions
-`extract_definitions(root_node, definition_dict)` traverses the AST and returns a list of `DefinitionInfo` objects. Each is converted into a plain dict, with the source text of the definition's line range spliced from `content_lines` and stored under `"context"`.
+### Stage 3 — Definition Extraction
+`extract_definitions(root_node, definition_dict)` traverses the AST via BFS and returns a list of `DefinitionInfo` objects. Each is transformed into a plain dict by pairing metadata fields with a `context` string sliced from `content_lines` using the definition's line range.
 
-### Stage 4: Resolve Import Language Parameters
-`get_import_params(file_ext)` returns the tree-sitter `Language` object and an import query string. If either is unavailable (unsupported language), the import/usage stages are skipped entirely and both `usage_list` and `caller_usages` remain empty lists.
+### Stage 4 — Import Parameter Resolution
+`get_import_params(file_ext)` returns a `(language, import_query_str)` tuple. If either value is `None` (unsupported language), Stages 5–7 are skipped entirely and `usage_list` and `caller_usages` remain empty lists.
 
-### Stage 5: Build Project File Set
-The `project_dep_list` is iterated to collect all known project-relative file paths into `project_file_set`, used as a filter in subsequent resolution steps.
+### Stage 5 — Symbol-to-File Map Construction
+The set of all project-relative file paths is built from `project_dep_list`. Then `extract_imports(root_node, language, import_query_str)` parses import statements from the AST into `ImportInfo` objects. These are passed to `build_symbol_to_file_map`, which resolves module strings to project-internal file paths and returns two dicts: `symbol_to_file_map` (imported name → definition file path) and `alias_to_original` (alias name → original name).
 
-### Stage 6: Extract Imports and Build Symbol Map
-`extract_imports(root_node, language, import_query_str)` parses import statements from the AST into a list of `ImportInfo` objects. These are passed to `build_symbol_to_file_map`, which resolves each imported module name to its project-relative file path, producing:
-- `symbol_to_file_map`: `{imported_name → definition_file_rel}`
-- `alias_to_original`: `{alias_name → original_name}`
+### Stage 6 — Callee Usage Analysis
+`build_usage_info_list` walks the AST to find occurrences of names present in `symbol_to_file_map`, groups them by `(source_file, name)`, and enriches each group with the definition's source code retrieved from disk. The result is a list of usage dicts (`usage_list`).
 
-### Stage 7: Build Callee Usages
-`build_usage_info_list(root_node, symbol_to_file_map, project_dir, file_ext, alias_to_original)` scans the AST for identifier nodes matching names in `symbol_to_file_map`. Usages are grouped by `(source_file, name)`, deduplicated, and each group is enriched with the definition's source code (`target_context`) read from the dependency file.
+### Stage 7 — Caller Usage Analysis
+`build_caller_usages` consults `project_dep_list` to find which other project files import from `target_file_rel`, then for each caller re-parses its AST, extracts its imports, identifies which names originate from the target, and collects the line numbers where those names are used. The result is a list of usage dicts (`caller_usages`).
 
-### Stage 8: Build Caller Usages
-`build_caller_usages(target_file_rel, project_dep_list, project_dir, project_file_set)` iterates over files that import `target_file_rel`, parses each caller's AST, extracts lines where names from `target_file_rel` are used, and attaches surrounding source lines as `usage_context`.
-
-### Stage 9: Assemble and Return Result
-The four collected data items are assembled into a single dict and returned to the caller.
+### Stage 8 — Result Assembly
+All collected data is assembled into a single return dict keyed by `"file"`, `"definitions"`, `"callee_usages"`, and `"caller_usages"`.
 
 ---
 
 ## 3. Outputs
 
-The function returns a single `dict` to the caller (`pipeline.py`). No files are written and there are no side effects (file I/O is encapsulated inside dependencies).
+The function returns a single `dict` to the caller in `pipeline.py`. No files are written and there are no side effects within this module itself.
 
-| Key | Type | Description |
+| Key | Type | Content |
 |---|---|---|
 | `"file"` | `str` | Project-relative path of the analyzed file |
-| `"definitions"` | `list[dict]` | Definitions extracted from the file |
-| `"callee_usages"` | `list[dict]` | Usages of names imported from other project files |
-| `"caller_usages"` | `list[dict]` | Usages of this file's names in other project files |
+| `"definitions"` | `list[dict]` | Extracted definitions with source context |
+| `"callee_usages"` | `list[dict]` | Usage locations of names this file imports from other project files |
+| `"caller_usages"` | `list[dict]` | Usage locations of names defined here, as used in other project files |
 
 ---
 
 ## 4. Key Data Structures
 
-### Return value dict
-
-| Field / Key | Type | Purpose |
-|---|---|---|
-| `"file"` | `str` | Relative path of the analyzed file |
-| `"definitions"` | `list[dict]` | Per-definition records (see below) |
-| `"callee_usages"` | `list[dict]` | Callee usage records (see below) |
-| `"caller_usages"` | `list[dict]` | Caller usage records (see below) |
-
-### Definition record dict (element of `"definitions"`)
-
+### `definition_list` entry (produced internally, returned under `"definitions"`)
 | Field / Key | Type | Purpose |
 |---|---|---|
 | `"name"` | `str` | Name of the defined symbol |
-| `"type"` | `str` | AST node type of the definition |
-| `"start_line"` | `int` | 1-based first line of the definition |
-| `"end_line"` | `int` | 1-based last line of the definition |
-| `"context"` | `str` | Source text of the definition's line range |
+| `"type"` | `str` | AST node type of the definition (e.g. `"function_definition"`) |
+| `"start_line"` | `int` | First line of the definition (1-based) |
+| `"end_line"` | `int` | Last line of the definition (1-based) |
+| `"context"` | `str` | Raw source code of the definition extracted from `content_lines` |
 
-### Callee usage record dict (element of `"callee_usages"`)
-
-| Field / Key | Type | Purpose |
-|---|---|---|
-| `"lines"` | `list[int]` | Deduplicated, sorted line numbers where the name is used |
-| `"name"` | `str` | The imported name (or attribute path) being used |
-| `"from"` | `str` | Project-relative path of the file where the name is defined |
-| `"target_context"` | `str` | Source code of the definition in the dependency file |
-
-### Caller usage record dict (element of `"caller_usages"`)
-
-| Field / Key | Type | Purpose |
-|---|---|---|
-| `"lines"` | `list[int]` | Deduplicated, sorted line numbers in the caller file |
-| `"name"` | `str` | Name defined in this file that is used by the caller |
-| `"file"` | `str` | Project-relative path of the caller file |
-| `"usage_context"` | `str` | Surrounding source lines from the caller at usage locations |
-
-### `project_dep_list` element dict (input)
-
+### `project_dep_list` entry (input)
 | Field / Key | Type | Purpose |
 |---|---|---|
 | `"file"` | `str` | Project-relative file path |
-| `"callers"` | `list[str]` | Relative paths of files that import this file |
+| `"callers"` | `list[str]` | Relative paths of files that import from this file |
 
-### Intermediate structures
-
-| Name | Type | Purpose |
+### `symbol_to_file_map` (intermediate)
+| Field / Key | Type | Purpose |
 |---|---|---|
-| `symbol_to_file_map` | `dict[str, str]` | Maps each imported symbol name to the project-relative path of its definition file |
-| `alias_to_original` | `dict[str, str]` | Maps alias names to their original imported names |
-| `project_file_set` | `set[str]` | Set of all project-relative file paths, used as a resolution filter |
-| `content_lines` | `list[str]` | UTF-8 source lines of the target file, used to slice definition source text |
+| imported name | `str` (key) | Symbol name as referenced in source code |
+| definition file path | `str` (value) | Project-relative path of the file where the symbol is defined |
+
+### `alias_to_original` (intermediate)
+| Field / Key | Type | Purpose |
+|---|---|---|
+| alias name | `str` (key) | The name used locally in the file (the alias) |
+| original name | `str` (value) | The name as exported from the source module |
+
+### `callee_usages` entry (returned under `"callee_usages"`)
+| Field / Key | Type | Purpose |
+|---|---|---|
+| `"lines"` | `list[int]` | Sorted, deduplicated line numbers where the name is used |
+| `"name"` | `str` | The used name (possibly with attribute access, e.g. `"helper.process"`) |
+| `"from"` | `str` | Project-relative path of the file where the name is defined |
+| `"target_context"` | `str` | Source code of the definition in the dependency file |
+
+### `caller_usages` entry (returned under `"caller_usages"`)
+| Field / Key | Type | Purpose |
+|---|---|---|
+| `"lines"` | `list[int]` | Sorted, deduplicated line numbers where the name is used in the caller |
+| `"name"` | `str` | The name defined in the target file that is being used |
+| `"file"` | `str` | Project-relative path of the caller file |
+| `"usage_context"` | `str` | Source code snippet surrounding the usage location in the caller |
 
 ## Error Handling
 
@@ -259,23 +220,37 @@ The function returns a single `dict` to the caller (`pipeline.py`). No files are
 
 ## 1. Overall Strategy
 
-`file_analyzer.py` adopts a **delegation-and-trust** strategy: it contains no explicit `try-except` blocks of its own and performs no local error catching. All error handling responsibility is fully delegated to the dependency modules it calls (`parse_file`, `extract_definitions`, `build_symbol_to_file_map`, etc.). Within the file itself, the only form of defensive logic is **conditional branching**: import/usage analysis is gated behind a truthiness check on the `language` and `import_query_str` values returned by `get_import_params`, causing that entire analysis path to be silently skipped for unsupported file extensions rather than raising an error.
+`file_analyzer.py` follows a **delegation-and-trust** strategy: it contains no explicit `try-except` blocks of its own, instead delegating all error handling entirely to its dependency modules. The function assumes that its callers (`pipeline.py`) and its dependencies (`parse_file`, `extract_definitions`, `build_usage_info_list`, etc.) handle or surface any exceptions that arise. If a dependency raises an unhandled exception, it propagates upward uncaught — a **fail-fast** posture at this layer.
+
+Graceful degradation is expressed structurally rather than through exception handling: import and usage analysis is conditionally skipped by branching on the return value of `get_import_params`. When a language is unsupported, `usage_list` and `caller_usages` remain as empty lists and the function returns a valid (partial) result dict without error.
+
+---
 
 ## 2. Error Pattern Table
 
 | Error Type | Trigger Condition | Handling | Recoverable? | Impact |
 |---|---|---|---|---|
-| Unsupported file extension (import analysis) | `get_import_params` returns `(None, None)` for an unrecognized extension | Conditional branch skips the entire import/usage analysis block; `usage_list` and `caller_usages` remain empty lists | Yes | No import or usage data is produced; definition extraction still proceeds |
-| Unsupported file extension (definition extraction) | `DEFINITION_DICTS.get(file_ext)` returns `None` for an unrecognized extension | `None` is passed as `definition_dict` to `extract_definitions`; behavior depends on the downstream implementation | Yes (delegated) | Definition list may be empty; no local error is raised |
-| File read / parse failure | `parse_file` encounters an unreadable or unparseable file | Not handled locally; propagates as an unhandled exception from `parse_file` | No | Function terminates with an exception; caller (`pipeline.py`) receives the exception |
-| Symbol resolution failure | `build_symbol_to_file_map` cannot resolve an import to a project file | Not handled locally; delegated entirely to `build_symbol_to_file_map` | Yes (delegated) | Unresolvable symbols are silently omitted from `symbol_to_file_map` |
-| Usage extraction failure | `build_usage_info_list` or `build_caller_usages` encounters an error | Not handled locally; propagates as an unhandled exception | No | Function terminates with an exception |
-| UTF-8 decode failure | `content.decode("utf-8")` fails on binary or non-UTF-8 file content | Not handled locally; propagates as an unhandled exception | No | Function terminates; `content_lines` and `definition_list` are not produced |
+| Unsupported file extension (import analysis) | `get_import_params` returns `(None, None)` for an unrecognized extension | The `if language and import_query_str:` branch is skipped; `usage_list` and `caller_usages` default to empty lists | Yes | `callee_usages` and `caller_usages` fields are empty in the output dict; `definitions` is still populated |
+| Unsupported file extension (definition extraction) | `DEFINITION_DICTS.get(file_ext)` returns `None` | `definition_dict` is `None`; passed to `extract_definitions`, which must handle it | Delegated to dependency | Depends on `extract_definitions` behavior |
+| File read or parse failure | `parse_file` cannot read or parse `target_file` | No local handling; exception propagates to the caller | No | Entire `get_file_dependencies` call fails |
+| AST extraction failure | `extract_definitions` or `build_usage_info_list` raises an exception | No local handling; exception propagates to the caller | No | Entire `get_file_dependencies` call fails |
+| Symbol resolution failure | `build_symbol_to_file_map` cannot resolve an import to a project file | Handled inside `build_symbol_to_file_map`; unresolvable entries are silently skipped | Yes (within dependency) | Affected symbols absent from `symbol_to_file_map`; no usage entries generated for them |
+| Caller file read failure | A caller file cannot be opened during `build_caller_usages` | Handled inside `build_caller_usages` (catches `OSError`, `UnicodeDecodeError`) | Yes (within dependency) | `usage_context` may be absent for affected caller entries |
+
+---
 
 ## 3. Design Notes
 
-The absence of local error handling reflects a deliberate **separation of concerns**: `get_file_dependencies` is responsible solely for orchestrating the analysis pipeline, while each dependency module is responsible for its own error conditions. The only locally-enforced safety boundary is the `language and import_query_str` guard, which represents a known, expected condition (unsupported language) rather than an exceptional one, and is handled as normal control flow rather than error recovery. Unexpected failures (I/O errors, parse errors, decode errors) are allowed to propagate upward to the caller in `pipeline.py`, which is the appropriate level to decide how to handle per-file failures in the context of a full project analysis run.
+- **No defensive wrapping at the orchestration layer:** `get_file_dependencies` is a data-assembly coordinator. It trusts each dependency to enforce its own contracts and does not introduce redundant catch blocks that would obscure the origin of failures.
+- **Structural fallback over exception fallback:** The primary resilience mechanism is the conditional guard on `language and import_query_str`. This cleanly handles the "unsupported language" case without exceptions, ensuring the output dict is always structurally complete even when analysis is partial.
+- **Implicit coupling to dependency error policies:** Because all exception handling is delegated, the effective error handling behavior of `get_file_dependencies` is determined by the combined policies of its dependencies (e.g., `build_caller_usages` catching `OSError`/`UnicodeDecodeError`, `parse_file` failing fast on unreadable files).
 
 ## Summary
 
-`file_analyzer.py` orchestrates per-file dependency analysis for a single source file. Public function: `get_file_dependencies(target_file: str, project_dir: str, project_dep_list: list[dict]) -> dict`. Returns a dict with keys `"file"` (str), `"definitions"` (list[dict] with name, type, start_line, end_line, context), `"callee_usages"` (list[dict] with lines, name, from, target_context), and `"caller_usages"` (list[dict] with lines, name, file, usage_context). Consumes `DEFINITION_DICTS`, `project_dep_list`, and results from `parse_file`, `extract_definitions`, `build_symbol_to_file_map`, `build_usage_info_list`, and `build_caller_usages`.
+**file_analyzer.py** orchestrates per-file dependency analysis by composing outputs from parsing, extraction, and resolution modules into a structured record.
+
+**Public function:** `get_file_dependencies(target_file: str, project_dir: str, project_dep_list: list[dict]) -> dict`
+
+**Key structures produced:** dict with keys `"file"` (str), `"definitions"` (list[dict] with name/type/start\_line/end\_line/context), `"callee_usages"` (list[dict] with lines/name/from/target\_context), `"caller_usages"` (list[dict] with lines/name/file/usage\_context).
+
+**Consumes:** `project_dep_list` (list[dict] with `"file"` and `"callers"` keys).

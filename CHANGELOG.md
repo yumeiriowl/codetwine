@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.5 - 2026-03-25
+
+### Changed
+- `pyproject.toml`: Pinned all dependencies to exact versions (`>=` → `==`)
+- `graph_search()`: Renamed return key `results` → `nodes`
+- `graph_search()`: Renamed internal variables for clarity (`starts` → `candidates`, `file_deps` → `deps`, `caller` → `usage`)
+- Updated sample output
+
 ## 0.1.4 - 2026-03-24
 
 ### Changed

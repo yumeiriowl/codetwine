@@ -86,7 +86,7 @@ def graph_search(name: str, hops: int = 1, direction: str = "both") -> dict:
             "start": "file:name",       # Start node
             "hops": int,
             "direction": str,
-            "results": [                # List of found definitions
+            "nodes": [                  # List of found definitions
                 {"key": "file:name", "file": str, "name": str, "type": str,
                  "hop": int, "via": "outgoing"|"incoming"}
             ],
@@ -98,12 +98,12 @@ def graph_search(name: str, hops: int = 1, direction: str = "both") -> dict:
     Usage:
         # Search direct dependencies and dependents of extract_imports (1 hop)
         result = graph_search("extract_imports", hops=1, direction="both")
-        for r in result["results"]:
+        for r in result["nodes"]:
             print(f"  hop {r['hop']}: {r['key']} ({r['via']})")
 
         # Search only dependents within 2 hops from node_text
         result = graph_search("node_text", hops=2, direction="incoming")
-        for r in result["results"]:
+        for r in result["nodes"]:
             print(f"  hop {r['hop']}: {r['name']} in {r['file']}")
     """
     if project_data is None:
@@ -113,27 +113,27 @@ def graph_search(name: str, hops: int = 1, direction: str = "both") -> dict:
     file_index = {f["file"]: f for f in project_data["files"]}
 
     # Search for start definition (exact match -> partial match fallback)
-    starts = []
+    candidates = []
     for f in project_data["files"]:
         for d in f.get("file_dependencies", {}).get("definitions", []):
             if d["name"] == name:
-                starts.append({"file": f["file"], "definition": d})
-    if not starts:
+                candidates.append({"file": f["file"], "definition": d})
+    if not candidates:
         for f in project_data["files"]:
             for d in f.get("file_dependencies", {}).get("definitions", []):
                 if name.lower() in d["name"].lower():
-                    starts.append({"file": f["file"], "definition": d})
-    if not starts:
+                    candidates.append({"file": f["file"], "definition": d})
+    if not candidates:
         return {"error": f"Definition '{name}' not found"}
 
-    start_file = starts[0]["file"]
-    start_def = starts[0]["definition"]
+    start_file = candidates[0]["file"]
+    start_def = candidates[0]["definition"]
     start_key = f"{start_file}:{start_def['name']}"
 
     # BFS search
     visited = {start_key}
     queue = deque([(start_key, start_file, start_def["name"], 0)])
-    results = []
+    nodes = []
     edges = []
     seen_edges = set()
 
@@ -146,11 +146,11 @@ def graph_search(name: str, hops: int = 1, direction: str = "both") -> dict:
         if not file_data:
             continue
 
-        file_deps = file_data.get("file_dependencies", {})
+        deps = file_data.get("file_dependencies", {})
 
         # Get line range of the current definition
         current_def = None
-        for d in file_deps.get("definitions", []):
+        for d in deps.get("definitions", []):
             if d["name"] == current_name:
                 current_def = d
                 break
@@ -159,7 +159,7 @@ def graph_search(name: str, hops: int = 1, direction: str = "both") -> dict:
 
         # Outgoing: other definitions used by this definition (callee_usages)
         if direction in ("outgoing", "both"):
-            for usage in file_deps.get("callee_usages", []):
+            for usage in deps.get("callee_usages", []):
                 # Check if usage lines are within the current definition's line range
                 if current_def:
                     in_range = any(
@@ -167,7 +167,7 @@ def graph_search(name: str, hops: int = 1, direction: str = "both") -> dict:
                         for line in usage.get("lines", [])
                     )
                 elif current_name == "__module__":
-                    all_defs = file_deps.get("definitions", [])
+                    all_defs = deps.get("definitions", [])
                     in_range = any(
                         not any(d["start_line"] <= line <= d["end_line"] for d in all_defs)
                         for line in usage.get("lines", [])
@@ -202,7 +202,7 @@ def graph_search(name: str, hops: int = 1, direction: str = "both") -> dict:
 
                 if target_key not in visited:
                     visited.add(target_key)
-                    results.append({
+                    nodes.append({
                         "key": target_key,
                         "file": target_file,
                         "name": target_name,
@@ -214,11 +214,11 @@ def graph_search(name: str, hops: int = 1, direction: str = "both") -> dict:
 
         # Incoming: other definitions that use this definition (caller_usages)
         if direction in ("incoming", "both"):
-            for caller in file_deps.get("caller_usages", []):
-                if caller.get("name") != current_name:
+            for usage in deps.get("caller_usages", []):
+                if usage.get("name") != current_name:
                     continue
 
-                source_file = caller.get("file", "")
+                source_file = usage.get("file", "")
                 source_file_data = file_index.get(source_file)
 
                 # Identify which definition in the source file is using it
@@ -226,7 +226,7 @@ def graph_search(name: str, hops: int = 1, direction: str = "both") -> dict:
                 source_type = ""
                 if source_file_data:
                     source_deps = source_file_data.get("file_dependencies", {})
-                    for line in caller.get("lines", []):
+                    for line in usage.get("lines", []):
                         for d in source_deps.get("definitions", []):
                             if d["start_line"] <= line <= d["end_line"]:
                                 source_name = d["name"]
@@ -248,7 +248,7 @@ def graph_search(name: str, hops: int = 1, direction: str = "both") -> dict:
 
                 if source_key not in visited:
                     visited.add(source_key)
-                    results.append({
+                    nodes.append({
                         "key": source_key,
                         "file": source_file,
                         "name": source_name,
@@ -262,6 +262,6 @@ def graph_search(name: str, hops: int = 1, direction: str = "both") -> dict:
         "start": start_key,
         "hops": hops,
         "direction": direction,
-        "results": results,
+        "nodes": nodes,
         "edges": edges
     }
