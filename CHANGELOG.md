@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.6 - 2026-03-26
+
+### Changed
+- `rlm_qa_agent.py`: Renamed private functions to public (`_build_doc_schema` → `build_doc_schema`, `_load_project` → `load_project`, `_create_interpreter` → `create_interpreter`)
+
 ## 0.1.5 - 2026-03-25
 
 ### Changed
