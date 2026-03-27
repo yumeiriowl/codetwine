@@ -2,32 +2,34 @@
 
 ## Overview & Purpose
 
-# Overview & Purpose
+## Overview & Purpose
 
-## 1. Module Summary
+### 1. Module Summary
 
-Extracts named definition information (functions, classes, variables, types, etc.) from a Tree-sitter AST and returns them as a sorted list of `DefinitionInfo` objects, serving as the central definition-discovery engine for language-aware code analysis across the codetwine toolchain.
+Extracts named definition information (functions, classes, variables, types, etc.) from a tree-sitter AST and returns them as a sorted list of `DefinitionInfo` objects, enabling callers to map symbol names to their source file locations and line ranges.
 
-## 2. When to Use This Module
+### 2. When to Use This Module
 
-- **Symbol-to-file mapping** (`codetwine/import_to_path.py`): Call `extract_definitions(root_node, definition_dict)` to enumerate every named symbol defined in a file and register each name in a lookup map.
-- **File-level definition inventory** (`codetwine/file_analyzer.py`): Call `extract_definitions(root_node, definition_dict)` to produce a structured list of definitions with their name, type, and line ranges for inclusion in file analysis reports.
-- **Target-file symbol enumeration** (`codetwine/extractors/usage_analysis.py`): Call `extract_definitions(root_node, definition_dict)` on a target file to collect all defined names and use them for usage/reference analysis.
+- **Building a symbol-to-file index** (`import_to_path.py`): Call `extract_definitions(root_node, definition_dict)` to iterate over all top-level definitions in a parsed file and register each `defn.name` in a symbol map.
+- **Generating per-file definition metadata** (`file_analyzer.py`): Call `extract_definitions(root_node, definition_dict)` to produce a list of definitions with `start_line`, `end_line`, and source context for structured file analysis output.
+- **Resolving symbol names exported by a target file** (`extractors/usage_analysis.py`): Call `extract_definitions(target_root, target_def_dict)` to collect all definition names from a target file in order to determine which symbols it exposes.
 
-## 3. Public Interface Table
+### 3. Public Interface Table
 
 | Name | Arguments (type) | Return type | Responsibility |
 |---|---|---|---|
-| `DefinitionInfo` | `name: str`, `type: str`, `start_line: int`, `end_line: int` | dataclass | Holds structured metadata about a single extracted definition, including its name, AST node type, and 1-based start/end line numbers. |
-| `extract_definitions` | `root_node: Node`, `definition_dict: dict[str, str]` | `list[DefinitionInfo]` | Traverses the AST via BFS using the provided language-specific node-type mapping, extracts all named definitions, and returns them sorted by start line. |
+| `DefinitionInfo` | `name: str`, `type: str`, `start_line: int`, `end_line: int` | dataclass | Holds the name, AST node type, and 1-based start/end line numbers of a single definition. |
+| `extract_definitions` | `root_node: Node`, `definition_dict: dict[str, str]` | `list[DefinitionInfo]` | Traverses the AST via BFS and returns all discovered definitions sorted by start line in ascending order. |
 
-## 4. Design Decisions
+### 4. Design Decisions
 
-- **Caller-supplied `definition_dict`**: The extraction logic is language-agnostic; the caller provides a mapping from AST node types to name-extraction strategies, making this module reusable across all supported languages without modification.
-- **Sentinel values for deep name extraction**: When a definition's name is not a direct child of the definition node (e.g., C/C++ `function_declarator`, JS/TS `variable_declarator`, Python `assignment`), `definition_dict` values use a `__sentinel__` convention (e.g., `"__assignment__"`, `"__function_declarator__"`) to dispatch to dedicated extraction functions rather than the generic child-search path.
-- **BFS with fallback descent**: When name extraction fails for a matched node type (e.g., a C/C++ forward declaration lacks an `init_declarator`), the node's children are enqueued for further BFS traversal, enabling discovery of nested definitions such as `function_declarator` inside a `declaration`.
-- **Container definition traversal**: Certain node types (currently `namespace_definition`) are recorded as definitions *and* have their children enqueued, allowing definitions nested inside namespaces to be discovered in the same BFS pass.
-- **Destructuring as a fallback path**: If both the primary name extraction and BFS fallback are inapplicable, a dedicated destructuring extractor handles multi-name patterns (Python `pattern_list`, JS/TS `object_pattern`/`array_pattern`), emitting one `DefinitionInfo` per extracted name with the same node's line range.
+- **Language-agnostic via `definition_dict`**: The extraction logic is fully driven by a caller-supplied mapping of AST node types to name-extraction strategies. This separates language-specific knowledge (what counts as a definition and where its name lives) from the traversal algorithm, allowing the same module to serve Python, JavaScript/TypeScript, and C/C++ without branching on language.
+
+- **Sentinel values for deep name extraction**: When a definition's name is not a direct child of the definition node, `definition_dict` values use a `"__sentinel__"` format string (e.g., `"__assignment__"`, `"__function_declarator__"`) to dispatch to dedicated extraction functions rather than forcing all patterns through a single generic traversal.
+
+- **BFS with fallback descent**: When name extraction fails for a matched node type (e.g., a C/C++ forward declaration lacking an `init_declarator`), the node's children are enqueued rather than discarded. This allows inner nodes such as `function_declarator` to be discovered and matched on a subsequent BFS iteration without requiring callers to pre-enumerate all possible nesting structures.
+
+- **Container definition pass-through**: Nodes of type `namespace_definition` are both recorded as definitions and have their children enqueued, allowing nested definitions (classes, functions) inside a namespace to be discovered in the same BFS pass.
 
 ## Definition Design Specifications
 
@@ -35,11 +37,16 @@ Extracts named definition information (functions, classes, variables, types, etc
 
 ---
 
-## Module-Level Constant
+## Module-level Constant
 
 ### `_INCLUDE_GUARD_RE`
 
-A compiled regular expression used to identify C/C++ include-guard `#define` directives. Matches names following the conventional patterns such as `MYHEADER_H`, `_MYHEADER_HPP_`, `MYFILE_H_INCLUDED`, etc. Definitions matching this pattern are silently excluded from extraction results.
+| Item | Detail |
+|---|---|
+| Type | `re.Pattern` |
+| Pattern | Matches C/C++ include guard macro names (e.g., `MY_HEADER_H`, `_FOO_HPP_`) |
+
+**Responsibility:** Pre-compiled regex used to filter out `#define` directives that serve as include guards rather than meaningful constants.
 
 ---
 
@@ -47,18 +54,18 @@ A compiled regular expression used to identify C/C++ include-guard `#define` dir
 
 ### `DefinitionInfo`
 
-A plain data container representing a single extracted definition.
+A dataclass holding metadata about a single extracted definition.
 
 | Field | Type | Purpose |
 |---|---|---|
 | `name` | `str` | The identifier name of the definition (function, class, variable, type, etc.) |
 | `type` | `str` | The AST node type string (e.g., `"function_definition"`, `"expression_statement"`) |
-| `start_line` | `int` | 1-based line number where the definition starts in the source file |
-| `end_line` | `int` | 1-based line number where the definition ends in the source file |
+| `start_line` | `int` | 1-based line number where the definition begins |
+| `end_line` | `int` | 1-based line number where the definition ends |
 
-**Responsibility:** Provides a language-agnostic, uniform record of a definition extracted from any supported language's AST.
+**Responsibility:** Acts as a plain data container for communicating definition metadata from extractors to callers such as `file_analyzer.py`, `import_to_path.py`, and `usage_analysis.py`.
 
-**When to use:** Consumed by callers such as `file_analyzer.py`, `import_to_path.py`, and `usage_analysis.py` to register symbol names, build context snippets, or resolve file ownership of symbols.
+**When to use:** Consumed by callers that iterate over the result of `extract_definitions` to map symbol names to file paths or build definition metadata tables.
 
 ---
 
@@ -73,28 +80,27 @@ def extract_definitions(
 ) -> list[DefinitionInfo]
 ```
 
-- **`root_node`**: The root `Node` of a tree-sitter parse tree for an entire source file.
-- **`definition_dict`**: A mapping from AST node type strings to name-extraction directives. Values are either a direct child node type (e.g., `"identifier"`) or a sentinel string (e.g., `"__assignment__"`) indicating a deeper extraction strategy.
-- **Returns**: A list of `DefinitionInfo` objects sorted in ascending order by `start_line`.
+**`definition_dict`:** A mapping from AST node type string to a name-extraction specifier. The specifier is either a direct child node type (e.g., `"identifier"`) or a sentinel string in `__sentinel__` format (e.g., `"__assignment__"`) that triggers a dedicated deep-extraction function.
 
-**Responsibility:** Entry point for definition extraction; traverses the AST via BFS and collects all named definitions matching the provided configuration.
+**Responsibility:** Traverses the entire AST via BFS and collects all definitions matching the language-specific `definition_dict`, returning them sorted by start line.
 
-**When to use:** Called whenever a file's AST needs to be scanned for its top-level and nested definitions, such as during symbol map construction or file analysis.
+**When to use:** Called by `file_analyzer.py`, `import_to_path.py`, and `usage_analysis.py` after parsing a source file to enumerate all top-level and nested definitions.
 
 **Design decisions:**
 
-- **BFS over DFS**: Uses a `deque`-based breadth-first search so that container definitions (e.g., `namespace_definition`) can be processed in document order before their children are enqueued.
-- **Fallback to child traversal**: When name extraction returns `None`, the node's children are enqueued for continued search rather than abandoning the subtree. This supports constructs like C/C++ forward declarations where the relevant name is nested inside a `function_declarator`.
-- **Container node continuation**: Nodes listed in `_CONTAINER_DEFINITION_TYPES` (currently `namespace_definition`) have their children enqueued even after a successful definition record, allowing definitions nested inside them to be collected.
-- **Destructuring fallback**: When single-name extraction fails, `_extract_destructured_names` is tried before falling back to child traversal, capturing multi-variable assignments like `X, Y = 1, 2`.
-- **`decorated_definition` special-casing**: Handled separately before the general branch so that the reported line range covers the full decorator span rather than only the inner definition.
-- **Include-guard filtering**: `preproc_def` nodes whose names match `_INCLUDE_GUARD_RE` are skipped and their children enqueued instead.
+- **BFS instead of DFS:** Ensures definitions are discovered in document order before descending; also allows selective child expansion (container nodes like `namespace_definition` continue traversal after being recorded, while non-container definitions do not).
+- **Fallback behavior on name-extraction failure:** Rather than silently dropping a node, child nodes are enqueued for continued search. This handles cases like C/C++ forward declarations where the actual function name lives inside a nested `function_declarator`.
+- **Include guard filtering:** `preproc_def` nodes whose extracted name matches `_INCLUDE_GUARD_RE` are discarded and their children are re-enqueued instead of being recorded.
+- **Destructured assignment handling:** When standard name extraction returns `None` and the node matches a destructuring pattern, multiple `DefinitionInfo` entries are created—one per extracted name—all sharing the same node's line range.
+- **`decorated_definition` separation:** Decorated definitions are routed to a dedicated parser rather than the generic path to preserve the full decorator-inclusive line range.
+- **`_CONTAINER_DEFINITION_TYPES`:** A locally defined set (`{"namespace_definition"}`) of node types whose children are always enqueued after the node itself is recorded.
 
 **Constraints & edge cases:**
 
-- `definition_dict` must accurately reflect the target language's AST structure; an incorrect mapping silently produces no results for that node type.
-- `decorated_definition` is intentionally excluded from the general `elif` branch to avoid double-processing.
-- The `_CONTAINER_DEFINITION_TYPES` set is module-local and currently hard-coded to `{"namespace_definition"}`.
+- `root_node` must be the root of a valid tree-sitter parse tree for the target language.
+- `definition_dict` must use sentinel strings that are recognized by `_extract_name`; unrecognized sentinels fall through to direct-child search with no match.
+- A `decorated_definition` that contains no recognized inner definition node produces no output.
+- Destructuring extraction is only supported for `__assignment__` (Python) and `__variable_declarator__` (JS/TS) sentinel types.
 
 ---
 
@@ -109,15 +115,13 @@ def _parse_decorated_definition(
 ) -> DefinitionInfo | None
 ```
 
-- **`node`**: A `decorated_definition` AST node.
-- **`definition_dict`**: Per-language definition node settings, same object passed to `extract_definitions`.
-- **Returns**: A `DefinitionInfo` with line numbers adjusted to include the decorator, or `None` if no valid inner definition is found.
+**Responsibility:** Extracts a `DefinitionInfo` from a `decorated_definition` node by locating the inner definition node and delegating name extraction, then overrides the line range to span the full decorator extent.
 
-**Responsibility:** Extracts the name from the inner function or class definition wrapped by a decorator, while attributing the full source range (including decorator lines) to the resulting record.
+**When to use:** Called exclusively by `extract_definitions` when the BFS encounters a `decorated_definition` node type.
 
-**When to use:** Called by `extract_definitions` exclusively when encountering a `decorated_definition` node.
+**Design decisions:** The `start_line` and `end_line` on the returned `DefinitionInfo` are overwritten to reflect the outer decorated node's range, so callers see the complete decorated block rather than just the inner function/class.
 
-**Constraints & edge cases:** Only the last matching inner definition child is used if multiple definition-type children exist. Returns `None` if no child matches any key in `definition_dict`.
+**Constraints & edge cases:** Returns `None` if no recognized definition node exists among the direct children of the `decorated_definition`. Only the last matching child is used as `inner_node`; multiple definitions within a single decorator block would result in only the last one being recorded.
 
 ---
 
@@ -130,13 +134,11 @@ def _parse_definition_node(
 ) -> DefinitionInfo | None
 ```
 
-- **`node`**: Any definition AST node (e.g., `function_definition`, `class_definition`).
-- **`name_node_type`**: Either a direct child node type string or a sentinel string indicating a specialized extractor.
-- **Returns**: A `DefinitionInfo` with 1-based line numbers, or `None` if name extraction fails.
+**Responsibility:** Converts a single definition AST node into a `DefinitionInfo` by delegating name extraction to `_extract_name` and building the result with 1-based line numbers.
 
-**Responsibility:** Converts a raw AST definition node into a typed `DefinitionInfo` record by delegating name extraction to `_extract_name`.
+**When to use:** Called by both `extract_definitions` (for standard definition nodes) and `_parse_decorated_definition` (for the inner node of a decorated definition).
 
-**When to use:** Called by both `extract_definitions` and `_parse_decorated_definition` whenever a definition node needs to be materialized into a `DefinitionInfo`.
+**Constraints & edge cases:** Returns `None` when `_extract_name` cannot locate the name, signaling the caller to attempt alternative extraction strategies.
 
 ---
 
@@ -146,23 +148,20 @@ def _parse_definition_node(
 def _extract_name(node: Node, name_type: str) -> str | None
 ```
 
-- **`node`**: The definition node from which to extract the name.
-- **`name_type`**: A directive string from `definition_dict`—either a standard child type or a sentinel of the form `__<strategy>__`.
-- **Returns**: The definition name as a UTF-8 string, or `None`.
+**Responsibility:** Dispatches to the appropriate dedicated extraction function based on the sentinel value of `name_type`, or performs a direct child search for standard node type names.
 
-**Responsibility:** Central dispatcher that routes name extraction to the appropriate specialized function based on the sentinel value, or performs a direct child search for standard cases.
+**When to use:** Called by `_parse_definition_node` as the single entry point for all name-extraction logic.
 
-**Design decisions:** The sentinel convention (`__<name>__`) makes the dispatch table explicit and extensible without requiring subclassing or a registry.
+**Design decisions:** Sentinel values are identified by their `__sentinel__` naming convention. The dispatch table covers four dedicated extractors:
 
-| Sentinel Value | Delegates To |
-|---|---|
-| `__assignment__` | `_extract_assignment_name` |
-| `__variable_declarator__` | `_extract_variable_declarator_name` |
-| `__init_declarator__` | `_extract_init_declarator_name` |
-| `__function_declarator__` | `_extract_function_declarator_name` |
-| *(any other value)* | Direct child type search |
+| Sentinel | Target Language | Dedicated Function |
+|---|---|---|
+| `__assignment__` | Python | `_extract_assignment_name` |
+| `__variable_declarator__` | JS/TS | `_extract_variable_declarator_name` |
+| `__init_declarator__` | C/C++ | `_extract_init_declarator_name` |
+| `__function_declarator__` | C/C++ | `_extract_function_declarator_name` |
 
-**Constraints & edge cases:** Returns `None` for both unrecognized sentinel values that do not match any branch and for standard child searches where no child with the given type exists.
+**Constraints & edge cases:** For standard patterns, only direct children are searched; deeper nesting requires a sentinel. Returns `None` if no matching child is found.
 
 ---
 
@@ -172,15 +171,14 @@ def _extract_name(node: Node, name_type: str) -> str | None
 def _extract_assignment_name(node: Node) -> str | None
 ```
 
-- **`node`**: An `expression_statement` node.
-- **Returns**: The identifier name from the left-hand side, or `None`.
+**Responsibility:** Extracts the variable name from a Python top-level simple assignment (`expression_statement > assignment > identifier`).
 
-**Responsibility:** Extracts the variable name from a Python top-level simple assignment (`X = ...`).
+**When to use:** Invoked by `_extract_name` when `name_type == "__assignment__"` and the node is an `expression_statement`.
 
 **Constraints & edge cases:**
-- Returns `None` if the inner node is not an `assignment` (e.g., a bare function call).
-- Returns `None` if the left-hand side is not a plain `identifier` (e.g., attribute assignment `obj.x = 1`).
-- Does not handle destructuring (tuple unpacking); that case is handled by `_extract_destructured_names`.
+- Returns `None` if the `expression_statement` does not contain an `assignment` (e.g., a standalone function call).
+- Returns `None` if the left-hand side is not a plain `identifier` (e.g., attribute assignment `obj.attr = 1` or subscript assignment).
+- Tuple/list destructuring (`X, Y = 1, 2`) is handled separately by `_extract_destructured_names`.
 
 ---
 
@@ -190,12 +188,14 @@ def _extract_assignment_name(node: Node) -> str | None
 def _extract_variable_declarator_name(node: Node) -> str | None
 ```
 
-- **`node`**: A `lexical_declaration` or `variable_declaration` node.
-- **Returns**: The identifier name from the first `variable_declarator` child's `name` field, or `None`.
+**Responsibility:** Extracts the variable name from a JS/TS `lexical_declaration` or `variable_declaration` by locating the `variable_declarator` child and reading its `name` field.
 
-**Responsibility:** Extracts the variable name from a JS/TS `const`, `let`, or `var` declaration.
+**When to use:** Invoked by `_extract_name` when `name_type == "__variable_declarator__"`.
 
-**Constraints & edge cases:** Only the first `variable_declarator` child is examined. Destructured patterns (`object_pattern`, `array_pattern`) in the name position cause this function to return `None`, which triggers the destructuring path in `_extract_destructured_names`.
+**Constraints & edge cases:**
+- Returns `None` if no `variable_declarator` child exists.
+- Returns `None` if the declarator's `name` field is absent.
+- Destructured patterns (`object_pattern`, `array_pattern`) on the `name` field cause this function to return `None`; `_extract_destructured_names` handles those cases.
 
 ---
 
@@ -205,16 +205,17 @@ def _extract_variable_declarator_name(node: Node) -> str | None
 def _extract_function_declarator_name(node: Node) -> str | None
 ```
 
-- **`node`**: A C/C++ `function_definition` node.
-- **Returns**: The function name string, or `None` if `function_declarator` is absent.
+**Responsibility:** Extracts the function name from a C/C++ `function_definition` node where the name is nested inside a `function_declarator` rather than being a direct child.
 
-**Responsibility:** Extracts the function name from C/C++ function definitions where the name is nested inside a `function_declarator` rather than being a direct child.
+**When to use:** Invoked by `_extract_name` when `name_type == "__function_declarator__"`.
 
-**Design decisions:** Handles C++ qualified identifiers (e.g., `Shape::get_name`) by scanning the `qualified_identifier`'s children and returning the last `identifier` found, yielding only the method name portion.
+**Design decisions:** Handles two sub-cases for the `function_declarator`'s declarator field:
+- Plain `identifier`: returns the text directly.
+- `qualified_identifier` (C++ class method, e.g., `Shape::get_name`): iterates children and returns the last `identifier` found, yielding only the method name portion.
 
 **Constraints & edge cases:**
-- Returns `None` if the `declarator` field is missing or is not a `function_declarator`.
-- Returns `None` for AST structures where the `function_declarator`'s `declarator` field is neither an `identifier` nor a `qualified_identifier`.
+- Returns `None` if the `declarator` field of `function_definition` is absent or is not a `function_declarator`.
+- Returns `None` if neither `identifier` nor `qualified_identifier` is found as the inner declarator type.
 
 ---
 
@@ -224,14 +225,13 @@ def _extract_function_declarator_name(node: Node) -> str | None
 def _extract_init_declarator_name(node: Node) -> str | None
 ```
 
-- **`node`**: A C/C++ `declaration` node.
-- **Returns**: The variable name string, or `None` if no `init_declarator` is found.
+**Responsibility:** Extracts a variable name from a C/C++ `declaration` node that uses an `init_declarator` (i.e., a declaration with an initializer).
 
-**Responsibility:** Extracts the variable name from a C/C++ variable or constant declaration that includes an initializer.
+**When to use:** Invoked by `_extract_name` when `name_type == "__init_declarator__"`.
 
-**Design decisions:** Forward declarations (e.g., `void freeFunction();`) lack an `init_declarator` and thus return `None`, intentionally triggering the BFS child-descent fallback in `extract_definitions` to find the `function_declarator` instead.
-
-**Constraints & edge cases:** Returns `None` for any `declaration` whose `declarator` field is not an `init_declarator`, including forward declarations and plain declarations without initialization.
+**Constraints & edge cases:**
+- Returns `None` for forward declarations (e.g., `void freeFunction();`) that do not have an `init_declarator`; this triggers the BFS fallback in `extract_definitions` to discover the nested `function_declarator` instead.
+- Returns `None` if the `declarator` field of `init_declarator` is not an `identifier`.
 
 ---
 
@@ -241,18 +241,21 @@ def _extract_init_declarator_name(node: Node) -> str | None
 def _extract_destructured_names(node: Node, name_type: str) -> list[str]
 ```
 
-- **`node`**: A definition node that failed single-name extraction.
-- **`name_type`**: The same sentinel value that was passed to `_extract_name`.
-- **Returns**: A list of extracted variable name strings; empty list if the node is not a recognized destructuring pattern.
+**Responsibility:** Detects and extracts multiple variable names from destructuring assignments when standard single-name extraction fails.
 
-**Responsibility:** Handles multi-variable destructuring assignments in Python and JS/TS by collecting all bound names from a single declaration node.
+**When to use:** Called by `extract_definitions` after `_parse_definition_node` returns `None`, to check whether the node represents a destructuring pattern before falling back to child-node BFS.
 
-| `name_type` | Language | Pattern handled |
+**Design decisions:** Covers two sentinel cases with different AST structures:
+
+| Sentinel | Language | Pattern |
 |---|---|---|
-| `__assignment__` | Python | `X, Y = 1, 2` via `pattern_list` |
-| `__variable_declarator__` | JS/TS | `const { a, b } = obj` / `const [a, b] = arr` |
+| `__assignment__` | Python | `expression_statement > assignment > pattern_list > identifier*` |
+| `__variable_declarator__` | JS/TS | `lexical_declaration > variable_declarator > object_pattern / array_pattern` |
 
-**Constraints & edge cases:** Returns an empty list for any `name_type` not listed above. For JS/TS, delegates to `_collect_identifiers_from_pattern` for the actual name collection.
+**Constraints & edge cases:**
+- Returns an empty list for all sentinel values other than the two above.
+- For JS/TS, only the first `variable_declarator` child with a recognized pattern name field is processed.
+- Nested JS/TS patterns are handled by delegating to `_collect_identifiers_from_pattern`.
 
 ---
 
@@ -262,19 +265,23 @@ def _extract_destructured_names(node: Node, name_type: str) -> list[str]
 def _collect_identifiers_from_pattern(pattern_node: Node) -> list[str]
 ```
 
-- **`pattern_node`**: An `object_pattern` or `array_pattern` AST node.
-- **Returns**: A flat list of all variable name strings bound by the pattern.
+**Responsibility:** Recursively collects all variable names from an `object_pattern` or `array_pattern` node, including nested destructuring.
 
-**Responsibility:** Recursively traverses a JS/TS destructuring pattern node to collect every locally-bound identifier name, including those in nested sub-patterns.
+**When to use:** Called by `_extract_destructured_names` when a JS/TS destructuring pattern is identified.
 
-**Design decisions:**
-- Handles `shorthand_property_identifier_pattern` (e.g., `{ a, b }`) directly as a name-bearing leaf.
-- For `pair_pattern` (e.g., `{ key: localName }`), only the `value` side is examined, since that is the locally bound name.
-- Recursion is used rather than BFS to naturally mirror the nesting structure of patterns.
+**Design decisions:** Handles four child node types within a pattern:
+
+| Child Type | Handling |
+|---|---|
+| `identifier` | Appended directly |
+| `shorthand_property_identifier_pattern` | Appended directly (e.g., `{ a, b }`) |
+| `object_pattern` / `array_pattern` | Recursed into |
+| `pair_pattern` | Extracts `value` field; recurses if value is itself a pattern |
 
 **Constraints & edge cases:**
-- Does not handle renamed default patterns (e.g., `{ a = 1 }`); only `identifier` and recognized pattern types are collected.
-- Arbitrarily deep nesting is supported via recursion, but very deep patterns may hit Python's recursion limit in pathological cases.
+- Only the `value` field of `pair_pattern` is recorded (the local binding name), not the key.
+- Nodes of types not listed above are silently ignored.
+- Recursion depth is bounded by the nesting depth of the destructuring pattern in the source.
 
 ## Dependency Description
 
@@ -282,27 +289,31 @@ def _collect_identifiers_from_pattern(pattern_node: Node) -> list[str]
 
 ## Dependencies (modules this file imports)
 
-This file has **no project-internal module dependencies**. All imports are from the standard library (`re`, `collections`, `dataclasses`) or third-party packages (`tree_sitter`).
+This file has **no project-internal module dependencies**. All imports (`re`, `collections.deque`, `dataclasses.dataclass`, `tree_sitter.Node`) are either standard library or third-party packages, which are excluded from this description.
+
+---
 
 ## Dependents (modules that import this file)
 
-Three project-internal modules import `extract_definitions` from this file:
+Three project-internal modules depend on this file, each consuming `extract_definitions` and the `DefinitionInfo` data class it returns.
 
-- **`codetwine/import_to_path.py`** → `codetwine/extractors/definitions_py/definitions.py` : Uses `extract_definitions` to parse a file's AST and register each definition's name into a symbol-to-file mapping, enabling symbol resolution across the project.
+- **`codetwine/import_to_path.py`** → `codetwine/extractors/definitions_py/definitions.py` : Uses `extract_definitions` to iterate over all top-level definitions in a parsed source file and register each definition's name into a symbol-to-file mapping, enabling symbol resolution across the project.
 
-- **`codetwine/file_analyzer.py`** → `codetwine/extractors/definitions_py/definitions.py` : Uses `extract_definitions` to enumerate all definitions in a file, extracting their names, start/end line numbers, and source context for file-level analysis output.
+- **`codetwine/file_analyzer.py`** → `codetwine/extractors/definitions_py/definitions.py` : Uses `extract_definitions` to enumerate definitions in a parsed source file and build structured records containing each definition's name, type, start/end line numbers, and source context text.
 
-- **`codetwine/extractors/usage_analysis.py`** → `codetwine/extractors/definitions_py/definitions.py` : Uses `extract_definitions` to collect the definition names exported by a target file, supporting usage and dependency analysis between files.
+- **`codetwine/extractors/usage_analysis.py`** → `codetwine/extractors/definitions_py/definitions.py` : Uses `extract_definitions` to collect all definition names exported by a target file, supporting usage analysis that determines which symbols a target module exposes.
+
+---
 
 ## Dependency Direction
 
 All relationships are **unidirectional**:
 
-- `codetwine/import_to_path.py` → this module (consumer only)
-- `codetwine/file_analyzer.py` → this module (consumer only)
-- `codetwine/extractors/usage_analysis.py` → this module (consumer only)
+- `codetwine/import_to_path.py` → `codetwine/extractors/definitions_py/definitions.py`
+- `codetwine/file_analyzer.py` → `codetwine/extractors/definitions_py/definitions.py`
+- `codetwine/extractors/usage_analysis.py` → `codetwine/extractors/definitions_py/definitions.py`
 
-This module does not import from any of its dependents; it acts purely as a provider of definition-extraction functionality.
+`definitions.py` itself imports no project-internal modules, so it sits at the leaf of the internal dependency graph. All data flow goes inward toward this module; it does not call back into any of its dependents.
 
 ## Data Flow
 
@@ -312,64 +323,47 @@ This module does not import from any of its dependents; it acts purely as a prov
 
 | Input | Type | Description |
 |-------|------|-------------|
-| `root_node` | `tree_sitter.Node` | The root node of a parsed AST covering an entire source file |
-| `definition_dict` | `dict[str, str]` | A mapping from AST node type strings to name-extraction specifiers (either a direct child node type name or a `__sentinel__` string) |
+| `root_node` | `tree_sitter.Node` | The root AST node of a parsed source file, produced by an external parser (e.g. `parse_file`) |
+| `definition_dict` | `dict[str, str]` | A per-language configuration map from AST node type strings to name-extraction strategy strings |
 
-The module receives no file handles, environment variables, or configuration files directly. All inputs are passed as arguments to `extract_definitions`.
+The `definition_dict` keys are AST node type strings (e.g. `"function_definition"`, `"expression_statement"`). Values are either a direct child node type string (e.g. `"identifier"`) or a sentinel string (e.g. `"__assignment__"`, `"__variable_declarator__"`, `"__init_declarator__"`, `"__function_declarator__"`) that signals a deeper, language-specific extraction path.
 
 ---
 
 ## 2. Transformation Overview
 
 ```
-root_node + definition_dict
-        │
-        ▼
-┌─────────────────────────────┐
-│  BFS traversal of AST nodes │  (deque-based; root_node is the initial element)
-└─────────────────────────────┘
-        │
-        ▼ for each node
-┌──────────────────────────────────────────────────────┐
-│  Node classification                                 │
-│   • decorated_definition  → _parse_decorated_definition │
-│   • node.type in dict     → _parse_definition_node   │
-│   • otherwise             → enqueue children         │
-└──────────────────────────────────────────────────────┘
-        │
-        ▼
-┌──────────────────────────────────────────────────────┐
-│  Name extraction via _extract_name                   │
-│   • "__assignment__"          → _extract_assignment_name            │
-│   • "__variable_declarator__" → _extract_variable_declarator_name  │
-│   • "__init_declarator__"     → _extract_init_declarator_name      │
-│   • "__function_declarator__" → _extract_function_declarator_name  │
-│   • standard string           → direct child lookup                │
-└──────────────────────────────────────────────────────┘
-        │
-        ├── name found → build DefinitionInfo; apply include-guard filter
-        │               for container types: also enqueue children
-        │
-        └── name not found → attempt _extract_destructured_names
-                │
-                ├── names found → build one DefinitionInfo per name
-                └── names not found → enqueue children (continue BFS)
-        │
-        ▼
-┌──────────────────────────┐
-│  Sort by start_line asc  │
-└──────────────────────────┘
-        │
-        ▼
-list[DefinitionInfo]
+root_node  ──►  BFS traversal  ──►  node classification  ──►  name extraction  ──►  DefinitionInfo list  ──►  sorted output
 ```
 
-**Special cases during the pipeline:**
+**Stage 1 — BFS Traversal**  
+Starting from `root_node`, nodes are visited breadth-first via a `deque`. At each step, the current node's type is tested against `definition_dict`.
 
-- `decorated_definition` nodes delegate name extraction to their inner function or class child node, then adopt the outer node's full line range.
-- `preproc_def` nodes whose extracted name matches `_INCLUDE_GUARD_RE` are discarded (not added to the output list), and their children are still enqueued.
-- Container nodes (currently `namespace_definition`) have their children enqueued even after a successful `DefinitionInfo` is recorded, allowing nested definitions to surface.
-- Destructured patterns (Python tuple unpacking, JS/TS object/array patterns) produce multiple `DefinitionInfo` entries sharing the same `start_line`/`end_line` but each with a distinct `name`.
+**Stage 2 — Node Classification**  
+Each visited node falls into one of four categories:
+- `decorated_definition`: delegated to `_parse_decorated_definition`, which locates the inner definition node and then follows the standard path.
+- A type present in `definition_dict` (non-decorated): dispatched to `_parse_definition_node`.
+- A type not present in `definition_dict`: its children are enqueued for further traversal.
+- `preproc_def` nodes whose extracted name matches `_INCLUDE_GUARD_RE` are discarded; their children are still enqueued.
+
+**Stage 3 — Name Extraction**  
+`_parse_definition_node` calls `_extract_name`, which dispatches based on the sentinel value:
+
+| Sentinel | Extraction path |
+|----------|----------------|
+| `__assignment__` | `expression_statement → assignment → left identifier` |
+| `__variable_declarator__` | `lexical_declaration / variable_declaration → variable_declarator → name identifier` |
+| `__init_declarator__` | `declaration → init_declarator → declarator identifier` |
+| `__function_declarator__` | `function_definition → function_declarator → declarator identifier` (or last identifier in `qualified_identifier`) |
+| (standard string) | Direct child of the node whose type matches the string |
+
+**Stage 4 — Fallback Paths**  
+If name extraction returns `None`, `_extract_destructured_names` is tried, which collects multiple identifiers from destructuring patterns (`pattern_list`, `object_pattern`, `array_pattern`). If that also yields nothing, the node's children are enqueued so BFS can descend into nested declarations (e.g. forward declarations in C/C++).
+
+Container nodes (currently `namespace_definition`) always enqueue their children even after a successful extraction, allowing nested definitions inside them to be found.
+
+**Stage 5 — Sorting**  
+The accumulated `definition_list` is sorted by `start_line` in ascending order before being returned.
 
 ---
 
@@ -377,9 +371,9 @@ list[DefinitionInfo]
 
 | Output | Type | Description |
 |--------|------|-------------|
-| Return value of `extract_definitions` | `list[DefinitionInfo]` | All recognized definitions, sorted by `start_line` in ascending order |
+| Return value | `list[DefinitionInfo]` | All discovered definitions sorted by start line (1-based), with no side effects or file writes |
 
-There are no file writes or side effects. The list is consumed by callers in `import_to_path.py`, `file_analyzer.py`, and `usage_analysis.py` to map symbol names to file paths or to build structured metadata about definitions.
+Callers (`import_to_path.py`, `file_analyzer.py`, `usage_analysis.py`) consume the list by iterating over `DefinitionInfo` fields — primarily `name`, `start_line`, and `end_line`.
 
 ---
 
@@ -389,45 +383,28 @@ There are no file writes or side effects. The list is consumed by callers in `im
 
 | Field | Type | Purpose |
 |-------|------|---------|
-| `name` | `str` | The extracted symbol name (function, class, variable, type, etc.) |
-| `type` | `str` | The AST node type from which the definition was extracted (e.g. `"function_definition"`, `"expression_statement"`) |
+| `name` | `str` | The identifier name of the definition (function name, class name, variable name, etc.) |
+| `type` | `str` | The AST node type string that produced this definition (e.g. `"function_definition"`) |
 | `start_line` | `int` | 1-based line number where the definition begins |
 | `end_line` | `int` | 1-based line number where the definition ends |
 
----
-
-### `definition_dict` (input parameter)
+### `definition_dict` (input dict)
 
 | Key | Value | Purpose |
 |-----|-------|---------|
-| AST node type string (e.g. `"function_definition"`) | Direct child node type (e.g. `"identifier"`) **or** a sentinel string (e.g. `"__assignment__"`) | Tells `extract_definitions` which nodes to treat as definitions and how to extract the name from each |
+| AST node type string | Child node type string | Signals that the name is a direct child of the matching type |
+| AST node type string | `"__assignment__"` | Signals Python assignment extraction path |
+| AST node type string | `"__variable_declarator__"` | Signals JS/TS variable declarator extraction path |
+| AST node type string | `"__init_declarator__"` | Signals C/C++ init declarator extraction path |
+| AST node type string | `"__function_declarator__"` | Signals C/C++ function declarator extraction path |
 
-Sentinel values recognized:
+### Internal working structures
 
-| Sentinel | Target Language Pattern |
-|----------|------------------------|
-| `"__assignment__"` | Python `expression_statement > assignment > identifier` |
-| `"__variable_declarator__"` | JS/TS `lexical_declaration / variable_declaration > variable_declarator > name` |
-| `"__init_declarator__"` | C/C++ `declaration > init_declarator > declarator` |
-| `"__function_declarator__"` | C/C++ `function_definition > function_declarator > declarator` |
-
----
-
-### `node_queue` (internal BFS state)
-
-| Aspect | Type | Purpose |
-|--------|------|---------|
-| Elements | `tree_sitter.Node` | AST nodes pending inspection during BFS traversal |
-| Structure | `collections.deque` | Enables O(1) enqueue (`extend`) and dequeue (`popleft`) during traversal |
-
----
-
-### `definition_list` (internal accumulator)
-
-| Aspect | Type | Purpose |
-|--------|------|---------|
-| Elements | `DefinitionInfo` | Accumulates all successfully extracted definitions before final sorting |
-| Structure | `list` | Ordered by insertion; sorted by `start_line` before being returned |
+| Structure | Type | Purpose |
+|-----------|------|---------|
+| `node_queue` | `deque[Node]` | BFS frontier; holds AST nodes awaiting classification |
+| `definition_list` | `list[DefinitionInfo]` | Accumulates all successfully extracted `DefinitionInfo` objects before final sorting |
+| `_CONTAINER_DEFINITION_TYPES` | `set[str]` | Node types (`"namespace_definition"`) whose children are always enqueued even after a successful extraction |
 
 ## Error Handling
 
@@ -435,7 +412,7 @@ Sentinel values recognized:
 
 ## 1. Overall Strategy
 
-This file adopts a **graceful degradation / silent-skip** strategy. No exceptions are raised at any point; instead, every extraction function signals failure by returning `None` or an empty list. The caller then decides whether to skip the node entirely or fall back to an alternative extraction path. The overall BFS traversal never terminates early — unrecognized or unextractable nodes are simply bypassed, and processing continues with the remaining queue.
+This file adopts a **graceful degradation** approach throughout. No exceptions are raised or caught anywhere in the code. Instead, every extraction function returns `None` (or an empty list) when it cannot produce a valid result, and callers treat those sentinel returns as signals to either skip the node, try an alternative extraction path, or continue BFS traversal into child nodes. The overall effect is that unrecognizable or malformed AST nodes are silently bypassed while well-formed nodes continue to be collected normally.
 
 ---
 
@@ -443,30 +420,35 @@ This file adopts a **graceful degradation / silent-skip** strategy. No exception
 
 | Error Type | Trigger Condition | Handling | Recoverable? | Impact |
 |---|---|---|---|---|
-| Name extraction failure (standard) | A definition node has no direct child matching the expected `name_node_type` | `_extract_name` returns `None`; the node's children are added to the BFS queue for deeper search | Yes | The definition is not recorded at that level; BFS descends further to find nested definitions |
-| Name extraction failure (sentinel) | A sentinel-dispatched extractor cannot locate the expected nested node (e.g., no `assignment`, no `function_declarator`, no `init_declarator`) | The dedicated extractor returns `None`; caller falls through to `_extract_destructured_names` | Yes | Falls back to destructuring extraction; if that also yields nothing, children are queued for BFS |
-| Destructuring extraction yields nothing | Node is neither a destructuring pattern nor a recognized sentinel type | `_extract_destructured_names` returns `[]` | Yes | BFS descends into child nodes; definition at this level is silently skipped |
-| `decorated_definition` with no inner definition | `decorated_definition` node has no child whose type appears in `definition_dict` | `_parse_decorated_definition` returns `None`; result is discarded by the caller | Yes | The decorated definition is silently omitted from the result list |
-| `#include` guard `#define` filtered out | A `preproc_def` node's extracted name matches `_INCLUDE_GUARD_RE` | Definition is discarded; node's children are still queued for BFS | Yes | The guard macro is excluded from results; traversal continues normally |
-| Empty or structurally unexpected node | A node has no children (e.g., `node.children` is empty) | Guard checks (`if not node.children`) return `None` or `[]` immediately | Yes | Extraction is skipped for that node; no side effects |
-| Non-`identifier` left-hand side in assignment | LHS of a Python assignment is not an `identifier` (e.g., `obj.attr = 1`) | `_extract_assignment_name` returns `None` | Yes | That assignment is not recorded as a definition; BFS may continue into children |
-| Unrecognized node type | A node type is not present in `definition_dict` | The `else` branch queues the node's children for BFS | Yes | No definition recorded; traversal continues transparently |
+| No name found in direct children | A definition node has no child matching the expected `name_type` | `_extract_name` returns `None`; caller falls back to destructuring extraction, then to BFS child traversal | Yes | Node is skipped at the current level; children are enqueued for further search |
+| Forward declaration (C/C++) | A `declaration` node has no `init_declarator` (e.g. `void freeFunction();`) | `_extract_init_declarator_name` returns `None`; BFS descends into children to find a nested `function_declarator` | Yes | No definition recorded at declaration level; inner declarator may be captured on the next BFS pass |
+| Non-assignment expression statement (Python) | `expression_statement` wraps something other than `assignment` (e.g. `print("hello")`) | `_extract_assignment_name` returns `None`; destructuring check also fails; BFS continues into children | Yes | Node produces no definition; processing continues normally |
+| Non-identifier left-hand side (Python) | Assignment LHS is not an `identifier` (e.g. `obj.attr = 1`) | `_extract_assignment_name` returns `None` after LHS type check fails | Yes | Node is skipped silently |
+| Include-guard `#define` directive (C/C++) | `preproc_def` name matches `_INCLUDE_GUARD_RE` | Definition is discarded after extraction; children are still enqueued | Yes | Guard macro is excluded from results; traversal continues |
+| Missing `decorated_definition` inner node | A `decorated_definition` contains no recognized inner definition child | `_parse_decorated_definition` returns `None` | Yes | No definition recorded for that decorated node |
+| Empty or structurally unexpected node | Node has no children or lacks expected fields (`child_by_field_name` returns `None`) | Each extractor guards with explicit `None` / emptiness checks and returns `None` or `[]` | Yes | Node is skipped; BFS continues with siblings and children |
+| Destructuring pattern not recognized | Destructuring extraction finds no `pattern_list`, `object_pattern`, or `array_pattern` | `_extract_destructured_names` returns `[]`; BFS falls back to child traversal | Yes | Node produces no definitions; traversal continues |
 
 ---
 
 ## 3. Design Notes
 
-- **No exceptions are used.** The entire module relies on sentinel return values (`None`, `[]`) to communicate extraction failure, which keeps the BFS loop free of exception-handling overhead and ensures the traversal always completes.
-- **BFS fallback as the recovery mechanism.** When name extraction fails, the fallback is not a retry of the same logic but a structural descent — children are enqueued, allowing definitions nested inside unexpected wrapper nodes (e.g., C/C++ forward declarations containing a `function_declarator`) to still be discovered.
-- **Destructuring as a secondary fallback.** The two-stage fallback (sentinel extractor → destructuring extractor → BFS descent) reflects a deliberate ordering from most specific to most general, minimizing missed definitions without requiring explicit error states.
-- **Impact on dependents is bounded.** Because the function always returns a (possibly empty) sorted list and never raises, all three callers (`import_to_path.py`, `file_analyzer.py`, `usage_analysis.py`) are insulated from any extraction anomaly — they simply iterate over whatever results are returned.
+**Return-value-based error signaling:** The entire error handling contract is expressed through return values (`None` and empty lists) rather than exceptions. This keeps the extraction pipeline uniform and avoids any need for exception handling in the callers (`import_to_path.py`, `file_analyzer.py`, `usage_analysis.py`), all of which simply iterate over the returned list without guarding against exceptions.
+
+**BFS fallback as recovery mechanism:** The decision to re-enqueue child nodes whenever name extraction fails is deliberate. It allows the extractor to handle deeply or variably nested AST structures (e.g., C/C++ declarators) without requiring an exhaustive upfront enumeration of every possible nesting shape. Failed extraction at one level automatically promotes child nodes for another attempt.
+
+**No logging or error reporting:** Failures are absorbed silently. There is no logging, warning output, or error accumulation. This is consistent with the role of the module as a pure AST-to-data transformer used inside a larger pipeline; error reporting policy is delegated entirely to callers.
+
+**Scope-limited filtering (include guards):** The one case where a successfully extracted definition is actively discarded—the include-guard `#define` pattern—is handled with an explicit post-extraction filter rather than a pre-extraction guard, keeping the extraction logic uniform while still preventing noise from polluting the results.
 
 ## Summary
 
-**definitions.py**: Extracts named definitions from a Tree-sitter AST, returning a sorted list of `DefinitionInfo` objects for use in symbol mapping, file analysis, and usage analysis.
+**`codetwine/extractors/definitions.py`** extracts named definitions from a tree-sitter AST and returns them as sorted `DefinitionInfo` objects.
 
 **Public interface:**
-- `DefinitionInfo(name: str, type: str, start_line: int, end_line: int)` — dataclass holding definition metadata
-- `extract_definitions(root_node: Node, definition_dict: dict[str, str]) -> list[DefinitionInfo]` — BFS traversal producing all definitions sorted by start line
+- `DefinitionInfo` (dataclass): `name:str`, `type:str`, `start_line:int`, `end_line:int`
+- `extract_definitions(root_node:Node, definition_dict:dict[str,str]) -> list[DefinitionInfo]`
 
-**Key data:** `definition_dict` maps AST node type strings to child type names or `__sentinel__` strings (e.g., `__assignment__`, `__function_declarator__`) directing specialized name extraction.
+**Key data structures:**
+- `definition_dict`: maps AST node type strings to name-extraction strategies (direct child type or sentinel like `__assignment__`, `__function_declarator__`)
+- Returns `list[DefinitionInfo]` sorted by `start_line`

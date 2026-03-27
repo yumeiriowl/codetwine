@@ -6,30 +6,30 @@
 
 ## 1. Module Summary
 
-Analyze AST nodes of a source file to extract two complementary usage datasets: the locations within a file where project-internal symbols are used (with their definition source attached), and the locations in other project files where symbols defined in a given file are referenced.
+Analyze usage relationships between project files by extracting the lines where imported symbols are used and pairing each usage with its definition source code, producing structured data for both callee-usage and caller-usage outputs.
 
 ## 2. When to Use This Module
 
-- **Call `build_usage_info_list`** when you have parsed a source file and need a list of records describing where each project-internal imported symbol is used within that file, merged by symbol name, with the callee's definition source code attached. Used by `codetwine/file_analyzer.py` to produce `callee_usages` output.
+- **Call `build_usage_info_list`** when you have the AST root of a file and a map of imported symbol names to their definition files, and you need a list of records describing where each imported project-internal symbol is used within that file, along with the corresponding definition source code (used by `codetwine/file_analyzer.py` to produce `callee_usages` output).
 
-- **Call `build_caller_usages`** when you need to find all other project files that import and use symbols defined in a given target file, and want per-symbol usage line numbers and surrounding context snippets from each caller. Used by `codetwine/file_analyzer.py` to produce `caller_usages` output.
+- **Call `build_caller_usages`** when you have the relative path of a target file and the project-wide dependency list, and you need to find all other project files that use symbols defined in that target file, along with the line numbers and surrounding source context of each usage (used by `codetwine/file_analyzer.py` to produce `caller_usages` output).
 
 ## 3. Public Interface Table
 
 | Name | Arguments (type) | Return type | Responsibility |
 |---|---|---|---|
-| `build_usage_info_list` | `root_node`, `symbol_to_file_map: dict[str, str]`, `project_dir: str`, `file_ext: str`, `alias_to_original: dict[str, str] \| None` | `list[dict]` | Extracts usage locations of project-internal imported names from the file's AST, merges entries with duplicate names into a single record with accumulated line numbers, and attaches the callee's definition source code to each record. |
-| `build_caller_usages` | `target_file_rel: str`, `project_dep_list: list[dict]`, `project_dir: str`, `project_file_set: set[str]` | `list[dict]` | Iterates over all caller files that import the target file, resolves which names they import from it, extracts usage lines for those names, and returns grouped records with usage line numbers and surrounding source context. |
+| `build_usage_info_list` | `root_node`, `symbol_to_file_map: dict[str, str]`, `project_dir: str`, `file_ext: str`, `alias_to_original: dict[str, str] \| None` | `list[dict]` | Extract usage locations of project-internal imported symbols within a file's AST, merge multi-line occurrences of the same symbol into one record, and attach the definition source code for each symbol. |
+| `build_caller_usages` | `target_file_rel: str`, `project_dep_list: list[dict]`, `project_dir: str`, `project_file_set: set[str]` | `list[dict]` | For each file that imports from the target file, collect the lines where target-defined symbols are used and attach surrounding source context, returning one record per symbol per caller file. |
 
 ## 4. Design Decisions
 
-- **Typed alias expansion in both directions**: Both functions call `extract_typed_aliases` to detect variables declared with an imported type (e.g., `genre: Genre`). These alias variable names are added to the tracked symbol set so that usages through the alias are captured, and the alias names are remapped back to the original type name before grouping, ensuring results are keyed by the canonical imported name rather than the local variable name.
+- **Typed alias expansion**: Both public functions extend the set of tracked symbol names with typed variable aliases (e.g., a variable `genre` declared with type `Genre`) via `extract_typed_aliases`, then remap those alias names back to the original type names before grouping, so that usages of local variables typed with an imported class are attributed to the original imported symbol rather than the local variable name.
 
-- **Deferred and cached target definition loading**: `build_caller_usages` lazily loads the target file's definition names (via `_load_target_definitions`) only when needed—for wildcard imports, C/C++ `#include`, Java/Kotlin same-package visibility, and Java/Kotlin wildcard package imports—and passes the result as a cache across caller iterations to avoid redundant parses of the same target file.
+- **Deferred definition loading with caching**: When collecting names imported from a target file in `build_caller_usages`, the target file's definitions are parsed at most once per invocation. The result is passed through the caller loop via `target_definition_names`, avoiding redundant parsing for languages (C/C++, Java/Kotlin wildcard imports, same-package visibility) where all target definitions are implicitly available without an explicit per-name import.
 
-- **Language-driven name collection strategy**: `_collect_names_from_target` adapts its name collection strategy based on the import separator character from `IMPORT_RESOLVE_CONFIG`: `.`-separated languages (Python, Java, Kotlin) extract individual named imports or the trailing component of a qualified import, while `/`-separated languages (C/C++) treat `#include` as incorporating all definitions from the included file.
+- **Usage grouping by `(source_file, name)` key**: In `build_usage_info_list`, usages of the same symbol are merged into a single record with a `lines` list rather than emitting one record per occurrence, reducing redundancy in the output and ensuring the definition source code is fetched only once per symbol.
 
-- **Usage grouping by `(source_file, name)` key in `build_usage_info_list`**: Multiple occurrences of the same symbol name across different lines are merged into a single entry with a sorted, deduplicated `lines` list, preventing redundant definition source lookups for the same symbol.
+- **Context radius for caller usages**: In `build_caller_usages`, usage context snippets are extracted with a fixed radius of 3 lines around each usage line, capped at 2 usage locations per symbol group (`_max_context_locations = 2`, `_context_radius = 3`), balancing context richness against output size.
 
 ## Definition Design Specifications
 
@@ -50,26 +50,27 @@ def build_usage_info_list(
 ) -> list[dict]
 ```
 
-- `symbol_to_file_map`: maps imported symbol names to the project-relative file paths where they are defined. **Mutated in place** when typed aliases are discovered.
-- `alias_to_original`: maps alias names (as used in the caller) to their original names in the definition file; `None` if no aliases exist.
-- Return: a list of dicts, each with keys `lines` (sorted list of 1-based line numbers), `name` (usage name), `from` (source definition file path), `target_context` (definition source code or `None`).
+- `symbol_to_file_map`: maps imported symbol names to their definition file paths (relative to project root)
+- `alias_to_original`: maps alias names (as used in the caller file) to their original exported names; `None` if no aliasing occurred
+- Returns a list of dicts, each representing a group of usages of one symbol, with keys: `lines` (list of ints), `name` (str), `from` (str), `target_context` (str or None)
 
-**Responsibility:**  
-Finds every location in a single file where project-internal imported symbols are referenced and attaches the corresponding definition source code, producing the data structure for the `callee_usages` JSON output.
+**Responsibility:**
+Identifies all locations in a single file's AST where project-internal imported names are used, retrieves the source code of each referenced definition, and merges multiple usage lines for the same symbol into a single record.
 
-**When to use:**  
-Called by `file_analyzer.py` after building `symbol_to_file_map` for a specific source file, to enumerate all usages of project-internal imports in that file.
+**When to use:**
+Called by `file_analyzer.py` after parsing a source file to build the `callee_usages` output for that file.
 
 **Design decisions:**
-- Typed variable aliases (e.g., `genre: Genre`) are resolved via `extract_typed_aliases` and injected into `symbol_to_file_map` so that references through alias variables are tracked alongside direct references.
-- Usages of the same `(source_file, remapped_name)` pair are merged into a single record with accumulated line numbers, avoiding duplicate entries.
-- When `alias_to_original` is present, the `search_name` passed to `extract_callee_source` is rewritten to the original name, ensuring definition lookup succeeds even when the import was aliased.
-- Attribute access names (e.g., `helper.process`) are split at `.` to identify the root symbol for file mapping, then kept whole as the usage name.
+- Mutates `symbol_to_file_map` in-place to add typed alias variable names (e.g., a variable `genre` declared with type `Genre` is added so its usages are tracked alongside the type).
+- Groups usages by `(source_file, remapped_name)` rather than by raw name, so aliased imports and typed variables are correctly consolidated with the canonical name.
+- When looking up the definition source for an aliased name, translates the alias back to the original exported name before calling `extract_callee_source`, ensuring the correct definition is found even when the import was renamed at the call site.
+- Duplicate line numbers within a group are eliminated and the list is sorted before returning.
 
 **Constraints & edge cases:**
-- `symbol_to_file_map` is mutated when typed aliases are added; callers must tolerate this side effect.
-- Duplicate line numbers within a group are removed and the list is sorted before returning.
-- `target_context` will be `None` if `extract_callee_source` cannot locate the definition.
+- `symbol_to_file_map` must already contain only project-internal symbols (external/stdlib imports excluded upstream).
+- If `alias_to_original` is `None`, no alias remapping is performed for definition lookup.
+- `target_context` in the returned dict may be `None` if `extract_callee_source` cannot locate the definition.
+- `file_ext` must match a key in `USAGE_NODE_TYPES`; if it does not, `usage_node_types` will be `None` and `extract_usages` returns an empty list.
 
 ---
 
@@ -88,31 +89,34 @@ def _collect_names_from_target(
 ) -> tuple[list[str], list[str] | None]
 ```
 
-- `caller_import_list`: list of `ImportInfo` objects extracted from the caller file.
-- `target_definition_names`: cached list of all definition names from the target file, or `None` on first call. Acts as an in/out cache to avoid redundant parsing.
-- Return: `(names_from_target, target_definition_names)` — the names the caller imports from the target, and the (possibly newly populated) definition name cache.
+- `caller_import_list`: list of `ImportInfo` objects from the caller file
+- `target_file_rel`: project-relative path of the file whose usage is being tracked
+- `caller_ext`: file extension of the caller (without leading `.`), used to select language-specific resolution behavior
+- `project_file_set`: set of all known project file paths for module resolution
+- `target_definition_names`: cached result of parsing the target file's definitions; `None` signals that it has not been computed yet
+- Returns `(names_from_target, target_definition_names)` where `names_from_target` is a list of symbol name strings and `target_definition_names` is either the newly computed cache or the passed-in value
 
-**Responsibility:**  
-Determines which names from the target file are visible to a specific caller file, accounting for language-specific import semantics (named imports, Java/Kotlin trailing-class imports, C/C++ whole-file inclusion, wildcard imports, and same-package visibility).
+**Responsibility:**
+Determines which names the caller file brings in from the target file by inspecting the caller's import statements, applying language-specific rules for how names are derived from import syntax.
 
-**When to use:**  
-Called once per caller file inside `build_caller_usages`, to establish the set of names to search for in the caller's AST.
+**When to use:**
+Called once per caller file inside `build_caller_usages` to populate the set of names to search for in the caller's AST.
 
 **Design decisions:**
-
-| Condition | Behavior |
-|---|---|
-| `import_info.names` present (Python/JS/TS style) | Individual names added directly; `*` triggers full target definition loading |
-| `caller_separator == "."` and no `names` (Java/Kotlin) | Trailing component of dotted module path is used as the name |
-| `caller_separator == "/"` (C/C++) | All definition names from the target file are added |
-| Wildcard Java/Kotlin import with unresolved module | Target names added if target resides within the package directory |
-| `SAME_PACKAGE_VISIBLE` true and same directory | All target definition names added even with no matching import |
-
-- `target_definition_names` is passed in and returned to allow the caller loop in `build_caller_usages` to cache the result across iterations over multiple callers of the same target.
+- Language behavior is driven by the `separator` field from `IMPORT_RESOLVE_CONFIG`:
+  | Separator | Language family | Name derivation |
+  |-----------|----------------|-----------------|
+  | `.` (with names) | Python / JS / TS | Individual names from `from X import a, b` |
+  | `.` (no names, leaf) | Java / Kotlin | Trailing segment of dotted module path |
+  | `/` | C / C++ | All definition names from the target file |
+- `target_definition_names` is passed in and returned as a cache to avoid re-parsing the target file for every caller that includes it.
+- Java/Kotlin wildcard imports (`import com.foo.*`) are handled separately: if the resolved path is absent but the import module maps to a package directory containing the target file, all target definitions are added.
+- Same-package visibility (Java/Kotlin) is handled as a final fallback: if `SAME_PACKAGE_VISIBLE` is set for the caller's extension and both files share the same directory, target definitions are added even with no matching import statement.
 
 **Constraints & edge cases:**
-- Returns an empty `names_from_target` list if no import matches the target and same-package visibility does not apply.
-- `target_definition_names` is only populated lazily via `_load_target_definitions` when actually needed.
+- `resolve_module_to_project_path` may return `None` for external/stdlib modules; those import entries are skipped.
+- The wildcard `*` name in `import_info.names` triggers a full target-definition load; individual names alongside `*` in the same import are also added.
+- Same-package fallback only fires when `names_from_target` is still empty after processing all imports.
 
 ---
 
@@ -126,21 +130,24 @@ def _load_target_definitions(
 ) -> list[str]
 ```
 
-- Return: list of definition name strings found in the target file; empty list if the file cannot be parsed or has no supported definition dict.
+- `target_file_rel`: project-relative path of the target file
+- Returns a list of definition name strings found in the target file; empty list if the file cannot be parsed or has no supported definition dict
 
-**Responsibility:**  
-Parses the target file on demand and extracts all named definition identifiers from its AST, serving as the data source for wildcard imports, C/C++ includes, and same-package visibility resolution.
+**Responsibility:**
+Parses the target file and extracts all top-level definition names from it, serving as the data source for wildcard imports and same-package visibility scenarios.
 
-**When to use:**  
-Called from `_collect_names_from_target` whenever the full set of names defined in the target file is required and has not yet been cached.
+**When to use:**
+Called lazily from `_collect_names_from_target` the first time a full definition name list is needed for a given target file, with the result cached by the caller.
 
 **Design decisions:**
-- Only files with a known extension in `DEFINITION_DICTS` and that physically exist on disk are parsed; all other cases return an empty list silently.
-- Relies on `parse_file`'s module-level cache, so repeated calls for the same file do not re-read disk.
+- Relies on `DEFINITION_DICTS` to select the correct definition extraction strategy for the target file's extension; if no dict is registered, returns an empty list without attempting to parse.
+- Only names that are non-empty strings (truthy `defn.name`) are included.
+- File existence is checked before parsing to avoid exceptions on missing files.
 
 **Constraints & edge cases:**
-- Returns an empty list (not `None`) when the target file is absent or its extension is unsupported.
-- Definition names with an empty/falsy `name` field are excluded.
+- If the target file's extension has no entry in `DEFINITION_DICTS`, the function returns `[]`.
+- If the file does not exist on disk, returns `[]`.
+- Uses `parse_file`'s module-level cache, so repeated calls for the same file path incur no additional I/O.
 
 ---
 
@@ -156,27 +163,27 @@ def build_caller_usages(
 ) -> list[dict]
 ```
 
-- `project_dep_list`: list of dependency dicts produced by `save_project_dependencies`, each with keys `"file"`, `"callers"`, `"callees"`.
-- Return: a list of dicts, each with keys `lines` (sorted, deduplicated 1-based line numbers), `name` (symbol name), `file` (caller's relative path), and `usage_context` (source snippet around each usage location, if the caller file is readable).
+- `project_dep_list`: list of dependency info dicts (each with `"file"` and `"callers"` keys) as produced by `build_project_dependencies`
+- Returns a list of dicts, each with keys: `lines` (sorted list of ints), `name` (str), `file` (str, the caller's relative path), and `usage_context` (str, source snippets surrounding usage lines, present when caller source was readable)
 
-**Responsibility:**  
-Collects all locations across the project where names defined in the target file are referenced by other files, producing the data structure for the `caller_usages` JSON output.
+**Responsibility:**
+Collects all lines across every file in the project that references names defined in `target_file_rel`, producing the `caller_usages` output for the target file.
 
-**When to use:**  
-Called by `file_analyzer.py` for the target file being analyzed, to enumerate all inbound usages from other project files.
+**When to use:**
+Called by `file_analyzer.py` after building the project dependency graph to populate the `caller_usages` field for a given file.
 
 **Design decisions:**
-- `target_definition_names` is initialized once before the caller loop and passed into `_collect_names_from_target` on each iteration, so the target file is parsed at most once regardless of how many callers exist.
-- Typed variable aliases in each caller file are detected and their alias names appended to `names_from_target` before usage extraction, so references through typed variables are captured.
-- Alias variable names are remapped to original type names before grouping, ensuring consistent `name` keys in the output.
-- `usage_context` extracts up to `_max_context_locations = 2` usage sites, each surrounded by `_context_radius = 3` lines, joined by `"\n...\n"`.
-- Callers whose file extension is not supported by `get_import_params` are skipped via `continue`.
+- `target_definition_names` is cached across all callers so the target file is parsed at most once regardless of how many callers exist.
+- Typed variable aliases in each caller file are resolved back to their declared type names before grouping, keeping group keys consistent with the canonical imported name.
+- `usage_context` is constructed by extracting a ±`_context_radius` (3) line window around each usage line, capped at `_max_context_locations` (2) locations per name, and joined with `"\n...\n"` between snippets.
+- Callers for which `get_import_params` returns `(None, None)` are silently skipped, limiting analysis to languages with registered import queries.
+- Duplicate line numbers within a group are deduplicated and sorted before context extraction.
 
 **Constraints & edge cases:**
-- If the target file has no entry in `project_dep_list`, `caller_file_list` remains empty and the function returns `[]`.
-- `usage_context` is omitted from a group's dict if the caller file cannot be read (`OSError` or `UnicodeDecodeError`), since `caller_source_lines` stays `None` and the context-extraction block is skipped.
-- Duplicate line numbers within a group are removed and sorted before context extraction and before returning.
-- The output list may contain entries from multiple caller files interleaved, as `caller_usages.extend(groups.values())` appends without per-file separation.
+- If `target_file_rel` is not present as a `"file"` key in `project_dep_list`, `caller_file_list` remains empty and the function returns `[]`.
+- `usage_context` is only populated when the caller file is readable as UTF-8; on `OSError` or `UnicodeDecodeError`, the key is absent from the group dict.
+- The function does not deduplicate across callers; the same name from different caller files produces separate entries (differentiated by the `"file"` field).
+- `caller_ext` must have a registered entry in `USAGE_NODE_TYPES` for usage extraction to produce results; otherwise `extract_usages` returns `[]`.
 
 ## Dependency Description
 
@@ -184,30 +191,36 @@ Called by `file_analyzer.py` for the target file being analyzed, to enumerate al
 
 ## Dependencies (modules this file imports)
 
-- `codetwine/extractors/usage_analysis.py` → `codetwine/parsers/ts_parser.py` : uses `parse_file` to parse source files into tree-sitter AST root nodes for both caller files and target definition files.
+- `codetwine/extractors/usage_analysis.py` → `codetwine/parsers/ts_parser.py` : uses `parse_file` to parse caller and target source files into tree-sitter ASTs for subsequent analysis
 
-- `codetwine/extractors/usage_analysis.py` → `codetwine/extractors/imports.py` : uses `extract_imports` to retrieve the list of import statements from a caller file's AST, enabling identification of which names originate from the target file.
+- `codetwine/extractors/usage_analysis.py` → `codetwine/extractors/imports.py` : uses `extract_imports` to retrieve the list of import statements from a caller file's AST
 
-- `codetwine/extractors/usage_analysis.py` → `codetwine/extractors/usages.py` : uses `extract_usages` to locate all usage positions of tracked symbol names within an AST, and `extract_typed_aliases` to discover typed variable declarations that introduce additional aliases for imported type names.
+- `codetwine/extractors/usage_analysis.py` → `codetwine/extractors/usages.py` : uses `extract_usages` to locate all usage lines of tracked symbol names within an AST, and `extract_typed_aliases` to discover variables declared with an imported type so they can be remapped to the original type name
 
-- `codetwine/extractors/usage_analysis.py` → `codetwine/extractors/definitions.py` : uses `extract_definitions` to enumerate all named definitions from a target file's AST, required when resolving wildcard imports, same-package visibility, or C/C++ `#include` incorporation.
+- `codetwine/extractors/usage_analysis.py` → `codetwine/extractors/definitions.py` : uses `extract_definitions` (via `_load_target_definitions`) to enumerate all named definitions in a target file, required for wildcard imports and same-package visibility resolution
 
-- `codetwine/extractors/usage_analysis.py` → `codetwine/extractors/dependency_graph.py` : uses `extract_callee_source` to retrieve the definition source code of a named symbol from its owning file, attached as `target_context` in usage records.
+- `codetwine/extractors/usage_analysis.py` → `codetwine/extractors/dependency_graph.py` : uses `extract_callee_source` to retrieve the definition source code of a named symbol from its defining file, attached as `target_context` in the usage info output
 
-- `codetwine/extractors/usage_analysis.py` → `codetwine/import_to_path.py` : uses `resolve_module_to_project_path` to map an import module string to a project-internal file path (determining whether a caller imports from the target file), and `get_import_params` to obtain the tree-sitter `Language` object and query string needed to extract imports from a caller file.
+- `codetwine/extractors/usage_analysis.py` → `codetwine/import_to_path.py` : uses `resolve_module_to_project_path` to determine whether an import statement in a caller file resolves to the target file, and `get_import_params` to obtain the tree-sitter `Language` object and query string needed for import extraction
 
-- `codetwine/extractors/usage_analysis.py` → `codetwine/config/settings.py` : uses `USAGE_NODE_TYPES` to obtain per-language AST node type configuration for usage extraction, `IMPORT_RESOLVE_CONFIG` to determine the language-specific module path separator, `DEFINITION_DICTS` to obtain per-language definition node mappings when loading target definitions, and `SAME_PACKAGE_VISIBLE` to determine whether same-directory files are implicitly visible without an explicit import (Java/Kotlin).
+- `codetwine/extractors/usage_analysis.py` → `codetwine/config/settings.py` : uses `DEFINITION_DICTS` to obtain per-language definition node configuration for target file parsing, `USAGE_NODE_TYPES` to obtain per-language usage node type settings for usage extraction, `IMPORT_RESOLVE_CONFIG` to determine the module path separator (`.` or `/`) controlling Java/Kotlin vs. C/C++ import resolution logic, and `SAME_PACKAGE_VISIBLE` to determine whether same-directory files are implicitly visible without explicit imports
 
 ## Dependents (modules that import this file)
 
-- `codetwine/file_analyzer.py` → `codetwine/extractors/usage_analysis.py` : uses `build_usage_info_list` to produce usage-location records (with definition source context) for names that the current file imports from within the project, and `build_caller_usages` to collect the lines in other project files where symbols defined in the current file are referenced.
+- `codetwine/file_analyzer.py` → `codetwine/extractors/usage_analysis.py` : uses `build_usage_info_list` to produce the callee usages output for a file being analyzed (mapping imported symbol names to their definition source and usage lines), and `build_caller_usages` to collect the lines in other project files where definitions from the current file are referenced
 
 ## Dependency Direction
 
 All relationships are **unidirectional**:
 
-- This module depends on `ts_parser`, `imports`, `usages`, `definitions`, `dependency_graph`, `import_to_path`, and `settings` — none of those modules import from `usage_analysis.py`.
-- `file_analyzer.py` depends on this module — this module does not import from `file_analyzer.py`.
+- `codetwine/extractors/usage_analysis.py` → `codetwine/parsers/ts_parser.py`: unidirectional
+- `codetwine/extractors/usage_analysis.py` → `codetwine/extractors/imports.py`: unidirectional
+- `codetwine/extractors/usage_analysis.py` → `codetwine/extractors/usages.py`: unidirectional
+- `codetwine/extractors/usage_analysis.py` → `codetwine/extractors/definitions.py`: unidirectional
+- `codetwine/extractors/usage_analysis.py` → `codetwine/extractors/dependency_graph.py`: unidirectional
+- `codetwine/extractors/usage_analysis.py` → `codetwine/import_to_path.py`: unidirectional
+- `codetwine/extractors/usage_analysis.py` → `codetwine/config/settings.py`: unidirectional
+- `codetwine/file_analyzer.py` → `codetwine/extractors/usage_analysis.py`: unidirectional
 
 ## Data Flow
 
@@ -215,161 +228,180 @@ All relationships are **unidirectional**:
 
 ## 1. Inputs
 
-### `build_usage_info_list`
-| Input | Type | Source |
-|---|---|---|
-| `root_node` | AST Node | Parsed AST of the caller file |
-| `symbol_to_file_map` | `dict[str, str]` | Maps imported symbol names → definition file paths |
-| `project_dir` | `str` | Absolute path to project root |
-| `file_ext` | `str` | File extension without leading dot |
-| `alias_to_original` | `dict[str, str] \| None` | Maps alias names → original names |
-| `USAGE_NODE_TYPES` | `dict[str, dict \| None]` | Per-language usage node type config from `settings.py` |
+**`build_usage_info_list`**
+- `root_node`: Tree-sitter AST root of the caller file being analyzed
+- `symbol_to_file_map`: `dict[str, str]` mapping imported symbol names to their definition file paths (relative to project root)
+- `project_dir`: Absolute path to the project root directory
+- `file_ext`: File extension string (e.g. `"py"`, `"java"`) without leading dot
+- `alias_to_original`: Optional `dict[str, str]` mapping alias names to original names
+- Config values: `USAGE_NODE_TYPES` (per-language AST node type settings)
 
-### `build_caller_usages`
-| Input | Type | Source |
-|---|---|---|
-| `target_file_rel` | `str` | Relative path of the target file |
-| `project_dep_list` | `list[dict]` | Project-wide dependency info (callers/callees per file) |
-| `project_dir` | `str` | Absolute path to project root |
-| `project_file_set` | `set[str]` | All file paths in the project |
-| Config values | `dict` | `USAGE_NODE_TYPES`, `IMPORT_RESOLVE_CONFIG`, `SAME_PACKAGE_VISIBLE`, `DEFINITION_DICTS` from `settings.py` |
-| File contents | `bytes` / `str` | Read from disk via `parse_file` and direct file open |
+**`build_caller_usages`**
+- `target_file_rel`: Relative path of the file whose usages in other files are being sought
+- `project_dep_list`: List of dependency dicts produced by `build_project_dependencies`, each containing `"file"`, `"callers"`, and `"callees"` keys
+- `project_dir`: Absolute path to the project root
+- `project_file_set`: Set of all relative file paths in the project
+- Config values: `USAGE_NODE_TYPES`, `IMPORT_RESOLVE_CONFIG`, `SAME_PACKAGE_VISIBLE`, `DEFINITION_DICTS`
+- File reads: Each caller file is read and parsed on demand via `parse_file`; the target file may be parsed to extract definition names
 
 ---
 
 ## 2. Transformation Overview
 
-### `build_usage_info_list` Pipeline
+### `build_usage_info_list`
 
-**Stage 1 — Typed alias discovery:**  
-`USAGE_NODE_TYPES[file_ext]` is consulted to obtain `typed_alias_parent_types`. `extract_typed_aliases` traverses the AST to find variable declarations typed with imported names (e.g., `genre: Genre`), returning a `var_name → type_name` dict. New variable names discovered this way are injected into `symbol_to_file_map`, pointing to the same file as their type.
+**Stage 1 — Typed alias discovery**  
+`USAGE_NODE_TYPES` is consulted for the `typed_alias_parent_types` node type set. `extract_typed_aliases` traverses the AST to find variables declared with an imported type (e.g. `genre: Genre`) and returns a `dict[str, str]` mapping variable names to type names. The variable names are injected into `symbol_to_file_map` so subsequent stages track them as importable symbols.
 
-**Stage 2 — Usage extraction:**  
-`extract_usages` performs a DFS over the AST to collect all `UsageInfo` records (name + line number) for any identifier in the expanded `symbol_to_file_map` key set.
+**Stage 2 — Raw usage extraction**  
+`extract_usages` performs a DFS traversal of the AST and returns a list of `UsageInfo` objects (name + line number) for every identifier matching any key in the expanded `symbol_to_file_map`.
 
-**Stage 3 — Alias remapping:**  
-For each `UsageInfo`, the root symbol (the part before the first `.`) is checked against `typed_aliases`. If it matches, the usage name is rewritten to substitute the variable name with the original type name (e.g., `genre.play()` → `Genre.play()`).
+**Stage 3 — Alias remapping and grouping**  
+Each `UsageInfo` entry is processed: the root symbol (before any `.`) is checked against `typed_aliases`; if found, the name is rewritten to the original type name. The `(source_file, remapped_name)` pair forms a group key. Entries sharing the same key accumulate their line numbers into a single record.
 
-**Stage 4 — Grouping and deduplication:**  
-Usages are grouped by `(source_file, remapped_name)`. The first occurrence triggers `extract_callee_source` to fetch the definition's source text from its file. Subsequent occurrences for the same key simply append line numbers. After grouping, each entry's `lines` list is deduplicated and sorted.
+**Stage 4 — Definition source retrieval**  
+For the first occurrence of each group key, `extract_callee_source` is called with the definition file path and the search name (substituting the `alias_to_original` original name when applicable) to retrieve the definition's source text.
 
----
-
-### `build_caller_usages` Pipeline
-
-**Stage 1 — Caller list retrieval:**  
-`project_dep_list` is scanned to find the entry whose `file` matches `target_file_rel`, yielding a `caller_file_list`.
-
-**Stage 2 — Per-caller import resolution:**  
-For each caller file, the file is parsed with `parse_file`. `get_import_params` retrieves the tree-sitter language and query string; `extract_imports` extracts structured `ImportInfo` objects from the AST. `_collect_names_from_target` then resolves each import against `target_file_rel` to build a list of names that the caller imports from the target. Language-specific resolution strategies handle Python/JS/TS named imports, Java/Kotlin trailing-segment imports, C/C++ full-file inclusion, wildcard imports, and same-package visibility.
-
-**Stage 3 — Typed alias expansion (per caller):**  
-`extract_typed_aliases` finds local variable declarations in the caller that are typed with any of the collected target names, expanding `names_from_target` with those variable names.
-
-**Stage 4 — Usage extraction:**  
-`extract_usages` collects all `UsageInfo` records for the expanded name set within the caller AST.
-
-**Stage 5 — Context extraction:**  
-The caller's source file is read line by line. For each group, up to 2 usage locations are selected, and a ±3-line code snippet is extracted around each location; snippets are joined with `\n...\n` to form `usage_context`.
-
-**Stage 6 — Grouping and accumulation:**  
-Usages are grouped by the remapped name. Each group records `lines` (deduplicated and sorted), `name`, `file`, and `usage_context`. Results from all callers are concatenated into a single list.
+**Stage 5 — Deduplication and output assembly**  
+Duplicate line numbers within each group are removed and sorted. The final list of group dicts is returned.
 
 ---
 
-### `_collect_names_from_target` Pipeline
+### `build_caller_usages`
 
-For each `ImportInfo` in the caller's import list, `resolve_module_to_project_path` checks whether the import resolves to `target_file_rel`. Depending on the import form and language separator:
-- Named imports → individual names added directly.
-- Wildcard imports → `_load_target_definitions` parses the target file and returns all definition names.
-- Java/Kotlin trailing-segment → the final `.`-separated component is added.
-- C/C++ `#include` → all target definition names are added.
-- Same-package (Java/Kotlin, no import match) → all target definition names are added.
+**Stage 1 — Caller file discovery**  
+`project_dep_list` is scanned to find the entry where `"file" == target_file_rel`. Its `"callers"` list drives the rest of the pipeline.
 
-`target_definition_names` is passed back as a cache to avoid re-parsing the target file across multiple import entries or caller iterations.
+**Stage 2 — Per-caller import extraction**  
+For each caller file, the file is parsed with `parse_file`. `get_import_params` provides the language object and query string. `extract_imports` returns `list[ImportInfo]` for the caller.
+
+**Stage 3 — Name collection from target**  
+`_collect_names_from_target` inspects each `ImportInfo`: for Python/JS/TS-style imports (`from X import a, b`), individual names are taken directly; for Java/Kotlin (`import com.foo.Bar`), the trailing segment is used; for C/C++ (`#include`), all definition names from the target file are loaded. Wildcard imports and same-package visibility rules can also trigger loading of target definition names via `_load_target_definitions`.
+
+**Stage 4 — Typed alias expansion (per caller)**  
+`extract_typed_aliases` is called on the caller AST with the collected `names_from_target` set, and any newly discovered alias variable names are appended to the tracking set.
+
+**Stage 5 — Usage extraction and grouping**  
+`extract_usages` finds all usage locations within the caller. Alias variable names are remapped back to original type names. Usages are grouped by `name`, accumulating line numbers.
+
+**Stage 6 — Usage context extraction**  
+The caller's source text is read line-by-line. For each group, up to `_max_context_locations` (2) usage lines are selected; a window of `_context_radius` (3) lines around each is extracted and joined with `"\n...\n"` to form `usage_context`.
+
+**Stage 7 — Output assembly**  
+All group dicts across all callers are concatenated into a flat list and returned.
 
 ---
 
-### `_load_target_definitions` Pipeline
+### `_load_target_definitions` (internal helper)
 
-The target file is located using `project_dir + target_file_rel`. Its extension is used to look up `DEFINITION_DICTS`. The file is parsed by `parse_file`, then `extract_definitions` traverses the AST and returns `DefinitionInfo` objects; their `.name` fields are collected into a flat string list.
+The target file is parsed and `extract_definitions` is called with the language-specific `DEFINITION_DICTS` entry. The resulting `DefinitionInfo` objects are mapped to their `name` strings and returned as a flat `list[str]`.
 
 ---
 
 ## 3. Outputs
 
-### `build_usage_info_list`
-Returns `list[dict]`, where each dict represents one uniquely named usage of a project-internal symbol:
+**`build_usage_info_list`** returns `list[dict]` where each dict describes one symbol used within the analyzed file:
 
 ```
 [
   {
-    "lines":          [int, ...],       # sorted, deduplicated line numbers in the caller file
-    "name":           str,              # remapped usage name (alias-resolved)
-    "from":           str,              # definition file path (relative to project root)
-    "target_context": str | None,       # source text of the definition
+    "lines":          [int, ...],
+    "name":           str,
+    "from":           str,
+    "target_context": str | None,
   },
   ...
 ]
 ```
 
-### `build_caller_usages`
-Returns `list[dict]`, where each dict represents one named symbol from the target file used in a caller file:
+**`build_caller_usages`** returns `list[dict]` where each dict describes one symbol from the target file as used in a caller file:
 
 ```
 [
   {
-    "lines":         [int, ...],        # sorted, deduplicated line numbers in the caller
-    "name":          str,               # remapped usage name
-    "file":          str,               # relative path of the caller file
-    "usage_context": str,               # ±3-line code snippets around usage locations
+    "lines":         [int, ...],
+    "name":          str,
+    "file":          str,
+    "usage_context": str,
   },
   ...
 ]
 ```
 
-No file writes or side effects are produced; all output is via return values.
+No files are written; no side effects beyond the `parse_cache` maintained by `ts_parser.py`.
 
 ---
 
 ## 4. Key Data Structures
 
-### `build_usage_info_list` — `usage_group_map` (internal grouping dict)
+### `symbol_to_file_map` (input / mutated in `build_usage_info_list`)
 | Field / Key | Type | Purpose |
 |---|---|---|
-| key `(source_file, remapped_name)` | `tuple[str, str]` | Unique identifier grouping all usages of the same symbol from the same file |
-| `"lines"` | `list[int]` | Line numbers where the usage appears |
-| `"name"` | `str` | Usage name after alias remapping |
-| `"from"` | `str` | Relative path of the file containing the definition |
-| `"target_context"` | `str \| None` | Source text of the definition retrieved by `extract_callee_source` |
+| `<symbol_name>` | `str` | Relative file path where that symbol is defined |
 
-### `build_caller_usages` — `groups` (internal per-caller grouping dict)
+---
+
+### `alias_to_original` (input to `build_usage_info_list`)
 | Field / Key | Type | Purpose |
 |---|---|---|
-| key `name` | `str` | Remapped usage name used as grouping key within a single caller |
-| `"lines"` | `list[int]` | Line numbers of usages in the caller file |
-| `"name"` | `str` | Remapped usage name |
+| `<alias_name>` | `str` | Original name that the alias was imported as |
+
+---
+
+### `typed_aliases` (intermediate)
+| Field / Key | Type | Purpose |
+|---|---|---|
+| `<variable_name>` | `str` | The imported type name the variable was declared with (e.g. `"genre"` → `"Genre"`) |
+
+---
+
+### `UsageInfo` (produced by `extract_usages`, consumed internally)
+| Field / Key | Type | Purpose |
+|---|---|---|
+| `name` | `str` | Symbol name as it appears at the usage site (may include `.` for attribute access) |
+| `line` | `int` | 1-based line number of the usage |
+
+---
+
+### `usage_group_map` (intermediate in `build_usage_info_list`)
+| Field / Key | Type | Purpose |
+|---|---|---|
+| key: `(source_file, remapped_name)` | `tuple[str, str]` | Unique group identifier combining definition file and canonical name |
+| `"lines"` | `list[int]` | All line numbers where this name was used |
+| `"name"` | `str` | Canonical (remapped) symbol name |
+| `"from"` | `str` | Relative path of the file where the symbol is defined |
+| `"target_context"` | `str \| None` | Source text of the symbol's definition |
+
+---
+
+### `groups` (intermediate in `build_caller_usages`)
+| Field / Key | Type | Purpose |
+|---|---|---|
+| key: `<name>` | `str` | Canonical symbol name used as the group key |
+| `"lines"` | `list[int]` | All line numbers in the caller where the symbol appears |
+| `"name"` | `str` | Canonical symbol name |
 | `"file"` | `str` | Relative path of the caller file |
-| `"usage_context"` | `str` | Code snippet context added after lines deduplication |
+| `"usage_context"` | `str` | Source snippets surrounding usage locations (added in Stage 6) |
 
-### `project_dep_list` entries (consumed input)
+---
+
+### `ImportInfo` (produced by `extract_imports`, consumed in `_collect_names_from_target`)
 | Field / Key | Type | Purpose |
 |---|---|---|
-| `"file"` | `str` | Relative path of the file described |
+| `module` | `str` | Module/path string from the import statement |
+| `names` | `list[str]` | Individually imported names; `"*"` for wildcard imports |
+| `line` | `int` | 1-based line number of the import statement |
+| `module_alias` | `str \| None` | Alias given to the module itself |
+| `alias_map` | `dict[str, str] \| None` | Maps alias names to their original names |
+
+---
+
+### `project_dep_list` entry (input to `build_caller_usages`)
+| Field / Key | Type | Purpose |
+|---|---|---|
+| `"file"` | `str` | Relative path of a project file |
 | `"callers"` | `list[str]` | Relative paths of files that import this file |
-| `"callees"` | `list[str]` | Relative paths of files imported by this file |
-
-### `typed_aliases` (intermediate, both functions)
-| Field / Key | Type | Purpose |
-|---|---|---|
-| key `var_name` | `str` | Local variable name declared with an imported type |
-| value `type_name` | `str` | The imported type name that the variable's type refers to |
-
-### `symbol_to_file_map` (consumed and mutated in `build_usage_info_list`)
-| Field / Key | Type | Purpose |
-|---|---|---|
-| key `symbol_name` | `str` | Imported or alias-derived name |
-| value `file_path` | `str` | Relative path of the file where that symbol is defined |
+| `"callees"` | `list[str]` | Relative paths of files this file imports |
 
 ## Error Handling
 
@@ -377,7 +409,7 @@ No file writes or side effects are produced; all output is via return values.
 
 ## 1. Overall Strategy
 
-The file follows a **graceful degradation / logging-and-continue** strategy. The dominant pattern is to skip operations that cannot be completed rather than raising exceptions to the caller. File I/O failures during context extraction are silently absorbed so that the rest of the analysis proceeds. Upstream failures in parsing or definition lookup are tolerated by returning `None` or empty collections, which the calling code treats as absent data and skips accordingly.
+The file adopts a **graceful degradation / logging-and-continue** approach. The primary goal is to keep the overall analysis pipeline running even when individual operations fail. Missing files, unreadable sources, and unresolvable symbols are handled by returning partial results or skipping the failing unit rather than terminating the process. Only file I/O with genuinely unrecoverable issues (e.g., encoding errors when reading a caller file) is caught and silently bypassed, allowing remaining callers to be processed normally.
 
 ---
 
@@ -385,28 +417,28 @@ The file follows a **graceful degradation / logging-and-continue** strategy. The
 
 | Error Type | Trigger Condition | Handling | Recoverable? | Impact |
 |---|---|---|---|---|
-| `OSError` / `UnicodeDecodeError` | Reading a caller source file to extract `usage_context` snippets | Caught silently; `caller_source_lines` remains `None` | Yes | `usage_context` field is omitted from all groups in that caller |
-| Missing file / unparseable file (via `parse_file`) | Target or caller file does not exist or cannot be parsed by tree-sitter | Propagates from `parse_file` (no local catch); `_load_target_definitions` guards with `os.path.isfile` before calling `parse_file` | Partial — `_load_target_definitions` skips gracefully; direct `parse_file` calls in `build_caller_usages` are unguarded | `_load_target_definitions` returns empty list; unguarded paths may propagate exceptions |
-| Definition not found (`extract_callee_source` returns `None`) | The named symbol is not locatable in the dependency file's AST | `None` is stored as `target_context` in the usage group entry | Yes | The usage entry is still produced but `target_context` is `None` |
-| Unsupported language / missing import params (`get_import_params` returns `(None, None)`) | Caller file has an extension with no import query configured | `continue` skips the caller entirely | Yes | That caller file contributes no entries to `caller_usages` |
-| No `DEFINITION_DICTS` entry for target extension | Target file extension is not registered in settings | `_load_target_definitions` returns an empty list without calling `parse_file` | Yes | No definition names are collected; wildcard/C++ include expansion produces no names |
-| Empty or absent `usage_node_types` | File extension not registered in `USAGE_NODE_TYPES` | `extract_usages` returns `[]`; `extract_typed_aliases` returns `{}` | Yes | No usages detected for that file; contributes empty result |
-| Module not resolvable to a project path (`resolve_module_to_project_path` returns `None`) | Import refers to a standard library or external package | Import is skipped in `_collect_names_from_target`; wildcard Java/Kotlin path checked as secondary fallback | Yes | Names from that import are not tracked |
+| `OSError` / `UnicodeDecodeError` | Opening a caller source file to extract usage context fails | Caught; `caller_source_lines` is left as `None`, `usage_context` field is simply omitted from affected group entries | Yes | That caller's usage entries lack `usage_context`; all other callers continue processing |
+| Definition source not found (`None` return from `extract_callee_source`) | The named definition cannot be located in the callee AST | `target_context` is stored as `None` in the usage group entry; no exception is raised | Yes | The entry is included in results with a `None` context value |
+| Unsupported file extension (`get_import_params` returns `(None, None)`) | A caller file has an extension with no import query configured | The caller is skipped via `continue` | Yes | That caller contributes no entries to `caller_usages` |
+| Target definition file absent or unreadable | `os.path.isfile` check fails inside `_load_target_definitions` | Returns an empty list silently; no exception is raised | Yes | No definition names are extracted from that target; downstream name collection is empty |
+| `USAGE_NODE_TYPES` returns `None` for an extension | Caller or target file extension has no usage node types registered | `extract_usages` returns an empty list; typed alias extraction is skipped | Yes | No usages are detected for that file; results are empty but no error propagates |
+| Target file cannot be parsed by `parse_file` | `parse_file` raises an exception (e.g., missing language mapping) | Not caught within this file; exception propagates to the caller | No | The entire `build_caller_usages` or `_load_target_definitions` call fails |
 
 ---
 
 ## 3. Design Notes
 
-- **Selective guarding**: The `os.path.isfile` check in `_load_target_definitions` before invoking `parse_file` is a deliberate guard at the boundary where a missing file is considered a normal project condition (e.g., generated or excluded files). In contrast, `parse_file` calls inside `build_caller_usages` are unguarded, implying callers are expected to exist (their paths come from a pre-validated dependency list).
-- **None-as-absent convention**: Functions like `extract_callee_source` returning `None` are treated as "no data available" rather than errors. The calling code stores `None` directly in the output dict without special-casing, delegating interpretation to downstream consumers.
-- **Silent I/O absorption**: The `try/except (OSError, UnicodeDecodeError)` around context extraction is intentionally broad and silent, prioritising completeness of the structural output (names and lines) over the supplementary `usage_context` field.
-- **Cache-driven resilience**: `parse_file` uses a module-level cache, so repeated access to the same file (e.g., the target file parsed both for definitions and for callee source) does not multiply I/O failure opportunities.
+- **Partial-result tolerance**: The design deliberately accepts incomplete output (missing `usage_context`, empty name lists, `None` source code) in preference to aborting the pipeline. This reflects the expectation that analysis over a large project will encounter occasional unreadable or unsupported files.
+- **Guard-before-call pattern**: Many potential errors are prevented rather than caught. Checks such as `os.path.isfile`, `USAGE_NODE_TYPES.get`, and inspecting the return value of `get_import_params` before proceeding mean that the most common failure modes never reach an exception-raising code path at all.
+- **No retry logic**: There is no retry or fallback for failed I/O operations; each failure is handled once and the pipeline moves on.
+- **Unguarded parse failures**: Calls to `parse_file` inside `build_caller_usages` and `_load_target_definitions` are not wrapped in exception handlers. Failures here are considered exceptional and are allowed to propagate, contrasting with the otherwise defensive style of the file.
+- **No centralized logging at the site of errors**: None of the error-handling paths in this file emit log messages; errors are absorbed silently, placing the burden of diagnosing missing output on the caller or the downstream consumer of the results.
 
 ## Summary
 
-**usage_analysis.py**: Extracts project-internal symbol usage locations from ASTs and collects inbound usages from other project files.
+**usage_analysis.py**: Analyzes cross-file symbol usage relationships.
 
-- `build_usage_info_list(root_node, symbol_to_file_map: dict[str,str], project_dir: str, file_ext: str, alias_to_original: dict|None) → list[dict]`: returns records with `lines`, `name`, `from`, `target_context`.
-- `build_caller_usages(target_file_rel: str, project_dep_list: list[dict], project_dir: str, project_file_set: set[str]) → list[dict]`: returns records with `lines`, `name`, `file`, `usage_context`.
+- `build_usage_info_list(root_node, symbol_to_file_map: dict[str,str], project_dir: str, file_ext: str, alias_to_original: dict|None) → list[dict]`: returns `{lines, name, from, target_context}` records for imported symbols used in a file.
+- `build_caller_usages(target_file_rel: str, project_dep_list: list[dict], project_dir: str, project_file_set: set[str]) → list[dict]`: returns `{lines, name, file, usage_context}` records for all callers of a target file.
 
-Consumes `symbol_to_file_map` (mutated) and `project_dep_list`; produces grouped usage dicts.
+Consumes `ImportInfo`, `UsageInfo`; produces grouped usage dicts; expands typed variable aliases to canonical imported names.

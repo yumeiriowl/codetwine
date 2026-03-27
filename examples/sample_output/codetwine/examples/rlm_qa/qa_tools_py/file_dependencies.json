@@ -41,18 +41,18 @@
   "caller_usages": [
     {
       "lines": [
-        177,
         181,
-        241,
-        285
+        185,
+        244,
+        290
       ],
       "name": "qa_tools.project_data",
       "file": "codetwine/examples/rlm_qa/rlm_qa_agent_py/rlm_qa_agent.py",
-      "usage_context": "        json_path: File path to project_knowledge.json\n    \"\"\"\n    with open(json_path, \"r\", encoding=\"utf-8\") as f:\n        qa_tools.project_data = json.load(f)\n\n    qa_tools.base_dir = os.path.dirname(json_path)\n\n...\n\n    qa_tools.base_dir = os.path.dirname(json_path)\n\n    print(f\"[OK] Loaded {len(qa_tools.project_data['files'])} files from project '{qa_tools.project_data['project_name']}'\")\n\n\ndef _create_interpreter() -> PythonInterpreter:"
+      "usage_context": "        json_path: File path to project_knowledge.json\n    \"\"\"\n    with open(json_path, \"r\", encoding=\"utf-8\") as f:\n        qa_tools.project_data = json.load(f)\n\n    qa_tools.base_dir = os.path.dirname(json_path)\n\n...\n\n    qa_tools.base_dir = os.path.dirname(json_path)\n\n    print(f\"[OK] Loaded {len(qa_tools.project_data['files'])} files from project '{qa_tools.project_data['project_name']}'\")\n\n\ndef create_interpreter() -> PythonInterpreter:"
     },
     {
       "lines": [
-        179
+        183
       ],
       "name": "qa_tools.base_dir",
       "file": "codetwine/examples/rlm_qa/rlm_qa_agent_py/rlm_qa_agent.py",
@@ -60,23 +60,23 @@
     },
     {
       "lines": [
-        261
+        263
       ],
       "name": "qa_tools.read_source_file",
       "file": "codetwine/examples/rlm_qa/rlm_qa_agent_py/rlm_qa_agent.py",
-      "usage_context": "        signature,\n        max_iterations=12,\n        tools=[\n            qa_tools.read_source_file,\n            qa_tools.get_files_using,\n            qa_tools.graph_search,\n        ],"
+      "usage_context": "    rlm = dspy.RLM(\n        signature,\n        tools=[\n            qa_tools.read_source_file,\n            qa_tools.get_files_using,\n            qa_tools.graph_search,\n        ],"
     },
     {
       "lines": [
-        262
+        264
       ],
       "name": "qa_tools.get_files_using",
       "file": "codetwine/examples/rlm_qa/rlm_qa_agent_py/rlm_qa_agent.py",
-      "usage_context": "        max_iterations=12,\n        tools=[\n            qa_tools.read_source_file,\n            qa_tools.get_files_using,\n            qa_tools.graph_search,\n        ],\n        verbose=True,"
+      "usage_context": "        signature,\n        tools=[\n            qa_tools.read_source_file,\n            qa_tools.get_files_using,\n            qa_tools.graph_search,\n        ],\n        verbose=True,"
     },
     {
       "lines": [
-        263
+        265
       ],
       "name": "qa_tools.graph_search",
       "file": "codetwine/examples/rlm_qa/rlm_qa_agent_py/rlm_qa_agent.py",
