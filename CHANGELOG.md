@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.7 - 2026-03-27
+
+### Changed
+- README: Added emoji icons to section headings
+- RLM QA agent: Added `LLM_API_BASE` configuration for custom API endpoints (e.g. Ollama, Azure)
+- RLM QA agent: Replaced `dspy.configure(lm=lm)` with `rlm.set_lm(lm)` for module-level LM setting
+
+### Removed
+- RLM QA agent: Removed `max_iterations` parameter from RLM
+
 ## 0.1.6 - 2026-03-26
 
 ### Changed

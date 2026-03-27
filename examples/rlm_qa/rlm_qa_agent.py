@@ -36,6 +36,10 @@ SUB_LLM_MODEL = "anthropic/claude-sonnet-4-6"
 # API key (obtained from environment variable)
 LLM_API_KEY = os.environ.get("LLM_API_KEY", "")
 
+# API base URL (set when using non-standard endpoints, e.g. Ollama, Azure)
+# LLM_API_BASE = "http://localhost:11434"
+LLM_API_BASE = None
+
 # Natural language for answers
 OUTPUT_LANGUAGE = "English"
 
@@ -45,7 +49,7 @@ TARGET_JSON_PATH = f"{os.path.dirname(__file__)}/../sample_output/codetwine/proj
 
 # ===== Signature instructions template =====
 # Template variables (embedded via .replace()):
-#   <<<DOC_SCHEMA>>> : result of _build_doc_schema()
+#   <<<DOC_SCHEMA>>> : result of build_doc_schema()
 #   <<<RLM_OUTPUT_LANGUAGE>>> : value of OUTPUT_LANGUAGE
 INSTRUCTIONS_TEMPLATE = """You are an agent that explores a project design document in JSON format.
 Manipulate the input project_data variable with Python code and answer the question.
@@ -232,10 +236,9 @@ def create_qa_agent(json_path: str) -> dspy.RLM:
     # Load project data
     load_project(json_path)
 
-    # Initialize LLM and set as dspy default
-    lm = dspy.LM(LLM_MODEL, api_key=LLM_API_KEY)
-    sub_lm = dspy.LM(SUB_LLM_MODEL, api_key=LLM_API_KEY)
-    dspy.configure(lm=lm)
+    # Initialize LLM
+    lm = dspy.LM(LLM_MODEL, api_key=LLM_API_KEY, api_base=LLM_API_BASE)
+    sub_lm = dspy.LM(SUB_LLM_MODEL, api_key=LLM_API_KEY, api_base=LLM_API_BASE)
 
     # Embed doc schema and output language into the template to build instructions
     doc_schema = build_doc_schema(qa_tools.project_data)
@@ -256,7 +259,6 @@ def create_qa_agent(json_path: str) -> dspy.RLM:
     # Assemble and return the RLM agent
     rlm = dspy.RLM(
         signature,
-        max_iterations=12,
         tools=[
             qa_tools.read_source_file,
             qa_tools.get_files_using,
@@ -266,6 +268,9 @@ def create_qa_agent(json_path: str) -> dspy.RLM:
         sub_lm=sub_lm,
         interpreter=interpreter,
     )
+
+    # Set LM at module level
+    rlm.set_lm(lm)
 
     return rlm
 

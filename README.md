@@ -11,44 +11,44 @@ The unified JSON can be used as input material for LLM-powered code search and Q
 
 - [codetwine](#codetwine)
   - [Table of Contents](#table-of-contents)
-  - [Supported Languages](#supported-languages)
-  - [Quick Start](#quick-start)
+  - [🧬 Supported Languages](#-supported-languages)
+  - [🚀 Quick Start](#-quick-start)
     - [Prerequisites](#prerequisites)
     - [1. Installation](#1-installation)
     - [2. Configuration](#2-configuration)
     - [3. Usage](#3-usage)
       - [Basic Execution](#basic-execution)
       - [Specifying Project and Output Directories](#specifying-project-and-output-directories)
-  - [Configuration Options](#configuration-options)
+  - [⚙️ Configuration Options](#️-configuration-options)
     - [LLM Settings](#llm-settings)
     - [Path Settings](#path-settings)
     - [Performance Settings](#performance-settings)
     - [Analysis Settings](#analysis-settings)
-  - [High-Level Processing Flow](#high-level-processing-flow)
-  - [Dependency Analysis Limitations](#dependency-analysis-limitations)
+  - [🔄 High-Level Processing Flow](#-high-level-processing-flow)
+  - [⚠️ Dependency Analysis Limitations](#️-dependency-analysis-limitations)
     - [Common to All Languages](#common-to-all-languages)
     - [JavaScript / TypeScript](#javascript--typescript)
     - [Java / Kotlin](#java--kotlin)
     - [C / C++](#c--c)
-  - [Output Files](#output-files)
-  - [Incremental Processing](#incremental-processing)
-  - [Output JSON Schema](#output-json-schema)
+  - [📁 Output Files](#-output-files)
+  - [♻️ Incremental Processing](#️-incremental-processing)
+  - [📋 Output JSON Schema](#-output-json-schema)
     - [project\_knowledge.json](#project_knowledgejson)
     - [project\_dependency\_summary.json](#project_dependency_summaryjson)
     - [file\_dependencies.json](#file_dependenciesjson)
     - [doc.json](#docjson)
-  - [Customizing the Design Document Template](#customizing-the-design-document-template)
-  - [Manual Editing of Design Documents](#manual-editing-of-design-documents)
-  - [Running Without Design Document Generation](#running-without-design-document-generation)
-  - [Usage Example: RLM QA Agent](#usage-example-rlm-qa-agent)
+  - [🎨 Customizing the Design Document Template](#-customizing-the-design-document-template)
+  - [✏️ Manual Editing of Design Documents](#️-manual-editing-of-design-documents)
+  - [⏭️ Running Without Design Document Generation](#️-running-without-design-document-generation)
+  - [💡 Usage Example: RLM QA Agent](#-usage-example-rlm-qa-agent)
     - [Sample Output](#sample-output)
     - [Additional Prerequisites](#additional-prerequisites)
     - [How to Run](#how-to-run)
-  - [Project Structure](#project-structure)
-  - [Acknowledgments](#acknowledgments)
-  - [License](#license)
+  - [🏗️ Project Structure](#️-project-structure)
+  - [🙏 Acknowledgments](#-acknowledgments)
+  - [📄 License](#-license)
 
-## Supported Languages
+## 🧬 Supported Languages
 
 - Python
 - Java
@@ -58,7 +58,7 @@ The unified JSON can be used as input material for LLM-powered code search and Q
 - C++
 - Kotlin
 
-## Quick Start
+## 🚀 Quick Start
 
 ### Prerequisites
 
@@ -121,7 +121,7 @@ uv run main.py --project-dir /path/to/your/project --output-dir /path/to/output
 | `--project-dir` | Root directory of the project to analyze | `DEFAULT_PROJECT_DIR` from `.env` |
 | `--output-dir` | Output directory for analysis results | `DEFAULT_OUTPUT_DIR` from `.env` (defaults to `output/` if not set). When only `--project-dir` is specified, `DEFAULT_OUTPUT_DIR` is ignored and `output/` is used |
 
-## Configuration Options
+## ⚙️ Configuration Options
 
 The following options can be configured in the `.env` file.
 
@@ -159,7 +159,7 @@ The following options can be configured in the `.env` file.
 | `SUMMARY_MAX_CHARS` | Maximum character count for summaries | `600` |
 | `EXCLUDE_PATTERNS` | Patterns to exclude during file traversal (comma-separated, fnmatch format) | `__pycache__,.git,.github,.venv,node_modules` |
 
-## High-Level Processing Flow
+## 🔄 High-Level Processing Flow
 
 1. **Build the project-wide dependency graph**
    - Traverses source files in the target directory, analyzes import statements, and identifies inter-file dependencies
@@ -178,7 +178,7 @@ The following options can be configured in the `.env` file.
 
 Note: LLM API calls are only made in step 4. No LLM is used in other steps.
 
-## Dependency Analysis Limitations
+## ⚠️ Dependency Analysis Limitations
 
 Dependency extraction is performed through static syntax analysis with tree-sitter, parsing import statements (including `#include`) in source code to identify inter-file dependencies. Dependencies may not be detected or may be incomplete in the following cases.
 
@@ -202,7 +202,7 @@ Dependency extraction is performed through static syntax analysis with tree-sitt
 
 - **Build system include paths**: Include paths added via CMake or Makefile `-I` options are not considered. Headers that cannot be resolved from the project root or current directory as relative paths are not detected as dependencies
 
-## Output Files
+## 📁 Output Files
 
 Running the tool generates the following files in `<output directory>/<project name>/` (default: `output/<project name>/`).
 
@@ -216,7 +216,7 @@ Running the tool generates the following files in `<output directory>/<project n
 | `<filename>/doc.md` | Per-file design document (Markdown format) |
 | `<filename>/<original filename>` | Copy of the original source code |
 
-## Incremental Processing
+## ♻️ Incremental Processing
 
 On subsequent runs, only the changed files and their affected scope have their design documents regenerated.
 
@@ -225,7 +225,7 @@ On subsequent runs, only the changed files and their affected scope have their d
 - **Design documents**: Only the changed files and files that depend on them (dependents) are regenerated; all others reuse previous results
 - **Completeness check**: Even for unchanged files, if the existing `doc.json` has missing sections or an empty summary (e.g. due to a previous LLM API failure), it is treated as incomplete and regenerated
 
-## Output JSON Schema
+## 📋 Output JSON Schema
 
 ### project_knowledge.json
 
@@ -367,7 +367,7 @@ Per-file design document.
 | `sections[].title` | string | Section heading |
 | `sections[].content` | string | Section body (Markdown format) |
 
-## Customizing the Design Document Template
+## 🎨 Customizing the Design Document Template
 
 Edit `doc_template.json` to customize the section structure and LLM instructions for design documents.
 
@@ -394,7 +394,7 @@ Edit `doc_template.json` to customize the section structure and LLM instructions
 
 When you modify the template sections, existing design documents whose section structure no longer matches the template are automatically regenerated on the next run.
 
-## Manual Editing of Design Documents
+## ✏️ Manual Editing of Design Documents
 
 You can manually edit the output `doc.md` and have it automatically reflected in `doc.json` on the next run.
 
@@ -406,7 +406,7 @@ Notes for editing:
 - Do not delete or rename `## Section heading` lines. The parser uses them as section delimiters, and without headings, parsing will not work correctly
 - The body text below section headings can be freely edited
 
-## Running Without Design Document Generation
+## ⏭️ Running Without Design Document Generation
 
 To output only dependency information without generating LLM design documents, set `ENABLE_LLM_DOC=False` in `.env`.
 
@@ -416,7 +416,7 @@ ENABLE_LLM_DOC=False
 
 The design document generation step is skipped. Dependency information (`file_dependencies.json` and source file copies) is still generated for each file, along with `project_knowledge.json`, `project_dependency_summary.json`, and `dependency_graph.md`. Since no LLM is used, it can run without API keys or model configuration.
 
-## Usage Example: RLM QA Agent
+## 💡 Usage Example: RLM QA Agent
 
 `examples/rlm_qa/` contains a sample that performs interactive Q&A against `project_knowledge.json` as a usage example for the consolidated JSON. It uses dspy's RLM and PythonInterpreter to generate answers by manipulating the JSON with Python code.
 
@@ -439,7 +439,7 @@ uv run python examples/rlm_qa/rlm_qa_agent.py
 
 By default, the sample output in `examples/sample_output/` is used. To use your own project's output, edit `TARGET_JSON_PATH` in `rlm_qa_agent.py`.
 
-## Project Structure
+## 🏗️ Project Structure
 
 ```
 codetwine/
@@ -479,13 +479,13 @@ codetwine/
     └── sample_output/            # Sample output (codetwine analyzed against itself)
 ```
 
-## Acknowledgments
+## 🙏 Acknowledgments
 
 This project uses the following libraries:
 
 - [tree-sitter](https://tree-sitter.github.io/tree-sitter/) - Source code syntax analysis
 - [litellm](https://github.com/BerriAI/litellm) - Unified interface for multiple LLM providers
 
-## License
+## 📄 License
 
 MIT License. See [LICENSE](LICENSE) for details.
