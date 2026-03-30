@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.8 - 2026-03-30
+
+### Changed
+- README: Rewrote High-Level Processing Flow for clarity (step 1: file collection, step 3: extraction details, step 4: topological sort and summary propagation, step 5: output description)
+- README: Moved Output Files section to directly follow Processing Flow
+
 ## 0.1.7 - 2026-03-27
 
 ### Changed

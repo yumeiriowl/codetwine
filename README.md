@@ -25,12 +25,12 @@ The unified JSON can be used as input material for LLM-powered code search and Q
     - [Performance Settings](#performance-settings)
     - [Analysis Settings](#analysis-settings)
   - [🔄 High-Level Processing Flow](#-high-level-processing-flow)
+  - [📁 Output Files](#-output-files)
   - [⚠️ Dependency Analysis Limitations](#️-dependency-analysis-limitations)
     - [Common to All Languages](#common-to-all-languages)
     - [JavaScript / TypeScript](#javascript--typescript)
     - [Java / Kotlin](#java--kotlin)
     - [C / C++](#c--c)
-  - [📁 Output Files](#-output-files)
   - [♻️ Incremental Processing](#️-incremental-processing)
   - [📋 Output JSON Schema](#-output-json-schema)
     - [project\_knowledge.json](#project_knowledgejson)
@@ -162,21 +162,37 @@ The following options can be configured in the `.env` file.
 ## 🔄 High-Level Processing Flow
 
 1. **Build the project-wide dependency graph**
-   - Traverses source files in the target directory, analyzes import statements, and identifies inter-file dependencies
+   - Collects source files with supported extensions from the target directory
+   - Analyzes import statements in each file and identifies inter-file dependencies
 2. **Detect changed files**
    - Compares source file hashes with the previous output to identify changed files for reprocessing
 3. **Extract dependency information for each file**
-   - Generates a syntax tree with tree-sitter and extracts definitions (functions, classes, etc.) at the symbol level
-   - Based on the dependency graph built in step 1, extracts callee and caller symbol usage locations with their source code
-   - Saves extraction results as `file_dependencies.json`
+   - Generates a syntax tree with tree-sitter and extracts definitions (functions, classes, etc.)
+   - Based on the dependency graph built in step 1, extracts callee and caller file paths, line numbers, and source code
 4. **Generate design documents via LLM**
-   - Processes files starting from those with the deepest dependencies (topological sort). Design document summaries generated earlier are included as input for subsequent files, enabling dependency-aware document generation
-   - Passes each file's source code, dependency information, and callee design document summaries to the LLM, generating content section by section according to the template (`doc_template.json`)
-5. **Output consolidated JSON and Mermaid graph**
-   - Consolidates all file dependencies and design documents into a single JSON
-   - Outputs the dependency graph in Mermaid format as Markdown
+   - Sorts files in topological order, processing from files with no dependencies toward dependent files
+   - Passes each file's source code, dependency information, and callee document summaries to the LLM, generating a design document section by section according to the template (`doc_template.json`)
+   - Generates a summary for each file. This summary is included as input when generating documents for subsequent dependent files, giving the LLM knowledge of each dependency's role and behavior
+5. **Save all outputs as JSON**
+   - Saved to `<output directory>/<project name>`
+   - All dependencies and design documents are consolidated into a single JSON (`project_knowledge.json`)
+   - Dependency graphs and design documents are also output as Markdown for readability
 
 Note: LLM API calls are only made in step 4. No LLM is used in other steps.
+
+## 📁 Output Files
+
+Running the tool generates the following files in `<output directory>/<project name>/` (default: `output/<project name>/`).
+
+| File | Description |
+|----------|------|
+| `project_knowledge.json` | Consolidated JSON of all file dependencies and design documents |
+| `project_dependency_summary.json` | Consolidated JSON of the dependency graph + per-file summaries |
+| `dependency_graph.md` | Dependency graph in Mermaid format |
+| `<filename>/file_dependencies.json` | Per-file definition and dependency information |
+| `<filename>/doc.json` | Per-file design document (JSON format) |
+| `<filename>/doc.md` | Per-file design document (Markdown format) |
+| `<filename>/<original filename>` | Copy of the original source code |
 
 ## ⚠️ Dependency Analysis Limitations
 
@@ -201,20 +217,6 @@ Dependency extraction is performed through static syntax analysis with tree-sitt
 ### C / C++
 
 - **Build system include paths**: Include paths added via CMake or Makefile `-I` options are not considered. Headers that cannot be resolved from the project root or current directory as relative paths are not detected as dependencies
-
-## 📁 Output Files
-
-Running the tool generates the following files in `<output directory>/<project name>/` (default: `output/<project name>/`).
-
-| File | Description |
-|----------|------|
-| `project_knowledge.json` | Consolidated JSON of all file dependencies and design documents |
-| `project_dependency_summary.json` | Consolidated JSON of the dependency graph + per-file summaries |
-| `dependency_graph.md` | Dependency graph in Mermaid format |
-| `<filename>/file_dependencies.json` | Per-file definition and dependency information |
-| `<filename>/doc.json` | Per-file design document (JSON format) |
-| `<filename>/doc.md` | Per-file design document (Markdown format) |
-| `<filename>/<original filename>` | Copy of the original source code |
 
 ## ♻️ Incremental Processing
 
