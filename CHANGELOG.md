@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.9 - 2026-03-31
+
+### Fixed
+- `_save_doc()`: Strip duplicate section title headers that the LLM may include in its response
+- Updated sample output
+
 ## 0.1.8 - 2026-03-30
 
 ### Changed

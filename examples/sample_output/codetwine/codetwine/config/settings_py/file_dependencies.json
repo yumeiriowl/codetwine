@@ -449,7 +449,7 @@
     },
     {
       "lines": [
-        727
+        736
       ],
       "name": "MAX_WORKERS",
       "file": "codetwine/codetwine/doc_creator_py/doc_creator.py",
@@ -457,7 +457,7 @@
     },
     {
       "lines": [
-        750
+        759
       ],
       "name": "DOC_TEMPLATE_PATH",
       "file": "codetwine/codetwine/doc_creator_py/doc_creator.py",

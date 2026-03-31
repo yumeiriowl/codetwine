@@ -582,6 +582,15 @@ def _save_doc(doc: dict, output_dir: str) -> None:
     """
     # Markdown output (write first)
     md_path = os.path.join(output_dir, "doc.md")
+
+    # Strip duplicate section title headers that the LLM may include in its response
+    for section in doc["sections"]:
+        section["content"] = re.sub(
+            r"\A\s*#+\s+" + re.escape(section["title"]) + r"\s*\n*",
+            "",
+            section["content"],
+        )
+
     md_lines = [f"# Design Document: {doc['file']}", ""]
 
     # Add heading and content for each section in Markdown format
