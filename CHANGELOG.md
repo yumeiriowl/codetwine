@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.0 - 2026-04-11
+
+### Changed
+- `_save_doc()`: Changed Markdown section headings from `##` to `#`
+- `_parse_md_sections()`: Updated section delimiter from `## {title}` to `# {title}`
+- `_build_section_prompt()`: Use `output_path_to_rel()` for relative file path in prompt
+- Updated sample output
+
 ## 0.1.9 - 2026-03-31
 
 ### Fixed

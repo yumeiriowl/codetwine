@@ -199,7 +199,7 @@ def _build_section_prompt(
     """
     # Basic prompt structure: target file name + source code
     parts = [
-        HEADER_TARGET_FILE.format(file=file_deps.get('file', 'unknown')),
+        HEADER_TARGET_FILE.format(file=output_path_to_rel(file_deps.get('file', 'unknown'))),
         "",
         HEADER_SOURCE_CODE,
         "```",
@@ -595,14 +595,14 @@ def _save_doc(doc: dict, output_dir: str) -> None:
 
     # Add heading and content for each section in Markdown format
     for section in doc["sections"]:
-        md_lines.append(f"## {section['title']}")
+        md_lines.append(f"# {section['title']}")
         md_lines.append("")
         md_lines.append(section["content"])
         md_lines.append("")
 
     # Append summary as a section at the end if present
     if doc.get("summary"):
-        md_lines.append("## Summary")
+        md_lines.append("# Summary")
         md_lines.append("")
         md_lines.append(doc["summary"])
         md_lines.append("")
@@ -620,9 +620,7 @@ def _save_doc(doc: dict, output_dir: str) -> None:
 def _parse_md_sections(md_text: str, section_titles: list[str]) -> dict[str, str]:
     """Split markdown text by known section titles and return the content of each section.
 
-    Use ``## {title}`` lines matching known section titles as delimiters.
-    Even if the LLM-generated content contains ``##`` headings,
-    they are treated as part of the content unless they exactly match a known title.
+    Use ``# {title}`` lines matching known section titles as delimiters.
 
     Args:
         md_text: Full text of doc.md.
@@ -632,8 +630,9 @@ def _parse_md_sections(md_text: str, section_titles: list[str]) -> dict[str, str
         Dict mapping title to content text. Sections not found are omitted.
     """
     escaped_titles = [re.escape(t) for t in section_titles]
+    titles_alternation = "|".join(escaped_titles)
     pattern = re.compile(
-        r"^## (" + "|".join(escaped_titles) + r")\s*$",
+        r"^# (" + titles_alternation + r")\s*$",
         re.MULTILINE,
     )
 

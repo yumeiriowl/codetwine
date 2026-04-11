@@ -1,35 +1,35 @@
 # Design Document: codetwine/doc_creator.py
 
-## Overview & Purpose
+# Overview & Purpose
 
-### 1. Module Summary
+## 1. Module Summary
 
-Generates structured LLM-based design documents for every source file in a project by assembling context-rich prompts from source code, dependency graphs, and prior document summaries, then saving the results in both Markdown and JSON formats.
+Generates structured LLM-based design documents for every source file in a project by assembling context-aware prompts from source code, dependency graphs, and prior design document summaries, then saving the results as both Markdown and JSON.
 
-### 2. When to Use This Module
+## 2. When to Use This Module
 
-- **Generating design documents for an entire project**: Call `generate_all_docs(base_output_dir, project_dep_list, llm_client)` from `codetwine/pipeline.py` after dependency analysis is complete. It returns `None` and writes `doc.md` and `doc.json` into each file's output directory.
-- **Incremental regeneration after source changes**: Pass a `changed_files: set[str]` to `generate_all_docs(...)` to skip unchanged files and reuse their existing `doc.json`, while still regenerating any file whose dependencies were updated.
+- **Generating design documents for an entire project**: Call `generate_all_docs(base_output_dir, project_dep_list, llm_client)` from `codetwine/pipeline.py` after dependency analysis is complete. It returns when all documents have been written to disk as `doc.md` and `doc.json` in each file's output directory.
+- **Incremental regeneration after code changes**: Pass a `changed_files` set to `generate_all_docs`. Files that have not changed and whose dependencies have not changed reuse their existing `doc.json`, skipping LLM calls entirely.
 
-### 3. Public Interface Table
+## 3. Public Interface Table
 
 | Name | Arguments (type) | Return type | Responsibility |
-|---|---|---|---|
-| `async generate_all_docs` | `base_output_dir: str`, `project_dep_list: list`, `llm_client: LLMClient`, `max_workers: int`, `changed_files: set[str] \| None` | `None` | Entry point: topologically sorts all project files, generates design documents level by level in parallel, and writes results to disk |
+|------|-----------------|-------------|----------------|
+| `async generate_all_docs` | `base_output_dir: str`, `project_dep_list: list`, `llm_client: LLMClient`, `max_workers: int`, `changed_files: set[str] \| None` | `None` | Entry point: topologically sorts all project files by dependency depth, generates design documents level by level with bounded parallelism, and saves each result as `doc.md` + `doc.json`. |
 
-### 4. Design Decisions
+## 4. Design Decisions
 
-- **Topological level-based parallelism**: Files are sorted into dependency depth levels so that each file's dependencies are fully documented before it is processed. Within a level, files are processed concurrently in batches of `max_workers`. This ensures callee summaries are always available as context when a caller's document is generated.
+- **Topological level-by-level processing**: Files are sorted into dependency depth levels via `_topological_sort_by_level` (Kahn's algorithm on the reverse graph). Documents at level N are generated only after all level N−1 documents are complete, so each file's prompt can include accurate design document summaries of its dependencies as context. Files with circular dependencies are collected into a final level with a warning rather than failing outright.
 
-- **Progressive context fallback on context-window overflow**: When the LLM rejects a prompt due to token limits (`ContextWindowExceededError`), the prompt is retried up to three times with progressively reduced callee context: full summaries → summaries truncated to 100 characters each → no callee context. This avoids hard failures for files with many or verbose dependencies.
+- **Progressive context fallback on context window exceeded**: When the LLM rejects a prompt due to context length, `_generate_section_with_fallback` retries the same section up to three times with progressively reduced callee context: full dependency summaries → 100-character-truncated summaries → no callee context at all. This avoids hard failures on large files without requiring the caller to pre-estimate token counts.
 
-- **MD-to-JSON sync for manual edits**: Before reusing an existing `doc.json`, the module checks whether `doc.md` has a newer modification timestamp. If so, it parses the Markdown back into sections using known section titles as delimiters and writes the edits into `doc.json`, preserving manual corrections across incremental runs.
+- **MD-to-JSON sync for manual edits**: Before reusing a cached `doc.json`, `_sync_md_to_json` checks whether `doc.md` has a newer modification timestamp. If it does, manual edits made directly in Markdown are parsed and written back into the JSON so that the JSON remains the authoritative source for downstream consumers.
 
-- **Incremental regeneration propagation**: A `regenerated_files` set tracks which files were regenerated in the current run. A file is marked for regeneration not only if it appears in `changed_files`, but also if any of its callees appear in `changed_files` or `regenerated_files`, ensuring that downstream documents remain consistent with updated dependencies.
+- **Completeness gate on cached documents**: `_is_doc_complete` verifies that a cached `doc.json` contains exactly the section IDs defined in the current template and a non-empty summary before accepting it as reusable. An incomplete cached document triggers full regeneration rather than a partial update.
 
-- **Header file implementation context**: For C/C++ header files (`.h`, `.hpp`, `.hh`, `.hxx`), the module searches the output directory for a corresponding implementation file (`.cpp`, `.c`, etc.) and injects its source code into the prompt, giving the LLM visibility into how declared interfaces are actually implemented.
+- **Callee context propagation via `doc_map`**: Rather than re-reading previously written JSON files from disk, completed design document dicts are held in the in-process `doc_map` dict and passed directly to each subsequent file's prompt builder, avoiding redundant I/O within a single run.
 
-## Definition Design Specifications
+# Definition Design Specifications
 
 ---
 
@@ -37,53 +37,59 @@ Generates structured LLM-based design documents for every source file in a proje
 
 | Constant | Type | Purpose |
 |---|---|---|
-| `HEADER_TARGET_FILE` | `str` | Prompt heading template identifying the target file |
-| `HEADER_SOURCE_CODE` | `str` | Prompt section heading for source code block |
-| `HEADER_CALLEE_USAGES` | `str` | Prompt section heading for dependencies (callee symbols) |
-| `CALLEE_USAGES_SCHEMA_NOTE` | `str` | Schema description injected before each callee usage list |
-| `CALLEE_SOURCE_CODE_LABEL` | `str` | Label prefix for inline dependency source code in the prompt |
-| `HEADER_CALLER_USAGES` | `str` | Prompt section heading for dependents (caller files) |
-| `CALLER_USAGES_SCHEMA_NOTE` | `str` | Schema description injected before each caller usage list |
-| `CALLER_SOURCE_CODE_LABEL` | `str` | Label prefix for inline caller source code in the prompt |
-| `HEADER_CALLEE_CONTEXT` | `str` | Prompt section heading for design document summaries of dependencies |
-| `CALLEE_CONTEXT_NOTE` | `str` | Explanatory note preceding callee design document summaries |
-| `HEADER_REQUEST` | `str` | Prompt section heading for the LLM instruction block |
-| `SECTION_REQUEST_TEMPLATE` | `str` | Template for per-section LLM instruction; `{title}` is substituted at call time |
-| `OUTPUT_LANGUAGE_INSTRUCTION` | `str` | Language instruction appended to every prompt; `{language}` is substituted |
-| `FACTUAL_ACCURACY_INSTRUCTION` | `str` | Warning instruction appended to every section prompt prohibiting speculation |
-| `HEADER_IMPL_CONTEXT` | `str` | Prompt section heading for corresponding C/C++ implementation file |
-| `IMPL_CONTEXT_NOTE` | `str` | Explanatory note preceding implementation file source code |
-| `HEADER_DOC_CONTENT` | `str` | Prompt section heading for full design document content (summary prompts) |
-| `SUMMARY_CHAR_LIMIT` | `str` | Character limit instruction template for summary prompts; `{max_chars}` is substituted |
-| `_HEADER_EXTENSIONS` | `set[str]` | C/C++ header file extensions: `.h`, `.hpp`, `.hh`, `.hxx` |
-| `_IMPL_EXTENSIONS` | `list[str]` | Implementation file extensions paired with header files: `cpp`, `c`, `cc`, `cxx` |
+| `HEADER_TARGET_FILE` | `str` | Prompt heading template indicating the target file path. |
+| `HEADER_SOURCE_CODE` | `str` | Prompt section heading for source code block. |
+| `HEADER_CALLEE_USAGES` | `str` | Prompt section heading for dependency symbols used by the file. |
+| `CALLEE_USAGES_SCHEMA_NOTE` | `str` | Explanation of the callee usage schema and attached source code semantics. |
+| `CALLEE_SOURCE_CODE_LABEL` | `str` | Label preceding the dependency source code block in prompts. |
+| `HEADER_CALLER_USAGES` | `str` | Prompt section heading for dependent files that reference this file. |
+| `CALLER_USAGES_SCHEMA_NOTE` | `str` | Explanation of the caller usage schema. |
+| `CALLER_SOURCE_CODE_LABEL` | `str` | Label preceding the usage-location source code block in prompts. |
+| `HEADER_CALLEE_CONTEXT` | `str` | Prompt section heading for design document summaries of dependency files. |
+| `CALLEE_CONTEXT_NOTE` | `str` | Instructions to the LLM on how to use the dependency summaries. |
+| `HEADER_REQUEST` | `str` | Prompt section heading marking the LLM instruction block. |
+| `SECTION_REQUEST_TEMPLATE` | `str` | Template for the per-section LLM instruction; `{title}` is substituted. |
+| `OUTPUT_LANGUAGE_INSTRUCTION` | `str` | Instruction appended to every prompt specifying the output language; `{language}` is substituted. |
+| `FACTUAL_ACCURACY_INSTRUCTION` | `str` | Instruction prohibiting speculation or contradiction of source code. |
+| `HEADER_IMPL_CONTEXT` | `str` | Prompt section heading for implementation file context (header files only). |
+| `IMPL_CONTEXT_NOTE` | `str` | Instructions explaining the implementation file's role in the prompt. |
+| `HEADER_DOC_CONTENT` | `str` | Prompt section heading used in summary generation prompts. |
+| `SUMMARY_CHAR_LIMIT` | `str` | Character-limit note template appended to summary prompts; `{max_chars}` is substituted. |
+| `_HEADER_EXTENSIONS` | `set[str]` | C/C++ header file extensions: `.h`, `.hpp`, `.hh`, `.hxx`. |
+| `_IMPL_EXTENSIONS` | `list[str]` | Ordered list of implementation file extensions to search for: `cpp`, `c`, `cc`, `cxx`. |
 
 ---
 
-## `_topological_sort_by_level`
+## Functions
+
+---
+
+### `_topological_sort_by_level`
 
 **Signature:**
 ```
 _topological_sort_by_level(project_dep_list: list[dict]) -> list[list[str]]
 ```
+- `project_dep_list`: List of dicts, each with keys `"file"` (str), `"callers"` (list), `"callees"` (list).
+- Returns: A list of levels, where each level is a sorted list of file paths. Index 0 = files with no dependencies.
 
-**Responsibility:** Determines a processing order for all project files such that a file's dependencies are always processed before the file itself, grouping files at the same dependency depth into the same level for parallel processing.
+**Responsibility:** Determines the correct processing order for design document generation by grouping files into dependency-depth levels so that a file's dependencies are always processed before the file itself.
 
-**When to use:** Called once at the start of `generate_all_docs` to establish the batch order for document generation.
+**When to use:** Called once per run inside `generate_all_docs` to establish the leveled processing schedule.
 
 **Design decisions:**
-- Implements Kahn's algorithm on a **reverse graph** (edges point from callee to caller) so that files with no dependencies naturally form level 0.
-- Files not reached by Kahn's algorithm (due to circular dependencies) are appended as a final level with a logged warning rather than causing a hard failure.
-- Within each level, files are sorted alphabetically to ensure deterministic output order.
+- Operates on a **reverse adjacency graph** (callers pointing to callees) with a Kahn's BFS algorithm to assign levels by dependency depth rather than reverse topological order.
+- Files not reachable by BFS due to circular dependencies are appended as a final extra level with a warning, rather than raising an error, ensuring graceful degradation.
+- All files appearing in any `callee` list are included as nodes even if they have no own entry in `project_dep_list`.
 
 **Constraints & edge cases:**
-- `project_dep_list` elements must have at least a `"file"` key; `"callees"` is optional and defaults to an empty list.
-- Files appearing only as callees (not as top-level entries) are still included via `all_files`.
-- Circular dependency groups are processed last but are not skipped.
+- Circular dependencies are tolerated; involved files are grouped at the last level.
+- Files listed only as callees (with no own entry) are still assigned levels.
+- Level order within a level is alphabetically sorted for determinism.
 
 ---
 
-## `_build_section_prompt`
+### `_build_section_prompt`
 
 **Signature:**
 ```
@@ -95,24 +101,29 @@ _build_section_prompt(
     implementation_context: str = "",
 ) -> str
 ```
+- `section`: One section definition dict from the template (keys: `id`, `title`, `prompt`).
+- `file_deps`: Parsed content of `file_dependencies.json` for the target file.
+- `callee_context`: Pre-built text of dependency design document summaries; may be empty.
+- `implementation_context`: Source code of a paired `.cpp`/`.c` file; empty for non-header files.
+- Returns: A complete LLM prompt string.
 
-**Responsibility:** Assembles a complete LLM prompt string for generating one design document section by combining source code, dependency information, optional implementation context, and section-specific instructions.
+**Responsibility:** Assembles the full textual prompt for generating one design document section by composing all available context (source code, dependencies, dependents, summaries, header/impl pairing) and appending the section-specific instruction.
 
-**When to use:** Called by `_generate_section_with_fallback` for each attempt (with varying `callee_context` values).
+**When to use:** Called once per template section per file inside `_generate_section_with_fallback`, with varying `callee_context` on each fallback attempt.
 
 **Design decisions:**
-- `callee_context` is a variable input across retry attempts; passing an empty string effectively removes the callee summary block.
-- Implementation context (for C/C++ header files) is included as a separate block only when non-empty, placed immediately after the source code block.
-- `OUTPUT_LANGUAGE_INSTRUCTION` and `FACTUAL_ACCURACY_INSTRUCTION` are unconditionally appended to every prompt.
+- The `implementation_context` block is included only when non-empty, making the function applicable to both header and non-header files without branching at the call site.
+- `callee_usages` and `caller_usages` sections are each omitted entirely when the respective list is empty, keeping prompts concise.
+- `output_path_to_rel` is applied to all file paths before embedding them in the prompt to show source-relative paths rather than output-directory paths.
+- `FACTUAL_ACCURACY_INSTRUCTION` and `OUTPUT_LANGUAGE_INSTRUCTION` are unconditionally appended last.
 
 **Constraints & edge cases:**
-- `file_deps` must contain `"callee_usages"` and `"caller_usages"` keys (may be empty lists).
-- Each usage entry in `callee_usages` may optionally include `"target_context"`; each entry in `caller_usages` may optionally include `"usage_context"`. Both are omitted from the prompt when absent.
-- `output_path_to_rel` is applied to dependency paths before rendering them in the prompt.
+- `file_deps.get('file', 'unknown')` is used defensively; a missing `file` key results in `'unknown'` in the prompt header.
+- `target_context` and `usage_context` per usage entry are optional; blocks are skipped if absent.
 
 ---
 
-## `_build_summary_prompt`
+### `_build_summary_prompt`
 
 **Signature:**
 ```
@@ -123,18 +134,19 @@ _build_summary_prompt(
     summary_max_chars: int,
 ) -> str
 ```
+- `section_contents`: List of already-generated section dicts, each with keys `id`, `title`, `content`.
+- Returns: A complete LLM prompt string for summary generation.
 
-**Responsibility:** Assembles the LLM prompt for generating a short summary of the entire design document from its already-generated sections.
+**Responsibility:** Assembles the prompt used to generate a concise summary of the entire design document by providing all section content and a character-limit constraint.
 
-**When to use:** Called once per file by `_generate_summary` after all sections have been generated.
+**When to use:** Called once per file inside `_generate_summary` after all sections have been generated.
 
 **Constraints & edge cases:**
-- `section_contents` elements must have `"title"` and `"content"` keys.
-- The character limit instruction is appended as informational text; the LLM is not technically constrained to it.
+- Does not append `FACTUAL_ACCURACY_INSTRUCTION`; only `OUTPUT_LANGUAGE_INSTRUCTION` and the character limit are appended.
 
 ---
 
-## `_build_callee_context_summary`
+### `_build_callee_context_summary`
 
 **Signature:**
 ```
@@ -144,25 +156,25 @@ _build_callee_context_summary(
     compact: bool = False,
 ) -> str
 ```
+- `doc_map`: Maps source-relative file path → design document dict with at least a `"summary"` key.
+- `compact`: If `True`, each summary is truncated to the first 100 characters followed by `"..."`.
+- Returns: A single string of bullet-point lines, one per dependency file that has a summary. Empty string if none found.
 
-- `doc_map` is a mapping from source-relative file path to a design document dict containing at minimum a `"summary"` key.
+**Responsibility:** Builds the callee-context block injected into section prompts by extracting and optionally compressing design document summaries of dependency files.
 
-**Responsibility:** Extracts summary text from previously generated design documents of the target file's dependencies and concatenates them into a single context string for inclusion in LLM prompts.
-
-**When to use:** Called in `_generate_file_doc` to build both the full and compact callee context strings before section generation begins.
+**When to use:** Called twice per file inside `_generate_file_doc`—once for the full version and once for the compact version—to support fallback strategies in `_generate_section_with_fallback`.
 
 **Design decisions:**
-- Dependency files are deduplicated from `callee_usages` using a set before iteration.
-- `compact=True` truncates each summary to 100 characters (appending `"..."` if truncated), used as a fallback when the full context exceeds the context window.
-- `output_path_to_rel` is applied to convert `callee_usages`' `"from"` paths to the format used as keys in `doc_map`.
+- Dependency files are deduplicated via a set before iteration, preventing duplicate summary entries when a callee appears in multiple `callee_usages` entries.
+- `output_path_to_rel` is applied to callee paths when looking up `doc_map` keys, reconciling the output-path format stored in `callee_usages` with the source-relative keys in `doc_map`.
 
 **Constraints & edge cases:**
-- Dependencies whose files have no entry in `doc_map` (not yet generated) are silently skipped.
-- Dependencies with an empty `"summary"` are silently skipped.
+- Files present in `callee_usages` but absent from `doc_map` (not yet processed or generation failed) are silently skipped.
+- Files with an empty `"summary"` field are also skipped.
 
 ---
 
-## `_build_implementation_context`
+### `_build_implementation_context`
 
 **Signature:**
 ```
@@ -171,23 +183,23 @@ _build_implementation_context(
     file_output_dir: str,
 ) -> str
 ```
+- Returns: Full source code text of the discovered implementation file, or empty string.
 
-**Responsibility:** Locates and returns the source code of the C/C++ implementation file corresponding to a header file, to be included as supplementary context in LLM prompts.
+**Responsibility:** Provides the source code of the paired implementation file for C/C++ header files so that prompts for headers can include concrete implementation details.
 
-**When to use:** Called in `_generate_file_doc` before section generation; the result is passed to `_generate_section_with_fallback`.
+**When to use:** Called once per file inside `_generate_file_doc`; for non-header files it returns immediately without filesystem access.
 
 **Design decisions:**
-- Returns an empty string immediately for non-header files (extension not in `_HEADER_EXTENSIONS`), making it safe to call unconditionally.
-- Searches for implementation files by looking for sibling directories named `{stem}_{impl_ext}` under the parent of `file_output_dir`, following the output directory naming convention of `resolve_file_output_dir`.
-- Iterates `_IMPL_EXTENSIONS` in order; returns the first match found.
+- Extensions are searched in the fixed order defined by `_IMPL_EXTENSIONS`; the first match wins.
+- The implementation file is located by looking one directory level above `file_output_dir` (i.e., sibling output directories share a common parent), then constructing the candidate path as `{base_dir}/{stem}_{impl_ext}/{stem}.{impl_ext}`.
 
 **Constraints & edge cases:**
-- Only reads the first matching implementation file; multiple implementations for one header are not supported.
-- Returns empty string if no implementation file is found.
+- Returns empty string for any file whose extension is not in `_HEADER_EXTENSIONS`.
+- Returns empty string if no matching implementation file exists on disk.
 
 ---
 
-## `_generate_section_with_fallback` *(async)*
+### `_generate_section_with_fallback` *(async)*
 
 **Signature:**
 ```
@@ -202,30 +214,29 @@ async _generate_section_with_fallback(
     implementation_context: str = "",
 ) -> str | None
 ```
+- Returns: Generated section text as a string, or `None` if all three attempts fail.
 
-**Responsibility:** Generates a single design document section via the LLM with a three-tier progressive fallback strategy to handle context window overflow.
+**Responsibility:** Shields section generation from context-window failures by retrying with progressively smaller prompts before giving up.
 
-**When to use:** Called once per template section inside `_generate_file_doc`.
+**When to use:** Called once per template section per file inside `_generate_file_doc`; it awaits `llm_client.generate` and is itself awaited sequentially per section.
 
-**Concurrency:** This is an `async` function. Each attempt `await`s `llm_client.generate()`; attempts are sequential, not parallel (the next is only tried on `ContextWindowExceededError`).
+**Design decisions:** Three attempts are tried in order:
 
-**Design decisions:**
+| Attempt | Callee context used |
+|---|---|
+| 1 | Full callee summary (`callee_context_summary`) |
+| 2 | Compact callee summary (`callee_context_compact`, 100-char truncation) |
+| 3 | No callee context (empty string) |
 
-| Attempt | Callee context used | Trigger |
-|---|---|---|
-| 1 | Full summary (`callee_context_summary`) | Initial attempt |
-| 2 | Compact summary (`callee_context_compact`) | `ContextWindowExceededError` on attempt 1 |
-| 3 | Empty string (no callee context) | `ContextWindowExceededError` on attempt 2 |
-
-- Non-context-window exceptions from `llm_client.generate()` are not caught here; only `ContextWindowExceededError` triggers fallback.
-- A `None` result from `llm_client.generate()` (LLM call failed without exception) terminates the loop for that attempt and continues to the next.
+- Only `ContextWindowExceededError` triggers a fallback; other exceptions propagate normally from `llm_client.generate`.
+- A warning is logged on each fallback step identifying the file and section.
 
 **Constraints & edge cases:**
-- Returns `None` if all three attempts fail or return `None`.
+- Returns `None` only when all three attempts raise `ContextWindowExceededError` or `generate` returns `None` on every attempt.
 
 ---
 
-## `_generate_file_doc` *(async)*
+### `_generate_file_doc` *(async)*
 
 **Signature:**
 ```
@@ -237,28 +248,23 @@ async _generate_file_doc(
     llm_client: LLMClient,
 ) -> dict | None
 ```
+- Returns: Design document dict with keys `file` (str), `sections` (list of `{id, title, content}`), `summary` (str); or `None` on complete failure.
 
-- Return type `dict` has shape `{file: str, sections: list[dict], summary: str}`.
+**Responsibility:** Orchestrates all LLM calls required to produce one complete design document: reading inputs, generating each section sequentially, and generating the summary.
 
-**Responsibility:** Orchestrates complete design document generation for a single file by loading its source and dependency data, generating all template sections sequentially, and producing a final summary.
-
-**When to use:** Called by `process_one` inside `generate_all_docs` when a file requires (re)generation.
-
-**Concurrency:** `async`; awaits `_generate_section_with_fallback` for each section sequentially, then awaits `_generate_summary`.
+**When to use:** Called once per file inside `process_one` (the inner coroutine of `generate_all_docs`) when regeneration is required.
 
 **Design decisions:**
-- Returns `None` (rather than raising) if the source file or `file_dependencies.json` cannot be found.
-- Returns `None` if no sections were successfully generated.
-- Sections that individually fail are skipped with a warning; partial documents (some sections missing) are still returned.
-- Summary generation failure (`_generate_summary` returns `None`) results in an empty string `""` in the returned dict rather than a hard failure.
+- Sections are generated **sequentially** (one `await` per section) rather than in parallel to avoid issuing too many concurrent LLM calls within a single file.
+- If any individual section fails completely, a warning is logged and that section is omitted rather than aborting the whole document.
+- Returns `None` only when zero sections were successfully generated.
 
 **Constraints & edge cases:**
-- `doc_map` must already contain entries for all dependency files that should contribute callee context; it is not modified by this function.
-- The source file is located via `_find_source_file`; returns `None` if not found.
+- Requires both a source file (discovered via `_find_source_file`) and a `file_dependencies.json` to be present in `file_output_dir`; returns `None` with a warning if either is missing.
 
 ---
 
-## `_generate_summary` *(async)*
+### `_generate_summary` *(async)*
 
 **Signature:**
 ```
@@ -269,102 +275,103 @@ async _generate_summary(
     llm_client: LLMClient,
 ) -> str | None
 ```
+- Returns: Summary text string, or `None` on any exception.
 
-**Responsibility:** Generates a short summary of the complete design document by sending all section contents to the LLM in a single prompt.
+**Responsibility:** Generates a concise summary of the entire design document by sending all section content to the LLM.
 
-**When to use:** Called once at the end of `_generate_file_doc` after all sections have been generated.
-
-**Concurrency:** `async`; a single `await` on `llm_client.generate()`.
+**When to use:** Called once per file at the end of `_generate_file_doc`, after all sections are collected.
 
 **Constraints & edge cases:**
-- All exceptions from `llm_client.generate()` are caught; returns `None` on any failure.
-- `summary_max_chars` is sourced from the `SUMMARY_MAX_CHARS` setting.
-- Does not implement fallback on `ContextWindowExceededError`; the full section content is always sent.
+- Any exception (not just `ContextWindowExceededError`) is caught and logged; the function returns `None` rather than propagating.
+- `SUMMARY_MAX_CHARS` from settings is used as the character-limit value in the prompt.
 
 ---
 
-## `_find_source_file`
+### `_find_source_file`
 
 **Signature:**
 ```
 _find_source_file(output_dir: str, file_rel: str) -> str | None
 ```
+- Returns: Absolute path to the source file copy, or `None` if not found.
 
-**Responsibility:** Locates the copied source file within an output directory by constructing its expected path from the original filename.
+**Responsibility:** Locates the copied source file within the output directory using only the base filename.
 
-**When to use:** Called by `_generate_file_doc` to resolve the readable source file path before loading its contents.
+**When to use:** Called inside `_generate_file_doc` to obtain the path to read source code from.
 
 **Constraints & edge cases:**
-- Returns `None` if the expected file does not exist; caller is responsible for handling `None`.
+- Only the base filename (not subdirectory structure) is used for the lookup; files with identical names in different subdirectories cannot be distinguished.
 
 ---
 
-## `_save_doc`
+### `_save_doc`
 
 **Signature:**
 ```
 _save_doc(doc: dict, output_dir: str) -> None
 ```
+- `doc`: Design document dict with keys `file`, `sections` (list of `{id, title, content}`), and optional `summary`.
 
-- `doc` has shape `{file: str, sections: list[dict], summary: str}`.
+**Responsibility:** Persists a completed design document to disk in both Markdown (human-readable) and JSON (machine-readable) formats.
 
-**Responsibility:** Persists a generated design document to disk in both Markdown (`doc.md`) and JSON (`doc.json`) formats.
-
-**When to use:** Called by `process_one` immediately after a successful `_generate_file_doc` call.
+**When to use:** Called inside `process_one` immediately after a successful `_generate_file_doc` call.
 
 **Design decisions:**
-- Markdown is written first; JSON is written second so that `doc.json` always has a timestamp equal to or newer than `doc.md`, which is the signal used by `_sync_md_to_json` to determine whether a sync is needed.
-- Before writing, any duplicate section title heading that the LLM may have prepended to section content is stripped using a regex on each section's `"content"` field. This mutation is applied in-place on the `doc` dict.
-- The summary is appended as a `## Summary` section in the Markdown only when it is non-empty.
+- Markdown is written **before** JSON so that JSON always has an equal or newer `mtime`, which is the invariant used by `_sync_md_to_json` to detect manual edits.
+- A regex substitution strips any duplicate `# {title}` heading that the LLM may have prepended to section content before writing.
+- The summary is appended as a `# Summary` section at the end of the Markdown file only when present.
+
+**Constraints & edge cases:**
+- Modifies `doc["sections"][*]["content"]` in-place during the heading-strip step, affecting the caller's dict.
 
 ---
 
-## `_parse_md_sections`
+### `_parse_md_sections`
 
 **Signature:**
 ```
 _parse_md_sections(md_text: str, section_titles: list[str]) -> dict[str, str]
 ```
+- `section_titles`: Titles used as delimiters; must match the `# {title}` pattern exactly.
+- Returns: Dict mapping title string → content text (stripped). Titles not found are absent from the result.
 
-**Responsibility:** Parses a `doc.md` file into a mapping of section title to section content, using known section titles as delimiters while treating `##` headings in LLM content as part of section bodies unless they exactly match a known title.
+**Responsibility:** Extracts section content from a Markdown design document by splitting on known `# {title}` headings.
 
-**When to use:** Called by `_sync_md_to_json` to extract editable section content from a manually modified Markdown file.
+**When to use:** Called inside `_sync_md_to_json` to parse the current state of `doc.md` for comparison with `doc.json`.
 
 **Design decisions:**
-- Matches only `## {known_title}` lines (exact match, multiline mode); arbitrary `##` headings inside section content are not treated as delimiters.
-- Uses `re.escape` on all section titles to prevent regex injection from unusual title characters.
+- Uses a compiled regex that matches `# {title}` only at line boundaries (`re.MULTILINE`) and only for the exact set of known titles via an alternation pattern.
+- Content boundaries are determined by adjacent match positions; the last section extends to end-of-file.
 
 **Constraints & edge cases:**
-- Sections not present in `md_text` are omitted from the returned dict rather than included with empty content.
-- `section_titles` should include `"Summary"` as the final entry to capture the summary block.
+- Only `#`-level headings (not `##` or deeper) are used as delimiters.
+- Sections whose heading does not appear in `section_titles` are not parsed.
 
 ---
 
-## `_sync_md_to_json`
+### `_sync_md_to_json`
 
 **Signature:**
 ```
 _sync_md_to_json(output_dir: str) -> None
 ```
 
-**Responsibility:** Propagates manual edits made to `doc.md` back into `doc.json` when the Markdown file has a newer modification timestamp, keeping both formats consistent.
+**Responsibility:** Propagates manual edits made to `doc.md` back into `doc.json` and re-saves both files in a consistent state.
 
-**When to use:** Called by `process_one` before reusing an existing `doc.json`, ensuring user edits in Markdown are not silently discarded.
+**When to use:** Called inside `process_one` for files that do not require regeneration, before attempting to reuse an existing `doc.json`.
 
 **Design decisions:**
-- Timestamp guard (`mtime(md) > mtime(json)`) prevents unnecessary parsing and write operations when no edits have been made.
-- A section's content is only updated if the **next** section (in JSON order) is also present in the parsed Markdown. This prevents incorrect boundary detection from partially overwriting content.
-- After updating `doc.json`, `_save_doc` is called to re-render `doc.md` from the updated JSON, normalizing formatting and ensuring `mtime(json) >= mtime(md)`.
-- `json.JSONDecodeError` and `OSError` during JSON loading are silently caught; the function returns without making changes.
+- Sync is skipped entirely when `doc.md` is not newer than `doc.json` (by `mtime`), making the operation a no-op for the common case.
+- A section in `doc.md` is only applied if the **next** section (in JSON order) is also present in the parsed MD; this guards against cases where an intermediate heading is missing and boundaries would be misidentified.
+- After updating JSON, `_save_doc` is called to regenerate `doc.md` from the updated JSON, ensuring both files are consistent and resetting `mtime` ordering.
 
 **Constraints & edge cases:**
-- No-ops if either `doc.json` or `doc.md` does not exist.
-- No-ops if the parsed Markdown yields no recognized sections.
-- Does not sync if no content differences are detected (`changed` remains `False`).
+- Silently returns if either file is missing or `doc.json` is unreadable.
+- Sections present in JSON but absent from MD are left unchanged.
 
 ---
 
-## `generate_all_docs` *(async)*
+### `generate_all_docs` *(async)*
 
 **Signature:**
 ```
@@ -376,237 +383,267 @@ async generate_all_docs(
     changed_files: set[str] | None = None,
 ) -> None
 ```
+- `project_dep_list`: Same structure as the output of `save_project_dependencies` (list of `{file, callers, callees}` dicts).
+- `changed_files`: Set of source-relative file paths. `None` means full regeneration; an empty set means no file changes.
 
-- `changed_files`: a set of project-relative file paths, or `None` to process all files.
+**Responsibility:** Entry point for the design document generation pipeline; processes all project files in dependency-level order, reusing existing documents where possible and parallelizing within each level.
 
-**Responsibility:** Entry point for the document generation pipeline; processes all project files in dependency order, parallelizing within each level while ensuring dependency documents are available for context in subsequent levels.
-
-**When to use:** Called from `codetwine/pipeline.py` when `ENABLE_LLM_DOC` is active, after dependency analysis is complete.
-
-**Concurrency:** `async`; within each level, files are batched into groups of `max_workers` and each batch is dispatched as concurrent `asyncio.Task`s via `asyncio.gather`. Levels are processed sequentially.
+**When to use:** Called once per pipeline run from `codetwine/pipeline.py` when `ENABLE_LLM_DOC` is set.
 
 **Design decisions:**
-- `doc_map` is accumulated across all levels; each completed document is immediately added so that files in later levels can reference earlier documents as callee context.
-- `regenerated_files` tracks which files were actually regenerated in the current run. A file that was not changed itself but has a regenerated dependency is still marked for regeneration, propagating changes through the dependency graph.
-- Exceptions from individual `process_one` tasks are caught via `return_exceptions=True` in `asyncio.gather` and logged rather than halting the entire pipeline.
+- Files within each level are processed in **parallel batches** of up to `max_workers` tasks using `asyncio.gather`; levels themselves are processed **sequentially** to ensure dependency documents are in `doc_map` before dependent files are processed.
+- `doc_map` accumulates only successfully generated or reused documents; it is shared across levels but mutated only after each level's batch completes.
+- `regenerated_files` tracks files regenerated in the current run so that callers of a regenerated file are also marked for regeneration, even if the caller file itself is not in `changed_files`.
+- `_is_doc_complete` validates that a reused document contains exactly the expected section IDs from the current template and a non-empty summary; incomplete documents are regenerated.
+- `asyncio.gather(..., return_exceptions=True)` is used so one task's exception does not cancel sibling tasks; exceptions are logged individually.
 
 **Inner functions:**
 
-| Name | Signature | Responsibility |
+| Name | Signature | Purpose |
 |---|---|---|
-| `_needs_regeneration` | `(file_rel: str) -> bool` | Determines if a file must be regenerated based on `changed_files`, `file_callees`, and `regenerated_files`. Returns `True` when `changed_files is None` (full regeneration). |
-| `_is_doc_complete` | `(doc: dict) -> bool` | Validates that an existing `doc.json` contains exactly the sections defined in the template and a non-empty summary (when `"summary_prompt"` is present). |
-| `process_one` | `async (file_rel: str) -> tuple[str, dict \| None]` | Handles the full lifecycle for one file: directory check, reuse decision, sync, generation, and saving. Returns `(file_rel, doc)`. |
+| `_needs_regeneration` | `(file_rel: str) -> bool` | Determines whether a file requires regeneration based on `changed_files` and `regenerated_files`. |
+| `_is_doc_complete` | `(doc: dict) -> bool` | Validates that a cached document has all template sections and a summary. |
+| `process_one` *(async)* | `(file_rel: str) -> tuple[str, dict \| None]` | Coordinates reuse-or-regenerate logic for a single file; returns `(file_rel, doc)`. |
 
 **Constraints & edge cases:**
-- Files whose output directory does not exist are skipped with a warning.
-- If `doc.json` cannot be read (corrupt or missing), `process_one` falls through to regeneration.
-- Files for which `_generate_file_doc` returns `None` are logged as `SKIP` and contribute `None` to `doc_map` (they are not inserted).
+- Files whose output directory does not exist on disk are skipped with a warning.
+- If `doc.json` is unreadable (corrupt JSON or OS error), the file falls back to regeneration silently.
+- `changed_files=None` forces regeneration of every file regardless of existing documents.
 
-## Dependency Description
+# Dependency Description
 
-### Dependencies (modules this file imports)
+## Dependencies (modules this file imports)
 
-**`doc_creator.py` → `codetwine/utils/file_utils.py`**
-- Symbols: `output_path_to_rel`, `resolve_file_output_dir`
-- Purpose: `output_path_to_rel` converts output-format paths back to project-relative source paths (used when labeling callee/caller usages in prompts and building callee context summaries). `resolve_file_output_dir` resolves the absolute output directory path for a given file's relative path (used to locate source copies, `file_dependencies.json`, and doc output targets).
+**`codetwine/doc_creator.py` → `codetwine/utils/file_utils.py`**
+Symbols: `output_path_to_rel`, `resolve_file_output_dir`
+Purpose: Converts output-format paths back to source-relative paths (used when building prompts and looking up `doc_map`), and resolves the absolute output directory path for a given file's relative path (used when locating source copies and dependency JSON files).
 
-**`doc_creator.py` → `codetwine/llm/client.py`**
-- Symbol: `LLMClient`
-- Purpose: Provides the async LLM API wrapper used to generate section content and summaries for each design document via `LLMClient.generate()`.
+**`codetwine/doc_creator.py` → `codetwine/config/settings.py`**
+Symbols: `MAX_WORKERS`, `DOC_TEMPLATE_PATH`, `OUTPUT_LANGUAGE`, `SUMMARY_MAX_CHARS`
+Purpose: Reads runtime configuration constants — the default parallelism level for batch processing, the file system path to the document template, the target output language for LLM-generated text, and the maximum character limit for generated summaries.
 
-**`doc_creator.py` → `codetwine/llm/__init__.py`**
-- Symbol: `ContextWindowExceededError`
-- Purpose: Caught during section generation to trigger progressive fallback logic (retrying with compressed or omitted callee context when the prompt exceeds the LLM's context window).
+**`codetwine/doc_creator.py` → `codetwine/llm/client.py`**
+Symbol: `LLMClient`
+Purpose: Sends assembled prompts to the LLM and retrieves generated text for each document section and for the per-file summary.
 
-**`doc_creator.py` → `codetwine/config/settings.py`**
-- Symbols: `MAX_WORKERS`, `DOC_TEMPLATE_PATH`, `OUTPUT_LANGUAGE`, `SUMMARY_MAX_CHARS`
-- Purpose: Supplies runtime configuration constants — `MAX_WORKERS` controls per-level parallelism, `DOC_TEMPLATE_PATH` locates the section template JSON, `OUTPUT_LANGUAGE` is injected into prompts to specify the output language, and `SUMMARY_MAX_CHARS` sets the character limit for generated summaries.
-
----
-
-### Dependents (modules that import this file)
-
-**`codetwine/pipeline.py` → `doc_creator.py`**
-- Symbol: `generate_all_docs`
-- Purpose: The pipeline calls `generate_all_docs` as the top-level entry point to drive the entire design document generation process, passing it the base output directory, the project dependency list, the LLM client instance, the worker count, and the set of changed files.
+**`codetwine/doc_creator.py` → `codetwine/llm/__init__.py`**
+Symbol: `ContextWindowExceededError`
+Purpose: Catches this exception during section generation to implement the progressive fallback strategy (full callee context → compact callee context → no callee context).
 
 ---
 
-### Dependency Direction
+## Dependents (modules that import this file)
+
+**`codetwine/pipeline.py` → `codetwine/doc_creator.py`**
+Symbol: `generate_all_docs`
+Purpose: The pipeline module calls `generate_all_docs` as the final stage of the overall processing pipeline to produce LLM-based design documents for all analysed project files, passing in the base output directory, the project-level dependency list, the LLM client, the worker count, and the set of changed files.
+
+---
+
+## Dependency Direction
 
 All relationships are **unidirectional**:
 
-- `doc_creator.py` → `codetwine/utils/file_utils.py` — `doc_creator.py` consumes path utilities; `file_utils.py` has no knowledge of `doc_creator.py`.
-- `doc_creator.py` → `codetwine/llm/client.py` — `doc_creator.py` drives LLM calls; `LLMClient` has no knowledge of `doc_creator.py`.
-- `doc_creator.py` → `codetwine/llm/__init__.py` — `doc_creator.py` catches the re-exported exception; the `llm` package has no knowledge of `doc_creator.py`.
-- `doc_creator.py` → `codetwine/config/settings.py` — `doc_creator.py` reads configuration constants; `settings.py` has no knowledge of `doc_creator.py`.
-- `codetwine/pipeline.py` → `doc_creator.py` — the pipeline invokes `generate_all_docs`; `doc_creator.py` has no knowledge of `pipeline.py`.
+- `codetwine/doc_creator.py` → `codetwine/utils/file_utils.py` (one-way; `file_utils` does not import from `doc_creator`)
+- `codetwine/doc_creator.py` → `codetwine/config/settings.py` (one-way; `settings` does not import from `doc_creator`)
+- `codetwine/doc_creator.py` → `codetwine/llm/client.py` (one-way; `client` does not import from `doc_creator`)
+- `codetwine/doc_creator.py` → `codetwine/llm/__init__.py` (one-way; `llm/__init__` does not import from `doc_creator`)
+- `codetwine/pipeline.py` → `codetwine/doc_creator.py` (one-way; `doc_creator` does not import from `pipeline`)
 
-## Data Flow
+# Data Flow
 
-## 1. Inputs
+### 1. Inputs
 
-| Input | Source | Format |
-|---|---|---|
-| `base_output_dir` | Caller (`pipeline.py`) | `str` — filesystem path to the root output directory |
-| `project_dep_list` | Caller (`pipeline.py`) | `list[dict]` — each entry: `{file, callers, callees}` |
-| `llm_client` | Caller (`pipeline.py`) | `LLMClient` instance |
-| `max_workers` | Config (`MAX_WORKERS`) / caller | `int` — parallelism limit per level |
-| `changed_files` | Caller (`pipeline.py`) | `set[str] \| None` — relative paths of changed files |
-| `DOC_TEMPLATE_PATH` | Config / filesystem | JSON file containing `{sections, summary_prompt}` |
-| Per-file source code | Filesystem (`output_dir/<filename>`) | Raw text |
-| `file_dependencies.json` | Filesystem (per-file output dir) | JSON: `{file, callee_usages, caller_usages, definitions}` |
-| `doc.json` / `doc.md` | Filesystem (per-file output dir) | Existing design documents (for reuse or MD→JSON sync) |
-| `OUTPUT_LANGUAGE`, `SUMMARY_MAX_CHARS` | Config | `str`, `int` |
+| Source | Format | Description |
+|--------|--------|-------------|
+| `base_output_dir` (arg) | `str` | Root directory containing per-file output subdirectories |
+| `project_dep_list` (arg) | `list[dict]` | Project-wide dependency list from `project_dependencies.json` |
+| `llm_client` (arg) | `LLMClient` | Async LLM API client used for text generation |
+| `max_workers` (arg / config) | `int` | Max parallel tasks per dependency level (default: `MAX_WORKERS`) |
+| `changed_files` (arg) | `set[str] \| None` | Relative paths of files changed since last run; `None` = full rebuild |
+| `DOC_TEMPLATE_PATH` (config) | JSON file path | Template defining section definitions and summary prompt |
+| `{file_output_dir}/file_dependencies.json` (file read) | JSON | Per-file callee/caller usage data and symbol definitions |
+| `{file_output_dir}/{filename}` (file read) | plain text | Copied source code of the target file |
+| `{file_output_dir}/doc.json` (file read, conditional) | JSON | Previously generated design document (reuse path) |
+| `{file_output_dir}/doc.md` (file read, conditional) | Markdown | Potentially hand-edited design document (MD→JSON sync path) |
+| `{stem}_{impl_ext}/{stem}.{impl_ext}` (file read, conditional) | plain text | Implementation file source code for C/C++ header files |
 
 ---
 
-## 2. Transformation Overview
+### 2. Transformation Overview
 
 ```
 project_dep_list
        │
        ▼
 _topological_sort_by_level()
-       │  Produces level_list: list[list[str]]
-       │  (Level 0 = no-dependency leaf files; Level N = files depending on N-1)
+       │  Kahn's BFS on the reverse dependency graph
+       │  produces level_list: list[list[str]]
        ▼
-For each level (sequential), batches of max_workers (parallel):
+For each level (outermost loop, sequential):
+  For each batch of ≤ max_workers files (inner loop, parallel):
+    ┌─────────────────────────────────────────────────────┐
+    │ process_one(file_rel)                               │
+    │                                                     │
+    │  ① _needs_regeneration()                           │
+    │     • changed_files / callee membership check      │
+    │     │                                              │
+    │     ├─ NO → _sync_md_to_json() → load doc.json    │
+    │     │       → _is_doc_complete() → REUSE           │
+    │     │                                              │
+    │     └─ YES → _generate_file_doc()                  │
+    │               │                                    │
+    │               ├─ read source file (plain text)     │
+    │               ├─ read file_dependencies.json       │
+    │               ├─ _build_callee_context_summary()   │
+    │               │    doc_map[callee]["summary"]       │
+    │               │    → bullet-list string            │
+    │               ├─ _build_implementation_context()   │
+    │               │    (header files only)             │
+    │               │                                    │
+    │               └─ For each template section:        │
+    │                   _generate_section_with_fallback()│
+    │                     attempt 1: full callee context │
+    │                     attempt 2: compact context     │
+    │                     attempt 3: no callee context   │
+    │                     → _build_section_prompt()      │
+    │                     → llm_client.generate(prompt)  │
+    │                     → section content str          │
+    │                                                    │
+    │               _generate_summary()                  │
+    │                 → _build_summary_prompt()          │
+    │                 → llm_client.generate(prompt)      │
+    │                 → summary str                      │
+    │                                                    │
+    │               → doc dict {file, sections, summary} │
+    │               → _save_doc() → doc.md + doc.json   │
+    └─────────────────────────────────────────────────────┘
        │
-       ├─► _needs_regeneration(file_rel)
-       │         │ false → _sync_md_to_json() + reuse existing doc.json
-       │         │ true  ↓
-       │
-       ├─► _generate_file_doc(file_rel, output_dir, doc_map, template, llm_client)
-       │         │
-       │         ├─ Read source code (filesystem)
-       │         ├─ Read file_dependencies.json (filesystem)
-       │         │
-       │         ├─ _build_callee_context_summary(file_deps, doc_map)
-       │         │       Extracts summaries from doc_map for callee files → callee_context_summary (str)
-       │         │       Also produces callee_context_compact (truncated to 100 chars each)
-       │         │
-       │         ├─ _build_implementation_context(file_rel, file_output_dir)
-       │         │       For .h/.hpp headers: reads paired .cpp/.c source → implementation_context (str)
-       │         │
-       │         └─ For each section in template["sections"]:
-       │               _generate_section_with_fallback(...)
-       │                     │
-       │                     ├─ Attempt 1: _build_section_prompt(..., callee_context_summary)
-       │                     ├─ Attempt 2: _build_section_prompt(..., callee_context_compact)  [on ContextWindowExceededError]
-       │                     └─ Attempt 3: _build_section_prompt(..., "")                      [on ContextWindowExceededError]
-       │                           │
-       │                           └─ llm_client.generate(prompt) → section content (str)
-       │         │
-       │         └─ _generate_summary(file_rel, section_list, template, llm_client)
-       │                 _build_summary_prompt(...) → llm_client.generate(prompt) → summary (str)
-       │
-       ├─► _save_doc(doc, output_dir)
-       │         Writes doc.md + doc.json
-       │
-       └─► doc_map[file_rel] = doc
-               (accumulated across levels; used as callee context for higher levels)
+       ▼
+  doc_map[file_rel] = doc        ← feeds callee context for next levels
+  regenerated_files.add(file_rel) ← propagates regeneration to callers
 ```
 
-The key sequential constraint is that each level waits for all prior levels to complete before starting, because `doc_map` must contain summaries of all dependencies before a file's prompt is assembled.
+**Fan-out / merge:** Within each level, all files are independent and processed concurrently via `asyncio.gather`. Results are collected and merged sequentially into `doc_map` before the next level begins, ensuring that downstream files (higher levels) always see complete callee summaries.
 
-Within a level, files are processed in concurrent batches (`asyncio.gather`) up to `max_workers` at a time.
+**Fallback cascade in `_generate_section_with_fallback`:** If the LLM raises `ContextWindowExceededError`, the prompt is rebuilt with progressively less callee context (full → 100-char truncated → none) and retried without propagating the error to the caller.
 
----
-
-## 3. Outputs
-
-| Output | Destination | Format |
-|---|---|---|
-| `doc.md` | `{output_dir}/doc.md` | Markdown: title heading, one `##` section per template section, optional `## Summary` |
-| `doc.json` | `{output_dir}/doc.json` | JSON: `{file, sections: [{id, title, content}], summary}` |
-| `doc_map` (in-memory) | Passed as context to subsequent levels | `dict[str, dict]` — accumulated design document dicts keyed by relative file path |
-| Console / log output | stdout + logger | Progress messages: level counts, `REUSE`, `OK`, `SKIP`, `INCOMPLETE` per file |
+**MD→JSON sync path:** Before reusing an existing `doc.json`, `_sync_md_to_json` compares file modification times. If `doc.md` is newer, it parses the Markdown with `_parse_md_sections`, diffs each section against the JSON, and overwrites the JSON. This path only fires in the reuse branch (`_needs_regeneration` returns `False`).
 
 ---
 
-## 4. Key Data Structures
+### 3. Outputs
 
-### `project_dep_list` element
-| Field / Key | Type | Purpose |
-|---|---|---|
-| `file` | `str` | Relative path of the source file |
-| `callers` | `list` | Files that use symbols from this file |
-| `callees` | `list[str]` | Files whose symbols this file uses (dependency paths) |
-
-### `template` (loaded from `DOC_TEMPLATE_PATH`)
-| Field / Key | Type | Purpose |
-|---|---|---|
-| `sections` | `list[dict]` | Ordered list of section definitions |
-| `sections[].id` | `str` | Unique section identifier |
-| `sections[].title` | `str` | Section heading text |
-| `sections[].prompt` | `str` | LLM instruction for this section |
-| `summary_prompt` | `str` | LLM instruction for the overall summary |
-
-### `file_deps` (from `file_dependencies.json`)
-| Field / Key | Type | Purpose |
-|---|---|---|
-| `file` | `str` | Relative path of this file |
-| `callee_usages` | `list[dict]` | Symbols this file consumes from external files |
-| `callee_usages[].name` | `str` | Symbol name |
-| `callee_usages[].from` | `str` | Output-format path of the file defining the symbol |
-| `callee_usages[].target_context` | `str \| None` | Full source of the dependency file |
-| `caller_usages` | `list[dict]` | External files consuming symbols from this file |
-| `caller_usages[].name` | `str` | Symbol name |
-| `caller_usages[].file` | `str` | Path of the file using the symbol |
-| `caller_usages[].usage_context` | `str \| None` | Source snippet of the usage location |
-
-### `doc` / `doc_map` value
-| Field / Key | Type | Purpose |
-|---|---|---|
-| `file` | `str` | Relative path of the documented file |
-| `sections` | `list[dict]` | Generated section list (id, title, content) |
-| `sections[].id` | `str` | Section identifier matching template |
-| `sections[].title` | `str` | Section heading |
-| `sections[].content` | `str` | LLM-generated section text |
-| `summary` | `str` | LLM-generated short summary (≤ `SUMMARY_MAX_CHARS` chars) |
-
-### `level_list`
-| Field / Key | Type | Purpose |
-|---|---|---|
-| Outer list index | `int` | Level number (0 = no dependencies) |
-| Inner `list[str]` | `list[str]` | Relative paths of files at this dependency depth |
-
-## Error Handling
-
-### 1. Overall Strategy
-
-The file employs a **graceful degradation with logging-and-continue** strategy. No error causes the entire generation pipeline to terminate. Instead, failures at each granularity level (individual LLM call, section, file) are caught, logged, and skipped, allowing the remaining work to proceed. For LLM context window overflows specifically, a **progressive fallback** retry sequence is applied before giving up on a section.
+| Output | Format | Description |
+|--------|--------|-------------|
+| `{file_output_dir}/doc.md` | Markdown file | Human-readable design document with one `# {title}` heading per section plus a `# Summary` section |
+| `{file_output_dir}/doc.json` | JSON file | Machine-readable design document dict (see Key Data Structures) |
+| `doc_map` (in-memory, internal) | `dict[str, dict]` | Accumulates all generated docs; consumed within the same run as callee context |
+| `regenerated_files` (in-memory, internal) | `set[str]` | Tracks which files were rebuilt; used to propagate regeneration necessity to dependent files |
+| Console / log output | text | Per-file status lines (`REUSE`, `OK`, `SKIP`, `INCOMPLETE`) and level progress messages |
 
 ---
 
-### 2. Error Pattern Table
+### 4. Key Data Structures
+
+#### `project_dep_list` element (input)
+
+| Field / Key | Type | Purpose |
+|-------------|------|---------|
+| `file` | `str` | Project-relative path of the file |
+| `callees` | `list[str]` | Paths of files this file depends on |
+| `callers` | `list[str]` | Paths of files that depend on this file |
+
+#### `file_dependencies.json` / `file_deps` dict (per-file input)
+
+| Field / Key | Type | Purpose |
+|-------------|------|---------|
+| `file` | `str` | Output-format path of the target file |
+| `callee_usages` | `list[dict]` | Symbols this file imports/calls from other files |
+| `caller_usages` | `list[dict]` | Symbols other files import/call from this file |
+
+##### `callee_usages` element
+
+| Field / Key | Type | Purpose |
+|-------------|------|---------|
+| `name` | `str` | Symbol name being used |
+| `from` | `str` | Output-format path of the file defining the symbol |
+| `target_context` | `str \| None` | Full source code of the dependency file (optional) |
+
+##### `caller_usages` element
+
+| Field / Key | Type | Purpose |
+|-------------|------|---------|
+| `name` | `str` | Symbol name being used |
+| `file` | `str` | Output-format path of the file that uses the symbol |
+| `usage_context` | `str \| None` | Source code snippet from the calling file (optional) |
+
+#### Design document dict (output, stored as `doc.json`)
+
+| Field / Key | Type | Purpose |
+|-------------|------|---------|
+| `file` | `str` | Project-relative path of the source file |
+| `sections` | `list[dict]` | Ordered list of generated section dicts |
+| `summary` | `str` | Short summary of the entire document (≤ `SUMMARY_MAX_CHARS` chars) |
+
+##### `sections` element
+
+| Field / Key | Type | Purpose |
+|-------------|------|---------|
+| `id` | `str` | Section identifier matching the template |
+| `title` | `str` | Human-readable section heading |
+| `content` | `str` | LLM-generated text for this section |
+
+#### `doc_map` (in-memory accumulator)
+
+| Field / Key | Type | Purpose |
+|-------------|------|---------|
+| key | `str` | Project-relative file path |
+| value | `dict` | Full design document dict (`file`, `sections`, `summary`) |
+
+#### `level_list` (intermediate, from topological sort)
+
+| Field / Key | Type | Purpose |
+|-------------|------|---------|
+| outer index | `int` | Dependency depth level (0 = no dependencies) |
+| element | `list[str]` | Sorted file relative paths at that level, safe to process in parallel |
+
+# Error Handling
+
+## 1. Overall Strategy
+
+The module follows a **graceful degradation with logging-and-continue** strategy. No single file failure is allowed to abort the entire document generation pipeline. Errors are caught at the finest granularity available (individual LLM calls, individual sections, individual files), logged at the appropriate severity level, and processing continues with the remaining work. Where retries are meaningful (context window overflow), a progressive fallback sequence is applied before giving up on a unit of work.
+
+---
+
+## 2. Error Pattern Table
 
 | Error Type | Trigger Condition | Handling | Recoverable? | Impact |
 |---|---|---|---|---|
-| `ContextWindowExceededError` | Prompt exceeds the LLM's context window | Retried up to 3 times with progressively reduced context: full callee summary → compact callee summary (100 chars each) → no callee context | Yes | Section may be generated with reduced context; if all attempts fail, section is skipped |
-| LLM returns `None` | `llm_client.generate()` returns `None` (e.g. after max retries inside `LLMClient`) | Section or summary is treated as a failure; warning is logged | Yes (section skipped) | Affected section is omitted from the document |
-| All sections fail to generate | Every section in `_generate_file_doc` yields `None` | Error logged; `_generate_file_doc` returns `None` | Yes (file skipped) | File's document is not produced; file is not added to `doc_map` |
-| Summary generation failure | Any exception from `llm_client.generate()` during summary generation | Warning logged; summary is set to empty string `""` | Yes | Document is saved without a summary field |
-| Source file not found | `_find_source_file` finds no copied source in the output directory | Warning logged; `_generate_file_doc` returns `None` | Yes (file skipped) | File's document is not produced |
-| `file_dependencies.json` missing | The JSON file does not exist in the expected output directory | Warning logged; `_generate_file_doc` returns `None` | Yes (file skipped) | File's document is not produced |
-| Output directory missing | `resolve_file_output_dir` returns a path that does not exist as a directory | Warning logged; `process_one` returns `(file_rel, None)` | Yes (file skipped) | File is silently skipped in the current level |
-| Corrupt or unreadable `doc.json` | `json.JSONDecodeError` or `OSError` when loading an existing document for reuse | Exception silently suppressed; falls back to full regeneration | Yes | LLM is called even though a cached document exists |
-| Corrupt or unreadable `doc.json` during MD→JSON sync | `json.JSONDecodeError` or `OSError` in `_sync_md_to_json` | Exception silently suppressed; sync is aborted | Yes (sync skipped) | Manual MD edits are not propagated to JSON for this file |
-| `asyncio.gather` task raises an exception | An unhandled exception propagates from a `process_one` task | Exception is caught via `return_exceptions=True`; logged at ERROR level; result skipped | Yes (file skipped) | File is not added to `doc_map`; downstream dependents lose its context |
-| Circular dependencies | Kahn's algorithm cannot fully drain the dependency graph | Remaining files are collected into a final level; warning logged | Yes | Circularly dependent files are processed last, potentially without each other's context |
+| `ContextWindowExceededError` on a section | Prompt for a section exceeds the model's context window | Retried up to three times with progressively reduced callee context: (1) full summary, (2) compact 100-char summary, (3) no callee context | Yes | Section may be generated with less dependency context |
+| All fallback attempts fail for a section | `ContextWindowExceededError` persists after all three fallback attempts | Section is skipped; warning logged | Yes (section skipped) | That section is absent from the final document |
+| All sections fail for a file | Every section generation returns `None` | File document skipped entirely; error logged | Yes (file skipped) | No document produced for that file; `doc_map` entry absent |
+| Summary generation failure | Any exception during summary LLM call | Warning logged; summary set to empty string `""` | Yes | Document saved without a summary |
+| `asyncio.gather` task raises an exception | Unhandled exception in `process_one` coroutine | Exception caught by the gather result loop; error logged; tuple result skipped | Yes | That file produces no `doc_map` entry |
+| Source file not found in output directory | `_find_source_file` returns `None` (file absent) | Warning logged; `_generate_file_doc` returns `None` | Yes (file skipped) | No document for that file |
+| `file_dependencies.json` missing | File absent from the expected output directory | Warning logged; `_generate_file_doc` returns `None` | Yes (file skipped) | No document for that file |
+| `doc.json` unreadable or malformed JSON | `json.JSONDecodeError` or `OSError` when loading existing doc | Silently falls through to full regeneration | Yes (fallback to regeneration) | LLM call is made instead of reusing cached doc |
+| `doc.json` or `doc.md` unreadable in sync | `json.JSONDecodeError` or `OSError` in `_sync_md_to_json` | Function returns early without changes | Yes | MD→JSON sync skipped for that file |
+| Output directory missing | `resolve_file_output_dir` returns a path that is not a directory | Warning logged; `process_one` returns `(file_rel, None)` | Yes (file skipped) | No document for that file |
+| Circular dependency in project graph | Kahn's algorithm leaves unprocessed files | Remaining files appended to the last processing level; warning logged | Yes | Those files are processed last without guaranteed correct ordering |
 
 ---
 
-### 3. Design Notes
+## 3. Design Notes
 
-- **Granularity isolation**: Errors are contained at the smallest possible scope—section, then file, then batch—so a single failing LLM call never aborts the level or the overall run.
-- **Progressive context reduction for context overflow**: Rather than immediately discarding callee context on a `ContextWindowExceededError`, the fallback sequence attempts to preserve as much context as possible (full → compact → none), reflecting a deliberate trade-off between context richness and prompt feasibility.
-- **Silent suppression for cache reads**: Failures reading existing `doc.json` files are suppressed without logging and treated as a cache miss. This prioritises forward progress over surfacing storage errors.
-- **`doc_map` integrity**: Files that fail generation return `None` and are excluded from `doc_map`, meaning their summaries are unavailable to dependent files processed in later levels. This is an accepted consequence of the graceful-skip strategy rather than a propagated error.
-- **`return_exceptions=True` in `asyncio.gather`**: Ensures that an exception in one concurrent task does not cancel sibling tasks within the same batch, consistent with the overall non-terminating philosophy.
+**Progressive context fallback** is the core resilience mechanism for LLM calls. Because context window limits are an inherent constraint of the underlying model, the design avoids a hard failure and instead sacrifices progressively less critical context (dependency design document summaries) before ultimately generating a section with no callee context at all. This ensures that even large files with many dependencies can still produce a document.
 
-## Summary
+**Coarse-to-fine failure granularity** is deliberate: a failure at the section level does not fail the file, and a failure at the file level does not fail the pipeline. This is appropriate for a batch documentation generation workload where partial output is more valuable than no output.
 
-`doc_creator.py` generates LLM-based design documents for all project source files in dependency order. Public entry point: `generate_all_docs(base_output_dir: str, project_dep_list: list, llm_client: LLMClient, max_workers: int, changed_files: set[str]|None) -> None`. Consumes `project_dep_list` (`list[dict]` with `file`, `callers`, `callees`) and a `template` dict (`sections[{id, title, prompt}]`, `summary_prompt`). Produces per-file `doc.md` and `doc.json` (`{file: str, sections: list[dict], summary: str}`) and accumulates an in-memory `doc_map: dict[str, dict]` used as callee context for dependent files.
+**Silent fallback to regeneration** on JSON read errors (rather than propagating the exception) reflects a conservative assumption: if the cached state cannot be trusted, re-generating from the LLM is always a safe default.
+
+**`asyncio.gather` exception isolation** ensures that a coroutine crash in one file's processing task does not cancel sibling tasks within the same batch, preserving parallelism and overall throughput.
+
+# Summary
+
+Generates LLM-based design documents for all project source files. Public entry point: `generate_all_docs(base_output_dir: str, project_dep_list: list, llm_client: LLMClient, max_workers: int, changed_files: set[str]|None) -> None`. Consumes `project_dep_list` (list of `{file, callers, callees}` dicts) and per-file `file_dependencies.json`. Produces `doc.md` and `doc.json` per file; `doc.json` contains `{file: str, sections: list[{id, title, content}], summary: str}`. Maintains in-memory `doc_map: dict[str, dict]` to propagate dependency summaries across levels.

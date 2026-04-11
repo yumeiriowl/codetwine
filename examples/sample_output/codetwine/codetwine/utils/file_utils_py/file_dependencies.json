@@ -115,6 +115,7 @@
     },
     {
       "lines": [
+        202,
         227,
         244,
         343,
@@ -122,11 +123,11 @@
       ],
       "name": "output_path_to_rel",
       "file": "codetwine/codetwine/doc_creator_py/doc_creator.py",
-      "usage_context": "        parts.append(HEADER_CALLEE_USAGES)\n        parts.append(CALLEE_USAGES_SCHEMA_NOTE)\n        for u in callee_usages:\n            parts.append(f\"- {u['name']} (from {output_path_to_rel(u['from'])})\")\n            # Attach the full dependency source code if available\n            target_context = u.get(\"target_context\")\n            if target_context:\n...\n        parts.append(HEADER_CALLER_USAGES)\n        parts.append(CALLER_USAGES_SCHEMA_NOTE)\n        for u in caller_usages:\n            parts.append(f\"- {u['name']} (from {output_path_to_rel(u['file'])})\")\n            usage_context = u.get(\"usage_context\")\n            if usage_context:\n                parts.append(CALLER_SOURCE_CODE_LABEL)"
+      "usage_context": "    \"\"\"\n    # Basic prompt structure: target file name + source code\n    parts = [\n        HEADER_TARGET_FILE.format(file=output_path_to_rel(file_deps.get('file', 'unknown'))),\n        \"\",\n        HEADER_SOURCE_CODE,\n        \"```\",\n...\n        parts.append(HEADER_CALLEE_USAGES)\n        parts.append(CALLEE_USAGES_SCHEMA_NOTE)\n        for u in callee_usages:\n            parts.append(f\"- {u['name']} (from {output_path_to_rel(u['from'])})\")\n            # Attach the full dependency source code if available\n            target_context = u.get(\"target_context\")\n            if target_context:"
     },
     {
       "lines": [
-        833
+        832
       ],
       "name": "resolve_file_output_dir",
       "file": "codetwine/codetwine/doc_creator_py/doc_creator.py",
