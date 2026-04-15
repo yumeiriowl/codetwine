@@ -90,7 +90,7 @@
   "caller_usages": [
     {
       "lines": [
-        383
+        427
       ],
       "name": "extract_definitions",
       "file": "codetwine/codetwine/import_to_path_py/import_to_path.py",
@@ -98,7 +98,7 @@
     },
     {
       "lines": [
-        52
+        53
       ],
       "name": "extract_definitions",
       "file": "codetwine/codetwine/file_analyzer_py/file_analyzer.py",

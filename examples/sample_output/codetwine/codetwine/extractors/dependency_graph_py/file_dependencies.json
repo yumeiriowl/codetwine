@@ -4,51 +4,51 @@
     {
       "name": "logger",
       "type": "expression_statement",
-      "start_line": 19,
-      "end_line": 19,
+      "start_line": 20,
+      "end_line": 20,
       "context": "logger = logging.getLogger(__name__)"
     },
     {
       "name": "_is_inside_import",
       "type": "function_definition",
-      "start_line": 22,
-      "end_line": 41,
+      "start_line": 23,
+      "end_line": 42,
       "context": "def _is_inside_import(node) -> bool:\n    \"\"\"Determine whether an AST node is inside an import/include statement.\n\n    Traverse ancestors from the node to the root using tree-sitter's Node.parent,\n    and check for import-related node types (import_statement, import_from_statement,\n    import_declaration, preproc_include, etc.).\n\n    Args:\n        node: The tree-sitter AST node to check.\n\n    Returns:\n        True if the node is inside an import/include statement.\n    \"\"\"\n    current = node.parent\n    while current is not None:\n        node_type = current.type\n        if \"import\" in node_type or node_type == \"preproc_include\":\n            return True\n        current = current.parent\n    return False"
     },
     {
       "name": "_DEFINITION_NAME_NODE_TYPES",
       "type": "expression_statement",
-      "start_line": 44,
-      "end_line": 44,
+      "start_line": 45,
+      "end_line": 45,
       "context": "_DEFINITION_NAME_NODE_TYPES = {\"identifier\", \"type_identifier\", \"namespace_identifier\"}"
     },
     {
       "name": "_find_definition_node",
       "type": "function_definition",
-      "start_line": 47,
-      "end_line": 72,
+      "start_line": 48,
+      "end_line": 73,
       "context": "def _find_definition_node(root_node, definition_name: str):\n    \"\"\"Search the AST by breadth-first search (BFS) and return the definition node with the specified name.\n\n    Target node types for the search:\n        identifier           - Function names, variable names, class names (Python/Java/Kotlin/JS)\n        type_identifier      - Type names (C/C++ struct/class/enum, TS interface/type alias)\n        namespace_identifier - Namespace names (C++ namespace)\n\n    Nodes inside import statements are skipped (they are references, not definitions).\n\n    Args:\n        root_node: The AST root node covering the entire file.\n        definition_name: The definition name to search for (e.g. \"parse_file\", \"Point\", \"geometry\").\n\n    Returns:\n        The parent node containing the definition. None if not found.\n    \"\"\"\n    queue = deque((child, root_node) for child in root_node.children)\n    while queue:\n        node, parent = queue.popleft()\n        if node.type in _DEFINITION_NAME_NODE_TYPES and node.text.decode(\"utf-8\") == definition_name:\n            if not _is_inside_import(node):\n                return parent\n        for child in node.children:\n            queue.append((child, node))\n    return None"
     },
     {
       "name": "extract_callee_source",
       "type": "function_definition",
-      "start_line": 75,
-      "end_line": 115,
+      "start_line": 76,
+      "end_line": 116,
       "context": "def extract_callee_source(\n    callee_file_path: str,\n    callee_name: str,\n    project_dir: str,\n) -> str | None:\n    \"\"\"Retrieve the definition source code for a specified name from the dependency target file.\n\n    Search the AST by breadth-first search (BFS) to find an identifier matching callee_name,\n    then return the entire source code of its parent node (function_definition / class_definition /\n    assignment, etc.).\n\n    Parse results are reused via the module-level cache in ts_parser.py.\n\n    Args:\n        callee_file_path: Path of the dependency target file (relative to project root, e.g. \"src/foo.py\").\n        callee_name: Name of the definition to retrieve (e.g. \"parse_file\", \"helper.process\").\n        project_dir: Absolute path to the project root.\n\n    Returns:\n        The source code string. None if the definition is not found.\n    \"\"\"\n\n    absolute_path = os.path.join(project_dir, callee_file_path)\n\n    callee_root = parse_file(absolute_path)[0]\n\n    # For attribute access like \"helper.process\", the trailing \"process\" is the actual definition name.\n    # For cases like \"TEMPLATE.format\" where the trailing part is a built-in method,\n    # the leading \"TEMPLATE\" is the definition name.\n    # If not found by the trailing part, re-search by the leading part.\n    parts = callee_name.split(\".\")\n    search_names = [parts[-1]]\n    if len(parts) > 1:\n        search_names.append(parts[0])\n\n    for definition_name in search_names:\n        parent_node = _find_definition_node(callee_root, definition_name)\n        if parent_node is not None:\n            return parent_node.text.decode(\"utf-8\")\n\n    return None"
     },
     {
       "name": "build_project_dependencies",
       "type": "function_definition",
-      "start_line": 118,
-      "end_line": 243,
-      "context": "def build_project_dependencies(project_dir: str) -> list[dict]:\n    \"\"\"Analyze inter-file dependencies within the project and build a dependency graph in memory.\n\n    Return value structure (array):\n        [\n          {\n            \"file\":    \"project_name/src/foo.py/foo.py\",\n            \"callers\": [\"project_name/src/bar.py/bar.py\"],\n            \"callees\": [\"project_name/src/baz.py/baz.py\"],\n          },\n          ...\n        ]\n\n    Paths use the \"project_name/copy_path\" format.\n    Import analysis is performed on all supported language files to build the dependency graph.\n\n    Args:\n        project_dir: Root directory of the project to analyze.\n\n    Returns:\n        A list of file dependency information dicts.\n    \"\"\"\n    supported_ext_set = set(DEFINITION_DICTS.keys())\n\n    # == Step 1: Collect all files with supported extensions ======================\n    all_file_list: list[str] = []\n    for dir_path, dir_names, file_name_list in os.walk(project_dir):\n        # Remove directories matching exclude patterns from the traversal targets\n        # Modifying dir_names in-place causes os.walk to skip those subtrees\n        dir_names[:] = [d for d in dir_names if not any(fnmatch.fnmatch(d, p) for p in EXCLUDE_PATTERNS)]\n        for file_name in file_name_list:\n            if any(fnmatch.fnmatch(file_name, p) for p in EXCLUDE_PATTERNS):\n                continue\n            if os.path.splitext(file_name)[1].lstrip(\".\") in supported_ext_set:\n                all_file_list.append(os.path.join(dir_path, file_name))\n\n    # == Step 2: Build the set of relative paths for project files ============\n    # A lookup set used to determine whether a module is within the project during import resolution\n    project_file_set: set[str] = set()\n    for file_path in all_file_list:\n        project_file_set.add(os.path.relpath(file_path, project_dir).replace(\"\\\\\", \"/\"))\n\n    # == Step 3: Collect files imported by each file (callees) ======\n    file_callee_map: dict[str, set[str]] = {}\n    for file_path in all_file_list:\n        callee_set: set[str] = set()\n        file_ext = os.path.splitext(file_path)[1].lstrip(\".\")\n        language, import_query_str = get_import_params(file_ext)\n        file_rel = os.path.relpath(file_path, project_dir).replace(\"\\\\\", \"/\")\n\n        # Parse import statements and add those resolvable to project files as callees\n        if language and import_query_str:\n            root_node = parse_file(file_path)[0]\n            for import_info in extract_imports(root_node, language, import_query_str):\n                resolved = resolve_module_to_project_path(\n                    import_info.module,\n                    file_rel,\n                    project_file_set,\n                )\n                if resolved:\n                    abs_resolved = os.path.abspath(os.path.join(project_dir, resolved))\n                    callee_set.add(abs_resolved)\n\n        file_callee_map[os.path.abspath(file_path)] = callee_set\n\n    # == Step 3.5: Add same-package files as implicit callees (Java/Kotlin) ==\n    # In Java/Kotlin, classes in the same package (same directory) can be referenced without imports.\n    # Add as a unidirectional dependency only when the class name (= filename without extension)\n    # appears in the source code.\n    dir_ext_groups: dict[tuple[str, str], list[str]] = {}\n    for file_path in all_file_list:\n        file_ext = os.path.splitext(file_path)[1].lstrip(\".\")\n        if not SAME_PACKAGE_VISIBLE.get(file_ext):\n            continue\n        abs_path = os.path.abspath(file_path)\n        key = (os.path.dirname(abs_path), file_ext)\n        dir_ext_groups.setdefault(key, []).append(abs_path)\n\n    # Check within the same group whether source code references class names from other files\n    for group in dir_ext_groups.values():\n        # Pre-build class names and regex patterns for each file in the group\n        class_names: dict[str, str] = {}\n        class_patterns: dict[str, re.Pattern[str]] = {}\n        for abs_path in group:\n            name = os.path.splitext(os.path.basename(abs_path))[0]\n            class_names[abs_path] = name\n            class_patterns[abs_path] = re.compile(r\"\\b\" + re.escape(name) + r\"\\b\")\n\n        for abs_path in group:\n            try:\n                with open(abs_path, \"r\", encoding=\"utf-8\") as f:\n                    source = f.read()\n            except (OSError, UnicodeDecodeError):\n                continue\n            for other_path in group:\n                if other_path == abs_path:\n                    continue\n                if class_patterns[other_path].search(source):\n                    file_callee_map[abs_path].add(other_path)\n\n    # == Step 4: Build the callers (reverse lookup) index ==================\n    file_caller_map: dict[str, list[str]] = {os.path.abspath(f): [] for f in all_file_list}\n    for caller_path, callee_set in file_callee_map.items():\n        for callee_path in callee_set:\n            if callee_path in file_caller_map:\n                file_caller_map[callee_path].append(caller_path)\n\n    # == Step 5: Convert to relative paths and write to JSON ====================\n    # Paths use the \"project_name/copy_path\" format.\n    # copy_path = {parent_dir}/{file_stem}/{filename} structure.\n    # This matches the actual file paths within the output folder,\n    # keeping all paths valid even when the folder is moved to another environment.\n    project_name = os.path.basename(project_dir)\n    file_info_list = []\n    for file_path in all_file_list:\n        abs_path = os.path.abspath(file_path)\n        rel = os.path.relpath(abs_path, project_dir).replace(\"\\\\\", \"/\")\n        caller_rels = [os.path.relpath(p, project_dir).replace(\"\\\\\", \"/\") for p in file_caller_map[abs_path]]\n        callee_rels = [os.path.relpath(p, project_dir).replace(\"\\\\\", \"/\") for p in file_callee_map[abs_path]]\n        file_info_list.append({\n            \"file\":    f\"{project_name}/{rel_to_copy_path(rel)}\",\n            \"callers\": [f\"{project_name}/{rel_to_copy_path(r)}\" for r in caller_rels],\n            \"callees\": [f\"{project_name}/{rel_to_copy_path(r)}\" for r in callee_rels],\n        })\n\n    return file_info_list"
+      "start_line": 119,
+      "end_line": 248,
+      "context": "def build_project_dependencies(project_dir: str) -> list[dict]:\n    \"\"\"Analyze inter-file dependencies within the project and build a dependency graph in memory.\n\n    Return value structure (array):\n        [\n          {\n            \"file\":    \"project_name/src/foo.py/foo.py\",\n            \"callers\": [\"project_name/src/bar.py/bar.py\"],\n            \"callees\": [\"project_name/src/baz.py/baz.py\"],\n          },\n          ...\n        ]\n\n    Paths use the \"project_name/copy_path\" format.\n    Import analysis is performed on all supported language files to build the dependency graph.\n\n    Args:\n        project_dir: Root directory of the project to analyze.\n\n    Returns:\n        A list of file dependency information dicts.\n    \"\"\"\n    supported_ext_set = set(DEFINITION_DICTS.keys())\n\n    # == Step 1: Collect all files with supported extensions ======================\n    all_file_list: list[str] = []\n    for dir_path, dir_names, file_name_list in os.walk(project_dir):\n        # Remove directories matching exclude patterns from the traversal targets\n        # Modifying dir_names in-place causes os.walk to skip those subtrees\n        dir_names[:] = [d for d in dir_names if not any(fnmatch.fnmatch(d, p) for p in EXCLUDE_PATTERNS)]\n        for file_name in file_name_list:\n            if any(fnmatch.fnmatch(file_name, p) for p in EXCLUDE_PATTERNS):\n                continue\n            if os.path.splitext(file_name)[1].lstrip(\".\") in supported_ext_set:\n                all_file_list.append(os.path.join(dir_path, file_name))\n\n    # == Step 2: Build the set of relative paths for project files ============\n    # A lookup set used to determine whether a module is within the project during import resolution\n    project_file_set: set[str] = set()\n    for file_path in all_file_list:\n        project_file_set.add(os.path.relpath(file_path, project_dir).replace(\"\\\\\", \"/\"))\n\n    # Detect source root prefixes (e.g. \"src/main/java/\") present in the project\n    source_root_set = detect_source_roots(project_file_set)\n\n    # == Step 3: Collect files imported by each file (callees) ======\n    file_callee_map: dict[str, set[str]] = {}\n    for file_path in all_file_list:\n        callee_set: set[str] = set()\n        file_ext = os.path.splitext(file_path)[1].lstrip(\".\")\n        language, import_query_str = get_import_params(file_ext)\n        file_rel = os.path.relpath(file_path, project_dir).replace(\"\\\\\", \"/\")\n\n        # Parse import statements and add those resolvable to project files as callees\n        if language and import_query_str:\n            root_node = parse_file(file_path)[0]\n            for import_info in extract_imports(root_node, language, import_query_str):\n                resolved = resolve_module_to_project_path(\n                    import_info.module,\n                    file_rel,\n                    project_file_set,\n                    source_root_set,\n                )\n                if resolved:\n                    abs_resolved = os.path.abspath(os.path.join(project_dir, resolved))\n                    callee_set.add(abs_resolved)\n\n        file_callee_map[os.path.abspath(file_path)] = callee_set\n\n    # == Step 3.5: Add same-package files as implicit callees (Java/Kotlin) ==\n    # In Java/Kotlin, classes in the same package (same directory) can be referenced without imports.\n    # Add as a unidirectional dependency only when the class name (= filename without extension)\n    # appears in the source code.\n    dir_ext_groups: dict[tuple[str, str], list[str]] = {}\n    for file_path in all_file_list:\n        file_ext = os.path.splitext(file_path)[1].lstrip(\".\")\n        if not SAME_PACKAGE_VISIBLE.get(file_ext):\n            continue\n        abs_path = os.path.abspath(file_path)\n        key = (os.path.dirname(abs_path), file_ext)\n        dir_ext_groups.setdefault(key, []).append(abs_path)\n\n    # Check within the same group whether source code references class names from other files\n    for group in dir_ext_groups.values():\n        # Pre-build class names and regex patterns for each file in the group\n        class_names: dict[str, str] = {}\n        class_patterns: dict[str, re.Pattern[str]] = {}\n        for abs_path in group:\n            name = os.path.splitext(os.path.basename(abs_path))[0]\n            class_names[abs_path] = name\n            class_patterns[abs_path] = re.compile(r\"\\b\" + re.escape(name) + r\"\\b\")\n\n        for abs_path in group:\n            try:\n                with open(abs_path, \"r\", encoding=\"utf-8\") as f:\n                    source = f.read()\n            except (OSError, UnicodeDecodeError):\n                continue\n            for other_path in group:\n                if other_path == abs_path:\n                    continue\n                if class_patterns[other_path].search(source):\n                    file_callee_map[abs_path].add(other_path)\n\n    # == Step 4: Build the callers (reverse lookup) index ==================\n    file_caller_map: dict[str, list[str]] = {os.path.abspath(f): [] for f in all_file_list}\n    for caller_path, callee_set in file_callee_map.items():\n        for callee_path in callee_set:\n            if callee_path in file_caller_map:\n                file_caller_map[callee_path].append(caller_path)\n\n    # == Step 5: Convert to relative paths and write to JSON ====================\n    # Paths use the \"project_name/copy_path\" format.\n    # copy_path = {parent_dir}/{file_stem}/{filename} structure.\n    # This matches the actual file paths within the output folder,\n    # keeping all paths valid even when the folder is moved to another environment.\n    project_name = os.path.basename(project_dir)\n    file_info_list = []\n    for file_path in all_file_list:\n        abs_path = os.path.abspath(file_path)\n        rel = os.path.relpath(abs_path, project_dir).replace(\"\\\\\", \"/\")\n        caller_rels = [os.path.relpath(p, project_dir).replace(\"\\\\\", \"/\") for p in file_caller_map[abs_path]]\n        callee_rels = [os.path.relpath(p, project_dir).replace(\"\\\\\", \"/\") for p in file_callee_map[abs_path]]\n        file_info_list.append({\n            \"file\":    f\"{project_name}/{rel_to_copy_path(rel)}\",\n            \"callers\": [f\"{project_name}/{rel_to_copy_path(r)}\" for r in caller_rels],\n            \"callees\": [f\"{project_name}/{rel_to_copy_path(r)}\" for r in callee_rels],\n        })\n\n    return file_info_list"
     }
   ],
   "callee_usages": [
     {
       "lines": [
-        99,
-        170
+        100,
+        174
       ],
       "name": "parse_file",
       "from": "codetwine/codetwine/parsers/ts_parser_py/ts_parser.py",
@@ -56,7 +56,7 @@
     },
     {
       "lines": [
-        140
+        141
       ],
       "name": "DEFINITION_DICTS.keys",
       "from": "codetwine/codetwine/config/settings_py/settings.py",
@@ -64,8 +64,8 @@
     },
     {
       "lines": [
-        147,
-        149
+        148,
+        150
       ],
       "name": "EXCLUDE_PATTERNS",
       "from": "codetwine/codetwine/config/settings_py/settings.py",
@@ -73,7 +73,15 @@
     },
     {
       "lines": [
-        165
+        162
+      ],
+      "name": "detect_source_roots",
+      "from": "codetwine/codetwine/import_to_path_py/import_to_path.py",
+      "target_context": "def detect_source_roots(project_file_set: set[str]) -> set[str]:\n    \"\"\"Detect source root prefixes that actually exist in the project file set.\n\n    Checks each known source root pattern (e.g. \"src/main/java/\") against\n    the project file paths to find which prefixes are actually in use.\n    Only patterns that appear as a prefix of at least one file are returned.\n\n    Args:\n        project_file_set: Set of relative file paths within the project.\n\n    Returns:\n        A set of source root prefix strings that exist in the project.\n        Empty set if no known source root patterns are found.\n    \"\"\"\n    source_root_set: set[str] = set()\n    for pattern in SOURCE_ROOT_PATTERNS:\n        for file_path in project_file_set:\n            if file_path.startswith(pattern):\n                source_root_set.add(pattern)\n                break\n    return source_root_set"
+    },
+    {
+      "lines": [
+        169
       ],
       "name": "get_import_params",
       "from": "codetwine/codetwine/import_to_path_py/import_to_path.py",
@@ -81,7 +89,7 @@
     },
     {
       "lines": [
-        171
+        175
       ],
       "name": "extract_imports",
       "from": "codetwine/codetwine/extractors/imports_py/imports.py",
@@ -89,15 +97,15 @@
     },
     {
       "lines": [
-        172
+        176
       ],
       "name": "resolve_module_to_project_path",
       "from": "codetwine/codetwine/import_to_path_py/import_to_path.py",
-      "target_context": "def resolve_module_to_project_path(\n    module: str,\n    current_file_rel: str,\n    project_file_set: set[str],\n) -> str | None:\n    \"\"\"Resolve an import statement's module name to a file path within the project.\n\n    The module names passed to this function include not only project-internal modules\n    but also standard library modules (os, json, etc.) and external packages (requests, etc.).\n    This function generates file path candidates from the module name and checks them\n    against project_file_set to determine whether the module is a project-internal file.\n    Returns None if no matching file exists within the project.\n\n    The internal processing consists of 3 steps, each delegated to a dedicated function:\n    1. resolve_relative_import: Parse relative/absolute imports to determine path_part_list.\n    2. generate_candidate_path_list: Generate candidate file paths from path_part_list.\n    3. Match against project_file_set and return the first matching candidate.\n\n    Args:\n        module: The module name from the import statement. Both project-internal and external\n                modules are passed (e.g. \"..utils\", \"os\", \"requests\", \"com.example.Foo\",\n                \"./helper\", \"stdio.h\").\n        current_file_rel: Relative path of the current file from the project root.\n        project_file_set: Set of file paths within the project (\"path/to/file.ext\" format).\n\n    Returns:\n        A project-internal file path (\"path/to/file.ext\" format).\n        None if no matching file exists within the project.\n    \"\"\"\n    # Get the current file's extension and resolve config\n    src_ext_with_dot = os.path.splitext(current_file_rel)[1]\n    src_ext = src_ext_with_dot.lstrip(\".\")\n\n    # Get the module resolve config for this extension\n    resolve_config = IMPORT_RESOLVE_CONFIG.get(src_ext)\n    if not resolve_config:\n        return None\n\n    separator = resolve_config[\"separator\"]\n    # Split the current file's directory path into components\n    current_dir_part_list = current_file_rel.replace(\"\\\\\", \"/\").split(\"/\")[:-1]\n\n    # Step 1: Convert the module name to path components\n    path_part_list = resolve_relative_import(\n        module, separator, current_dir_part_list\n    )\n    base_path = \"/\".join(path_part_list)\n\n    # Step 2: Generate file candidates\n    candidate_path_list = generate_candidate_path_list(\n        base_path, src_ext_with_dot, resolve_config, current_dir_part_list\n    )\n\n    # Step 3: Match against project_file_set and return the first matching candidate\n    for candidate_path in candidate_path_list:\n        if candidate_path in project_file_set:\n            return candidate_path\n\n    return None"
+      "target_context": "def resolve_module_to_project_path(\n    module: str,\n    current_file_rel: str,\n    project_file_set: set[str],\n    source_root_set: set[str] | None = None,\n) -> str | None:\n    \"\"\"Resolve an import statement's module name to a file path within the project.\n\n    The module names passed to this function include not only project-internal modules\n    but also standard library modules (os, json, etc.) and external packages (requests, etc.).\n    This function generates file path candidates from the module name and checks them\n    against project_file_set to determine whether the module is a project-internal file.\n    Returns None if no matching file exists within the project.\n\n    The internal processing consists of 3 steps, each delegated to a dedicated function:\n    1. resolve_relative_import: Parse relative/absolute imports to determine path_part_list.\n    2. generate_candidate_path_list: Generate candidate file paths from path_part_list.\n    3. Match against project_file_set and return the first matching candidate.\n       If no exact match is found and source_root_set is provided, retry with\n       each source root prefix prepended to the candidate path.\n       (e.g. \"com/example/Foo.java\" -> \"src/main/java/com/example/Foo.java\")\n\n    Args:\n        module: The module name from the import statement. Both project-internal and external\n                modules are passed (e.g. \"..utils\", \"os\", \"requests\", \"com.example.Foo\",\n                \"./helper\", \"stdio.h\").\n        current_file_rel: Relative path of the current file from the project root.\n        project_file_set: Set of file paths within the project (\"path/to/file.ext\" format).\n        source_root_set: Set of source root prefixes detected in the project\n                         (e.g. {\"src/main/java/\", \"src/test/java/\"}). None or empty to skip.\n\n    Returns:\n        A project-internal file path (\"path/to/file.ext\" format).\n        None if no matching file exists within the project.\n    \"\"\"\n    # Get the current file's extension and resolve config\n    src_ext_with_dot = os.path.splitext(current_file_rel)[1]\n    src_ext = src_ext_with_dot.lstrip(\".\")\n\n    # Get the module resolve config for this extension\n    resolve_config = IMPORT_RESOLVE_CONFIG.get(src_ext)\n    if not resolve_config:\n        return None\n\n    separator = resolve_config[\"separator\"]\n    # Split the current file's directory path into components\n    current_dir_part_list = current_file_rel.replace(\"\\\\\", \"/\").split(\"/\")[:-1]\n\n    # Step 1: Convert the module name to path components\n    path_part_list = resolve_relative_import(\n        module, separator, current_dir_part_list\n    )\n    base_path = \"/\".join(path_part_list)\n\n    # Step 2: Generate file candidates\n    candidate_path_list = generate_candidate_path_list(\n        base_path, src_ext_with_dot, resolve_config, current_dir_part_list\n    )\n\n    # Step 3: Match against project_file_set and return the first matching candidate\n    for candidate_path in candidate_path_list:\n        if candidate_path in project_file_set:\n            return candidate_path\n\n    # Step 3 fallback: Prepend source root prefixes and retry.\n    # Java import \"com.example.Foo\" generates candidate \"com/example/Foo.java\",\n    # but the actual file may be at \"src/main/java/com/example/Foo.java\".\n    if source_root_set:\n        for candidate_path in candidate_path_list:\n            for source_root in source_root_set:\n                prefixed = source_root + candidate_path\n                if prefixed in project_file_set:\n                    return prefixed\n\n    return None"
     },
     {
       "lines": [
-        190
+        195
       ],
       "name": "SAME_PACKAGE_VISIBLE.get",
       "from": "codetwine/codetwine/config/settings_py/settings.py",
@@ -105,9 +113,9 @@
     },
     {
       "lines": [
-        238,
-        239,
-        240
+        243,
+        244,
+        245
       ],
       "name": "rel_to_copy_path",
       "from": "codetwine/codetwine/utils/file_utils_py/file_utils.py",

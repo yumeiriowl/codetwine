@@ -8,10 +8,34 @@ from codetwine.config.settings import (
     IMPORT_RESOLVE_CONFIG,
     IMPORT_QUERIES,
     SAME_PACKAGE_VISIBLE,
+    SOURCE_ROOT_PATTERNS,
     TREE_SITTER_LANGUAGES,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def detect_source_roots(project_file_set: set[str]) -> set[str]:
+    """Detect source root prefixes that actually exist in the project file set.
+
+    Checks each known source root pattern (e.g. "src/main/java/") against
+    the project file paths to find which prefixes are actually in use.
+    Only patterns that appear as a prefix of at least one file are returned.
+
+    Args:
+        project_file_set: Set of relative file paths within the project.
+
+    Returns:
+        A set of source root prefix strings that exist in the project.
+        Empty set if no known source root patterns are found.
+    """
+    source_root_set: set[str] = set()
+    for pattern in SOURCE_ROOT_PATTERNS:
+        for file_path in project_file_set:
+            if file_path.startswith(pattern):
+                source_root_set.add(pattern)
+                break
+    return source_root_set
 
 
 def resolve_relative_import(
@@ -149,6 +173,7 @@ def resolve_module_to_project_path(
     module: str,
     current_file_rel: str,
     project_file_set: set[str],
+    source_root_set: set[str] | None = None,
 ) -> str | None:
     """Resolve an import statement's module name to a file path within the project.
 
@@ -162,6 +187,9 @@ def resolve_module_to_project_path(
     1. resolve_relative_import: Parse relative/absolute imports to determine path_part_list.
     2. generate_candidate_path_list: Generate candidate file paths from path_part_list.
     3. Match against project_file_set and return the first matching candidate.
+       If no exact match is found and source_root_set is provided, retry with
+       each source root prefix prepended to the candidate path.
+       (e.g. "com/example/Foo.java" -> "src/main/java/com/example/Foo.java")
 
     Args:
         module: The module name from the import statement. Both project-internal and external
@@ -169,6 +197,8 @@ def resolve_module_to_project_path(
                 "./helper", "stdio.h").
         current_file_rel: Relative path of the current file from the project root.
         project_file_set: Set of file paths within the project ("path/to/file.ext" format).
+        source_root_set: Set of source root prefixes detected in the project
+                         (e.g. {"src/main/java/", "src/test/java/"}). None or empty to skip.
 
     Returns:
         A project-internal file path ("path/to/file.ext" format).
@@ -203,6 +233,16 @@ def resolve_module_to_project_path(
         if candidate_path in project_file_set:
             return candidate_path
 
+    # Step 3 fallback: Prepend source root prefixes and retry.
+    # Java import "com.example.Foo" generates candidate "com/example/Foo.java",
+    # but the actual file may be at "src/main/java/com/example/Foo.java".
+    if source_root_set:
+        for candidate_path in candidate_path_list:
+            for source_root in source_root_set:
+                prefixed = source_root + candidate_path
+                if prefixed in project_file_set:
+                    return prefixed
+
     return None
 
 
@@ -231,6 +271,7 @@ def build_symbol_to_file_map(
     project_file_set: set[str],
     file_ext: str,
     project_dir: str,
+    source_root_set: set[str] | None = None,
 ) -> tuple[dict[str, str], dict[str, str]]:
     """Build a dict mapping imported names to their definition file paths, used to
     identify "which file does this name come from" during usage tracking.
@@ -252,6 +293,7 @@ def build_symbol_to_file_map(
         project_file_set: Set of file paths within the project.
         file_ext: Extension of the current file (without ".", e.g. "py", "java", "c", "cpp").
         project_dir: Absolute path to the project root.
+        source_root_set: Set of source root prefixes (e.g. {"src/main/java/"}).
 
     Returns:
         A (symbol_to_file_map, alias_to_original) tuple.
@@ -268,7 +310,8 @@ def build_symbol_to_file_map(
     for import_info in import_info_list:
         # Resolve the module name to a file path (returns None for non-project modules)
         resolved_path = resolve_module_to_project_path(
-            import_info.module, current_file_rel, project_file_set
+            import_info.module, current_file_rel, project_file_set,
+            source_root_set,
         )
 
         # Java/Kotlin wildcard import: if not resolvable to a single file,
@@ -278,6 +321,7 @@ def build_symbol_to_file_map(
             _register_definitions_from_package(
                 package_dir, file_ext, project_dir,
                 project_file_set, symbol_to_file_map,
+                source_root_set,
             )
             continue
 
@@ -391,6 +435,7 @@ def _register_definitions_from_package(
     project_dir: str,
     project_file_set: set[str],
     symbol_to_file_map: dict[str, str],
+    source_root_set: set[str] | None = None,
 ) -> None:
     """For Java/Kotlin wildcard imports: register definition names from all files
     within the package directory into symbol_to_file_map.
@@ -404,19 +449,26 @@ def _register_definitions_from_package(
         project_dir: Absolute path to the project root.
         project_file_set: Set of file paths within the project.
         symbol_to_file_map: The target dict (name -> file path). Modified directly by this function.
+        source_root_set: Set of source root prefixes (e.g. {"src/main/java/"}).
     """
-    prefix = package_dir + "/"
-    for project_file in project_file_set:
-        if not project_file.startswith(prefix):
-            continue
-        # Do not include files from sub-packages (only files directly under the directory)
-        remainder = project_file[len(prefix):]
-        if "/" in remainder:
-            continue
-        if os.path.splitext(project_file)[1].lstrip(".") == file_ext:
-            _register_definitions_from_file(
-                project_file, project_dir, symbol_to_file_map,
-            )
+    # Build the list of prefixes to try: bare prefix + source-root-prefixed variants
+    prefix_list = [package_dir + "/"]
+    if source_root_set:
+        for source_root in source_root_set:
+            prefix_list.append(source_root + package_dir + "/")
+
+    for prefix in prefix_list:
+        for project_file in project_file_set:
+            if not project_file.startswith(prefix):
+                continue
+            # Do not include files from sub-packages (only files directly under the directory)
+            remainder = project_file[len(prefix):]
+            if "/" in remainder:
+                continue
+            if os.path.splitext(project_file)[1].lstrip(".") == file_ext:
+                _register_definitions_from_file(
+                    project_file, project_dir, symbol_to_file_map,
+                )
 
 
 def get_import_params(file_ext: str) -> tuple[Language, str] | tuple[None, None]:

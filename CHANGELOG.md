@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.1 - 2026-04-15
+
+### Added
+- `detect_source_roots()`: Detect source root prefixes (e.g. `src/main/java/`) present in the project
+- `resolve_module_to_project_path()`: Fallback resolution with source root prefixes for Maven/Gradle/Scala standard layouts
+- `SOURCE_ROOT_PATTERNS`: Configuration for known source root directory patterns
+- Updated sample output
+
 ## 0.2.0 - 2026-04-11
 
 ### Changed

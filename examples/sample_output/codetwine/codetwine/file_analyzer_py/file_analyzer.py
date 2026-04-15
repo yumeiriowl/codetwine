@@ -8,6 +8,7 @@ from codetwine.extractors.usage_analysis import (
 )
 from codetwine.import_to_path import (
     build_symbol_to_file_map,
+    detect_source_roots,
     get_import_params,
 )
 from codetwine.extractors.imports import extract_imports
@@ -64,6 +65,9 @@ def get_file_dependencies(
         for dep_info in project_dep_list:
             project_file_set.add(dep_info["file"])
 
+        # Detect source root prefixes (e.g. "src/main/java/") present in the project
+        source_root_set = detect_source_roots(project_file_set)
+
         # Parse import statements and create an "imported name -> dependency file" dict
         symbol_to_file_map, alias_to_original = build_symbol_to_file_map(
             extract_imports(root_node, language, import_query_str),
@@ -71,6 +75,7 @@ def get_file_dependencies(
             project_file_set,
             file_ext,
             project_dir,
+            source_root_set,
         )
 
         # Get the list of usage locations and dependency target source code

@@ -329,6 +329,13 @@
       "start_line": 533,
       "end_line": 536,
       "context": "SAME_PACKAGE_VISIBLE: dict[str, bool] = _expand_ext_aliases(\n    {ext: cfg.same_package_visible for ext, cfg in _LANG_REGISTRY.items()\n     if cfg.same_package_visible}\n)"
+    },
+    {
+      "name": "SOURCE_ROOT_PATTERNS",
+      "type": "expression_statement",
+      "start_line": 540,
+      "end_line": 548,
+      "context": "SOURCE_ROOT_PATTERNS: list[str] = [\n    \"src/main/java/\",\n    \"src/test/java/\",\n    \"src/main/kotlin/\",\n    \"src/test/kotlin/\",\n    \"src/main/scala/\",\n    \"src/test/scala/\",\n    \"src/\",\n]"
     }
   ],
   "callee_usages": [],
@@ -367,8 +374,16 @@
     },
     {
       "lines": [
-        182,
-        265
+        33
+      ],
+      "name": "SOURCE_ROOT_PATTERNS",
+      "file": "codetwine/codetwine/import_to_path_py/import_to_path.py",
+      "usage_context": "        Empty set if no known source root patterns are found.\n    \"\"\"\n    source_root_set: set[str] = set()\n    for pattern in SOURCE_ROOT_PATTERNS:\n        for file_path in project_file_set:\n            if file_path.startswith(pattern):\n                source_root_set.add(pattern)"
+    },
+    {
+      "lines": [
+        212,
+        307
       ],
       "name": "IMPORT_RESOLVE_CONFIG.get",
       "file": "codetwine/codetwine/import_to_path_py/import_to_path.py",
@@ -376,7 +391,7 @@
     },
     {
       "lines": [
-        338
+        382
       ],
       "name": "SAME_PACKAGE_VISIBLE.get",
       "file": "codetwine/codetwine/import_to_path_py/import_to_path.py",
@@ -384,7 +399,7 @@
     },
     {
       "lines": [
-        377
+        421
       ],
       "name": "DEFINITION_DICTS.get",
       "file": "codetwine/codetwine/import_to_path_py/import_to_path.py",
@@ -392,7 +407,7 @@
     },
     {
       "lines": [
-        435
+        487
       ],
       "name": "IMPORT_QUERIES.get",
       "file": "codetwine/codetwine/import_to_path_py/import_to_path.py",
@@ -400,7 +415,7 @@
     },
     {
       "lines": [
-        441
+        493
       ],
       "name": "TREE_SITTER_LANGUAGES",
       "file": "codetwine/codetwine/import_to_path_py/import_to_path.py",
@@ -408,7 +423,7 @@
     },
     {
       "lines": [
-        38
+        39
       ],
       "name": "DEFINITION_DICTS.get",
       "file": "codetwine/codetwine/file_analyzer_py/file_analyzer.py",
@@ -548,7 +563,7 @@
     },
     {
       "lines": [
-        140
+        141
       ],
       "name": "DEFINITION_DICTS.keys",
       "file": "codetwine/codetwine/extractors/dependency_graph_py/dependency_graph.py",
@@ -556,8 +571,8 @@
     },
     {
       "lines": [
-        147,
-        149
+        148,
+        150
       ],
       "name": "EXCLUDE_PATTERNS",
       "file": "codetwine/codetwine/extractors/dependency_graph_py/dependency_graph.py",
@@ -565,7 +580,7 @@
     },
     {
       "lines": [
-        190
+        195
       ],
       "name": "SAME_PACKAGE_VISIBLE.get",
       "file": "codetwine/codetwine/extractors/dependency_graph_py/dependency_graph.py",

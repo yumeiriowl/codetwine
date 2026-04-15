@@ -4,25 +4,25 @@
 
 ## 1. Module Summary
 
-Configures the application-wide logging system by attaching a console handler and a rotating file handler to the root logger with appropriate log levels and formatting.
+Configures the application-wide logging system by setting up a rotating file handler and a console handler with separate log levels, so that all modules can obtain pre-configured loggers via the standard `logging` module.
 
 ## 2. When to Use This Module
 
-- **Application startup**: Call `setup_logging()` once at the beginning of an entry point's `main()` function (e.g., `main.py`, `rlm_qa_agent.py`) to initialize all logging behavior before any other module emits log messages. No return value is needed; the effect is global via the root logger.
-- **Adjusting verbosity**: Pass a specific `level` argument to `setup_logging(level=logging.DEBUG)` when a non-default log level is required at startup.
+- **At application startup in an entry point** (e.g., `main.py`): call `setup_logging()` once before any other application logic runs. This ensures that all subsequent calls to `logging.getLogger(...)` throughout the codebase emit records to both the console and the rotating log file under `logs/codetwine.log`.
+- **When changing the application-wide log verbosity**: pass an explicit `level` argument to `setup_logging(level=logging.DEBUG)` to lower the threshold for what gets written to the log file, while the console threshold remains fixed at `WARNING`.
 
 ## 3. Public Interface Table
 
 | Name | Arguments (type) | Return type | Responsibility |
 |---|---|---|---|
-| `setup_logging` | `level: int` (default: `logging.INFO`) | `None` | Attaches a console handler (WARNING and above) and a rotating file handler (all messages at `level`) to the root logger, and suppresses noisy external library loggers to WARNING |
+| `setup_logging` | `level: int` (default: `logging.INFO`) | `None` | Attaches a `WARNING`-level console handler and an `INFO`-level rotating file handler to the root logger, applies the shared formatter to both, and suppresses verbose output from `httpx`, `httpcore`, and `LiteLLM` to `WARNING`. |
 
 ## 4. Design Decisions
 
-- **Single call contract**: `setup_logging` is designed to be called exactly once per process at the entry point. Calling it multiple times would add duplicate handlers to the root logger.
-- **Split console/file log levels**: The console handler is fixed at `WARNING` to keep terminal output quiet during normal operation, while the file handler inherits the `level` argument (defaulting to `INFO`) to capture more detailed diagnostic information in the log file.
-- **Blank-line suppression via custom formatter**: The private `_SkipBlankFormatter` is applied to both handlers uniformly, so whitespace-only log messages are silently dropped from both console and file output rather than cluttering logs with empty lines.
-- **Log file location is repository-relative**: The log directory is resolved relative to this file's location (`../../logs/`), making the output path predictable regardless of the working directory from which the application is launched.
+- **Single call contract**: `setup_logging` operates on the root logger and adds handlers unconditionally, so it is intended to be called exactly once per process. Calling it multiple times would attach duplicate handlers.
+- **Asymmetric log levels**: the console handler is fixed at `WARNING` regardless of the `level` argument, while the file handler inherits the root logger's level. This deliberately keeps console output quiet during normal operation while preserving full detail in the log file.
+- **Blank-line suppression via a custom formatter**: rather than filtering at the handler or logger level, a custom `Formatter` subclass returns an empty string for whitespace-only messages, preventing blank entries from cluttering the log file without discarding the record from the logging pipeline entirely.
+- **Log directory placement**: the `logs/` directory is resolved relative to this file's location (`../../logs`), anchoring it at the repository root regardless of the working directory at runtime.
 
 # Definition Design Specifications
 
@@ -32,12 +32,12 @@ Configures the application-wide logging system by attaching a console handler an
 
 | Name | Type | Value | Purpose |
 |---|---|---|---|
-| `_LOG_DIR` | `str` | Resolved at import time | Absolute path to the `logs/` directory located two levels above this file (i.e., the repository root). |
-| `_LOG_FORMAT` | `str` | Fixed format string | Shared log format string applied to both console and file handlers. Includes timestamp, level, logger name, and message. |
-| `_MAX_BYTES` | `int` | `1,048,576` (1 MiB) | Maximum size of a single rotating log file before rollover is triggered. |
-| `_BACKUP_COUNT` | `int` | `5` | Number of rotated backup log files retained alongside the active log file. |
+| `_LOG_DIR` | `str` | Resolved path to `<repo_root>/logs/` | Absolute path to the directory where log files are written. Computed relative to this file's location by navigating two levels up from the `config/` package. |
+| `_LOG_FORMAT` | `str` | `"%(asctime)s [%(levelname)s] %(name)s: %(message)s"` | Shared format string applied to both console and file handlers. |
+| `_MAX_BYTES` | `int` | `1,048,576` (1 MiB) | Maximum size of a single rotating log file before rollover. |
+| `_BACKUP_COUNT` | `int` | `5` | Number of backup log files retained after rollover. |
 
-All constants are module-private (prefixed with `_`) and are not intended to be referenced by callers directly.
+All names are prefixed with `_`, marking them as internal to this module and not part of the public API.
 
 ---
 
@@ -45,32 +45,35 @@ All constants are module-private (prefixed with `_`) and are not intended to be 
 
 **Signature:** `class _SkipBlankFormatter(logging.Formatter)`
 
-**Responsibility:** A custom log formatter that suppresses output for log records whose message content is entirely whitespace or an isolated newline, preventing blank entries from polluting the log file.
+**Responsibility:** Extends the standard `logging.Formatter` to suppress log records whose message content is entirely whitespace or blank, preventing empty lines from cluttering log output.
 
-**When to use:** Instantiated internally by `setup_logging`; callers never instantiate this class directly.
+**When to use:** Instantiated internally by `setup_logging`; not intended for direct use outside this module.
 
 **Design decisions:**
-- Inherits from `logging.Formatter` and overrides only `format`, keeping all other formatting behavior unchanged.
-- The suppression signal is an empty string return value. This relies on the handler choosing not to emit empty strings, which is the standard behavior of Python's `StreamHandler` and `RotatingFileHandler`.
-- The class is module-private; it is not part of the public API.
+- Inherits from `logging.Formatter` and overrides only `format`, leaving all other formatting behavior unchanged.
+- The suppression signal is an empty string return value rather than raising an exception or filtering at the handler level. Callers (handlers) that check the return value of `format` will receive `""` and should skip emission; this relies on standard handler behavior.
 
 **Constraints & edge cases:**
-- A message consisting solely of `"\n"` or `""` after `.strip()` is treated as blank and suppressed.
-- Messages containing at least one non-whitespace character are formatted normally.
+- A message matching `""` or `"\n"` after stripping is suppressed. Messages containing non-whitespace characters alongside newlines are not suppressed.
+- The `_` prefix marks this class as private; it should not be subclassed or instantiated outside this module.
 
 ---
 
-### Special Method: `_SkipBlankFormatter.format`
+### `_SkipBlankFormatter.format`
 
-| Item | Detail |
-|---|---|
-| **Signature** | `format(self, record: logging.LogRecord) -> str` |
-| **Argument** | `record`: the standard log record object produced by the logging framework |
-| **Return type** | `str` — the formatted log line, or an empty string if the message is blank |
+**Signature:** `format(self, record: logging.LogRecord) -> str`
 
-**Responsibility:** Intercepts the standard formatting pipeline to gate blank-line messages, delegating all other records to the parent `Formatter.format` implementation.
+**Responsibility:** Intercepts format requests to return an empty string for whitespace-only messages; delegates all other records to the parent formatter.
 
-**Constraints:** The method does not mutate the passed `record`; it only inspects the message content.
+**Arguments:**
+
+| Parameter | Type | Description |
+|---|---|---|
+| `record` | `logging.LogRecord` | The log record to be formatted. |
+
+**Returns:** `str` — The formatted log string for normal records, or `""` for blank-line records.
+
+**Constraints & edge cases:** Exactly two stripped values trigger suppression: `""` and `"\n"`. Any other content, including a single space followed by text, passes through normally.
 
 ---
 
@@ -78,52 +81,49 @@ All constants are module-private (prefixed with `_`) and are not intended to be 
 
 **Signature:** `setup_logging(level: int = logging.INFO) -> None`
 
-**Responsibility:** Performs one-time configuration of the Python root logger by attaching a console handler and a rotating file handler, and by suppressing verbose output from known third-party libraries.
+**Responsibility:** Performs one-time configuration of the root logger, attaching a console handler and a rotating file handler with consistent formatting, and restricts verbose output from known external libraries.
 
-**When to use:** Called once at application startup inside `main()` of each entry point (e.g., `main.py`) before any other logging activity occurs.
+**When to use:** Called once at application startup, specifically at the beginning of `main()` in entry-point modules (confirmed usage in `main.py`).
 
-**Parameters:**
+**Arguments:**
 
-| Name | Type | Default | Meaning |
+| Parameter | Type | Default | Description |
 |---|---|---|---|
-| `level` | `int` | `logging.INFO` | The minimum severity level recorded by the root logger and written to the log file. |
+| `level` | `int` | `logging.INFO` | The log level applied to the root logger, controlling which records are processed at all. |
 
-**Return type:** `None`
-
-**Handler summary:**
-
-| Handler | Class | Output destination | Minimum level |
-|---|---|---|---|
-| Console handler | `logging.StreamHandler` | `stderr` (default) | `WARNING` |
-| File handler | `RotatingFileHandler` | `logs/codetwine.log` | Inherits root level (default: `INFO`) |
+**Returns:** `None`
 
 **Design decisions:**
-- The console handler is intentionally restricted to `WARNING` and above so that informational and debug output is written only to the file, reducing noise during normal terminal use.
-- `_LOG_DIR` is created on demand with `exist_ok=True`, so the function is safe to call in environments where the directory does not yet exist.
-- Both handlers share the same `_SkipBlankFormatter` instance, ensuring consistent blank-line suppression across all outputs.
-- Third-party loggers (`httpx`, `httpcore`, `LiteLLM`) are explicitly capped at `WARNING` to prevent their verbose output from flooding the log file regardless of the root level set by the caller.
+
+- **Dual-handler architecture:** A console handler is intentionally set to `WARNING` and above, while the file handler inherits the root logger's level (defaulting to `INFO`). This means informational detail is captured in the log file without cluttering console output during normal operation.
+- **Shared formatter instance:** A single `_SkipBlankFormatter` instance is applied to both handlers, ensuring consistent blank-line suppression and formatting across outputs.
+- **Selective external library silencing:** `httpx`, `httpcore`, and `LiteLLM` loggers are explicitly capped at `WARNING` to prevent third-party verbose output from polluting logs regardless of the root level.
+- **Log directory creation:** The `logs/` directory is created on demand with `exist_ok=True`, so the function is safe to call even when the directory does not yet exist.
+- **RotatingFileHandler settings:** File rollover is governed by `_MAX_BYTES` (1 MiB) and `_BACKUP_COUNT` (5), bounding total disk usage to approximately 6 MiB for the log file family.
 
 **Constraints & edge cases:**
-- The function does not guard against being called multiple times. Repeated calls will attach additional handlers to the root logger, causing duplicate log output.
-- The `level` parameter affects the root logger and the file handler's effective floor, but the console handler's floor remains fixed at `WARNING` regardless of the value passed.
-- The log file is UTF-8 encoded; log messages containing non-UTF-8 bytes may raise encoding errors at the handler level.
-- The rotating file handler retains at most `_BACKUP_COUNT` (5) backup files in addition to the active file, capping total disk usage at approximately 6 MiB.
+- Intended to be called exactly once. Calling it multiple times will attach duplicate handlers to the root logger, causing repeated log output.
+- The `level` parameter governs the root logger only; the console handler's threshold is hardcoded to `WARNING` and is not influenced by `level`.
+- Log files are written as UTF-8 encoded text.
+- External library logger levels are set unconditionally, overriding any prior configuration for those loggers.
 
 # Dependency Description
 
 ## Dependencies (modules this file imports)
 
-No project-internal module dependencies exist. `codetwine/config/logger.py` relies exclusively on standard library modules (`os`, `logging`, `logging.handlers`) and no other modules within the project's own codebase.
+No project-internal module dependencies are present. `codetwine/config/logger.py` relies exclusively on standard library modules (`os`, `logging`, `logging.handlers`) and no project-internal modules are imported.
+
+---
 
 ## Dependents (modules that import this file)
 
-- `main.py` → `codetwine/config/logger.py` : imports and calls `setup_logging()` at the start of the `main()` entry point function to initialize both console and file-based logging for the application.
+- `main.py` → `codetwine/config/logger.py` : imports and calls `setup_logging()` once at the start of the `main()` entry point function to initialize both console and file logging before any other application logic executes.
+
+---
 
 ## Dependency Direction
 
-All relationships are **unidirectional**:
-
-- The relationship between `main.py` and `codetwine/config/logger.py` is unidirectional: `main.py` depends on `codetwine/config/logger.py`. `codetwine/config/logger.py` has no knowledge of or reference to `main.py`.
+- The relationship between `main.py` and `codetwine/config/logger.py` is **unidirectional**: `main.py` depends on `codetwine/config/logger.py`, while `codetwine/config/logger.py` has no knowledge of or dependency on `main.py`.
 
 # Data Flow
 
@@ -131,60 +131,61 @@ All relationships are **unidirectional**:
 
 | Input | Source | Format |
 |---|---|---|
-| `level` | Caller argument (`setup_logging(level)`) | `int` (a `logging` module constant, e.g., `logging.INFO`) |
-| `__file__` | Python runtime | String file path used to derive `_LOG_DIR` at module load time |
-| `_LOG_DIR` | Computed at module load from `__file__` | Absolute filesystem path string (`logs/` under the repository root) |
-| `_LOG_FORMAT` | Module-level constant | String defining the log record format |
-| `_MAX_BYTES`, `_BACKUP_COUNT` | Module-level constants | `int` values controlling log file rotation |
+| `level` | Caller argument (`setup_logging(level=...)`) | `int` (a `logging` module constant, e.g., `logging.INFO`) |
+| `__file__` | Python runtime | String file path, used to derive `_LOG_DIR` at module load time |
+| `_LOG_DIR` | Computed at module load from `__file__` | Absolute filesystem path string pointing to `logs/` under the repository root |
+| `_LOG_FORMAT` | Module-level constant | String — `"%(asctime)s [%(levelname)s] %(name)s: %(message)s"` |
+| `_MAX_BYTES` | Module-level constant | `int` — `1_048_576` |
+| `_BACKUP_COUNT` | Module-level constant | `int` — `5` |
 
-`setup_logging()` is called with no arguments from `main.py`, so `level` defaults to `logging.INFO`.
+The sole public entry point is `setup_logging()`, called once from `main.py`'s `main()` function with no arguments (accepting the default `level=logging.INFO`).
 
 ---
 
 ## 2. Transformation Overview
 
 ```
-[Module load]
-  __file__
-    → os.path.dirname / normpath / join
-    → _LOG_DIR (absolute path string)
-
-[setup_logging() call]
-
-Stage 1 — Root logger acquisition and level assignment
-  level (int)
-    → logging.getLogger()  →  root_logger
-    → root_logger.setLevel(level)
-
-Stage 2 — Formatter construction
-  _LOG_FORMAT (string)
-    → _SkipBlankFormatter(_LOG_FORMAT)
-    → formatter instance shared by both handlers
-
-Stage 3 — Console handler construction
-  formatter
-    → logging.StreamHandler()
-    → setLevel(logging.WARNING)          ← threshold higher than root
-    → setFormatter(formatter)
-    → root_logger.addHandler(console_handler)
-
-Stage 4 — File handler construction
-  _LOG_DIR, _MAX_BYTES, _BACKUP_COUNT, formatter
-    → os.makedirs(_LOG_DIR)              ← ensures directory exists
-    → RotatingFileHandler("codetwine.log", ...)
-    → setFormatter(formatter)
-    → root_logger.addHandler(file_handler)
-
-Stage 5 — External library suppression
-  hard-coded logger names ("httpx", "httpcore", "LiteLLM")
-    → each logger's level set to logging.WARNING
-
-[Per log-record path through _SkipBlankFormatter]
-  logging.LogRecord
-    → record.getMessage().strip()
-    → if result is "" or "\n"  →  return ""  (record suppressed)
-    → otherwise                →  super().format(record)  →  formatted string
+[Call: setup_logging(level)]
+        │
+        ▼
+[1. Root logger acquisition]
+   logging.getLogger() → root_logger
+   root_logger.setLevel(level)
+        │
+        ▼
+[2. Formatter construction]
+   _SkipBlankFormatter(_LOG_FORMAT) → formatter
+   (shared by both handlers)
+        │
+        ├─────────────────────────────────────────────────┐
+        ▼                                                 ▼
+[3a. Console handler]                          [3b. File handler]
+  StreamHandler()                              os.makedirs(_LOG_DIR)
+  setLevel(WARNING)                            RotatingFileHandler(
+  setFormatter(formatter)                        path=_LOG_DIR/codetwine.log,
+  addHandler → root_logger                       maxBytes=_MAX_BYTES,
+                                                 backupCount=_BACKUP_COUNT,
+                                                 encoding="utf-8")
+                                               setFormatter(formatter)
+                                               addHandler → root_logger
+        │
+        ▼
+[4. Third-party logger suppression]
+   httpx / httpcore / LiteLLM → setLevel(WARNING)
 ```
+
+**`_SkipBlankFormatter` sub-flow** (triggered per log record at emit time):
+
+```
+[logging.LogRecord]
+        │
+        ▼
+  record.getMessage().strip() in ("", "\n")?
+        ├── Yes → return ""   (record is silently dropped)
+        └── No  → super().format(record) → formatted string
+```
+
+The formatter acts as a filter gate on each record before it is written to either destination.
 
 ---
 
@@ -192,15 +193,12 @@ Stage 5 — External library suppression
 
 | Output | Type | Destination | Notes |
 |---|---|---|---|
-| Console output | Text lines | `stderr` (default `StreamHandler` target) | Only records at `WARNING` level and above are emitted |
-| Log file | Rotating UTF-8 text file | `<repo_root>/logs/codetwine.log` | All records at `level` (default `INFO`) and above; rotates at 1 MiB, keeps 5 backups |
-| Suppressed blank records | Empty string `""` | Neither console nor file | `_SkipBlankFormatter` returns `""` for whitespace-only messages |
-| `setup_logging` return value | `None` | Caller | No value is returned |
+| Console log stream | Text lines | `stderr` (default `StreamHandler`) | Only `WARNING` and above |
+| Log file | Rotating UTF-8 text file | `<repo_root>/logs/codetwine.log` | All records at or above `level` (default `INFO`); rotates at 1 MiB, keeps 5 backups |
+| Mutated root logger | Side effect on `logging.Logger` | Global Python logging state | Two handlers attached, level set |
+| Suppressed third-party loggers | Side effect on named loggers | `httpx`, `httpcore`, `LiteLLM` | Each forced to `WARNING` regardless of root level |
 
-Side effects produced by `setup_logging()`:
-- The `logs/` directory is created on disk if it does not already exist.
-- Two handlers are attached to the root logger (mutations of the global logging state).
-- The log levels of `httpx`, `httpcore`, and `LiteLLM` loggers are set to `WARNING` (mutations of the global logging state).
+Blank or whitespace-only log messages are silently suppressed at formatter level and produce no output to either destination.
 
 ---
 
@@ -208,26 +206,28 @@ Side effects produced by `setup_logging()`:
 
 ### `_SkipBlankFormatter` (subclass of `logging.Formatter`)
 
-| Field / Key | Type | Purpose |
+No additional fields beyond the standard `logging.Formatter`. Its behavior is defined entirely by the overridden `format` method.
+
+| Attribute / Parameter | Type | Purpose |
 |---|---|---|
-| `_fmt` (inherited) | `str` | Holds `_LOG_FORMAT`; controls the text layout of each emitted log line |
+| `_LOG_FORMAT` (passed to `__init__`) | `str` | Controls timestamp, level, logger name, and message layout for all formatted output |
+| `record` (method input) | `logging.LogRecord` | Carries the log message and metadata evaluated during formatting |
+| Return value of `format` | `str` | Formatted log line, or `""` to suppress blank messages |
 
-No additional instance fields are introduced beyond those inherited from `logging.Formatter`.
+### Module-Level Configuration Constants
 
-### `RotatingFileHandler` configuration (passed as constructor arguments)
-
-| Field / Key | Type | Purpose |
+| Name | Type | Purpose |
 |---|---|---|
-| filename | `str` | Absolute path to `codetwine.log` inside `_LOG_DIR` |
-| `maxBytes` | `int` | `1_048_576` (1 MiB) — triggers rotation when the file reaches this size |
-| `backupCount` | `int` | `5` — number of rotated backup files retained |
-| `encoding` | `str` | `"utf-8"` — character encoding for the log file |
+| `_LOG_DIR` | `str` | Absolute path to the `logs/` directory derived from this file's location |
+| `_LOG_FORMAT` | `str` | Shared format string for all handlers |
+| `_MAX_BYTES` | `int` | Maximum size of `codetwine.log` before rotation (1 MiB) |
+| `_BACKUP_COUNT` | `int` | Number of rotated backup files to retain |
 
 # Error Handling
 
 ## 1. Overall Strategy
 
-This file adopts a **logging-and-continue** approach with selective **silent suppression**. The primary strategy is to allow the application to proceed without interruption when log messages are determined to be non-informative (blank or whitespace-only). No explicit exception handling is implemented within this file; errors arising from setup operations (such as file system access failures) are left to propagate naturally to the caller (`main()` in `main.py`), following an implicit **fail-fast** posture for infrastructure-level failures.
+This file adopts a **logging-and-continue** approach combined with **silent suppression**. The primary strategy is to filter out undesirable log entries (blank or whitespace-only messages) before they reach the output targets, rather than raising exceptions or halting execution. No explicit error recovery or retry logic is implemented; the module trusts that the underlying Python `logging` infrastructure and the filesystem are available when `setup_logging()` is called.
 
 ---
 
@@ -235,23 +235,20 @@ This file adopts a **logging-and-continue** approach with selective **silent sup
 
 | Error Type | Trigger Condition | Handling | Recoverable? | Impact |
 |---|---|---|---|---|
-| Blank/whitespace-only log message | A log record whose message content is empty, whitespace, or a bare newline | The `_SkipBlankFormatter` returns an empty string, suppressing the message from being written | Yes – the message is silently skipped; the logger continues operating normally | No output is written for that record; all subsequent records are unaffected |
-| Log directory creation failure | `_LOG_DIR` cannot be created (e.g., permission denied) at the `os.makedirs` call | No handling; exception propagates to the caller (`main()`) | No – process terminates | Application startup fails entirely |
-| Log file open/write failure | The `RotatingFileHandler` cannot open or write to `codetwine.log` (e.g., disk full, permission denied) | No handling; exception propagates to the caller | No – process terminates | Application startup fails entirely |
-| External library over-verbose logging | `httpx`, `httpcore`, or `LiteLLM` emit log records below `WARNING` level | Log level for those loggers is explicitly set to `WARNING`, suppressing lower-severity records | Yes – lower-level records are filtered; no data is lost from the application perspective | Reduced noise in both console output and the log file |
+| Blank / whitespace-only log message | A `LogRecord` whose `getMessage()` result is empty or contains only whitespace or a bare newline | `_SkipBlankFormatter.format()` returns an empty string, suppressing the record silently | Yes – the record is skipped; other records continue normally | Only the offending log entry is dropped; no disruption to the logging pipeline |
+| Log directory unavailable | `_LOG_DIR` does not exist at the time `setup_logging()` is called | `os.makedirs(_LOG_DIR, exist_ok=True)` creates the directory automatically | Yes – directory is created on demand | None under normal conditions; if directory creation itself fails (e.g., permission denied), an unhandled OS-level exception propagates to the caller |
+| Unhandled OS exception during file handler setup | Filesystem permission error or other OS failure when creating `RotatingFileHandler` or its target directory | No explicit handling; the exception propagates uncaught to `setup_logging()`'s caller (`main()`) | No – process terminates with an unhandled exception | Entire application startup fails |
+| Excessive verbosity from external libraries | `httpx`, `httpcore`, or `LiteLLM` emit log records below `WARNING` level | Those loggers are explicitly clamped to `WARNING`, discarding lower-severity records | Yes – lower-severity records are permanently filtered | Diagnostic detail from those libraries is suppressed for the lifetime of the process |
 
 ---
 
 ## 3. Design Notes
 
-- **Separation of suppression from exception handling:** The blank-message suppression is implemented purely at the formatting layer (`_SkipBlankFormatter`) rather than through exception handling. This means the suppression is a deliberate output-filtering policy, not an error recovery mechanism.
-- **Implicit fail-fast for infrastructure errors:** By omitting try-except blocks around directory creation and file handler initialization, the design treats logging setup as a hard prerequisite. Any failure at this stage is considered unrecoverable, and the responsibility for observing and handling such failures is delegated entirely to the caller.
-- **External library noise reduction as a policy concern:** Restricting third-party logger levels to `WARNING` is treated as a logging hygiene policy rather than error handling. It prevents external libraries from obscuring application-level log output without suppressing genuinely actionable warnings.
+- **Suppression over exception**: `_SkipBlankFormatter` deliberately returns an empty string rather than raising an error or logging a warning about the invalid record. This keeps the log file clean without interrupting the application.
+- **No defensive guards around `setup_logging()`**: The function contains no `try/except` blocks. Failures in handler creation (e.g., filesystem errors) are intentionally left to propagate, implying the design assumes a correctly provisioned environment and treats setup failures as unrecoverable startup conditions.
+- **External library noise reduction is policy, not error handling**: Clamping third-party loggers to `WARNING` is a deliberate output-quality decision rather than a response to an error condition, but it has the side effect of preventing unexpected high-volume debug output from contaminating the log file.
+- **`exist_ok=True` as the sole resilience mechanism**: The only proactive fault-tolerance measure in the file is the idempotent directory creation, which prevents a failure on repeated calls to `setup_logging()` or when the directory already exists.
 
 # Summary
 
-**codetwine/config/logger.py**: Configures application-wide logging by attaching a console handler (WARNING+) and rotating file handler (INFO+ by default) to the root logger.
-
-**Public:** `setup_logging(level: int = logging.INFO) -> None`
-
-**Key structures:** `_SkipBlankFormatter(logging.Formatter)` suppresses whitespace-only records; `RotatingFileHandler` writes to `logs/codetwine.log` (1 MiB max, 5 backups, UTF-8); third-party loggers (`httpx`, `httpcore`, `LiteLLM`) capped at WARNING.
+**codetwine/config/logger.py** configures application-wide logging once at startup. Public interface: `setup_logging(level: int = logging.INFO) -> None` attaches a `WARNING`-level `StreamHandler` and an `INFO`-level `RotatingFileHandler` to the root logger. Private class `_SkipBlankFormatter(logging.Formatter)` suppresses whitespace-only records. Key constants: `_LOG_DIR` (str), `_LOG_FORMAT` (str), `_MAX_BYTES` (int, 1 MiB), `_BACKUP_COUNT` (int, 5). Silences `httpx`, `httpcore`, and `LiteLLM` loggers to `WARNING`.

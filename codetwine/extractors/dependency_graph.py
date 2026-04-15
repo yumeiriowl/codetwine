@@ -6,6 +6,7 @@ from collections import deque
 from codetwine.parsers.ts_parser import parse_file
 from codetwine.extractors.imports import extract_imports
 from codetwine.import_to_path import (
+    detect_source_roots,
     resolve_module_to_project_path,
     get_import_params,
 )
@@ -157,6 +158,9 @@ def build_project_dependencies(project_dir: str) -> list[dict]:
     for file_path in all_file_list:
         project_file_set.add(os.path.relpath(file_path, project_dir).replace("\\", "/"))
 
+    # Detect source root prefixes (e.g. "src/main/java/") present in the project
+    source_root_set = detect_source_roots(project_file_set)
+
     # == Step 3: Collect files imported by each file (callees) ======
     file_callee_map: dict[str, set[str]] = {}
     for file_path in all_file_list:
@@ -173,6 +177,7 @@ def build_project_dependencies(project_dir: str) -> list[dict]:
                     import_info.module,
                     file_rel,
                     project_file_set,
+                    source_root_set,
                 )
                 if resolved:
                     abs_resolved = os.path.abspath(os.path.join(project_dir, resolved))

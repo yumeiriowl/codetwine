@@ -4,33 +4,33 @@
 
 ## 1. Module Summary
 
-Provides utility functions for converting between project-relative file paths and the copy-destination directory structure used throughout the CodeTwine pipeline, as well as computing and comparing file hashes to detect changes.
+Provides utility functions for converting between project-relative file paths and the copy-destination directory structure used throughout the CodeTwine pipeline, along with file hashing helpers for change detection.
 
 ## 2. When to Use This Module
 
-- **Converting a relative path to its copy-destination path**: Call `rel_to_copy_path(rel_path)` to obtain the path under which a source file will be stored in the output directory (e.g., for constructing output paths in `output.py` and `dependency_graph.py`).
-- **Resolving the absolute output directory for a file**: Call `resolve_file_output_dir(base_output_dir, file_rel)` to get the absolute directory path where a file's generated artifacts (e.g., `doc.json`, `file_dependencies.json`) are written. Used in `output.py`, `pipeline.py`, and `doc_creator.py`.
-- **Recovering the original relative path from a copy-destination path**: Call `copy_path_to_rel(copy_path)` to strip the inserted `{stem}_{ext}` directory segment and restore the project-relative path. Used in `output.py` and `pipeline.py`.
-- **Recovering the original relative path from a full output path**: Call `output_path_to_rel(output_path)` to strip the leading project-name prefix and then apply `copy_path_to_rel`. Used in `output.py` and `doc_creator.py`.
-- **Detecting whether a source file has changed**: Call `is_file_unchanged(source_path, copied_path)` to compare the SHA256 hashes of the original file and its copy, determining whether reprocessing is needed. Used in `pipeline.py`.
-- **Hashing a single file**: Call `compute_file_hash(file_path)` to obtain a SHA256 hex digest of any file.
+- **Converting a relative path to its output directory path**: Call `resolve_file_output_dir(base_output_dir, file_rel)` to obtain the absolute path of the output directory for a given source file. Used by `pipeline.py`, `output.py`, and `doc_creator.py` when reading or writing per-file artifacts such as `doc.json` and `file_dependencies.json`.
+- **Building a copy-destination path from a relative path**: Call `rel_to_copy_path(rel_path)` to convert a project-relative path (e.g. `"src/utils.py"`) into the structured copy-destination path (e.g. `"src/utils_py/utils.py"`). Used by `output.py` and `dependency_graph.py` when recording file references in output JSON.
+- **Recovering the original relative path from a copy-destination path**: Call `copy_path_to_rel(copy_path)` to reverse the transformation applied by `rel_to_copy_path`. Used by `output.py` and `pipeline.py` when interpreting stored paths back to source-relative form.
+- **Recovering the original relative path from a full output path**: Call `output_path_to_rel(output_path)` to strip the project-name prefix and reverse the copy-destination transformation. Used by `output.py` and `doc_creator.py` when resolving file references that include the project name.
+- **Detecting whether a source file has changed**: Call `is_file_unchanged(source_path, copied_path)` to compare SHA-256 hashes of the original file and its previously copied counterpart. Used by `pipeline.py` to skip re-processing unmodified files.
+- **Computing a file's hash independently**: Call `compute_file_hash(file_path)` to obtain the SHA-256 hex digest of any file.
 
 ## 3. Public Interface Table
 
 | Name | Arguments (type) | Return type | Responsibility |
 |---|---|---|---|
-| `rel_to_copy_path` | `rel_path: str` | `str` | Converts a project-relative path to the copy-destination directory structure path (`{parent_dir}/{stem}_{ext}/{filename}`). |
-| `copy_path_to_rel` | `copy_path: str` | `str` | Inverse of `rel_to_copy_path`; removes the inserted `{stem}_{ext}` directory to recover the original relative path. |
-| `output_path_to_rel` | `output_path: str` | `str` | Strips the leading project-name segment from a `project_name/copy_destination_path` format path and delegates to `copy_path_to_rel`. |
-| `resolve_file_output_dir` | `base_output_dir: str`, `file_rel: str` | `str` | Returns the absolute output directory path for a given file by combining `base_output_dir` with the parent directory portion of the copy-destination path. |
-| `compute_file_hash` | `file_path: str` | `str` | Returns the SHA256 hash of a file as a hex string, reading in 8 KB chunks. |
-| `is_file_unchanged` | `source_path: str`, `copied_path: str` | `bool` | Returns `True` if the source file and its copy share identical SHA256 hashes; returns `False` if the copy does not exist. |
+| `rel_to_copy_path` | `rel_path` (str) | str | Converts a project-relative path to the copy-destination directory structure path (`{parent}/{stem}_{ext}/{filename}`). |
+| `copy_path_to_rel` | `copy_path` (str) | str | Reverses `rel_to_copy_path`, restoring the copy-destination path to the original project-relative path. |
+| `output_path_to_rel` | `output_path` (str) | str | Removes the project-name prefix from a `"project_name/copy_path"` format path and delegates to `copy_path_to_rel` to recover the source-relative path. |
+| `resolve_file_output_dir` | `base_output_dir` (str), `file_rel` (str) | str | Returns the absolute output directory path for a file by combining `base_output_dir` with the parent portion of the copy-destination path. |
+| `compute_file_hash` | `file_path` (str) | str | Returns the SHA-256 hash of a file as a hex string, reading in 8 KB chunks. |
+| `is_file_unchanged` | `source_path` (str), `copied_path` (str) | bool | Returns `True` if the source file and its copy share the same SHA-256 hash; returns `False` if the copy does not exist. |
 
 ## 4. Design Decisions
 
-- **Collision-free output directories via extension suffixing**: The copy-destination structure inserts a `{stem}_{ext}` directory between the parent directory and the filename (e.g., `utils_c/utils.c` and `utils_h/utils.h`). This ensures that files sharing the same stem but differing in extension never map to the same output directory, which would otherwise silently overwrite artifacts.
-- **Symmetric path conversion**: `rel_to_copy_path` and `copy_path_to_rel` are designed as strict inverses, with `copy_path_to_rel` using `_to_dir_name` to verify that the second-to-last path segment was actually inserted before removing it, avoiding incorrect stripping on paths that were not produced by `rel_to_copy_path`.
-- **Hash-based change detection over timestamps**: `is_file_unchanged` uses content hashing (SHA256) rather than file modification timestamps, making change detection reliable across file copies and system clock variations.
+- **Collision-free output directory naming**: By transforming `stem.ext` into `stem_ext` as the containing directory name (via the internal `_to_dir_name` helper), files that share a base name but differ in extension (e.g. `utils.c` and `utils.h`) are placed in distinct output directories, preventing path collisions.
+- **Invertible path transformation**: `rel_to_copy_path` and `copy_path_to_rel` are designed as strict inverses. `copy_path_to_rel` identifies the inserted directory by checking whether the second-to-last path component matches `_to_dir_name(filename)`, making the reversal reliable without storing metadata.
+- **Copy-destination path as the common path currency**: All pipeline components (output generation, dependency graph, doc creation) express file locations using the same `{parent}/{stem}_{ext}/{filename}` structure, centralizing the path logic in this module and keeping dependents consistent.
 
 # Definition Design Specifications
 
@@ -38,164 +38,176 @@ Provides utility functions for converting between project-relative file paths an
 
 ## `_to_dir_name(filename: str) -> str`
 
-**Responsibility:** Converts a filename into a directory name by replacing the extension separator `.` with `_`, producing a safe, collision-resistant directory segment.
+| Item | Detail |
+|---|---|
+| **Signature** | `filename: str` → `str` |
+| **Visibility** | Module-private (underscore prefix) |
 
-**When to use:** Called internally whenever a directory name must be derived from a filename (by both `rel_to_copy_path` and `copy_path_to_rel`).
+**Responsibility:** Converts a bare filename into a directory name by replacing the extension separator `.` with `_`, so that the resulting string is safe to use as a directory name without a dot.
+
+**When to use:** Called internally whenever a per-file output directory name must be derived from a filename.
 
 **Design decisions:**
-- Files with no extension (e.g., `Makefile`) are returned unchanged, since there is no `.` to replace.
-- Only the extension dot is replaced; dots within the stem are left as-is.
+- Uses `os.path.splitext` so the split is consistent with the OS path library's definition of an extension.
+- Files without extensions (e.g. `Makefile`) are returned unchanged, not given a trailing `_`.
+- The leading `.` of the extension is stripped by taking `ext[1:]`, so `_py` is produced rather than `_.py`.
 
 **Constraints & edge cases:**
-
-| Case | Behavior |
-|---|---|
-| File with extension | Returns `{stem}_{ext_without_dot}` |
-| File without extension | Returns the filename as-is |
-| Multiple dots in stem | Only the final extension dot is affected |
+- Input is expected to be a bare filename, not a path with directory components; behavior is undefined for inputs containing path separators.
+- Hidden files (e.g. `.gitignore`) are treated by `os.path.splitext` as having no extension (stem = `.gitignore`, ext = `""`), so they are returned unchanged.
 
 ---
 
 ## `rel_to_copy_path(rel_path: str) -> str`
 
-**Responsibility:** Converts a project-relative file path into the copy-destination directory structure path used when source files are copied to output directories.
+| Item | Detail |
+|---|---|
+| **Signature** | `rel_path: str` → `str` |
 
-**When to use:** Call when building the output path for a file that is about to be copied, or when constructing path strings in formats like `{project_name}/{copy_path}` (used by `output.py` and `extractors/dependency_graph.py`).
+**Responsibility:** Transforms a project-relative file path into the copy-destination directory structure path used throughout the output layer, inserting a `{stem}_{ext}` directory between the parent directory and the filename.
+
+**When to use:** Called whenever a relative source path must be mapped to the corresponding location in the output directory tree, e.g. when writing copied source files or building dependency graph entries.
 
 **Design decisions:**
-- A `{stem}_{ext}` directory is inserted between the parent directory and the filename. This prevents collisions between files sharing the same stem but different extensions (e.g., `utils.c` vs. `utils.h`).
-- Top-level files (no parent directory) omit the leading separator.
+- The intermediate `{stem}_{ext}` directory prevents name collisions between files that share a stem but differ in extension (e.g. `utils.c` vs. `utils.h`).
+- Top-level files (no parent directory) omit the leading `/` by using a separate branch.
 
 **Constraints & edge cases:**
-
-| Case | Output format |
-|---|---|
-| Top-level file with extension | `{stem}_{ext}/{filename}` |
-| Nested file with extension | `{parent}/{stem}_{ext}/{filename}` |
-| File without extension | `{filename}/{filename}` |
+- `rel_path` must use forward slashes or be handled by `os.path.dirname`/`os.path.basename`.
+- The function is the authoritative definition of the copy-destination path structure; all callers must stay consistent with it.
 
 ---
 
 ## `copy_path_to_rel(copy_path: str) -> str`
 
-**Responsibility:** Reverses the transformation applied by `rel_to_copy_path`, recovering the original project-relative path from a copy-destination path.
+| Item | Detail |
+|---|---|
+| **Signature** | `copy_path: str` → `str` |
 
-**When to use:** Call when reading a copy-destination path (e.g., from a JSON dependency record) and the original source-relative path is needed — used in `output.py` and `pipeline.py`.
+**Responsibility:** Inverts `rel_to_copy_path`, removing the inserted `{stem}_{ext}` directory component to recover the original project-relative path.
+
+**When to use:** Called when reading back an output-tree path and needing to identify which source file it corresponds to.
 
 **Design decisions:**
-- Before splitting, backslashes are normalized to forward slashes to handle Windows-style paths.
-- The reversal is conditional: the second-to-last path segment is only removed if it matches `_to_dir_name(filename)`, ensuring the function is safe to call on paths that were not produced by `rel_to_copy_path`.
-- If the path has fewer than two segments or the inserted directory cannot be detected, the input is returned unchanged.
+- Normalises Windows backslashes to forward slashes before splitting, making the function cross-platform.
+- The second-to-last path component is validated against `_to_dir_name(filename)` before removal, so paths that do not follow the expected structure are returned unchanged rather than silently corrupted.
 
 **Constraints & edge cases:**
-
-| Case | Behavior |
-|---|---|
-| Valid copy-destination path | Inserted directory segment removed |
-| Path not matching expected structure | Returned unchanged |
-| Windows-style backslash separators | Normalized before processing |
+- Relies on the invariant that `_to_dir_name` is the same function used during path creation; any drift between the two will cause incorrect inversion.
+- Paths with fewer than two components are returned as-is.
 
 ---
 
 ## `output_path_to_rel(output_path: str) -> str`
 
-**Responsibility:** Strips the leading project-name prefix from a `{project_name}/{copy_path}` format path and then converts the remainder to a project-relative path.
+| Item | Detail |
+|---|---|
+| **Signature** | `output_path: str` → `str` |
 
-**When to use:** Call when processing paths found in dependency JSON records (used in `output.py` and `doc_creator.py`) where paths are stored with a project-name prefix.
+**Responsibility:** Strips the project-name prefix from a full output path (format `project_name/copy_destination_path`) and delegates to `copy_path_to_rel` to recover the source-relative path.
+
+**When to use:** Called when processing paths stored inside JSON dependency documents, where paths are recorded in `project_name/copy_destination_path` format, and the caller needs the original source-relative path.
 
 **Design decisions:**
-- Only the first `/` is used as the split point, so project names containing `/` are not a concern, but nested paths after the prefix are preserved intact.
-- Delegates to `copy_path_to_rel` for the second transformation step.
-- If the input has no `/`, it is returned unchanged.
+- Splits on the first `/` only (limit `1`) to correctly handle project names that contain no slashes while leaving the rest of the path intact for `copy_path_to_rel`.
+- Falls back to returning the input unchanged when no `/` separator is found.
 
 **Constraints & edge cases:**
-- Assumes the project name contains no `/`.
-- A path with no prefix separator passes through without modification.
+- Assumes the first path segment is exactly the project name with no nested structure.
+- Input paths with only one segment are returned unchanged, which may or may not be correct depending on the caller's context.
 
 ---
 
 ## `resolve_file_output_dir(base_output_dir: str, file_rel: str) -> str`
 
-**Responsibility:** Produces the absolute path of the output directory for a given source file by combining the base output directory with the copy-destination directory structure.
+| Item | Detail |
+|---|---|
+| **Signature** | `base_output_dir: str`, `file_rel: str` → `str` |
 
-**When to use:** Call before writing any output artifact (copied source, `doc.json`, `file_dependencies.json`) for a file, to determine where those artifacts should be placed — used in `output.py`, `pipeline.py`, and `doc_creator.py`.
+**Responsibility:** Computes the absolute path of the output directory for a given source file by combining the base output directory with the directory component of the file's copy-destination path.
+
+**When to use:** Called before reading or writing any per-file output artefact (copied source, `doc.json`, `file_dependencies.json`) to resolve the correct directory on disk.
 
 **Design decisions:**
-- Delegates path structure computation entirely to `rel_to_copy_path`, then takes the parent of the resulting path as the output directory. This ensures the directory structure is consistent with where files are actually copied.
+- Delegates path structure computation entirely to `rel_to_copy_path`, so the output directory layout is always consistent with the copy-destination path structure.
+- Returns only the directory (via `os.path.dirname` of the copy path), not the full file path, because callers construct specific filenames themselves.
 
 **Constraints & edge cases:**
-- `base_output_dir` is expected to be an absolute path; no validation is performed.
-- The returned path is not guaranteed to exist; callers are responsible for creating it (e.g., with `os.makedirs`).
+- Does not create the directory; callers are responsible for calling `os.makedirs` if needed.
+- `base_output_dir` should be an absolute path to yield a meaningful absolute result; a relative `base_output_dir` produces a relative result.
 
 ---
 
 ## `compute_file_hash(file_path: str) -> str`
 
-**Responsibility:** Computes the SHA-256 hash of a file's binary content and returns it as a hexadecimal string, used for change detection.
+| Item | Detail |
+|---|---|
+| **Signature** | `file_path: str` → `str` |
 
-**When to use:** Call when a stable content fingerprint is needed for a file — called internally by `is_file_unchanged`.
+**Responsibility:** Produces a SHA-256 hex digest for a file, enabling content-based equality checks without loading the entire file into memory.
+
+**When to use:** Called indirectly through `is_file_unchanged` to compare source and copied file contents; may also be called directly when a hash of a single file is needed.
 
 **Design decisions:**
-- Reads the file in fixed 8 KB chunks rather than loading the entire content into memory, making it suitable for large files.
+- Reads the file in fixed 8 KB chunks to bound memory usage regardless of file size.
+- Opens in binary mode to ensure the hash is byte-exact across platforms (no newline translation).
 
 **Constraints & edge cases:**
-- `file_path` must exist and be readable; no existence check is performed internally.
-- Returns a lowercase hex string (64 characters for SHA-256).
+- Raises `FileNotFoundError` (or similar OS error) if `file_path` does not exist; callers must ensure the file is present before calling.
+- `file_path` must be an absolute path or a valid path relative to the current working directory.
 
 ---
 
 ## `is_file_unchanged(source_path: str, copied_path: str) -> bool`
 
-**Responsibility:** Determines whether a source file and its previously copied counterpart are identical by comparing their SHA-256 hashes, enabling incremental processing in `pipeline.py`.
+| Item | Detail |
+|---|---|
+| **Signature** | `source_path: str`, `copied_path: str` → `bool` |
 
-**When to use:** Call during the change-detection phase of a pipeline run to decide whether reprocessing a file can be skipped.
+**Responsibility:** Determines whether a source file and its output-directory copy are byte-identical by comparing their SHA-256 hashes, so that the pipeline can skip re-processing unchanged files.
+
+**When to use:** Called during the change-detection phase of the pipeline to populate the set of files that require reprocessing.
 
 **Design decisions:**
-- A missing copy is treated as "changed" (returns `False`) rather than raising an error, so that newly encountered files are always processed.
-- Hash comparison is used rather than modification-time comparison, providing content-based accuracy regardless of filesystem timestamp behavior.
+- A missing copy is treated as "changed" (returns `False`) rather than raising an error, because a missing copy simply means the file has never been processed.
+- SHA-256 comparison is preferred over modification-time comparison because timestamps can be unreliable across copy operations.
 
 **Constraints & edge cases:**
-
-| Condition | Return value |
-|---|---|
-| Copy does not exist | `False` (treated as changed) |
-| Hashes match | `True` |
-| Hashes differ | `False` |
-
-- Both paths must be readable if they exist; no permission handling is performed.
+- Both paths must point to regular files if they exist; behaviour on directories or special files is unspecified.
+- Hash collision (two different files producing the same SHA-256) is treated as equality; this is an accepted theoretical limitation.
 
 # Dependency Description
 
-## Dependencies (modules this file imports)
+### Dependencies (modules this file imports)
 
-This file has **no project-internal module dependencies**. It imports only from the Python standard library (`os`, `hashlib`) and defines utilities consumed by other modules.
-
----
-
-## Dependents (modules that import this file)
-
-The following project-internal modules import symbols from `codetwine/utils/file_utils.py`:
-
-- **`codetwine/output.py` → `codetwine/utils/file_utils.py`** : Uses `rel_to_copy_path` to construct output paths in `"project_name/copy_path"` format; uses `resolve_file_output_dir` to locate per-file output directories when building summary maps and file lists; uses `output_path_to_rel` to recover source-relative paths from output-format paths in dependency maps; uses `copy_path_to_rel` to strip the inserted `{stem}_{ext}` directory segment when building Mermaid diagrams.
-
-- **`codetwine/pipeline.py` → `codetwine/utils/file_utils.py`** : Uses `resolve_file_output_dir` to determine the output directory for each file during change detection and file processing; uses `is_file_unchanged` to compare the source file against its copy in the output directory to detect whether reprocessing is needed; uses `copy_path_to_rel` to convert copy-destination paths back to project-relative paths.
-
-- **`codetwine/doc_creator.py` → `codetwine/utils/file_utils.py`** : Uses `output_path_to_rel` to recover readable source-relative file names when constructing LLM prompts from dependency data; uses `resolve_file_output_dir` to locate the output directory for a given file when loading or writing design documents.
-
-- **`codetwine/extractors/dependency_graph.py` → `codetwine/utils/file_utils.py`** : Uses `rel_to_copy_path` to format the `"file"`, `"callers"`, and `"callees"` path fields in the dependency graph output by constructing `"project_name/copy_path"` strings for each file and its caller/callee relationships.
+`codetwine/utils/file_utils.py` imports only from the Python standard library (`os`, `hashlib`). There are **no project-internal module dependencies** for this file.
 
 ---
 
-## Dependency Direction
+### Dependents (modules that import this file)
 
-All relationships are **unidirectional**:
+The following project-internal modules depend on `codetwine/utils/file_utils.py`:
 
-- `codetwine/output.py` → `codetwine/utils/file_utils.py`
-- `codetwine/pipeline.py` → `codetwine/utils/file_utils.py`
-- `codetwine/doc_creator.py` → `codetwine/utils/file_utils.py`
-- `codetwine/extractors/dependency_graph.py` → `codetwine/utils/file_utils.py`
+- **`codetwine/output.py`** → `codetwine/utils/file_utils.py` : Uses `rel_to_copy_path` to construct output path strings in `"project_name/copy_path"` format; uses `resolve_file_output_dir` to locate per-file output directories when building summary maps and file lists; uses `output_path_to_rel` to convert stored output paths back to project-relative paths when processing dependency usage entries; uses `copy_path_to_rel` to strip the copy-destination directory structure and recover original relative paths (e.g., for Mermaid diagram building).
 
-`codetwine/utils/file_utils.py` does not import from any of these modules; it serves purely as a utility provider, with the data flow going from each dependent inward toward this file.
+- **`codetwine/pipeline.py`** → `codetwine/utils/file_utils.py` : Uses `resolve_file_output_dir` to determine per-file output directories during change detection and file processing; uses `is_file_unchanged` to compare source files against their copies and decide whether reprocessing is needed; uses `copy_path_to_rel` to convert prefixed copy-destination paths back to internal relative paths.
+
+- **`codetwine/doc_creator.py`** → `codetwine/utils/file_utils.py` : Uses `output_path_to_rel` to recover human-readable relative paths from stored output paths when constructing documentation prompts and listing callee usages; uses `resolve_file_output_dir` to locate the output directory for a given file when loading or writing design documents.
+
+- **`codetwine/extractors/dependency_graph.py`** → `codetwine/utils/file_utils.py` : Uses `rel_to_copy_path` to format file, caller, and callee entries in the dependency graph output as `"project_name/copy_path"` strings.
+
+---
+
+### Dependency Direction
+
+| Relationship | Direction |
+|---|---|
+| `codetwine/output.py` → `codetwine/utils/file_utils.py` | Unidirectional |
+| `codetwine/pipeline.py` → `codetwine/utils/file_utils.py` | Unidirectional |
+| `codetwine/doc_creator.py` → `codetwine/utils/file_utils.py` | Unidirectional |
+| `codetwine/extractors/dependency_graph.py` → `codetwine/utils/file_utils.py` | Unidirectional |
+
+All relationships are unidirectional: `codetwine/utils/file_utils.py` is a pure utility module that depends on no other project-internal modules, while multiple higher-level modules consume its path manipulation and file hashing utilities.
 
 # Data Flow
 
@@ -204,108 +216,122 @@ All relationships are **unidirectional**:
 | Input | Source | Format |
 |---|---|---|
 | `filename` | Caller argument | Plain string (e.g., `"settings.py"`, `"Makefile"`) |
-| `rel_path` | Caller argument | Relative path string from the project root (e.g., `"repo_graphrag/llm/client.py"`) |
+| `rel_path` | Caller argument | Relative path string from project root (e.g., `"repo_graphrag/llm/client.py"`) |
 | `copy_path` | Caller argument | Copy-destination directory structure path string (e.g., `"repo_graphrag/llm/client_py/client.py"`) |
 | `output_path` | Caller argument | `"project_name/copy_destination_path"` format string |
 | `base_output_dir` | Caller argument | Absolute directory path string |
-| `file_rel` | Caller argument | Relative path string from the project root |
 | `file_path` / `source_path` / `copied_path` | Caller argument | Absolute file path strings |
 
-No file reads, configuration values, or environment state are consumed — all inputs arrive exclusively as function arguments.
+No configuration files or environment variables are read by this module. File system reads occur only in `compute_file_hash` (binary file read) and `is_file_unchanged` (existence check via `os.path.exists`).
 
 ---
 
 ## 2. Transformation Overview
 
-### Path encoding pipeline (`rel_to_copy_path`)
+This module contains several independent transformation pipelines rather than a single linear chain.
+
+### Path Encoding Pipeline (`rel_path` → copy-destination path)
 
 ```
-rel_path
-  └─ os.path.dirname / os.path.basename
-        └─ filename, parent_dir
-              └─ _to_dir_name(filename)          # "." in extension → "_"
-                    └─ f"{parent_dir}/{dir_name}/{filename}"   # copy-destination path
+rel_path (e.g., "repo_graphrag/llm/client.py")
+    │
+    ├─ os.path.dirname  →  parent_dir ("repo_graphrag/llm")
+    └─ os.path.basename →  filename   ("client.py")
+                                │
+                         _to_dir_name()
+                         os.path.splitext → stem="client", ext=".py"
+                         → dir_name = "client_py"
+                                │
+                    f"{parent_dir}/{dir_name}/{filename}"
+                                │
+                    "repo_graphrag/llm/client_py/client.py"  ← rel_to_copy_path output
+                                │
+                    os.path.dirname → "repo_graphrag/llm/client_py"
+                                │
+                    os.path.join(base_output_dir, ...)       ← resolve_file_output_dir output
 ```
 
-`_to_dir_name` is the shared primitive: it splits a filename into stem and extension via `os.path.splitext`, then concatenates them with `_` as separator (or returns the stem unchanged when no extension is present). All higher-level path functions build on this primitive.
-
-### Path decoding pipeline (`copy_path_to_rel`)
+### Path Decoding Pipeline (copy-destination path → `rel_path`)
 
 ```
-copy_path
-  └─ split by "/"
-        └─ parts[-1] = filename
-              └─ _to_dir_name(filename) == parts[-2]?   # was the directory inserted?
-                    YES → join(parts[:-2] + [filename])  # remove inserted directory
-                    NO  → return copy_path unchanged
+copy_path (e.g., "repo_graphrag/llm/client_py/client.py")
+    │
+    split("/") → ["repo_graphrag", "llm", "client_py", "client.py"]
+    │
+    filename = parts[-1]  →  "client.py"
+    parts[-2]             →  "client_py"
+    _to_dir_name("client.py") → "client_py"   [match confirmed]
+    │
+    "/".join(parts[:-2] + [filename])
+    │
+    "repo_graphrag/llm/client.py"              ← copy_path_to_rel output
 ```
 
-### Two-level decoding (`output_path_to_rel`)
+### Output Path Decoding Pipeline (`output_path` → `rel_path`)
 
 ```
-output_path
-  └─ split("/", 1)            # strip project_name prefix
-        └─ parts[1] = copy_path
-              └─ copy_path_to_rel(copy_path)   # decode copy-destination structure
-                    └─ rel_path
+output_path (e.g., "js_project/src/emitter_js/emitter.js")
+    │
+    split("/", 1) → ["js_project", "src/emitter_js/emitter.js"]
+    │
+    parts[1] → copy_path_to_rel("src/emitter_js/emitter.js")
+    │
+    "src/emitter.js"                           ← output_path_to_rel output
 ```
 
-### Output directory resolution (`resolve_file_output_dir`)
-
-```
-file_rel
-  └─ rel_to_copy_path(file_rel)        # encode to copy-destination path
-        └─ os.path.dirname(copy_path)  # drop the filename, keep the directory portion
-              └─ os.path.join(base_output_dir, ...)   # absolute output directory
-```
-
-### File change detection (`is_file_unchanged`)
+### File Integrity Pipeline
 
 ```
 source_path, copied_path
-  └─ os.path.exists(copied_path)       # fast-exit: False if copy is absent
-        └─ compute_file_hash(source_path)
-        └─ compute_file_hash(copied_path)
-              └─ compare hex strings → bool
+    │
+    os.path.exists(copied_path) ──[missing]──→ False
+    │ [exists]
+    compute_file_hash(source_path)    ← SHA256, read in 8 KB chunks
+    compute_file_hash(copied_path)    ← SHA256, read in 8 KB chunks
+    │
+    hash comparison
+    │
+    True / False                               ← is_file_unchanged output
 ```
-
-`compute_file_hash` reads a file in 8 KB chunks, feeding each chunk into a SHA-256 digest, and returns the final hex string. It does not accumulate the full file content in memory.
 
 ---
 
 ## 3. Outputs
 
-| Function | Return Type | Description |
+| Function | Output | Format |
 |---|---|---|
-| `_to_dir_name` | `str` | Filename with extension dot replaced by `_`, or bare stem |
-| `rel_to_copy_path` | `str` | Copy-destination path with an inserted `{stem}_{ext}` directory |
-| `copy_path_to_rel` | `str` | Original project-relative path with the inserted directory removed |
-| `output_path_to_rel` | `str` | Project-relative path, with both the project-name prefix and the inserted directory removed |
-| `resolve_file_output_dir` | `str` | Absolute path of the output directory for a given source file |
-| `compute_file_hash` | `str` | SHA-256 hex digest of the file at the given path |
-| `is_file_unchanged` | `bool` | `True` if source and copy have matching SHA-256 hashes; `False` if the copy is absent or hashes differ |
+| `_to_dir_name` | Directory name with extension separator replaced | String (e.g., `"client_py"`, `"Makefile"`) |
+| `rel_to_copy_path` | Copy-destination path with inserted `{stem}_{ext}` directory | String (e.g., `"repo_graphrag/llm/client_py/client.py"`) |
+| `copy_path_to_rel` | Original project-relative path recovered from copy-destination path | String (e.g., `"repo_graphrag/llm/client.py"`) |
+| `output_path_to_rel` | Project-relative path recovered from `project_name/copy_path` format | String (e.g., `"src/emitter.js"`) |
+| `resolve_file_output_dir` | Absolute output directory path for a given source file | String (absolute path, no trailing slash) |
+| `compute_file_hash` | SHA256 digest of a file | Hex string (64 characters) |
+| `is_file_unchanged` | Whether source and copied file contents are identical | Boolean |
 
-No files are written and no side effects are produced by any function in this module.
+No files are written by this module. The only side effect is file system reads performed inside `compute_file_hash`.
 
 ---
 
 ## 4. Key Data Structures
 
-This module operates entirely on primitive strings and booleans; it defines no dataclasses, TypedDicts, or named domain structures. The only internal compound value is the list produced by path splitting:
+This module operates exclusively on primitive strings and booleans; no dataclasses, TypedDicts, or compound data structures are defined or produced. The following table documents the intermediate string components that appear as implicit structures within path manipulation:
 
-### Path parts list (internal to `copy_path_to_rel`)
+### Path Components (implicit, within `rel_to_copy_path` / `copy_path_to_rel`)
 
-| Index | Type | Purpose |
+| Component | Type | Purpose |
 |---|---|---|
-| `parts[0...-2]` | `list[str]` | Parent directory components preceding the inserted `{stem}_{ext}` directory |
-| `parts[-2]` | `str` | The inserted `{stem}_{ext}` directory, verified against `_to_dir_name(filename)` |
-| `parts[-1]` | `str` | The original filename (basename), used as the restored final path component |
+| `parent_dir` | `str` | Zero-or-more directory segments preceding the filename (e.g., `"repo_graphrag/llm"`); empty string for top-level files |
+| `filename` | `str` | Bare filename including extension (e.g., `"client.py"`) |
+| `stem` | `str` | Filename without extension, from `os.path.splitext` (e.g., `"client"`) |
+| `ext` | `str` | Extension including leading dot, from `os.path.splitext` (e.g., `".py"`); empty string if no extension |
+| `dir_name` | `str` | Inserted intermediate directory name with dot replaced by underscore (e.g., `"client_py"`); equals `stem` when no extension |
+| `parts` | `list[str]` | Path split on `/` used in `copy_path_to_rel` to identify and remove the inserted directory segment |
 
 # Error Handling
 
 ## 1. Overall Strategy
 
-This file adopts a **fail-fast with minimal silent fallback** approach. Most functions perform no internal error handling and allow exceptions to propagate directly to the caller. The single exception to this pattern is `is_file_unchanged`, which applies a deliberate, localized graceful degradation: a missing file at the copy destination is treated as a changed state rather than an error, returning `False` without raising an exception. All other operations—file I/O, hashing, and path computation—rely entirely on the calling layer (e.g., `pipeline.py`, `output.py`) to handle any failures.
+This file adopts a **fail-fast** approach. No `try-except` blocks are present; all functions either complete successfully or propagate exceptions directly to callers. The single explicit defensive check—the existence test in `is_file_unchanged`—is a **graceful degradation** case: a missing file is treated as a changed file rather than an error, allowing callers to proceed normally. All other error conditions (I/O failures, invalid paths, missing files opened for hashing) are left unhandled and surface as unmodified Python exceptions.
 
 ---
 
@@ -313,25 +339,24 @@ This file adopts a **fail-fast with minimal silent fallback** approach. Most fun
 
 | Error Type | Trigger Condition | Handling | Recoverable? | Impact |
 |---|---|---|---|---|
-| `FileNotFoundError` / `OSError` | `compute_file_hash` opens a file that does not exist or is inaccessible | Not caught; propagates to caller | No (at this layer) | Caller must handle; unhandled propagation halts the operation |
-| `FileNotFoundError` / `OSError` | `is_file_unchanged` attempts to hash `source_path` that is inaccessible | Not caught; propagates to caller | No (at this layer) | Caller must handle |
-| Missing copy destination file | `is_file_unchanged` is called but `copied_path` does not exist | Explicitly checked via `os.path.exists`; returns `False` | Yes — treated as a changed file, triggering reprocessing | Downstream pipeline marks the file for reprocessing; no exception raised |
-| Invalid or malformed path input | `rel_to_copy_path`, `copy_path_to_rel`, `output_path_to_rel`, `resolve_file_output_dir` receive unexpected path strings | No validation; functions return a best-effort result based on `os.path` behavior | Yes (path computed as-is) | Potentially incorrect output path; no exception raised unless `os.path` itself raises |
-| `copy_path_to_rel` path not matching expected structure | The second-to-last path component does not match `_to_dir_name(filename)` | Falls back to returning the original `copy_path` unchanged | Yes — original path returned | Caller receives the unmodified input; no exception raised |
+| `FileNotFoundError` / `OSError` | `compute_file_hash` attempts to open a file that does not exist or is inaccessible | None — exception propagates to caller | No | Calling operation (e.g., change detection in `pipeline.py`) terminates or crashes |
+| Missing copy at destination | `is_file_unchanged` is called when the copied file does not yet exist at `copied_path` | Returns `False` without raising; file is treated as changed | Yes | File is scheduled for (re)processing; no termination |
+| `OSError` / `PermissionError` | Path operations (`os.path.splitext`, `os.path.join`, `os.path.dirname`) receive an inaccessible or malformed path | None — exception propagates to caller | No | Dependent pipeline or output operation fails |
+| Malformed `copy_path` input | `copy_path_to_rel` receives a path whose second-to-last component does not match the expected `_to_dir_name` pattern | Falls back to returning the input path unchanged | Yes (partial) | The path is passed through as-is; callers receive an unrestored path |
 
 ---
 
 ## 3. Design Notes
 
-- **Explicit existence check over exception catching:** In `is_file_unchanged`, the absence of the copied file is a known, expected condition in the pipeline (a file has simply not been processed yet). Using `os.path.exists` rather than catching `FileNotFoundError` makes this intentional state explicit and keeps the function's return type clean (`bool`), avoiding exception-based control flow for a normal operational scenario.
+- **Minimal surface area for error handling.** The utility functions in this file are pure path transformations or straightforward file-system operations. The design delegates all error responsibility to callers (e.g., `pipeline.py`, `output.py`), keeping each function focused on a single task without coupling it to recovery logic.
 
-- **No internal validation in path utilities:** The path transformation functions (`rel_to_copy_path`, `copy_path_to_rel`, `output_path_to_rel`) perform no input validation. This keeps them lightweight and purely computational, delegating correctness guarantees to callers. The `copy_path_to_rel` fallback (returning the input unchanged when the structure is unrecognized) is the only defensive measure, preventing silent data corruption from an unrecognized path format.
+- **Existence check as a domain rule, not an error handler.** The guard in `is_file_unchanged` reflects an intentional domain decision—an absent copy is semantically equivalent to a changed file—rather than a defensive workaround for an exceptional condition. This allows change-detection loops in callers to run without requiring pre-checks or exception handling on their side.
 
-- **Delegation to callers for I/O errors:** File I/O errors in `compute_file_hash` and `is_file_unchanged` are fully propagated. Dependents such as `pipeline.py` contain the orchestration logic that determines whether such failures should halt processing or be logged and skipped, keeping error policy decisions out of this utility layer.
+- **Passthrough fallback in `copy_path_to_rel`.** When the path structure does not match the expected insertion pattern, the function returns the input unchanged. This is the only other case where a potentially incorrect input is tolerated silently rather than surfacing an error, prioritising forward progress over strict validation.
 
 # Summary
 
-**file_utils.py** converts project-relative paths to/from copy-destination paths and detects file changes via hashing.
+**file_utils.py** — Path conversion and file hashing utilities for the CodeTwine pipeline.
 
 **Public functions:**
 - `rel_to_copy_path(rel_path: str) → str`
@@ -341,4 +366,4 @@ This file adopts a **fail-fast with minimal silent fallback** approach. Most fun
 - `compute_file_hash(file_path: str) → str`
 - `is_file_unchanged(source_path: str, copied_path: str) → bool`
 
-**Key data:** All inputs/outputs are primitive `str` or `bool`. Copy-destination paths follow `{parent}/{stem}_{ext}/{filename}` format.
+**Key data:** All inputs/outputs are primitive `str` or `bool`. Copy-destination paths follow `{parent}/{stem}_{ext}/{filename}` format; output paths use `project_name/copy_path` format.

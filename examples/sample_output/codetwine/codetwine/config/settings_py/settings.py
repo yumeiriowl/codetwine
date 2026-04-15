@@ -534,3 +534,15 @@ SAME_PACKAGE_VISIBLE: dict[str, bool] = _expand_ext_aliases(
     {ext: cfg.same_package_visible for ext, cfg in _LANG_REGISTRY.items()
      if cfg.same_package_visible}
 )
+
+# Source root prefixes for Maven/Gradle standard layouts and Python src-layout.
+# Used to resolve import statements when source files are nested under these directories.
+SOURCE_ROOT_PATTERNS: list[str] = [
+    "src/main/java/",
+    "src/test/java/",
+    "src/main/kotlin/",
+    "src/test/kotlin/",
+    "src/main/scala/",
+    "src/test/scala/",
+    "src/",
+]

@@ -48,7 +48,7 @@
   "caller_usages": [
     {
       "lines": [
-        69
+        73
       ],
       "name": "extract_imports",
       "file": "codetwine/codetwine/file_analyzer_py/file_analyzer.py",
@@ -64,7 +64,7 @@
     },
     {
       "lines": [
-        171
+        175
       ],
       "name": "extract_imports",
       "file": "codetwine/codetwine/extractors/dependency_graph_py/dependency_graph.py",
