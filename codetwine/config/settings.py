@@ -81,6 +81,23 @@ RETRY_WAIT = get_config_value("RETRY_WAIT", default=2, var_type=int)
 # == Analysis settings =============================================
 ENABLE_LLM_DOC = get_config_value("ENABLE_LLM_DOC", default=True, var_type=bool)
 SUMMARY_MAX_CHARS: int = get_config_value("SUMMARY_MAX_CHARS", default=600, var_type=int)
+
+# Enable LLM summarization of large code as a fallback when the design-document
+# prompt exceeds the model context window (True/False). When False, the context
+# is only reduced by dropping caller/callee context (no extra LLM calls).
+ENABLE_CODE_SUMMARY = get_config_value("ENABLE_CODE_SUMMARY", default=True, var_type=bool)
+
+# Definitions / dependency symbols longer than this many lines are candidates
+# for LLM summarization during context-overflow fallback.
+CODE_SUMMARY_TRIGGER_LINES = get_config_value(
+    "CODE_SUMMARY_TRIGGER_LINES", default=40, var_type=int
+)
+
+# Target character limit for a single code behavior summary.
+CODE_SUMMARY_MAX_CHARS = get_config_value(
+    "CODE_SUMMARY_MAX_CHARS", default=400, var_type=int
+)
+
 _EXCLUDE_PATTERNS_ENV = get_config_value("EXCLUDE_PATTERNS", default="", var_type=str)
 EXCLUDE_PATTERNS: list[str] = (
     [p.strip() for p in _EXCLUDE_PATTERNS_ENV.split(",") if p.strip()]
