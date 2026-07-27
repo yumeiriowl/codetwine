@@ -1,6 +1,7 @@
 import os
 import json
 import re
+import hashlib
 import asyncio
 import logging
 from codetwine.llm import ContextWindowExceededError
@@ -11,6 +12,9 @@ from codetwine.config.settings import (
     DOC_TEMPLATE_PATH,
     OUTPUT_LANGUAGE,
     SUMMARY_MAX_CHARS,
+    ENABLE_CODE_SUMMARY,
+    CODE_SUMMARY_TRIGGER_LINES,
+    CODE_SUMMARY_MAX_CHARS,
 )
 
 logger = logging.getLogger(__name__)
@@ -29,7 +33,7 @@ HEADER_CALLEE_USAGES = "## External Functions/Classes Used by This File (Depende
 CALLEE_USAGES_SCHEMA_NOTE = (
     "* Schema: name=symbol name being used, from=file path where that symbol is defined\n"
     "* The 'dependency source code' shown below each symbol is the full source code "
-    "of the dependency file where that symbol is defined. "
+    "of the dependency symbol (or, for large symbols, a concise behavior summary of it). "
     "Refer to it to understand what external code this target file depends on."
 )
 
@@ -88,6 +92,25 @@ HEADER_DOC_CONTENT = "## Design Document Content"
 
 # {max_chars} is replaced with the maximum character count
 SUMMARY_CHAR_LIMIT = "({max_chars} characters or fewer)"
+
+# ===== Code behavior summary prompt (context-overflow fallback) =====
+
+# {name} = symbol name, {max_chars} = character limit, {language} = output language.
+# Used to shrink large code blocks while keeping their behavior information.
+CODE_SUMMARY_PROMPT = (
+    "Summarize the behavior of the following code symbol `{name}` in {max_chars} "
+    "characters or fewer. Keep the signature (first line) as-is, then describe what "
+    "it takes, what it does internally, and what it returns or its side effects. "
+    "This is reference context for documenting another file that depends on it, so be "
+    "concise and factual. Write the description in {language}.\n\n"
+    "```\n{code}\n```"
+)
+
+# Placeholder header prefixed to a summarized code block in the prompt.
+CODE_SUMMARY_MARKER = "# [summarized] {name}"
+
+# Deterministic fallback body appended when summary generation fails.
+CODE_SUMMARY_FAILED_NOTE = "# ...(body omitted; summary unavailable)"
 
 # C/C++ header extension set
 _HEADER_EXTENSIONS = {".h", ".hpp", ".hh", ".hxx"}
@@ -311,18 +334,13 @@ def _build_summary_prompt(
 def _build_callee_context_summary(
     file_deps: dict,
     doc_map: dict[str, dict],
-    compact: bool = False,
 ) -> str:
     """Extract only summary text (doc_map[file]["summary"]) from design documents
     of dependency files and concatenate them into a single string.
 
-    compact=False: Concatenate each dependency's summary as-is.
-    compact=True: Truncate each dependency's summary to the first 100 characters.
-
     Args:
         file_deps: The target file's file_dependencies.json.
         doc_map: A map of file relative path -> generated design document dict.
-        compact: If True, truncate summaries to the first 100 characters.
 
     Returns:
         Context text combining only the summaries.
@@ -338,17 +356,217 @@ def _build_callee_context_summary(
     # Retrieve and concatenate summaries for each dependency file
     # callee_usages' from is in output format; doc_map keys are source relative paths, so reverse-convert
     parts = []
-    _compact_max_chars = 100
     for callee_file in callee_files:
         doc = doc_map.get(output_path_to_rel(callee_file))
         if not doc:
             continue
         summary = doc.get("summary", "")
         if summary:
-            if compact:
-                summary = summary[:_compact_max_chars] + ("..." if len(summary) > _compact_max_chars else "")
             parts.append(f"- **{output_path_to_rel(callee_file)}**: {summary}")
     return "\n".join(parts)
+
+
+def _line_count(text: str) -> int:
+    """Return the number of lines in a text block (newline count + 1)."""
+    return text.count("\n") + 1
+
+
+async def _summarize_code(
+    code: str,
+    name: str,
+    llm_client: LLMClient,
+    summary_cache: dict[str, str],
+) -> str:
+    """Summarize a code block into a concise behavior description via the LLM.
+
+    Results are cached by the SHA256 of the code text, so the same symbol is
+    summarized only once across all files and sections in a single run. When
+    generation fails, a deterministic fallback (signature line + note) is used
+    so the caller always gets usable text.
+
+    Args:
+        code: Full source of the code symbol to summarize.
+        name: Symbol name (used in the prompt and the placeholder marker).
+        llm_client: LLM client used to generate the summary.
+        summary_cache: Shared cache mapping code-hash -> summary text.
+
+    Returns:
+        The behavior summary text (or a deterministic fallback on failure).
+    """
+    cache_key = hashlib.sha256(code.encode("utf-8")).hexdigest()
+    if cache_key in summary_cache:
+        return summary_cache[cache_key]
+
+    prompt = CODE_SUMMARY_PROMPT.format(
+        name=name,
+        max_chars=CODE_SUMMARY_MAX_CHARS,
+        language=OUTPUT_LANGUAGE,
+        code=code,
+    )
+    try:
+        summary = await llm_client.generate(prompt)
+    except ContextWindowExceededError:
+        summary = None
+
+    # Deterministic fallback keeps the signature so the block stays informative
+    if not summary:
+        first_line = code.split("\n", 1)[0]
+        summary = f"{first_line}\n{CODE_SUMMARY_FAILED_NOTE}"
+
+    summary_cache[cache_key] = summary
+    return summary
+
+
+def _reduce_caller_usages(file_deps: dict) -> dict:
+    """Return a shallow copy of file_deps with caller usage_context bodies removed.
+
+    Keeps name / file / lines so the dependent references stay listed, but drops
+    the source snippets to shrink the prompt (fallback stage 1).
+
+    Args:
+        file_deps: The target file's file_dependencies.json contents.
+
+    Returns:
+        A shallow copy with each caller_usages entry stripped of usage_context.
+    """
+    caller_usages = file_deps.get("caller_usages", [])
+    if not caller_usages:
+        return file_deps
+
+    reduced = dict(file_deps)
+    reduced["caller_usages"] = [
+        {key: value for key, value in usage.items() if key != "usage_context"}
+        for usage in caller_usages
+    ]
+    return reduced
+
+
+async def _summarize_callee_usages(
+    file_deps: dict,
+    llm_client: LLMClient,
+    summary_cache: dict[str, str],
+) -> dict:
+    """Return a copy of file_deps where large callee target_context is summarized.
+
+    Only dependency symbols longer than CODE_SUMMARY_TRIGGER_LINES are replaced
+    by an LLM behavior summary; smaller ones are kept verbatim (fallback stage 3).
+
+    Args:
+        file_deps: The target file's file_dependencies.json contents.
+        llm_client: LLM client used for summarization.
+        summary_cache: Shared cache mapping code-hash -> summary text.
+
+    Returns:
+        A shallow copy with large callee_usages[].target_context summarized.
+    """
+    callee_usages = file_deps.get("callee_usages", [])
+    if not callee_usages:
+        return file_deps
+
+    new_usages = []
+    for usage in callee_usages:
+        target_context = usage.get("target_context")
+        if target_context and _line_count(target_context) > CODE_SUMMARY_TRIGGER_LINES:
+            summary = await _summarize_code(
+                target_context, usage.get("name", "symbol"), llm_client, summary_cache
+            )
+            usage = {**usage, "target_context": summary}
+        new_usages.append(usage)
+
+    reduced = dict(file_deps)
+    reduced["callee_usages"] = new_usages
+    return reduced
+
+
+def _select_outermost_large_definitions(
+    definitions: list[dict],
+    trigger_lines: int,
+) -> list[dict]:
+    """Select large definitions, excluding ones nested inside a larger selection.
+
+    Definitions spanning more than trigger_lines lines are candidates. When a
+    class and its methods are both large, only the outermost (the class) is kept
+    so a range is never summarized twice.
+
+    Args:
+        definitions: definitions[] from file_dependencies.json (with start_line/end_line).
+        trigger_lines: Minimum line span for a definition to be summarized.
+
+    Returns:
+        Outermost large definitions, sorted by start_line.
+    """
+    large = [
+        d
+        for d in definitions
+        if d.get("start_line")
+        and d.get("end_line")
+        and (d["end_line"] - d["start_line"] + 1) > trigger_lines
+    ]
+    # Outer-first ordering: earliest start, and on ties the wider range first
+    large.sort(key=lambda d: (d["start_line"], -d["end_line"]))
+
+    selected: list[dict] = []
+    covered_end = 0
+    for definition in large:
+        # Skip definitions that start within an already-selected outer range
+        if definition["start_line"] <= covered_end:
+            continue
+        selected.append(definition)
+        covered_end = definition["end_line"]
+    return selected
+
+
+async def _splice_large_definitions(
+    source_code: str,
+    definitions: list[dict],
+    llm_client: LLMClient,
+    summary_cache: dict[str, str],
+) -> str:
+    """Replace large definitions in the source with LLM behavior summaries.
+
+    Used as the last-resort fallback (stage 4) when the target file itself is too
+    large. Line numbers are 1-based and match the source copy exactly, so the
+    [start_line, end_line] range of each selected definition is spliced out and
+    replaced by a summary block. Non-definition lines and small definitions are
+    kept as-is.
+
+    Args:
+        source_code: Full source of the target file (as read from its copy).
+        definitions: definitions[] from file_dependencies.json.
+        llm_client: LLM client used for summarization.
+        summary_cache: Shared cache mapping code-hash -> summary text.
+
+    Returns:
+        The source with large definitions replaced by summary blocks. Returns the
+        original source unchanged when no definition exceeds the threshold.
+    """
+    selected = _select_outermost_large_definitions(definitions, CODE_SUMMARY_TRIGGER_LINES)
+    if not selected:
+        return source_code
+
+    # split("\n") keeps 1-based mapping: source line N -> lines[N-1] (tree-sitter rows are \n-based)
+    lines = source_code.split("\n")
+    total_lines = len(lines)
+    definition_by_start = {d["start_line"]: d for d in selected}
+
+    out_lines: list[str] = []
+    line_no = 1
+    while line_no <= total_lines:
+        definition = definition_by_start.get(line_no)
+        if definition:
+            name = definition.get("name", "symbol")
+            code = definition.get("context") or "\n".join(
+                lines[definition["start_line"] - 1 : definition["end_line"]]
+            )
+            summary = await _summarize_code(code, name, llm_client, summary_cache)
+            out_lines.append(CODE_SUMMARY_MARKER.format(name=name))
+            out_lines.append(summary)
+            line_no = definition["end_line"] + 1
+        else:
+            out_lines.append(lines[line_no - 1])
+            line_no += 1
+
+    return "\n".join(out_lines)
 
 
 def _build_implementation_context(
@@ -389,54 +607,82 @@ async def _generate_section_with_fallback(
     section: dict,
     source_code: str,
     file_deps: dict,
-    callee_context_summary: str,
-    callee_context_compact: str,
+    callee_context: str,
     file_path: str,
     llm_client: LLMClient,
+    summary_cache: dict[str, str],
     implementation_context: str = "",
 ) -> str | None:
-    """Generate one section with progressive fallback.
+    """Generate one section, reducing the prompt on context-window overflow.
 
-    When a ContextWindowExceededError occurs, retry in the following order:
-      Attempt 1: With dependency design document summary context
-      Attempt 2: With compressed dependency summaries (first 100 chars each)
-      Attempt 3: Without callee context
-    Returns None if all attempts fail.
+    On ContextWindowExceededError, the prompt is shrunk cumulatively:
+      Stage 0: full (source + callee/caller usages + dependency doc summaries)
+      Stage 1: drop caller usage_context bodies                 (no LLM)
+      Stage 2: drop dependency doc summaries (callee_context)   (no LLM)
+      Stage 3: summarize large callee dependency symbols        (LLM, cached)
+      Stage 4: summarize large definitions in the source        (LLM, cached)
+    Stages 3-4 run only when ENABLE_CODE_SUMMARY is True. Returns None if every
+    stage still fails.
 
     Args:
         section: One section definition from the template.
         source_code: Full source code of the target file.
         file_deps: Contents of file_dependencies.json.
-        callee_context_summary: Callee summary context.
-        callee_context_compact: Compressed version of callee summary context.
+        callee_context: Dependency design-document summaries (may be empty).
         file_path: Relative path of the target file.
         llm_client: LLM client.
-        implementation_context: For header files. Source code of the corresponding implementation file.
+        summary_cache: Shared cache mapping code-hash -> summary text.
+        implementation_context: For header files. Source of the implementation file.
 
     Returns:
-        Generated section text, or None if all attempts fail.
+        Generated section text, or None if all stages fail.
     """
-    # Attempt list: (label, callee context)
-    attempts = [
-        ("with callee summary", callee_context_summary),
-        ("compact callee summary", callee_context_compact),
-        ("without callee", ""),
-    ]
-
-    for label, callee_ctx in attempts:
-        prompt = _build_section_prompt(
-            section, source_code, file_deps, callee_ctx, implementation_context,
-        )
+    async def _try(src: str, deps: dict, ctx: str, label: str) -> str | None:
+        """Build the prompt for one reduction stage and try generating the section."""
+        prompt = _build_section_prompt(section, src, deps, ctx, implementation_context)
         try:
-            result = await llm_client.generate(prompt)
-            if result is not None:
-                return result
+            return await llm_client.generate(prompt)
         except ContextWindowExceededError:
             logger.warning(
                 f"Context exceeded ({label}): {file_path}/{section['id']}. "
-                f"Falling back to next attempt."
+                f"Falling back to next reduction stage."
             )
-            continue
+            return None
+
+    # Stage 0: full context
+    result = await _try(source_code, file_deps, callee_context, "full")
+    if result is not None:
+        return result
+
+    # Stage 1: drop caller usage_context bodies
+    deps_no_caller = _reduce_caller_usages(file_deps)
+    result = await _try(source_code, deps_no_caller, callee_context, "drop caller bodies")
+    if result is not None:
+        return result
+
+    # Stage 2: drop dependency doc summaries
+    result = await _try(source_code, deps_no_caller, "", "drop callee context")
+    if result is not None:
+        return result
+
+    if not ENABLE_CODE_SUMMARY:
+        return None
+
+    # Stage 3: summarize large dependency symbols
+    deps_summarized = await _summarize_callee_usages(
+        deps_no_caller, llm_client, summary_cache
+    )
+    result = await _try(source_code, deps_summarized, "", "summarize callee usages")
+    if result is not None:
+        return result
+
+    # Stage 4: summarize large definitions in the source itself
+    source_summarized = await _splice_large_definitions(
+        source_code, deps_summarized.get("definitions", []), llm_client, summary_cache
+    )
+    result = await _try(source_summarized, deps_summarized, "", "summarize source defs")
+    if result is not None:
+        return result
 
     return None
 
@@ -447,6 +693,7 @@ async def _generate_file_doc(
     doc_map: dict[str, dict],
     template: dict,
     llm_client: LLMClient,
+    summary_cache: dict[str, str],
 ) -> dict | None:
     """Generate a design document for one file.
 
@@ -460,6 +707,7 @@ async def _generate_file_doc(
         doc_map: Design document dict of processed files (for callee context reference).
         template: Template dict.
         llm_client: LLM client.
+        summary_cache: Shared cache mapping code-hash -> summary text (context-overflow fallback).
 
     Returns:
         Design document dict ({file, sections, summary}), or None if generation completely fails.
@@ -482,9 +730,8 @@ async def _generate_file_doc(
     with open(deps_file, "r", encoding="utf-8") as f:
         file_deps = json.load(f)
 
-    # Prepare callee context (summary only)
-    callee_context_summary = _build_callee_context_summary(file_deps, doc_map)
-    callee_context_compact = _build_callee_context_summary(file_deps, doc_map, compact=True)
+    # Prepare callee context (dependency doc summaries only)
+    callee_context = _build_callee_context_summary(file_deps, doc_map)
 
     # For header files, get the corresponding implementation file's source code
     implementation_context = _build_implementation_context(file_rel, file_output_dir)
@@ -495,9 +742,9 @@ async def _generate_file_doc(
     for section in template["sections"]:
         result = await _generate_section_with_fallback(
             section, source_code, file_deps,
-            callee_context_summary,
-            callee_context_compact,
+            callee_context,
             file_rel, llm_client,
+            summary_cache,
             implementation_context,
         )
 
@@ -774,6 +1021,11 @@ async def generate_all_docs(
     # Key: file relative path, Value: design document dict {file, sections, summary}
     doc_map: dict[str, dict] = {}
 
+    # Shared code-summary cache for the whole run (context-overflow fallback).
+    # Key: SHA256 of a code block, Value: its behavior summary. Reused across
+    # files and sections so the same symbol is summarized only once.
+    summary_cache: dict[str, str] = {}
+
     # Per-file callee (dependency) list
     file_callees: dict[str, set[str]] = {}
     for info in project_dep_list:
@@ -853,7 +1105,7 @@ async def generate_all_docs(
                     pass  # Fall back to regeneration on read failure
 
         doc = await _generate_file_doc(
-            file_rel, output_dir, doc_map, template, llm_client,
+            file_rel, output_dir, doc_map, template, llm_client, summary_cache,
         )
         if doc:
             _save_doc(doc, output_dir)

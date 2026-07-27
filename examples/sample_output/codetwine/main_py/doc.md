@@ -2,242 +2,144 @@
 
 # Overview & Purpose
 
-## 1. Module Summary
+`main.py` is the CLI entry point of the codetwine tool. It exists as a separate, minimal file to decouple process bootstrapping (argument parsing, logging setup, directory resolution) from the actual analysis/documentation-generation logic, which is delegated entirely to `codetwine.pipeline.process_all_files`. This keeps orchestration logic testable and reusable while `main.py` remains a thin, script-like wrapper responsible only for wiring CLI input to the pipeline.
 
-Serve as the command-line entry point for the codetwine tool, parsing user arguments, resolving input/output directories, and launching the full project analysis pipeline.
+Its responsibilities are:
+- Parse command-line arguments (`--project-dir`, `--output-dir`).
+- Resolve the effective project/output directories by combining CLI arguments with `.env`-driven defaults (`DEFAULT_PROJECT_DIR`, `DEFAULT_OUTPUT_DIR`, `REPO_ROOT`).
+- Initialize logging via `setup_logging()`.
+- Conditionally construct an `LLMClient` based on the `ENABLE_LLM_DOC` feature flag.
+- Invoke the async pipeline (`process_all_files`) via `asyncio.run`.
 
-## 2. When to Use This Module
+### Public Interfaces
 
-- **Running the tool from the command line**: Execute `uv run main.py` (with optional `--project-dir` and `--output-dir` flags) to trigger dependency analysis and design document generation for a target project.
-- **Customizing the analysis target programmatically**: Call `parse_args()` to obtain a structured `argparse.Namespace` object representing the user's CLI input.
-- **Resolving effective directories**: Call `resolve_dirs(args)` with a parsed `argparse.Namespace` to determine the final `project_dir` and `output_dir`, respecting the precedence rules between CLI arguments and `.env` defaults.
-- **Running the full pipeline**: Call `main()` to initialize logging, resolve directories, conditionally construct an `LLMClient`, and execute `process_all_files` via `asyncio.run`.
-
-## 3. Public Interface Table
-
-| Name | Arguments (type) | Return type | Responsibility |
+| Name | Arguments | Return Value | Responsibility |
 |---|---|---|---|
-| `parse_args` | none | `argparse.Namespace` | Parse `--project-dir` and `--output-dir` CLI arguments and return the result as a namespace object. |
-| `resolve_dirs` | `args: argparse.Namespace` | `tuple[str, str]` | Determine the effective `(project_dir, output_dir)` pair by applying precedence rules among CLI arguments, `REPO_ROOT`-based default, and `.env` settings. |
-| `main` | none | `None` | Initialize logging, resolve directories, optionally construct `LLMClient`, and run `process_all_files` as the top-level entry point. |
+| `parse_args()` | none | `argparse.Namespace` | Defines and parses the `--project-dir` / `--output-dir` CLI options. |
+| `resolve_dirs(args)` | `args: argparse.Namespace` | `tuple[str, str]` (`project_dir`, `output_dir`) | Determines effective project and output directories from CLI args and `.env` defaults, with special-case fallback when only `--project-dir` is given. |
+| `main()` | none | `None` | Entry point: sets up logging, resolves args/dirs, builds `LLMClient` if enabled, and runs the async analysis pipeline. |
 
-## 4. Design Decisions
+### Design Decisions
 
-- **Conditional `LLMClient` instantiation**: `LLMClient` is only constructed when `ENABLE_LLM_DOC` is `True`; otherwise `None` is passed to `process_all_files`. This keeps the entry point responsible for the instantiation decision while allowing the pipeline to remain agnostic about whether LLM generation is active.
-- **Non-symmetric directory defaulting in `resolve_dirs`**: When `--project-dir` is supplied without `--output-dir`, the output directory defaults to `{REPO_ROOT}/output` rather than `DEFAULT_OUTPUT_DIR` from `.env`. This deliberate asymmetry prevents `.env`-configured output paths (which may be project-specific) from being silently applied to an unrelated CLI-specified project directory.
+- **Thin orchestrator / delegation pattern**: `main.py` contains no analysis logic itself; all substantive work is delegated to `process_all_files` in `pipeline.py`, keeping the entry point simple and focused on setup/wiring.
+- **Explicit directory resolution rule**: `resolve_dirs` encodes a deliberate precedence rule — if `--project-dir` is specified without `--output-dir`, the `.env`-based `DEFAULT_OUTPUT_DIR` is intentionally bypassed in favor of `{REPO_ROOT}/output`, avoiding unintended reuse of a default output path tied to a different default project.
+- **Feature toggle for optional dependency**: `LLMClient` instantiation is guarded by `ENABLE_LLM_DOC`, allowing the pipeline to run without requiring valid LLM credentials/configuration when documentation generation is disabled.
+- **Sync-to-async bridging**: `main()` remains a synchronous function (standard `if __name__ == "__main__":` script pattern) and uses `asyncio.run()` to invoke the asynchronous pipeline, providing a conventional synchronous CLI entry point over async internals.
 
 # Definition Design Specifications
 
----
+## `parse_args() -> argparse.Namespace`
 
-## Module-level Overview
+**Arguments:** None.
 
-`main.py` is the CLI entry point for the `codetwine` tool. It owns argument parsing, directory resolution, logging initialization, and top-level orchestration of the async pipeline.
+**Returns:** `argparse.Namespace` containing the parsed CLI options `project_dir` (`str | None`) and `output_dir` (`str | None`), both unset (`None`) if not provided on the command line.
 
----
+**Responsibility / Design intent:** Provides a single, isolated entry point for CLI argument parsing, decoupling argument definition from the resolution logic that determines actual runtime paths.
 
-## `parse_args`
+**Design decisions:** Both `--project-dir` and `--output-dir` are optional with no hardcoded defaults at the `argparse` level; defaulting is deferred to `resolve_dirs`, allowing the resolution logic to apply conditional fallback rules (see below) rather than static defaults.
 
-**Signature:**
-```python
-def parse_args() -> argparse.Namespace
-```
-
-| Item | Detail |
-|---|---|
-| Returns | `argparse.Namespace` — object with optional attributes `project_dir: str \| None` and `output_dir: str \| None` |
-
-**Responsibility:** Declares and parses the two optional CLI flags (`--project-dir`, `--output-dir`), making raw user input available as a structured object.
-
-**When to use:** Called once at the start of `main()` before any directory resolution or pipeline invocation.
-
-**Constraints & edge cases:**
-- Both flags are optional; neither has a hardcoded default at the parser level. Missing flags yield `None` on the returned namespace, which downstream resolution handles explicitly.
+**Edge cases / constraints:** No validation of path existence or format is performed here; any string is accepted as-is.
 
 ---
 
-## `resolve_dirs`
+## `resolve_dirs(args: argparse.Namespace) -> tuple[str, str]`
 
-**Signature:**
-```python
-def resolve_dirs(args: argparse.Namespace) -> tuple[str, str]
-```
+**Arguments:** `args` — the `argparse.Namespace` returned by `parse_args()`, expected to expose `project_dir` and `output_dir` attributes (both optional strings).
 
-| Parameter | Type | Description |
-|---|---|---|
-| `args` | `argparse.Namespace` | Parsed CLI arguments from `parse_args()` |
-| Returns | `tuple[str, str]` | `(project_dir, output_dir)` — both as absolute or resolvable path strings |
+**Returns:** `tuple[str, str]` of `(project_dir, output_dir)` — fully resolved absolute/relative path strings to be used for the rest of the pipeline.
 
-**Responsibility:** Implements the three-way precedence rule for `output_dir` and the two-way fallback for `project_dir`, insulating the rest of the program from argument/config ambiguity.
-
-**When to use:** Called immediately after `parse_args()` in `main()`, before instantiating `LLMClient` or invoking the pipeline.
+**Responsibility / Design intent:** Centralizes the precedence rules for determining the effective project and output directories from CLI input versus `.env`-based configuration (`DEFAULT_PROJECT_DIR`, `DEFAULT_OUTPUT_DIR`, `REPO_ROOT`), so `main()` itself stays simple.
 
 **Design decisions:**
-- `output_dir` resolution follows a deliberate three-branch priority:
-  1. Explicit `--output-dir` CLI value.
-  2. If only `--project-dir` was provided (and `--output-dir` was not), `DEFAULT_OUTPUT_DIR` from `.env` is **ignored** in favor of `{REPO_ROOT}/output`.
-  3. If neither CLI flag is set, `DEFAULT_OUTPUT_DIR` from `.env` is used.
-- `project_dir` follows a simpler two-branch rule: CLI value takes precedence, falling back to `DEFAULT_PROJECT_DIR`.
+- `project_dir` falls back to `DEFAULT_PROJECT_DIR` when `--project-dir` is not given.
+- `output_dir` resolution is intentionally asymmetric: if `--output-dir` is explicitly given, it is always used; if `--output-dir` is omitted but `--project-dir` *is* given, `DEFAULT_OUTPUT_DIR` (from `.env`) is deliberately **ignored** in favor of `{REPO_ROOT}/output`, preventing an unrelated `.env`-configured output path from being applied to a manually specified project; only when neither CLI argument is given does it fall back to `DEFAULT_OUTPUT_DIR`.
 
-**Constraints & edge cases:**
-- The "ignore `DEFAULT_OUTPUT_DIR`" rule applies **only** when `--project-dir` is given without `--output-dir`; it does not apply when neither flag is specified.
-- Does not validate that the resolved paths exist or are accessible.
+**Edge cases / constraints:** Assumes `REPO_ROOT` is a valid absolute path already resolved in `settings.py`; does not create or validate the returned directories (that responsibility belongs to `process_all_files`).
 
 ---
 
-## `main`
+## `main() -> None`
 
-**Signature:**
-```python
-def main() -> None
-```
+**Arguments:** None (reads from `sys.argv` via `parse_args()`).
 
-**Responsibility:** Serves as the single top-level entry point that wires together logging setup, argument parsing, directory resolution, optional `LLMClient` construction, and async pipeline execution.
+**Returns:** `None`.
 
-**When to use:** Invoked by the `if __name__ == "__main__"` guard or by a package entry-point script.
+**Responsibility / Design intent:** Serves as the sole executable entry point of the application, wiring together logging setup, CLI parsing/resolution, conditional LLM client construction, and invocation of the async pipeline.
 
 **Design decisions:**
-- `LLMClient` is instantiated only when `ENABLE_LLM_DOC` is `True`; otherwise `None` is passed to `process_all_files`, which handles the absent client gracefully.
-- The async pipeline (`process_all_files`) is driven synchronously via `asyncio.run`, keeping the entry point itself synchronous and avoiding any ambient event-loop dependency.
+- Logging is initialized first (`setup_logging()`) before any other operation, ensuring all subsequent output (including argument resolution issues) is captured.
+- `LLMClient` is instantiated conditionally based on `ENABLE_LLM_DOC`; when disabled, `None` is passed to `process_all_files`, allowing the pipeline to skip LLM-dependent steps without special-casing client construction in `main`.
+- The async pipeline (`process_all_files`) is driven via `asyncio.run`, keeping `main()` itself synchronous as the process entry point.
 
-**Constraints & edge cases:**
-- `LLMClient()` construction raises `ValueError` if `LLM_MODEL` is not configured; this propagates unhandled from `main`.
-- `setup_logging()` must be called before any other operation so that log output from all subsequent components is captured correctly.
+**Edge cases / constraints:** If `ENABLE_LLM_DOC` is `True` but required LLM configuration (e.g., model name) is missing, `LLMClient()` construction will raise (per its documented fail-fast behavior); `main()` does not catch this, so the process will terminate with an error rather than proceeding without an LLM client.
 
 # Dependency Description
 
-### Dependencies (modules this file imports)
+### Dependencies (what this file uses)
 
-- **main.py → codetwine/config/settings.py** : Retrieves runtime configuration constants — `DEFAULT_PROJECT_DIR` (fallback project root), `DEFAULT_OUTPUT_DIR` (fallback output directory), `REPO_ROOT` (repository root path used to construct the default output path when `--project-dir` is specified alone), and `ENABLE_LLM_DOC` (flag controlling whether LLM-based document generation is enabled).
+`main.py` serves as the CLI entry point for codetwine and relies on the following internal modules:
 
-- **main.py → codetwine/config/logger.py** : Invokes `setup_logging()` to initialize application-wide logging (console + rotating file handlers) once at startup before any other processing begins.
+- **codetwine/config/settings.py** (`DEFAULT_PROJECT_DIR`, `DEFAULT_OUTPUT_DIR`, `ENABLE_LLM_DOC`, `REPO_ROOT`): Used to resolve fallback values for the project directory and output directory when CLI arguments are not provided, to determine whether LLM-based documentation generation should be enabled, and to compute a repository-root-relative default output path.
 
-- **main.py → codetwine/llm/client.py** : Instantiates `LLMClient` when `ENABLE_LLM_DOC` is `True`, producing the async LLM API client that is passed into the pipeline for design document generation.
+- **codetwine/config/logger.py** (`setup_logging`): Used to initialize console and file logging before any processing begins, ensuring consistent logging behavior across the application.
 
-- **main.py → codetwine/pipeline.py** : Calls `process_all_files(project_dir, output_dir, llm_client)` to delegate the entire analysis pipeline — dependency extraction, design document generation, and output artifact production — to the pipeline module.
+- **codetwine/llm/client.py** (`LLMClient`): Used to instantiate an LLM client for generating design documents, but only when `ENABLE_LLM_DOC` is true; otherwise `None` is passed downstream.
 
----
+- **codetwine/pipeline.py** (`process_all_files`): Used as the core orchestration function that performs the actual dependency analysis and design document generation; `main.py` delegates all substantive processing to this function after resolving directories and setting up the LLM client.
 
-### Dependents (modules that import this file)
+### Dependents (what uses this file)
 
-No dependent information available.
-
----
-
-### Dependency Direction
-
-All relationships are **unidirectional**:
-
-- `main.py → codetwine/config/settings.py` : unidirectional (settings does not import main)
-- `main.py → codetwine/config/logger.py` : unidirectional (logger does not import main)
-- `main.py → codetwine/llm/client.py` : unidirectional (client does not import main)
-- `main.py → codetwine/pipeline.py` : unidirectional (pipeline does not import main)
-
-`main.py` acts as the top-level entry point of the application, consuming from all internal modules without being imported by any of them.
+No dependent information available. `main.py` acts as the top-level executable entry point, so the dependency direction is unidirectional: `main.py` depends on the modules listed above, and no other project file depends on `main.py`.
 
 # Data Flow
 
-## 1. Inputs
+**Input data format and source**
 
 | Source | Data | Format |
 |---|---|---|
-| CLI arguments (`--project-dir`) | Root directory of the project to analyze | `str` (filesystem path) |
-| CLI arguments (`--output-dir`) | Output directory for analysis results | `str` (filesystem path) |
-| `DEFAULT_PROJECT_DIR` (settings.py) | Fallback project directory when `--project-dir` is omitted | `str` (filesystem path, derived from `.env` or `REPO_ROOT`) |
-| `DEFAULT_OUTPUT_DIR` (settings.py) | Fallback output directory when neither CLI argument is provided | `str` (filesystem path, derived from `.env` or `REPO_ROOT/output`) |
-| `REPO_ROOT` (settings.py) | Repository root path used as the base for the default output directory when only `--project-dir` is specified | `str` (normalized filesystem path) |
-| `ENABLE_LLM_DOC` (settings.py) | Flag controlling whether an `LLMClient` instance is created | `bool` |
+| CLI arguments | `--project-dir`, `--output-dir` | Optional strings via `argparse.Namespace` |
+| `.env` / settings | `DEFAULT_PROJECT_DIR`, `DEFAULT_OUTPUT_DIR`, `REPO_ROOT`, `ENABLE_LLM_DOC` | Constants loaded from `codetwine/config/settings.py` |
 
-## 2. Transformation Overview
+**Main transformation flow**
 
-```
-CLI argv
-    │
-    ▼
-parse_args()
-    │  argparse.Namespace {project_dir: str|None, output_dir: str|None}
-    ▼
-resolve_dirs()
-    │  Applies three-way priority logic:
-    │  - Both args present      → use both CLI values
-    │  - Only --project-dir     → CLI project_dir + REPO_ROOT/output
-    │  - Neither arg present    → DEFAULT_PROJECT_DIR + DEFAULT_OUTPUT_DIR
-    │
-    │  (project_dir: str, output_dir: str)
-    ▼
-LLMClient() or None
-    │  Conditional on ENABLE_LLM_DOC bool:
-    │  True  → instantiated LLMClient (model/key/base from settings)
-    │  False → None
-    │
-    ▼
-asyncio.run(process_all_files(project_dir, output_dir, llm_client))
-    │  Delegates all analysis, document generation, and file I/O
-    │  to the pipeline module
-    ▼
-  (all outputs produced inside pipeline.py)
-```
+1. `parse_args()` reads raw CLI input into an `argparse.Namespace` (`project_dir`, `output_dir`, both optionally `None`).
+2. `resolve_dirs(args)` merges CLI values with `.env` defaults into a concrete `(project_dir, output_dir)` string tuple, applying this precedence:
+   - `output_dir`: explicit `--output-dir` > (`--project-dir` given but no `--output-dir` → `REPO_ROOT/output`) > `DEFAULT_OUTPUT_DIR`.
+   - `project_dir`: explicit `--project-dir` > `DEFAULT_PROJECT_DIR`.
+3. `setup_logging()` is invoked first (side effect only, no data returned) to initialize console/file logging before any processing.
+4. `ENABLE_LLM_DOC` (bool flag) gates conditional construction of an `LLMClient` instance; otherwise `llm_client` is `None`.
+5. The resolved `(project_dir, output_dir, llm_client)` tuple is passed into `process_all_files(...)`, run synchronously via `asyncio.run`, which performs all actual analysis/document generation internally (opaque to `main.py`).
 
-## 3. Outputs
+**Output data format and destination**
 
-`main.py` itself produces no direct file writes or return values. Its outputs are entirely side effects routed through the called functions:
+- `main.py` itself produces no direct return value or file output; it only triggers side effects:
+  - Logging output to console (WARNING+) and `logs/codetwine.log` (via `setup_logging`).
+  - Delegated file outputs (dependency JSON, design docs, consolidated JSON, Mermaid graphs) written under `output_dir` by `process_all_files`.
 
-| Sink | Data | Nature |
+**Key data structures**
+
+| Structure | Fields | Purpose |
 |---|---|---|
-| `process_all_files(...)` | `project_dir`, `output_dir`, `llm_client` | Passed as arguments; all file writing, JSON generation, Mermaid graphs, and design documents are produced inside `pipeline.py` |
-| Root logger (via `setup_logging()`) | Rotating log file at `_LOG_DIR/codetwine.log`; WARNING-level messages to console | Side effect |
-
-## 4. Key Data Structures
-
-### `argparse.Namespace` (produced by `parse_args`)
-
-| Field / Key | Type | Purpose |
-|---|---|---|
-| `project_dir` | `str \| None` | Value of `--project-dir` CLI argument; `None` when omitted |
-| `output_dir` | `str \| None` | Value of `--output-dir` CLI argument; `None` when omitted |
-
-### Return value of `resolve_dirs` — plain `tuple`
-
-| Position | Type | Purpose |
-|---|---|---|
-| `[0]` `project_dir` | `str` | Resolved absolute or relative path to the project root to be analyzed |
-| `[1]` `output_dir` | `str` | Resolved absolute or relative path where all output artifacts will be written |
-
-### Priority matrix inside `resolve_dirs`
-
-| `args.project_dir` | `args.output_dir` | Resulting `project_dir` | Resulting `output_dir` |
-|---|---|---|---|
-| provided | provided | `args.project_dir` | `args.output_dir` |
-| provided | omitted | `args.project_dir` | `REPO_ROOT/output` |
-| omitted | omitted | `DEFAULT_PROJECT_DIR` | `DEFAULT_OUTPUT_DIR` |
+| `argparse.Namespace` (from `parse_args`) | `project_dir: str | None`, `output_dir: str | None` | Raw CLI input container |
+| `(project_dir, output_dir)` tuple (from `resolve_dirs`) | `project_dir: str`, `output_dir: str` | Fully resolved paths passed downstream |
+| `llm_client` | `LLMClient` instance or `None` | Optional dependency injected into the pipeline for LLM-based doc generation |
 
 # Error Handling
 
-## 1. Overall Strategy
+`main.py` follows a fail-fast strategy: it performs no local exception handling and delegates all error management to lower layers (`LLMClient`, `process_all_files`, and their internal components). Any unhandled exception propagates up and terminates the process, since this file is the top-level entry point with no caller to recover to.
 
-`main.py` itself contains no explicit error handling constructs (no try/except blocks). Its strategy is **delegation with minimal defense**: each responsibility is pushed entirely to called subsystems (`setup_logging`, `resolve_dirs`, `LLMClient`, `process_all_files`), and errors that propagate back are left unhandled, causing the process to terminate with an unhandled exception. The one deliberate design choice at this layer is **conditional instantiation**: when `ENABLE_LLM_DOC` is `False`, `LLMClient` is never constructed, avoiding any initialization errors related to missing LLM credentials.
+| Error Type | Handling | Impact |
+|---|---|---|
+| Missing/invalid `LLM_MODEL` config | `LLMClient.__init__` raises `ValueError`; not caught here | Program aborts before analysis starts when `ENABLE_LLM_DOC` is true |
+| Errors during dependency analysis / doc generation (inside `process_all_files`) | Not caught in `main.py`; relies on `process_all_files`'s own internal handling (per-file isolation) or propagation | Uncaught exceptions stop the entire run; `asyncio.run` surfaces them to the caller |
+| CLI argument errors (`argparse`) | Handled by `argparse` itself (prints usage, exits) | Process exits immediately with an error message |
+| Invalid/missing directories (project/output) | No explicit validation in `main.py`; any resulting error surfaces from downstream file I/O in `process_all_files` | Failure occurs later in the pipeline rather than at argument resolution time |
 
----
-
-## 2. Error Pattern Table
-
-| Error Type | Trigger Condition | Handling | Recoverable? | Impact |
-|---|---|---|---|---|
-| Missing or invalid `LLM_MODEL` | `ENABLE_LLM_DOC` is `True` and `LLM_MODEL` is unset in `.env` or environment | `LLMClient.__init__` raises `ValueError`; propagates uncaught to the caller | No | Process terminates immediately at startup |
-| LLM rate limit exceeded | API returns HTTP 429 during `process_all_files` execution | Handled inside `LLMClient._call_with_retry` (retry with wait); not surfaced to `main.py` | Yes (within retry budget) | Transparent to `main.py`; handled in dependency |
-| LLM API error | Provider API error during generation | Handled inside `LLMClient`; returns `None` | Yes (skips that document) | Transparent to `main.py` |
-| Invalid or inaccessible `project_dir` / `output_dir` | Path does not exist or lacks permissions; detected during `process_all_files` | Propagates uncaught to `main.py` | No | Process terminates |
-| Invalid CLI arguments | Unrecognized flags passed to the CLI | `argparse` prints usage and calls `sys.exit(2)` | No | Process terminates with exit code 2 |
-| `ENABLE_LLM_DOC=False` | Configuration flag disables LLM | `llm_client` is set to `None`; `process_all_files` skips document generation | Yes (feature disabled by design) | LLM-related errors are fully avoided |
-
----
-
-## 3. Design Notes
-
-- **Thin entry-point philosophy**: `main.py` is intentionally kept as a thin orchestrator. Error handling complexity is encapsulated in the subsystems it calls (`pipeline.py`, `LLMClient`), keeping the top-level flow readable and uncluttered.
-- **Guard by configuration, not exception**: The `ENABLE_LLM_DOC` flag acts as a pre-condition guard. Rather than catching errors that arise from absent LLM configuration, the design prevents the error from occurring at all by not constructing `LLMClient` when LLM functionality is disabled.
-- **No explicit fallback or recovery at this layer**: `main.py` does not implement any fallback logic (e.g., retrying `process_all_files`, partial output recovery, or error reporting to the user beyond what propagates naturally). Any unhandled exception results in a Python traceback and process termination.
+Design considerations:
+- Since `main.py` only wires together configuration, argument parsing, and the async pipeline call, it intentionally avoids try/except blocks, keeping responsibility for granular error recovery (e.g., per-file isolation, retries) inside `pipeline.py` and `LLMClient`.
+- Logging is initialized first (`setup_logging`) so that any downstream error, even if it later crashes the process, is recorded to the rotating log file before failure.
+- The `llm_client` is conditionally created based on `ENABLE_LLM_DOC`, meaning LLM-related initialization errors (e.g., missing model) only occur when LLM-based documentation is enabled, avoiding unnecessary fail-fast behavior when the feature is disabled.
 
 # Summary
 
-`main.py` is the CLI entry point that parses arguments, resolves directories, and launches the async analysis pipeline. Public functions: `parse_args() -> argparse.Namespace` (fields: `project_dir: str|None`, `output_dir: str|None`); `resolve_dirs(args: argparse.Namespace) -> tuple[str, str]` (applies three-way priority: both CLI args → use both; only `--project-dir` → `REPO_ROOT/output`; neither → `.env` defaults); `main() -> None` (initializes logging, conditionally constructs `LLMClient`, runs `process_all_files(project_dir, output_dir, llm_client)`).
+main.py is codetwine's thin CLI entry point, delegating all analysis logic to codetwine.pipeline.process_all_files. Responsibilities: parse CLI args (--project-dir, --output-dir), resolve effective directories against .env defaults (with asymmetric fallback for output_dir), initialize logging, conditionally build LLMClient per ENABLE_LLM_DOC, and run the async pipeline via asyncio.run. Interfaces: parse_args()->Namespace, resolve_dirs(args)->(project_dir, output_dir), main()->None. No local error handling; fail-fast, delegating errors downstream. No dependents (top-level entry point).

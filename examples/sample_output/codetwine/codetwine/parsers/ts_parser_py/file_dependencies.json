@@ -36,19 +36,19 @@
   "caller_usages": [
     {
       "lines": [
-        426
-      ],
-      "name": "parse_file",
-      "file": "codetwine/codetwine/import_to_path_py/import_to_path.py",
-      "usage_context": "        return\n\n    # Parse the file, extract definitions, and register each definition name in symbol_to_file_map\n    root_node = parse_file(abs_path)[0]\n    for defn in extract_definitions(root_node, definition_dict):\n        if defn.name:\n            _put_symbol(symbol_to_file_map, defn.name, file_rel)"
-    },
-    {
-      "lines": [
         41
       ],
       "name": "parse_file",
       "file": "codetwine/codetwine/file_analyzer_py/file_analyzer.py",
       "usage_context": "    # Per-language definition extraction settings (None for unsupported languages)\n    definition_dict = DEFINITION_DICTS.get(file_ext)\n\n    root_node, content = parse_file(target_file)\n\n    # Convert content to text lines and extract source code from each definition's line range\n    content_lines = content.decode(\"utf-8\").splitlines()"
+    },
+    {
+      "lines": [
+        426
+      ],
+      "name": "parse_file",
+      "file": "codetwine/codetwine/import_to_path_py/import_to_path.py",
+      "usage_context": "        return\n\n    # Parse the file, extract definitions, and register each definition name in symbol_to_file_map\n    root_node = parse_file(abs_path)[0]\n    for defn in extract_definitions(root_node, definition_dict):\n        if defn.name:\n            _put_symbol(symbol_to_file_map, defn.name, file_rel)"
     },
     {
       "lines": [

@@ -55,6 +55,51 @@
   "caller_usages": [
     {
       "lines": [
+        225,
+        250,
+        267,
+        360,
+        365
+      ],
+      "name": "output_path_to_rel",
+      "file": "codetwine/codetwine/doc_creator_py/doc_creator.py",
+      "usage_context": "    \"\"\"\n    # Basic prompt structure: target file name + source code\n    parts = [\n        HEADER_TARGET_FILE.format(file=output_path_to_rel(file_deps.get('file', 'unknown'))),\n        \"\",\n        HEADER_SOURCE_CODE,\n        \"```\",\n...\n        parts.append(HEADER_CALLEE_USAGES)\n        parts.append(CALLEE_USAGES_SCHEMA_NOTE)\n        for u in callee_usages:\n            parts.append(f\"- {u['name']} (from {output_path_to_rel(u['from'])})\")\n            # Attach the full dependency source code if available\n            target_context = u.get(\"target_context\")\n            if target_context:"
+    },
+    {
+      "lines": [
+        1084
+      ],
+      "name": "resolve_file_output_dir",
+      "file": "codetwine/codetwine/doc_creator_py/doc_creator.py",
+      "usage_context": "        Returns:\n            tuple[str, dict | None]: Tuple of (file relative path, design document dict). dict is None on failure.\n        \"\"\"\n        output_dir = resolve_file_output_dir(base_output_dir, file_rel)\n        if not os.path.isdir(output_dir):\n            logger.warning(f\"Output directory does not exist: {output_dir}\")\n            return file_rel, None"
+    },
+    {
+      "lines": [
+        52
+      ],
+      "name": "copy_path_to_rel",
+      "file": "codetwine/codetwine/pipeline_py/pipeline.py",
+      "usage_context": "\n    def to_internal(path: str) -> str:\n        stripped = path[len(prefix):] if path.startswith(prefix) else path\n        return copy_path_to_rel(stripped)\n\n    return [\n        {"
+    },
+    {
+      "lines": [
+        87,
+        117
+      ],
+      "name": "resolve_file_output_dir",
+      "file": "codetwine/codetwine/pipeline_py/pipeline.py",
+      "usage_context": "    changed: set[str] = set()\n    for file_rel in all_file_list:\n        file_abs = os.path.join(project_dir, file_rel)\n        output_file_dir = resolve_file_output_dir(base_output_dir, file_rel)\n        copied_path = os.path.join(output_file_dir, os.path.basename(file_rel))\n        deps_json_path = os.path.join(output_file_dir, \"file_dependencies.json\")\n\n...\n    for file_rel in files_to_process:\n        try:\n            file_abs = os.path.join(project_dir, file_rel)\n            output_file_dir = resolve_file_output_dir(base_output_dir, file_rel)\n\n            os.makedirs(output_file_dir, exist_ok=True)\n"
+    },
+    {
+      "lines": [
+        91
+      ],
+      "name": "is_file_unchanged",
+      "file": "codetwine/codetwine/pipeline_py/pipeline.py",
+      "usage_context": "        copied_path = os.path.join(output_file_dir, os.path.basename(file_rel))\n        deps_json_path = os.path.join(output_file_dir, \"file_dependencies.json\")\n\n        if not is_file_unchanged(file_abs, copied_path) or not os.path.exists(deps_json_path):\n            changed.add(file_rel)\n    return changed\n"
+    },
+    {
+      "lines": [
         25
       ],
       "name": "rel_to_copy_path",
@@ -87,51 +132,6 @@
       "name": "copy_path_to_rel",
       "file": "codetwine/codetwine/output_py/output.py",
       "usage_context": "        \"\"\"\n        parts = path.split(\"/\", 1)\n        if len(parts) == 2:\n            return copy_path_to_rel(parts[1])\n        return path\n\n    # Build the Mermaid text"
-    },
-    {
-      "lines": [
-        52
-      ],
-      "name": "copy_path_to_rel",
-      "file": "codetwine/codetwine/pipeline_py/pipeline.py",
-      "usage_context": "\n    def to_internal(path: str) -> str:\n        stripped = path[len(prefix):] if path.startswith(prefix) else path\n        return copy_path_to_rel(stripped)\n\n    return [\n        {"
-    },
-    {
-      "lines": [
-        87,
-        117
-      ],
-      "name": "resolve_file_output_dir",
-      "file": "codetwine/codetwine/pipeline_py/pipeline.py",
-      "usage_context": "    changed: set[str] = set()\n    for file_rel in all_file_list:\n        file_abs = os.path.join(project_dir, file_rel)\n        output_file_dir = resolve_file_output_dir(base_output_dir, file_rel)\n        copied_path = os.path.join(output_file_dir, os.path.basename(file_rel))\n        deps_json_path = os.path.join(output_file_dir, \"file_dependencies.json\")\n\n...\n    for file_rel in files_to_process:\n        try:\n            file_abs = os.path.join(project_dir, file_rel)\n            output_file_dir = resolve_file_output_dir(base_output_dir, file_rel)\n\n            os.makedirs(output_file_dir, exist_ok=True)\n"
-    },
-    {
-      "lines": [
-        91
-      ],
-      "name": "is_file_unchanged",
-      "file": "codetwine/codetwine/pipeline_py/pipeline.py",
-      "usage_context": "        copied_path = os.path.join(output_file_dir, os.path.basename(file_rel))\n        deps_json_path = os.path.join(output_file_dir, \"file_dependencies.json\")\n\n        if not is_file_unchanged(file_abs, copied_path) or not os.path.exists(deps_json_path):\n            changed.add(file_rel)\n    return changed\n"
-    },
-    {
-      "lines": [
-        202,
-        227,
-        244,
-        343,
-        350
-      ],
-      "name": "output_path_to_rel",
-      "file": "codetwine/codetwine/doc_creator_py/doc_creator.py",
-      "usage_context": "    \"\"\"\n    # Basic prompt structure: target file name + source code\n    parts = [\n        HEADER_TARGET_FILE.format(file=output_path_to_rel(file_deps.get('file', 'unknown'))),\n        \"\",\n        HEADER_SOURCE_CODE,\n        \"```\",\n...\n        parts.append(HEADER_CALLEE_USAGES)\n        parts.append(CALLEE_USAGES_SCHEMA_NOTE)\n        for u in callee_usages:\n            parts.append(f\"- {u['name']} (from {output_path_to_rel(u['from'])})\")\n            # Attach the full dependency source code if available\n            target_context = u.get(\"target_context\")\n            if target_context:"
-    },
-    {
-      "lines": [
-        832
-      ],
-      "name": "resolve_file_output_dir",
-      "file": "codetwine/codetwine/doc_creator_py/doc_creator.py",
-      "usage_context": "        Returns:\n            tuple[str, dict | None]: Tuple of (file relative path, design document dict). dict is None on failure.\n        \"\"\"\n        output_dir = resolve_file_output_dir(base_output_dir, file_rel)\n        if not os.path.isdir(output_dir):\n            logger.warning(f\"Output directory does not exist: {output_dir}\")\n            return file_rel, None"
     },
     {
       "lines": [

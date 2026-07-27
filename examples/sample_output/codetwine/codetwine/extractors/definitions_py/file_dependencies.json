@@ -90,19 +90,19 @@
   "caller_usages": [
     {
       "lines": [
-        427
-      ],
-      "name": "extract_definitions",
-      "file": "codetwine/codetwine/import_to_path_py/import_to_path.py",
-      "usage_context": "\n    # Parse the file, extract definitions, and register each definition name in symbol_to_file_map\n    root_node = parse_file(abs_path)[0]\n    for defn in extract_definitions(root_node, definition_dict):\n        if defn.name:\n            _put_symbol(symbol_to_file_map, defn.name, file_rel)\n"
-    },
-    {
-      "lines": [
         53
       ],
       "name": "extract_definitions",
       "file": "codetwine/codetwine/file_analyzer_py/file_analyzer.py",
       "usage_context": "            \"end_line\":   d.end_line,\n            \"context\":    \"\\n\".join(content_lines[d.start_line - 1 : d.end_line]),\n        }\n        for d in extract_definitions(root_node, definition_dict)\n    ]\n\n    # import / usage analysis"
+    },
+    {
+      "lines": [
+        427
+      ],
+      "name": "extract_definitions",
+      "file": "codetwine/codetwine/import_to_path_py/import_to_path.py",
+      "usage_context": "\n    # Parse the file, extract definitions, and register each definition name in symbol_to_file_map\n    root_node = parse_file(abs_path)[0]\n    for defn in extract_definitions(root_node, definition_dict):\n        if defn.name:\n            _put_symbol(symbol_to_file_map, defn.name, file_rel)\n"
     },
     {
       "lines": [

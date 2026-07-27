@@ -13,11 +13,12 @@
   "caller_usages": [
     {
       "lines": [
-        434
+        408,
+        645
       ],
       "name": "ContextWindowExceededError",
       "file": "codetwine/codetwine/doc_creator_py/doc_creator.py",
-      "usage_context": "            result = await llm_client.generate(prompt)\n            if result is not None:\n                return result\n        except ContextWindowExceededError:\n            logger.warning(\n                f\"Context exceeded ({label}): {file_path}/{section['id']}. \"\n                f\"Falling back to next attempt.\""
+      "usage_context": "    )\n    try:\n        summary = await llm_client.generate(prompt)\n    except ContextWindowExceededError:\n        summary = None\n\n    # Deterministic fallback keeps the signature so the block stays informative\n...\n        prompt = _build_section_prompt(section, src, deps, ctx, implementation_context)\n        try:\n            return await llm_client.generate(prompt)\n        except ContextWindowExceededError:\n            logger.warning(\n                f\"Context exceeded ({label}): {file_path}/{section['id']}. \"\n                f\"Falling back to next reduction stage.\""
     }
   ]
 }

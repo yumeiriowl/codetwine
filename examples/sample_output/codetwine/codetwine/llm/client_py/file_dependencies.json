@@ -79,22 +79,25 @@
     },
     {
       "lines": [
+        377,
+        446,
+        522,
+        612,
+        695,
+        781,
+        981
+      ],
+      "name": "LLMClient",
+      "file": "codetwine/codetwine/doc_creator_py/doc_creator.py",
+      "usage_context": "async def _summarize_code(\n    code: str,\n    name: str,\n    llm_client: LLMClient,\n    summary_cache: dict[str, str],\n) -> str:\n    \"\"\"Summarize a code block into a concise behavior description via the LLM.\n...\n\nasync def _summarize_callee_usages(\n    file_deps: dict,\n    llm_client: LLMClient,\n    summary_cache: dict[str, str],\n) -> dict:\n    \"\"\"Return a copy of file_deps where large callee target_context is summarized."
+    },
+    {
+      "lines": [
         148
       ],
       "name": "LLMClient",
       "file": "codetwine/codetwine/pipeline_py/pipeline.py",
       "usage_context": "async def process_all_files(\n    project_dir: str,\n    output_dir: str,\n    llm_client: LLMClient | None,\n    max_workers: int = MAX_WORKERS,\n) -> None:\n    \"\"\"Analyze the entire project and output per-file dependency JSON, design documents,"
-    },
-    {
-      "lines": [
-        395,
-        449,
-        534,
-        734
-      ],
-      "name": "LLMClient",
-      "file": "codetwine/codetwine/doc_creator_py/doc_creator.py",
-      "usage_context": "    callee_context_summary: str,\n    callee_context_compact: str,\n    file_path: str,\n    llm_client: LLMClient,\n    implementation_context: str = \"\",\n) -> str | None:\n    \"\"\"Generate one section with progressive fallback.\n...\n    file_output_dir: str,\n    doc_map: dict[str, dict],\n    template: dict,\n    llm_client: LLMClient,\n) -> dict | None:\n    \"\"\"Generate a design document for one file.\n"
     }
   ]
 }
