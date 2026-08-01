@@ -347,6 +347,8 @@ Per-file definition and dependency information.
 | `caller_usages[].usage_context` | string | Source code of the usage location in the dependent |
 | `caller_usages[].lines` | int[] | Line numbers of usage in the dependent file |
 
+Members declared inside a class, struct, interface, enum or namespace are listed as their own entries in addition to the enclosing definition, so their line range and `context` are contained in the enclosing entry. Functions defined inside a function body are not listed.
+
 ### doc.json
 
 Per-file design document.
@@ -372,6 +374,8 @@ Per-file design document.
 | `sections[].id` | string | Section identifier (corresponds to id in doc_template.json) |
 | `sections[].title` | string | Section heading |
 | `sections[].content` | string | Section body (Markdown format) |
+
+In the `definitions` section, each definition starts with a level-2 heading holding only the definition name in backticks (`` ## `parse_args` ``).
 
 ## 🎨 Customizing the Design Document Template
 

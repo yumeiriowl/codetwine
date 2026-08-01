@@ -135,25 +135,28 @@ JAVA_DEFINITION_DICT = {
     "interface_declaration": "identifier",
     "constructor_declaration": "identifier",
     "enum_declaration": "identifier",
+    "field_declaration": "__variable_declarator__",
 }
 
 CPP_DEFINITION_DICT = {
     "class_specifier": "type_identifier",
     "struct_specifier": "type_identifier",
-    "function_declarator": "identifier",
+    "function_declarator": "__declarator_name__",
     "function_definition": "__function_declarator__",
     "namespace_definition": "namespace_identifier",
     "declaration": "__init_declarator__",
+    "field_declaration": "field_identifier",
     "alias_declaration": "type_identifier",
     "enum_specifier": "type_identifier",
     "preproc_def": "identifier",
 }
 
 C_DEFINITION_DICT = {
-    "function_declarator": "identifier",
+    "function_declarator": "__declarator_name__",
     "function_definition": "__function_declarator__",
     "struct_specifier": "type_identifier",
     "declaration": "__init_declarator__",
+    "field_declaration": "field_identifier",
     "preproc_def": "identifier",
     "type_definition": "type_identifier",
     "enum_specifier": "type_identifier",
@@ -163,21 +166,24 @@ KOTLIN_DEFINITION_DICT = {
     "class_declaration": "identifier",
     "function_declaration": "identifier",
     "object_declaration": "identifier",
+    "property_declaration": "__kotlin_property__",
 }
 
 JS_DEFINITION_DICT = {
     "function_declaration": "identifier",
-    "method_definition": "identifier",
+    "method_definition": "property_identifier",
     "class_declaration": "identifier",
+    "field_definition": "property_identifier",
     "lexical_declaration": "__variable_declarator__",
     "variable_declaration": "__variable_declarator__",
 }
 
 TS_DEFINITION_DICT = {
     "function_declaration": "identifier",
-    "method_definition": "identifier",
+    "method_definition": "property_identifier",
     "class_declaration": "type_identifier",
     "interface_declaration": "type_identifier",
+    "public_field_definition": "property_identifier",
     "lexical_declaration": "__variable_declarator__",
     "variable_declaration": "__variable_declarator__",
     "type_alias_declaration": "type_identifier",

@@ -2,117 +2,111 @@
 
 # Overview & Purpose
 
-`rlm_qa_agent.py` is the entry-point script for an interactive Q&A tool that lets a user ask natural-language questions about a codebase whose structural/documentation data has been pre-extracted into `project_knowledge.json`. It exists as a standalone example file (under `examples/rlm_qa/`) that wires together `dspy.RLM`, a sandboxed `PythonInterpreter` (Deno/Pyodide), and the helper functions in `qa_tools.py` into a runnable CLI application.
+## Purpose and Role
 
-Its responsibilities are:
-- **Configuration**: defines LLM model names, API key/base, output language, and the target JSON path as module-level constants.
-- **Instruction/prompt construction**: builds the `dspy.Signature` instructions by combining a static template (`INSTRUCTIONS_TEMPLATE`) with a dynamically generated JSON-doc-schema summary (`build_doc_schema`), so the agent's system prompt always reflects the actual structure of the loaded data.
-- **Environment setup**: loads `project_knowledge.json` into the shared `qa_tools` module state (`load_project`), and configures a Deno-based `PythonInterpreter` with the correct sandbox flags/cache directory (`create_interpreter`).
-- **Agent assembly**: constructs and configures the `dspy.RLM` agent with the main LLM, a sub-LLM, the interpreter, and the `qa_tools` functions as callable tools (`create_qa_agent`).
-- **Query execution & CLI loop**: provides a simple `ask()` wrapper to invoke the RLM on a question, and a `main()` function implementing an interactive REPL loop with graceful shutdown of the Deno interpreter process.
+`rlm_qa_agent.py` is the entry-point script (executable example) that wires together `dspy.RLM`, a sandboxed `PythonInterpreter`, and the `qa_tools` module to provide an interactive natural-language Q&A interface over a pre-generated `project_knowledge.json` codebase graph.
 
-This logic is kept in its own file (separate from `qa_tools.py`) to isolate "agent orchestration and CLI" concerns from the "reusable data-query tool functions," which are designed to be invoked by the LLM inside the sandboxed interpreter.
+It exists as a separate, standalone file (rather than being folded into `qa_tools.py` or the main pipeline) because it represents a distinct concern: **agent orchestration and configuration**, as opposed to the **stateless data-access tools** provided by `qa_tools.py`. This separation allows:
+- `qa_tools.py` to remain a pure, reusable library of read-only helper functions/state that can be imported both by this agent and executed inside the sandboxed interpreter.
+- `rlm_qa_agent.py` to own all environment-specific concerns: LLM model selection, API keys, Deno/PythonInterpreter setup, prompt/instruction construction, and the interactive CLI loop.
 
-### Main Public Interfaces
+Its responsibilities include:
+1. Loading `project_knowledge.json` into `qa_tools.project_data`/`qa_tools.base_dir` (module-level shared state consumed by `qa_tools` functions).
+2. Dynamically building the RLM instructions text, embedding a schema of the JSON's `doc.sections` (extracted at runtime from actual data) and the desired output language.
+3. Constructing a Deno-based `PythonInterpreter` (with the correct `--allow-read`/`--node-modules-dir` flags for Deno 2.x) that will execute LLM-generated Python code in a sandbox against `project_data`.
+4. Assembling a `dspy.RLM` agent from a `dspy.Signature`, the sandbox interpreter, the `qa_tools` tool functions, and separate primary/sub LLMs.
+5. Running an interactive REPL loop that accepts user questions, invokes the RLM agent, prints answers, and cleanly shuts down the Deno subprocess on exit.
+
+## Public Interfaces
 
 | Name | Arguments | Return | Responsibility |
 |---|---|---|---|
-| `build_doc_schema(project_data)` | `project_data: dict` | `str` | Extracts the first available `doc.sections` list from the loaded data and renders it as a markdown table for embedding into agent instructions |
-| `load_project(json_path)` | `json_path: str` | `None` | Loads `project_knowledge.json` from disk and populates `qa_tools.project_data` / `qa_tools.base_dir` |
-| `create_interpreter()` | — | `PythonInterpreter` | Builds a Deno-backed `PythonInterpreter` with correct `--allow-read`/`--node-modules-dir` flags and resolved Deno cache dir |
-| `create_qa_agent(json_path)` | `json_path: str` | `dspy.RLM` | Loads project data, builds instructions/signature, creates the interpreter, and assembles a fully configured `dspy.RLM` agent with `qa_tools` functions as tools |
-| `ask(rlm, question)` | `rlm: dspy.RLM`, `question: str` | `str` | Invokes the RLM agent with `project_data` and `question`, returning `result.answer` |
-| `main()` | — | `None` | CLI entry point: validates the JSON file exists, initializes the agent, runs an interactive question/answer loop, and shuts down the interpreter on exit |
+| `build_doc_schema(project_data: dict)` | `project_data`: loaded JSON dict | `str` | Scans `files[].doc.sections` for the first non-empty entry and renders a Markdown table of section `id`/`title` for embedding into agent instructions |
+| `load_project(json_path: str)` | `json_path`: path to `project_knowledge.json` | `None` | Loads JSON file into `qa_tools.project_data`, sets `qa_tools.base_dir`, prints a load confirmation |
+| `create_interpreter()` | none | `PythonInterpreter` | Locates `runner.js` and the Deno cache dir, builds a Deno command with proper `--allow-read`/`--node-modules-dir=false` flags, and returns a configured `PythonInterpreter` |
+| `create_qa_agent(json_path: str)` | `json_path`: path to `project_knowledge.json` | `dspy.RLM` | Loads project data, builds primary/sub `dspy.LM`s, constructs the instruction text via `INSTRUCTIONS_TEMPLATE`/`build_doc_schema`, creates the `dspy.Signature`, `PythonInterpreter`, and assembles/configures the full `dspy.RLM` agent (tools, `sub_lm`, `interpreter`, LM) |
+| `ask(rlm: dspy.RLM, question: str)` | `rlm`: configured RLM instance; `question`: user's natural-language question | `str` | Invokes the RLM agent with `project_data` and `question`, returning `result.answer` |
+| `main()` | none | `None` | CLI entry point: validates existence of the target JSON, initializes the agent via `create_qa_agent`, runs an interactive input loop calling `ask`, and shuts down the interpreter (`rlm._interpreter.shutdown()`) on exit |
 
-### Design Decisions
+Module-level configuration constants (`LLM_MODEL`, `SUB_LLM_MODEL`, `LLM_API_KEY`, `LLM_API_BASE`, `OUTPUT_LANGUAGE`, `TARGET_JSON_PATH`, `INSTRUCTIONS_TEMPLATE`) are also effectively part of the public surface, as they are the intended customization points documented in the module docstring ("modify to match your environment").
 
-- **Template-based prompt construction**: Instructions are defined as a string template with placeholder tokens (`<<<DOC_SCHEMA>>>`, `<<<RLM_OUTPUT_LANGUAGE>>>`) substituted via `.replace()`, keeping the prompt text readable while allowing runtime customization based on actual loaded data and configured output language.
-- **Shared mutable module state via `qa_tools`**: Rather than passing `project_data`/`base_dir` explicitly to every tool function, this file sets them as globals on the imported `qa_tools` module (`load_project`), so that tool functions executed inside the sandboxed interpreter (which only receives `project_data` as a signature input) can still access `base_dir` and reuse the same data reference.
-- **Sandboxed code execution**: Uses `dspy.primitives.python_interpreter.PythonInterpreter` backed by a Deno subprocess (Pyodide sandbox) rather than executing LLM-generated code directly in-process, isolating arbitrary generated Python code from the host environment.
-- **Separation of main vs. sub LLM**: A primary `LLM_MODEL` drives the RLM agent's reasoning/orchestration, while a distinct `SUB_LLM_MODEL` is passed as `sub_lm` for use by `llm_query`/`llm_query_batched` calls made from within the sandbox, allowing a cheaper/faster model for sub-queries.
-- **Resource cleanup**: `main()` uses a `try/finally` block to guarantee `rlm._interpreter.shutdown()` is called, ensuring the Deno subprocess is terminated even on `KeyboardInterrupt` or early exit.
+## Design Decisions
+
+- **Template-based prompt construction**: `INSTRUCTIONS_TEMPLATE` uses simple `.replace()` placeholder substitution (`<<<DOC_SCHEMA>>>`, `<<<RLM_OUTPUT_LANGUAGE>>>`) rather than a templating engine, keeping instruction generation dependency-free and explicit.
+- **Schema introspection from live data**: `build_doc_schema` derives the documented section schema directly from the loaded JSON rather than hardcoding it, ensuring the instructions stay accurate as the underlying `project_knowledge.json` structure evolves.
+- **Separation of stateful tool module vs. orchestrator**: shared mutable state (`project_data`, `base_dir`) is deliberately placed in `qa_tools` (imported and set from this file) so that both the RLM sandbox and the host process can reference the same tool functions without duplicating logic.
+- **Sandboxed code execution**: the agent does not execute LLM-authored code directly in the host Python process; it delegates to a Deno-based `PythonInterpreter` (Pyodide sandbox) for isolation, with explicit `--allow-read` scoping to only the runner script and Deno cache directory.
+- **Resource cleanup via `try`/`finally`**: `main()` guarantees the Deno subprocess (`rlm._interpreter`) is shut down even on `KeyboardInterrupt` or early loop exit.
 
 # Definition Design Specifications
 
-### Module-level constants
+## `build_doc_schema`
 
-- **`LLM_MODEL`** (str): Model identifier (litellm format) used for the main RLM reasoning LM. Exists to centralize the primary model choice as a single editable constant rather than scattering it across the script.
-- **`SUB_LLM_MODEL`** (str): Model identifier used for `llm_query`/`llm_query_batched` calls made from within the sandboxed Python code executed by RLM. Kept separate from `LLM_MODEL` so a cheaper/faster model can be used for sub-queries issued inside the sandbox, independent of the top-level reasoning model.
-- **`LLM_API_KEY`** (str): API key read from the `LLM_API_KEY` environment variable, shared by both the main and sub LLMs. Defaults to an empty string if unset, deferring failure to the LM client rather than failing at import time.
-- **`LLM_API_BASE`** (str | None): Optional override for a non-standard LLM endpoint (e.g., Ollama, Azure). `None` means "use provider default."
-- **`OUTPUT_LANGUAGE`** (str): Natural language name embedded into the instructions template to control the language of generated answers.
-- **`TARGET_JSON_PATH`** (str): Filesystem path to the target `project_knowledge.json`, computed relative to this file's directory so the script is runnable from any working directory.
-- **`INSTRUCTIONS_TEMPLATE`** (str): Template string for the `dspy.Signature` instructions, containing JSON schema documentation and code examples for the RLM sandbox. Uses `<<<...>>>` placeholder tokens replaced via `.replace()` (not `str.format`) to avoid conflicts with the literal `{`/`}` characters present in the embedded JSON/code examples.
+Takes `project_data` (dict): the loaded project_knowledge.json structure. Returns a `str` containing a Markdown table listing doc section `id` and `title` pairs, prefixed with an explanatory line.
 
-### `build_doc_schema(project_data: dict) -> str`
+Exists to dynamically derive the set of design-document section identifiers actually present in the target project's JSON, so the RLM agent's instructions accurately reflect the schema of the loaded data rather than a hardcoded assumption.
 
-- **Arguments**: `project_data` (dict) — the loaded `project_knowledge.json` content.
-- **Returns**: `str` — a Markdown table (as text) enumerating `doc.sections` `id`/`title` pairs, prefixed with an explanatory sentence.
-- **Responsibility**: Dynamically derives the project-specific documentation section schema from actual data, rather than hardcoding section IDs/titles in `INSTRUCTIONS_TEMPLATE`, so the agent's instructions stay accurate as the underlying document schema evolves across projects.
-- **Design decision**: Only the sections from the *first* `files[]` entry that actually has a non-empty `doc.sections` are used, on the assumption that all files share the same section schema (uniform document structure across the project). Iteration stops as soon as such an entry is found.
-- **Edge case**: If no file has `doc.sections`, `sections` remains an empty list and the function still returns a valid (header-only) table rather than raising.
+Design decision: only the first `files[]` entry that has a non-empty `doc.sections` is used as the template for the section schema, on the assumption that all files share the same section structure. If no file has `doc.sections`, the resulting table has a header but no rows.
 
-### `load_project(json_path: str) -> None`
+## `load_project`
 
-- **Arguments**: `json_path` (str) — path to `project_knowledge.json`.
-- **Returns**: `None`.
-- **Responsibility**: Loads the JSON file into memory and initializes the shared module-level state (`qa_tools.project_data`, `qa_tools.base_dir`) that the tool functions (`read_source_file`, `get_files_using`, `graph_search`) depend on, since those tools are called from within the sandboxed interpreter and need pre-populated globals rather than parameters.
-- **Design decision**: State is injected by directly assigning to `qa_tools` module attributes rather than passing objects through function calls, because the sandbox-exposed tool functions have fixed signatures dictated by their use as RLM tools/LLM-callable functions.
-- **Constraint**: Must be called before any `qa_tools` tool function is invoked; `base_dir` is derived from `json_path`'s directory and is used later to resolve relative source file paths.
+Takes `json_path` (str): filesystem path to project_knowledge.json. Returns `None`.
 
-### `create_interpreter() -> PythonInterpreter`
+Responsible for reading the JSON file and populating the shared module-level state (`qa_tools.project_data`, `qa_tools.base_dir`) that all `qa_tools` functions rely on, plus printing a confirmation message with file/project counts.
 
-- **Arguments**: None.
-- **Returns**: `PythonInterpreter` — configured with an explicit Deno command line.
-- **Responsibility**: Builds a `PythonInterpreter` (Pyodide-in-Deno sandbox) with flags compatible with Deno 2.x, since the default `PythonInterpreter` construction does not account for the `--node-modules-dir=false` requirement and read-permission scoping needed here.
-- **Design decisions**:
-  - `runner_path` is located via `inspect.getfile(PythonInterpreter)` to find the `runner.js` shipped alongside the installed `dspy` package, avoiding a hardcoded path that would break across environments/versions.
-  - The Deno cache directory (`DENO_DIR`) is resolved with a fallback chain: existing `DENO_DIR` env var → `deno info --json` output → default `~/.cache/deno`. This ensures `--allow-read` can be scoped precisely to the runner script and Deno's own cache, rather than granting broader filesystem read access.
-  - `DENO_DIR` is written back into `os.environ` so that the actual `deno` subprocess invoked by `PythonInterpreter` uses the same resolved directory that was granted read permission.
-- **Edge case**: If `deno info --json` fails or `deno` is not on `PATH` (`FileNotFoundError`), the failure is silently absorbed and the hardcoded default cache path is used instead.
+Design decision: `base_dir` is derived from the directory of `json_path`, establishing the root for resolving relative source file paths used later by `read_source_file`.
 
-### `create_qa_agent(json_path: str) -> dspy.RLM`
+Constraint: assumes the JSON file exists and is well-formed UTF-8 JSON with `files` and `project_name` keys; no error handling is performed for missing/malformed input.
 
-- **Arguments**: `json_path` (str) — path to `project_knowledge.json`.
-- **Returns**: `dspy.RLM` — a fully configured, ready-to-query agent instance.
-- **Responsibility**: Single entry point that wires together all pieces required for the Q&A agent: loading data, constructing the main/sub LMs, generating instructions, building the signature, creating the sandbox interpreter, and registering tool functions — so callers only need one function call to obtain a usable agent.
-- **Design decisions**:
-  - The `dspy.Signature` is built dynamically as `"project_data, question -> answer"` with instructions text assembled by string substitution, keeping the schema/instructions data-driven (via `build_doc_schema`) instead of static.
-  - Only three tool functions (`read_source_file`, `get_files_using`, `graph_search`) are exposed to the RLM tool interface, complementing direct JSON manipulation of `project_data` that the sandboxed code performs itself.
-  - The main LM is set via `rlm.set_lm(lm)` after construction rather than passed at construction time, reflecting `dspy.RLM`'s API for configuring its primary LM separately from the `sub_lm` used inside the sandbox.
-- **Constraint**: Depends on `qa_tools.project_data` being loaded as a global before RLM tool calls occur; this is guaranteed by calling `load_project` first within this function.
+## `create_interpreter`
 
-### `ask(rlm: dspy.RLM, question: str) -> str`
+Takes no arguments. Returns a `PythonInterpreter` instance configured to run code in a Deno sandbox.
 
-- **Arguments**: `rlm` (`dspy.RLM`) — the configured agent; `question` (str) — the user's natural-language question.
-- **Returns**: `str` — the answer text extracted from the RLM prediction's `answer` field.
-- **Responsibility**: Provides a minimal, uniform calling convention for invoking the agent, always passing the currently loaded `qa_tools.project_data` alongside the question, so callers don't need to know about the signature's field names.
-- **Constraint**: Assumes `qa_tools.project_data` has already been populated (via `load_project`/`create_qa_agent`); otherwise the call would pass `None` as `project_data`.
+Exists to work around Deno 2.x permission requirements by explicitly constructing a `deno run` command with `--node-modules-dir=false` and `--allow-read` flags scoped to the runner script and the Deno cache directory, since the default `PythonInterpreter` construction does not supply these flags.
 
-### `main() -> None`
+Design decision: resolves the Deno cache directory (`DENO_DIR`) via the `DENO_DIR` environment variable first, then falls back to querying `deno info --json`, and finally falls back to a default path (`~/.cache/deno`) if neither is available; the resolved value is written back into the `DENO_DIR` environment variable to ensure consistency for subsequent Deno invocations.
 
-- **Arguments**: None (reads module-level `TARGET_JSON_PATH`).
-- **Returns**: `None`.
-- **Responsibility**: Provides an interactive CLI loop for exploratory Q&A sessions against the loaded project knowledge base, serving as the script's runnable entry point.
-- **Design decisions**:
-  - Validates that the target JSON file exists up front and exits with a non-zero status and an actionable message if not, avoiding a confusing failure deeper in `create_qa_agent`.
-  - Wraps the interactive loop in `try`/`finally` so that `rlm._interpreter.shutdown()` is always called on exit (including on `KeyboardInterrupt` or the `exit`/`quit`/`q` commands), ensuring the underlying Deno subprocess is terminated rather than left running.
-  - Accepts case-insensitive exit commands (`exit`, `quit`, `q`) and silently skips empty input, prioritizing a forgiving interactive UX.
-- **Edge case**: Directly accesses the private attribute `rlm._interpreter` to perform shutdown, since `dspy.RLM` does not expose a public shutdown method for the interpreter it owns.
+Constraint: requires the `deno` executable to be available on PATH for both the info query and the actual sandboxed execution; if `deno info` fails or is not found, the hardcoded default cache path is used instead.
+
+## `create_qa_agent`
+
+Takes `json_path` (str): path to project_knowledge.json. Returns a configured `dspy.RLM` instance ready to answer questions.
+
+Responsible for assembling all pieces needed for the Q&A agent: loading project data, constructing the main and sub LLMs, building the dynamic instructions (schema + output language), defining the input/output `dspy.Signature`, creating the sandboxed interpreter, and wiring in the `qa_tools` functions as callable tools.
+
+Design decision: two separate LLMs are used — `lm` (main reasoning model) and `sub_lm` (used internally by RLM for `llm_query`/`llm_query_batched` within the sandbox) — allowing a cheaper/faster model for sub-queries. The `lm` is set on the RLM instance after construction via `set_lm`, separate from `sub_lm` which is passed at construction time.
+
+Constraint: expects `json_path` to point to a valid, already-loaded-compatible file; relies on `load_project` succeeding first since instructions generation depends on `qa_tools.project_data` being populated.
+
+## `ask`
+
+Takes `rlm` (`dspy.RLM`): an initialized RLM agent, and `question` (str): the natural-language question to answer. Returns a `str` containing the generated answer.
+
+Thin wrapper that invokes the RLM agent with the current `project_data` and the given question, then extracts the `answer` field from the result, decoupling the calling code from the RLM call signature/result structure.
+
+## `main`
+
+Takes no arguments. Returns `None`.
+
+Entry point implementing an interactive command-line Q&A loop: verifies the target JSON file exists, initializes the agent via `create_qa_agent`, then repeatedly reads a question from stdin, prints the answer, until the user types an exit keyword (`exit`, `quit`, `q`) or sends a keyboard interrupt.
+
+Design decision: the Deno-backed interpreter is explicitly shut down in a `finally` block to ensure the sandboxed subprocess is terminated even if the loop exits via interrupt or exception, preventing orphaned processes.
+
+Constraint: exits the process with status code 1 if `TARGET_JSON_PATH` does not exist, instructing the user to run `main.py` first to generate it.
 
 # Dependency Description
 
 ### Dependencies (what this file uses)
 
-This file depends on `examples/rlm_qa/qa_tools.py` for shared state and tool functions used by the RLM Q&A agent:
+This file depends entirely on `examples/rlm_qa/qa_tools.py` to provide the runtime data and tool functions needed by the RLM sandbox:
 
-- **`qa_tools.project_data`**: A module-level global that holds the loaded JSON project knowledge data. This file sets it in `load_project()` after reading `project_knowledge.json`, and later reads it in `create_qa_agent()` (to build the doc schema) and in `ask()` (to pass as input to the RLM call).
-- **`qa_tools.base_dir`**: A module-level global holding the directory containing the JSON file. It is set in `load_project()` so that `qa_tools.read_source_file()` can resolve relative source file paths.
-- **`qa_tools.read_source_file`**: Passed as a callable tool to `dspy.RLM` so the agent can read the full content of a source file when it needs more context than the JSON snippets provide.
-- **`qa_tools.get_files_using`**: Passed as a callable tool to `dspy.RLM` so the agent can find which files depend on a given target file.
-- **`qa_tools.graph_search`**: Passed as a callable tool to `dspy.RLM` so the agent can perform a BFS over function/class definitions and their usage relationships to explore dependency graphs.
+- **`qa_tools.project_data`**: A module-level variable used as the shared in-memory store for the loaded `project_knowledge.json` content. `rlm_qa_agent.py` populates it during `load_project()` and reads from it (e.g., to build the doc schema and to pass it as an argument when invoking the RLM agent).
+- **`qa_tools.base_dir`**: A module-level variable set during `load_project()` to record the base directory of the loaded JSON file, enabling `read_source_file` to resolve relative source paths correctly.
+- **`qa_tools.read_source_file`**: Passed as a tool to `dspy.RLM` so the agent can read the full content of a source file when it needs more context than what is embedded in the JSON.
+- **`qa_tools.get_files_using`**: Passed as a tool to `dspy.RLM` so the agent can find files that depend on a given target file, supporting dependency investigation during Q&A.
+- **`qa_tools.graph_search`**: Passed as a tool to `dspy.RLM` so the agent can perform BFS-based exploration of the definitions/usages graph, supporting multi-hop dependency analysis.
 
-The dependency direction is unidirectional: `rlm_qa_agent.py` depends on `qa_tools.py`, both by importing its tool functions and by writing into its module-level globals (`project_data`, `base_dir`) to share state with those tool functions at runtime.
+The dependency direction is unidirectional: `rlm_qa_agent.py` depends on `qa_tools.py` for both shared state and tool functions, while `qa_tools.py` has no dependency back on `rlm_qa_agent.py` (its state is simply set externally by this file).
 
 ### Dependents (what uses this file)
 
@@ -120,107 +114,113 @@ No dependent information available.
 
 # Data Flow
 
-## Input Data Format and Source
+## 1. Input Data
 
-| Source | Format | Description |
+| Source | Format | Consumed by |
 |---|---|---|
-| `TARGET_JSON_PATH` (constant) | file path (str) | Points to `project_knowledge.json` generated by `main.py` |
-| `project_knowledge.json` (file) | JSON | Loaded via `json.load()` into a Python `dict` (`qa_tools.project_data`) |
-| `LLM_API_KEY` (env var) | str | API key for both main LM and sub-LM |
-| Interactive `input()` | str | User's natural language question |
-| `qa_tools` module (external file) | Python module | Provides tool functions and shared globals (`project_data`, `base_dir`) |
+| `TARGET_JSON_PATH` (`project_knowledge.json`) | JSON file on disk | `load_project()` → `json.load()` |
+| `LLM_API_KEY` env var | string | `dspy.LM` / `dspy.RLM` construction |
+| Interactive `input()` from user | string (question) | `ask()` |
+| `INSTRUCTIONS_TEMPLATE` (in-file constant) | string with placeholders | `create_qa_agent()` |
 
-## Main Transformation Flow
+## 2. Main Transformation Flow
 
 ```
-TARGET_JSON_PATH
-      │
-      ▼
-load_project(json_path)
-  - json.load(file) → qa_tools.project_data (dict)
-  - os.path.dirname(json_path) → qa_tools.base_dir
-      │
-      ▼
-build_doc_schema(project_data)
-  - scans project_data["files"][*]["doc"]["sections"]
-  - builds a Markdown table string (id/title) → doc_schema
-      │
-      ▼
-instructions = INSTRUCTIONS_TEMPLATE
-  - "<<<DOC_SCHEMA>>>"           → replaced with doc_schema
-  - "<<<RLM_OUTPUT_LANGUAGE>>>"  → replaced with OUTPUT_LANGUAGE
-      │
-      ▼
+project_knowledge.json (file)
+        │  json.load()
+        ▼
+qa_tools.project_data (dict, module-global)
+        │                         └─ also sets qa_tools.base_dir (dirname of json_path)
+        │
+        ├─► build_doc_schema(project_data) ──► doc_schema (str: markdown table of section id/title)
+        │
+        ▼
+INSTRUCTIONS_TEMPLATE.replace(<<<DOC_SCHEMA>>>, doc_schema)
+                      .replace(<<<RLM_OUTPUT_LANGUAGE>>>, OUTPUT_LANGUAGE)
+        ▼
+instructions (str)
+        │
+        ▼
 dspy.Signature("project_data, question -> answer", instructions)
-      │
-      ▼
-create_interpreter()
-  - locates runner.js, resolves Deno cache dir (DENO_DIR)
-  - builds deno_command list
-  - returns PythonInterpreter(deno_command=...)
-      │
-      ▼
-dspy.RLM(signature, tools=[qa_tools.read_source_file,
-                           qa_tools.get_files_using,
-                           qa_tools.graph_search],
-         sub_lm=sub_lm, interpreter=interpreter)
-  - rlm.set_lm(lm)
-      │
-      ▼
-ask(rlm, question)
-  - rlm(project_data=qa_tools.project_data, question=question)
-      - RLM sandbox executes Python code manipulating project_data
-      - can call qa_tools.* tool functions for source lookup / graph traversal
-      - LLM (lm) drives code generation & reasoning; sub_lm used internally for sub-queries
-      │
-      ▼
-result.answer (str) → returned from ask() → printed to console
+        │
+        ▼
+dspy.RLM(signature, tools=[read_source_file, get_files_using, graph_search],
+         sub_lm=sub_lm, interpreter=PythonInterpreter(...))
+        │  rlm.set_lm(lm)
+        ▼
+rlm  (configured agent, returned to caller)
 ```
 
-## Output Data Format and Destination
+At question time:
+
+```
+qa_tools.project_data (dict) + question (str)
+        │
+        ▼
+rlm(project_data=..., question=...)
+        │  (RLM internally drives the LLM, which writes/executes Python
+        │   code inside the PythonInterpreter/Deno sandbox, manipulating
+        │   project_data and calling read_source_file / get_files_using /
+        │   graph_search as needed)
+        ▼
+result.answer (str)
+```
+
+## 3. Output Data
 
 | Output | Format | Destination |
 |---|---|---|
-| `result.answer` | str (natural language, in `OUTPUT_LANGUAGE`) | Returned by `ask()`, printed via `print()` in the interactive loop |
-| Console logs (`[OK] Loaded ...`) | str | stdout, informational only |
-| `rlm._interpreter.shutdown()` | side effect | Terminates the Deno sandbox process on exit |
+| `rlm` instance | `dspy.RLM` object | returned by `create_qa_agent()`, used by `main()`/`ask()` |
+| `result.answer` | string | returned by `ask()`, printed to stdout in the interactive loop |
+| Console messages (`[OK] Loaded...`, `[OK] Initialization complete`, prompts) | string | stdout |
 
-## Key Data Structures
+## 4. Key Data Structures
 
-### `qa_tools.project_data` (dict, loaded from JSON)
+### `qa_tools.project_data` (module-global dict, set by `load_project`)
 | Field | Type | Purpose |
 |---|---|---|
-| `project_name` | str | Project identifier |
-| `project_dependencies` | array | File-level dependency graph (`file`, `summary`, `callers`, `callees`) |
-| `files` | array | Per-file `file_dependencies` (definitions, callee/caller usages) and `doc` (summary + sections) |
+| `project_name` | str | Used for logging and path stripping in `read_source_file` |
+| `project_dependencies` | array | Whole-project dependency graph (file-level callers/callees) |
+| `files` | array | Per-file details (`file`, `file_dependencies`, `doc`) |
+
+### `qa_tools.base_dir`
+- Directory containing the JSON file; used by `read_source_file` to resolve relative source paths.
+
+### `doc_schema` (str, built by `build_doc_schema`)
+- Markdown table (`| id | title |`) derived from the `doc.sections` of the first file entry that has sections; embedded into `instructions` so the LLM knows available document sections.
 
 ### `instructions` (str)
-Built by string substitution into `INSTRUCTIONS_TEMPLATE`; embeds the dynamically generated `doc_schema` table and `OUTPUT_LANGUAGE`, then passed to `dspy.Signature` to steer the RLM's code-generation and answering behavior.
+- Final signature instruction text: static rule/schema text + dynamically injected `doc_schema` + `OUTPUT_LANGUAGE`.
 
-### `deno_command` (list of str)
-Constructed in `create_interpreter()`; configures the Deno sandbox invocation (`runner_path`, `--allow-read` scope including `deno_dir`) used by `PythonInterpreter` to execute RLM-generated Python code safely.
+### `dspy.Signature`
+- Declares the RLM interface: inputs `project_data`, `question` → output `answer`, paired with `instructions`.
 
-### `rlm` (dspy.RLM instance)
-Holds `signature`, `tools`, `sub_lm`, `interpreter`, and the main `lm` (set via `set_lm`). Acts as the callable agent: consumes `project_data` + `question`, produces `answer`.
+### `rlm` (`dspy.RLM`)
+- Holds: signature, tool functions (`read_source_file`, `get_files_using`, `graph_search`), `sub_lm` (used by RLM internally for `llm_query`/`llm_query_batched`), `interpreter` (sandboxed Python execution via Deno), and the primary `lm` set via `set_lm`.
+
+### `result` (dspy return object)
+- Contains `.answer` (str), the only field consumed by `ask()`.
 
 # Error Handling
 
-**Overall strategy:** This file adopts a mixed approach — fail-fast for setup/prerequisite checks (missing JSON file, missing interpreter) combined with graceful degradation delegated to `qa_tools` for data-access errors during the interactive Q&A loop. Top-level orchestration code favors explicit, early termination on unrecoverable conditions, while the RLM sandbox execution itself relies on caller-facing tool functions that return error strings/dicts rather than raising, so the LLM agent can react to failures within its own reasoning loop.
+This file adopts a mixed strategy: startup-time and precondition checks fail fast with explicit user-facing messages and process termination, while the interactive Q&A loop favors graceful continuation, and sandbox/subprocess resource cleanup is guaranteed via a `finally` block regardless of how the loop exits.
 
 | Error type | Handling | Impact |
 |---|---|---|
-| `project_knowledge.json` not found (`main()`) | Checked explicitly before initialization; prints a guidance message instructing the user to run `main.py` first | Process exits immediately via `sys.exit(1)`; agent is never created |
-| Deno cache directory (`DENO_DIR`) not resolvable via env var | Falls back to querying `deno info --json`; if that also fails (`FileNotFoundError` caught), falls back further to a hardcoded default path (`~/.cache/deno`) | No crash; interpreter creation proceeds with a best-effort cache directory |
-| `subprocess.run(["deno", ...])` failure or non-zero return code | Return code and stdout are checked; on failure the exception is swallowed only for `FileNotFoundError`, other subprocess outcomes simply skip the JSON parse and move to fallback | No fail-fast; silently degrades to fallback deno dir logic |
-| Errors during RLM/tool execution inside the sandbox (e.g. file read errors in `read_source_file`, missing definitions in `graph_search`) | Not handled in this file; delegated entirely to `qa_tools`, which returns descriptive error strings/dicts instead of raising | The RLM agent receives the error as part of its data/tool output and can decide how to proceed or report it to the user; the outer loop is unaffected |
-| `KeyboardInterrupt` during interactive `input()` loop | Caught explicitly inside the `while True` loop | Loop breaks cleanly, proceeding to the `finally` block instead of crashing with a traceback |
-| Any exception during the interactive session (implicit, via `finally`) | `PythonInterpreter.shutdown()` is called in a `finally` block guarded by a `None` check on `rlm._interpreter` | Ensures the Deno subprocess is terminated even if the loop exits abnormally, preventing orphaned sandbox processes |
+| Missing `project_knowledge.json` (`TARGET_JSON_PATH` not found) | Checked explicitly in `main()`; prints an error message instructing the user to run `main.py` first, then calls `sys.exit(1)` | Program terminates immediately before any LLM/interpreter setup occurs |
+| Deno environment lookup failure (`deno info --json` command not found or fails) | `subprocess.run` is invoked with `check=False`; a `FileNotFoundError` is caught and silently ignored; falls back to a default cache directory (`~/.cache/deno`) if `DENO_DIR` cannot be determined | Interpreter creation proceeds with a best-effort default path instead of aborting |
+| User pressing Ctrl+C during interactive input (`KeyboardInterrupt`) | Caught inside the `while True` loop and used to `break` out cleanly | Interactive loop exits gracefully instead of propagating a stack trace |
+| Empty user input | Explicitly checked and skipped via `continue` | Loop simply re-prompts without attempting to query the RLM agent |
+| Exit commands (`exit`, `quit`, `q`) | Checked via string comparison and used to `break` the loop | Normal, intentional termination path, not treated as an error |
+| Interpreter/sandbox shutdown | Wrapped in a `finally` block after the interactive loop, guarded by a `None` check on `rlm._interpreter` | Ensures the Deno subprocess is shut down even if the loop exits via break, exception, or keyboard interrupt |
+| Errors raised inside `dspy.RLM(...)` call (`ask()`) itself (e.g., LLM/sandbox failures) | Not caught in this file; no try/except wraps `ask(rlm, question)` | Any exception from the RLM call/interpreter propagates up through the loop, likely terminating `main()` unless it is a `KeyboardInterrupt` |
+| Errors from dependency tool functions (`qa_tools.read_source_file`, `get_files_using`, `graph_search`) | Not handled here; these functions themselves return error strings/dicts rather than raising, and this file passes them through unmodified as tools to `dspy.RLM` | Error information (if any) is surfaced only within the RLM's sandboxed execution context, not intercepted by this file |
 
 **Design considerations:**
-- Responsibility for error handling is deliberately split by layer: this file handles *process-level* concerns (missing prerequisites, resource cleanup, user interrupt), while `qa_tools` handles *data-level* concerns (missing files, malformed lookups) using non-throwing return values suitable for LLM tool consumption.
-- Resource cleanup (shutting down the Deno-based `PythonInterpreter`) is treated as a hard requirement, enforced through `finally` regardless of how the interactive loop terminates.
-- Setup-phase failures (missing JSON, unavailable Deno info) are treated as unrecoverable and handled by either aborting the program or falling back to reasonable defaults, rather than raising further up the stack.
+- Precondition failures (missing input file) are treated as fatal and are checked before any expensive initialization (LLM/interpreter setup) to avoid wasted work.
+- The interactive loop is designed to survive minor/expected disruptions (empty input, Ctrl+C) without crashing, but does not defensively guard against unexpected exceptions from the core `ask()` call, relying on the underlying `dspy.RLM` and `qa_tools` layers to manage their own error reporting.
+- Resource cleanup (shutting down the Deno-based `PythonInterpreter`) is treated as a hard guarantee via `finally`, reflecting the importance of not leaving orphaned subprocess sandboxes running after the script exits.
 
 # Summary
 
-`rlm_qa_agent.py` is the CLI entry point wiring `dspy.RLM`, a sandboxed Deno/Pyodide `PythonInterpreter`, and `qa_tools.py` into an interactive Q&A tool over `project_knowledge.json`. Key functions: `build_doc_schema` (derives doc-section schema), `load_project` (populates `qa_tools.project_data`/`base_dir` globals), `create_interpreter` (configures sandbox), `create_qa_agent` (assembles RLM with tools/LMs), `ask` (runs a query), `main` (REPL with fail-fast setup checks and guaranteed interpreter shutdown). Depends unidirectionally on `qa_tools` for shared state and tool functions.
+`rlm_qa_agent.py` is the standalone CLI orchestrator that wires `dspy.RLM`, a Deno-sandboxed `PythonInterpreter`, and `qa_tools` to answer questions over `project_knowledge.json`. Key functions: `load_project` (populates `qa_tools.project_data`/`base_dir`), `build_doc_schema` (derives doc-section schema), `create_interpreter` (Deno sandbox setup), `create_qa_agent` (builds LMs, instructions, Signature, RLM), `ask` (runs query), `main` (interactive REPL with cleanup). Depends solely on `qa_tools` for state/tools; no dependents. Handles startup errors fatally, loop errors gracefully, guarantees interpreter shutdown.

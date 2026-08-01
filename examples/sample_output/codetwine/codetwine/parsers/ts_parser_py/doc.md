@@ -2,138 +2,134 @@
 
 # Overview & Purpose
 
-`codetwine/parsers/ts_parser.py` provides a single, centralized entry point for parsing source files into tree-sitter ASTs. It exists as a dedicated module to isolate tree-sitter parser setup and file-reading logic from the rest of the codebase, and to provide a shared, memoized parse result so that multiple consumers (definition extraction, import resolution, usage analysis, dependency graph construction) can request the AST for the same file without redundant disk I/O or re-parsing.
+`ts_parser.py` provides a single, centralized entry point for parsing source files into tree-sitter ASTs across the CodeTwine project. It exists as its own module to decouple the mechanics of language detection, tree-sitter `Parser` initialization, and file reading from the higher-level analysis logic (definition extraction, import resolution, usage/dependency graph building) that depends on parsed ASTs. By isolating this concern, all consumers (`file_analyzer.py`, `import_to_path.py`, `usage_analysis.py`, `dependency_graph.py`, `pipeline.py`) share one consistent parsing implementation and one cache, ensuring the same file is never parsed more than once during a run.
 
-The module resolves the appropriate `Language` object based on file extension using the `TREE_SITTER_LANGUAGES` mapping from `codetwine/config/settings.py`, reads the target file as bytes, and produces a tree-sitter root `Node` alongside the raw byte content, which downstream consumers use both for AST traversal and for slicing out source text by byte/line ranges.
+The module relies on `TREE_SITTER_LANGUAGES` (from `codetwine/config/settings.py`) to map file extensions to the appropriate tree-sitter `Language` object, keeping language-specific configuration out of the parser itself.
 
 ### Main Public Interfaces
 
 | Name | Arguments | Return Value | Responsibility |
 |---|---|---|---|
-| `parse_file` | `file_path: str` | `tuple[Node, bytes]` | Reads the given file, parses it with the tree-sitter parser matching its extension, and returns the AST root node along with the raw file content (with results cached). |
-| `parse_cache` | (module-level dict) `dict[str, tuple[Node, bytes]]` | — | Module-level cache mapping file paths to previously computed `(root_node, content)` results; exposed so callers (e.g., the pipeline) can explicitly clear it to free memory. |
+| `parse_file(file_path: str)` | `file_path`: absolute path of the file to parse | `tuple[Node, bytes]` — (AST root node, raw file byte content) | Reads a file, parses it with the tree-sitter `Parser` selected via file extension, caches the result, and returns the root AST node plus raw content |
+| `parse_cache: dict[str, tuple[Node, bytes]]` | — | Module-level dict mapping file path → (root node, content) | Exposes the shared parse cache so other modules (e.g., `pipeline.py`) can clear it to free memory after analysis completes |
 
 ### Design Decisions
 
-- **Memoization via module-level cache**: `parse_file` checks `parse_cache` before parsing and stores results after parsing, avoiding repeated parsing of the same file across different analysis stages (definition extraction, import resolution, usage/dependency analysis) that all operate on overlapping sets of files.
-- **Extension-based language dispatch**: The file extension is extracted via `os.path.splitext` and used to look up the correct `Language` object from `_language_map` (aliased from `TREE_SITTER_LANGUAGES`), keeping language-specific configuration fully delegated to `codetwine/config/settings.py` and out of this parsing module.
-- **Explicit cache lifecycle control**: The cache is exposed as a public module-level object (`parse_cache`) rather than hidden behind an internal variable, allowing external code (e.g., the pipeline) to explicitly clear it (`parse_cache.clear()`) once analysis completes to free memory.
-- **Binary file reading**: Files are read in binary mode (`"rb"`) since tree-sitter operates on byte content, and this raw byte content is also returned so callers can perform byte/line-accurate slicing of source text.
+- **Module-level caching**: `parse_cache` memoizes parse results keyed by `file_path`, avoiding redundant disk reads and re-parsing when multiple parts of the pipeline (definition extraction, import resolution, usage/dependency analysis) need the AST for the same file. The cache is intentionally exposed at module scope so external code (`pipeline.py`) can explicitly clear it once analysis is complete.
+- **Extension-based language dispatch**: The file extension (derived via `os.path.splitext`) is used to look up the correct tree-sitter `Language` from `TREE_SITTER_LANGUAGES`, delegating all language-specific configuration to `settings.py` and keeping this file purely mechanical (I/O + parsing + caching).
+- **Binary file reading**: Content is read as raw bytes (`"rb"` mode) since tree-sitter's `Parser.parse` operates on byte content, and the same byte content is returned alongside the AST for downstream consumers that need to slice source text by byte/line ranges.
 
 # Definition Design Specifications
 
-## `parse_cache: dict[str, tuple[Node, bytes]]`
+## `parse_file`
 
-Module-level dictionary mapping absolute file paths to their parsed `(root_node, content)` results.
+Parses a source file into a tree-sitter AST and returns the root node along with the raw file bytes, memoizing results at module scope so repeated requests for the same path skip re-reading and re-parsing.
 
-- **Responsibility**: Acts as a process-wide memoization store so that repeated requests to parse the same file (from multiple consumer modules such as `file_analyzer.py`, `import_to_path.py`, `usage_analysis.py`, and `dependency_graph.py`) avoid redundant I/O and re-parsing.
-- **Design decision**: Exposed at module level (rather than hidden inside a class) so that external code (e.g., `pipeline.py`) can explicitly call `parse_cache.clear()` to release memory once analysis is complete, since parsed ASTs and raw file bytes can be large and are only needed during the analysis phase.
-- **Constraint**: Keyed by the raw `file_path` string passed to `parse_file`; callers must pass consistent (e.g., absolute) paths for cache hits to work correctly, as no path normalization is performed.
+**Arguments:**
+- `file_path` (`str`): Absolute path to the source file to parse. Used both as the file to read and as the cache key.
 
-## `parse_file(file_path: str) -> tuple[Node, bytes]`
+**Returns:**
+- `tuple[Node, bytes]`: A pair of the parsed AST's root `Node` and the exact byte content read from disk. Returning raw bytes alongside the node lets callers slice source text using tree-sitter's byte-offset-based node ranges without re-reading the file.
 
-- **Arguments**:
-  - `file_path`: Absolute path of the source file to parse.
-- **Returns**: A tuple `(root_node, content)` where `root_node` is the tree-sitter AST root (`Node`) and `content` is the raw file bytes read from disk.
-- **Responsibility**: Provides a single, cached entry point for turning a source file into a tree-sitter AST plus its raw byte content, decoupling all downstream extraction/analysis logic (definitions, imports, usages) from parser setup and language selection details.
-- **Design decisions**:
-  - Uses the file extension (via `os.path.splitext`, stripped of the leading dot) as the lookup key into `TREE_SITTER_LANGUAGES` to select the appropriate `Language` grammar, keeping language dispatch declarative and centralized in `settings.py` rather than hardcoded here.
-  - Returns raw bytes (not decoded text) alongside the AST because tree-sitter node byte offsets are defined against the original byte content; callers needing text (e.g., `file_analyzer.py`) are responsible for decoding it themselves.
-  - Reads the cache before doing any extension lookup or file I/O, making repeated calls for the same path effectively O(1) after the first parse.
-- **Edge cases / constraints**:
-  - Assumes `file_path`'s extension exists as a key in `_language_map` (`TREE_SITTER_LANGUAGES`); an unsupported/unknown extension will raise a `KeyError` since no fallback or error handling is implemented.
-  - Assumes the file exists and is readable; no explicit handling of `FileNotFoundError` or decoding errors (file is read in binary mode, so encoding issues are deferred to callers).
-  - Not safe for concurrent mutation of `parse_cache` in a multi-threaded context, since dictionary access/insertion is unsynchronized.
+**Design intent:** Centralizes file reading and tree-sitter parsing so that all consumers (definition extraction, import resolution, usage/dependency analysis) share a single, consistent entry point and avoid redundant I/O/parsing for files referenced from multiple analysis passes across the pipeline.
+
+**Design decisions:**
+- The cache is a simple module-level `dict` keyed by `file_path`, not an LRU or size-bounded cache; it assumes the file set analyzed in one run is small enough to fully retain in memory, and it must be explicitly cleared by the caller (e.g., `pipeline.py` calls `parse_cache.clear()` at the end of analysis) to free memory between runs.
+- Language selection is derived purely from the file extension (via `_language_map`/`TREE_SITTER_LANGUAGES`), keeping this function decoupled from any language-specific logic.
+- Content is read in binary mode and returned as `bytes` rather than decoded text, matching tree-sitter's expectation of byte content and preserving exact byte offsets for downstream node-to-text extraction.
+
+**Edge cases/constraints:**
+- The file extension must exist as a key in `_language_map`; otherwise a `KeyError` is raised when constructing the `Parser`.
+- No handling for missing files or unreadable content—file I/O errors propagate to the caller.
+- Not thread-safe: concurrent calls for the same uncached `file_path` could result in duplicate parsing work (last write wins in the cache), since there is no locking around the cache read/write.
 
 # Dependency Description
 
 ### Dependencies (what this file uses)
 
-- **`TREE_SITTER_LANGUAGES` (from `codetwine/config/settings.py`)**: Used as a mapping from file extension to the corresponding tree-sitter `Language` object. `ts_parser.py` relies on this map to select the correct grammar for initializing the `Parser` based on the extension of the file being parsed, enabling language-agnostic parsing across multiple supported languages.
+- **codetwine/config/settings.py** (`TREE_SITTER_LANGUAGES`): This file relies on `TREE_SITTER_LANGUAGES` to map a file's extension to its corresponding tree-sitter `Language` object. This mapping is essential for instantiating the correct `Parser` for the file being parsed, since tree-sitter requires a language-specific grammar to build an AST.
 
 ### Dependents (what uses this file)
 
-- **`codetwine/file_analyzer.py`**: Calls `parse_file` to obtain the AST root node and raw file content for a target file, which is then used together with per-language definition extraction settings to extract source code for each definition.
-- **`codetwine/import_to_path.py`**: Calls `parse_file` to parse a resolved file path and obtain its AST root node, which is then used to extract definitions and register their names into a symbol-to-file mapping.
-- **`codetwine/pipeline.py`**: Calls `parse_cache.clear()` to clear the module-level parse result cache after analysis completes, freeing memory.
-- **`codetwine/extractors/usage_analysis.py`**: Calls `parse_file` to parse target and caller files, using the resulting AST root nodes to extract definition names and to analyze import statements/usages for dependency tracking.
-- **`codetwine/extractors/dependency_graph.py`**: Calls `parse_file` to parse callee and caller files, using the resulting AST root nodes to resolve definitions and extract import information for building the dependency graph.
+- **codetwine/file_analyzer.py**: Uses `parse_file` to obtain the AST root node and raw file content, which are then used to extract source code definitions and their corresponding line ranges.
+- **codetwine/import_to_path.py**: Uses `parse_file` to parse a file and retrieve its AST root node, which is then passed to definition extraction logic to register symbol names for import-to-path resolution.
+- **codetwine/pipeline.py**: Uses `parse_cache.clear()` to release the module-level parse cache after the analysis pipeline completes, freeing memory.
+- **codetwine/extractors/usage_analysis.py**: Uses `parse_file` to parse both target and caller files, extracting their AST root nodes to identify definitions and imports for usage analysis.
+- **codetwine/extractors/dependency_graph.py**: Uses `parse_file` to parse callee and source files, obtaining AST root nodes needed to resolve dependency relationships and import statements between project files.
 
-The dependency direction is unidirectional: `ts_parser.py` depends on `codetwine/config/settings.py` for language configuration, while the listed files depend on `ts_parser.py` for file parsing and cache management functionality. There is no reverse dependency from `ts_parser.py` back to any of its dependents.
+**Direction of dependency**: Unidirectional — `ts_parser.py` depends on `codetwine/config/settings.py` for language configuration, while multiple other modules (`file_analyzer.py`, `import_to_path.py`, `pipeline.py`, `usage_analysis.py`, `dependency_graph.py`) depend on `ts_parser.py` for file parsing and cache management. There is no reverse dependency from `settings.py` back to `ts_parser.py`.
 
 # Data Flow
 
-**Input**
-- `file_path: str` — absolute path to a source file, supplied by callers (`file_analyzer.py`, `import_to_path.py`, `usage_analysis.py`, `dependency_graph.py`).
+## Input
+- **Source**: `file_path` (absolute path string) passed by callers (`file_analyzer.py`, `import_to_path.py`, `usage_analysis.py`, `dependency_graph.py`).
+- **Format**: plain string representing a filesystem path to a source code file.
 
-**Processing Flow**
+## Transformation Flow
 
 ```
 file_path
    │
-   ▼
-[cache lookup] ── hit ──► return cached (Node, bytes)
-   │ miss
-   ▼
-extract extension ──► lookup Language in TREE_SITTER_LANGUAGES (_language_map)
+   ├─► [Cache Lookup] parse_cache.get(file_path)
+   │        │
+   │        ├─ hit  ──► return cached (root_node, content)
+   │        │
+   │        └─ miss ──► continue below
    │
-   ▼
-instantiate tree_sitter.Parser(language)
+   ├─► [Extension Extraction] os.path.splitext(file_path) → ext
    │
-   ▼
-read file as raw bytes (binary mode)
+   ├─► [Language Resolution] _language_map[ext] (TREE_SITTER_LANGUAGES lookup)
+   │        └─► instantiate tree_sitter.Parser(language)
    │
-   ▼
-parser.parse(content) ──► tree_sitter Tree
+   ├─► [File Read] open(file_path, "rb") → raw bytes content
    │
-   ▼
-extract tree.root_node ──► build result tuple (root_node, content)
+   ├─► [Parse] parser.parse(content) → tree
+   │        └─► extract tree.root_node
    │
-   ▼
-store result in parse_cache[file_path]
+   ├─► [Result Assembly] result = (root_node, content)
    │
-   ▼
-return result
+   └─► [Cache Store] parse_cache[file_path] = result
+            │
+            └─► return result
 ```
 
-- The extension string (e.g. `"py"`, `"ts"`) is used purely as a key to select the correct tree-sitter `Language` from `_language_map`.
-- Raw file bytes are fed directly into tree-sitter's parser without any pre-transformation; tree-sitter internally converts them into an AST (`Node` tree).
-- No transformation is applied to the parsed node itself — the file’s byte content and its AST root are simply paired and cached as-is.
+Core transformation: `file_path (str)` → `ext (str)` → `Language object` → `Parser instance` → `raw bytes` → `AST (root_node)` → `(root_node, content) tuple`.
 
-**Output**
-- Return value: `tuple[Node, bytes]`
-  - `Node`: root of the tree-sitter AST for the file, used by callers to run queries/extract definitions or imports.
-  - `bytes`: raw file content, used by callers (e.g. `file_analyzer.py`) to decode into text and slice source lines by byte/row ranges.
-- Destination: returned directly to caller functions; also persisted in the module-level `parse_cache`.
+## Output
+- **Format**: `tuple[Node, bytes]` — `(root_node, content)`
+  - `root_node`: tree-sitter `Node`, the AST root, used by dependents for definition/import extraction (`extract_definitions`, `extract_imports`, etc.).
+  - `content`: raw file bytes, later decoded to text lines by callers (e.g., `content.decode("utf-8").splitlines()`).
+- **Destination**: returned directly to calling functions across the codebase; not persisted to disk.
 
-**Main Data Structures**
+## Key Data Structures
 
-| Structure | Type | Key | Value | Purpose |
-|---|---|---|---|---|
-| `_language_map` | `dict[str, Language]` | file extension (no dot) | tree-sitter `Language` object | Resolves correct grammar/parser per file type |
-| `parse_cache` | `dict[str, tuple[Node, bytes]]` | absolute file path | `(root_node, content)` | Avoids re-parsing the same file across multiple callers/pipeline stages; cleared explicitly at pipeline end (`parse_cache.clear()`) |
+| Structure | Type | Fields / Structure | Purpose |
+|---|---|---|---|
+| `_language_map` | `dict[str, Language]` (alias of `TREE_SITTER_LANGUAGES`) | key: file extension (str), value: tree-sitter `Language` object | Resolves which grammar/language to use for parsing based on file extension |
+| `parse_cache` | `dict[str, tuple[Node, bytes]]` | key: `file_path` (str), value: `(root_node, content)` | Module-level memoization to avoid re-parsing the same file across multiple calls/modules; cleared externally via `parse_cache.clear()` (in `pipeline.py`) to free memory after analysis completes |
+| return value `result` | `tuple[Node, bytes]` | `(root_node, content)` | Standard unit of parsed output consumed by all downstream extractors |
 
 # Error Handling
 
 ## Overall Strategy
 
-This module follows a **fail-fast** approach with no explicit exception handling. It performs no validation, try/except blocks, or defensive checks of its own, relying entirely on Python's built-in exceptions and the behavior of underlying dependencies (`os.path`, `Parser`, file I/O, and `TREE_SITTER_LANGUAGES`) to surface errors. Any failure condition propagates directly to the caller as an unhandled exception.
+`ts_parser.py` follows a **fail-fast, no-defensive-handling** policy. It performs no explicit try/except blocks and does not validate inputs before use. All error conditions—unsupported file extensions, unreadable files, or missing parser configuration—are allowed to propagate as native Python exceptions raised by underlying operations (dictionary lookups, file I/O, tree-sitter parsing). This delegates responsibility for error handling to callers (e.g., `pipeline.py`, `file_analyzer.py`, `import_to_path.py`, extractors), keeping the module itself minimal and predictable.
 
-## Error Patterns and Handling Policy
+## Main Error Patterns
 
 | Error Type | Handling | Impact |
 |---|---|---|
-| Unsupported file extension (extension not present in `TREE_SITTER_LANGUAGES`) | No handling; dictionary lookup (`_language_map[ext]`) raises `KeyError` naturally | Propagates to caller; `parse_file` call fails entirely for that file |
-| Non-existent or unreadable file path | No handling; `open(file_path, "rb")` raises `FileNotFoundError`/`OSError` naturally | Propagates to caller; no partial or cached result is stored |
-| Malformed/unparseable source content | No handling; tree-sitter's `Parser.parse` is relied upon to always return a tree (even if partially error-recovered), so no exception is expected here | If tree-sitter returns an error-recovered tree, it is silently cached and returned as-is without validation |
-| Cache key collisions or stale cache entries | No handling; `file_path` is used verbatim as the cache key with no normalization | Callers must supply consistent absolute paths; inconsistent path forms bypass the cache without warning |
+| Unsupported/unknown file extension (not present in `TREE_SITTER_LANGUAGES`) | No existence check; direct dictionary access via `_language_map[ext]` | Raises a `KeyError`, propagated to the caller; no fallback parser or default language is used |
+| File not found or unreadable (`open(file_path, "rb")`) | No pre-check of file existence/permissions | Raises `FileNotFoundError`/`OSError`, propagated uncaught |
+| Malformed/invalid source content passed to tree-sitter | No validation of content before parsing | tree-sitter's `parser.parse` is generally tolerant and produces a best-effort AST (possibly with error nodes) rather than raising; no additional handling is applied on top of this |
+| Repeated parse requests for the same file | Cache lookup (`parse_cache`) short-circuits re-parsing | Avoids redundant I/O/parsing; if a prior call failed before caching, no stale/error result is stored since caching happens only after successful completion of read+parse |
 
 ## Design Considerations
 
-- The module intentionally keeps parsing logic minimal and delegates all error responsibility to the caller and to the underlying `tree_sitter` library and OS-level file operations.
-- The module-level `parse_cache` only stores successful parse results; since exceptions are raised before the cache is populated, failed parses are never cached, so a subsequent call with the same path will retry from scratch.
-- No logging or error wrapping is performed within this file, meaning error diagnostics rely entirely on Python's default traceback and the semantics of the raised exception types (`KeyError`, `FileNotFoundError`, `OSError`, etc.).
+- The absence of explicit error handling is a deliberate simplicity choice: this module acts as a thin, cacheable wrapper around tree-sitter parsing, and pushes decisions about how to react to missing languages or unreadable files to higher-level orchestration code.
+- Because `parse_cache` is a module-level dict, only successful `(root_node, content)` results are stored; a call that raises an exception (e.g., `KeyError` or `OSError`) does not populate the cache, so subsequent calls for the same `file_path` will retry the full read-and-parse path rather than returning a cached error.
+- Cache invalidation/clearing is handled externally (e.g., `pipeline.py` calls `parse_cache.clear()`), meaning this file has no internal mechanism to expire or bound the cache; long-running processes rely on callers to manage memory via this exposed hook.
 
 # Summary
 
-`ts_parser.py` centralizes tree-sitter parsing: `parse_file(file_path)` reads a file as bytes, selects a `Language` by extension via `TREE_SITTER_LANGUAGES`, parses it, and returns `(root_node, content)`. Results are memoized in the module-level dict `parse_cache` (keyed by exact file_path) to avoid redundant I/O/parsing across consumers (definition extraction, import resolution, usage/dependency analysis); `pipeline.py` calls `parse_cache.clear()` post-analysis. No error handling—unsupported extensions, missing files, or unsynchronized concurrent access raise natural exceptions (`KeyError`, `FileNotFoundError`).
+`ts_parser.py` centralizes tree-sitter AST parsing for CodeTwine. Its core interface, `parse_file(file_path)`, reads a file as bytes, selects a tree-sitter `Language` via extension lookup in `TREE_SITTER_LANGUAGES`, parses it, and returns `(root_node, content)`. Results are memoized in module-level `parse_cache` (dict keyed by file_path), shared across consumers (`file_analyzer.py`, `import_to_path.py`, `usage_analysis.py`, `dependency_graph.py`) to avoid redundant I/O/parsing. No error handling—unsupported extensions or unreadable files raise natively. `pipeline.py` clears the cache post-analysis.

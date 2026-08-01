@@ -2,7 +2,7 @@ import os
 import logging
 from tree_sitter import Language
 from codetwine.parsers.ts_parser import parse_file
-from codetwine.extractors.definitions import extract_definitions
+from codetwine.extractors.definitions import DefinitionInfo, extract_definitions
 from codetwine.config.settings import (
     DEFINITION_DICTS,
     IMPORT_RESOLVE_CONFIG,
@@ -424,9 +424,35 @@ def _register_definitions_from_file(
 
     # Parse the file, extract definitions, and register each definition name in symbol_to_file_map
     root_node = parse_file(abs_path)[0]
-    for defn in extract_definitions(root_node, definition_dict):
+    definition_list = extract_definitions(root_node, definition_dict)
+    for defn in _select_top_level_definitions(definition_list):
         if defn.name:
             _put_symbol(symbol_to_file_map, defn.name, file_rel)
+
+
+def _select_top_level_definitions(
+    definition_list: list[DefinitionInfo],
+) -> list[DefinitionInfo]:
+    """Keep only definitions that are not nested inside another definition.
+
+    Class members (methods, constructors, fields) are not importable on their own,
+    so registering them would map a member name to the file of an unrelated class.
+
+    Args:
+        definition_list: Definitions of a single file, sorted by start_line.
+
+    Returns:
+        The outermost definitions, sorted by start_line.
+    """
+    selected: list[DefinitionInfo] = []
+    covered_end = 0
+    for definition in definition_list:
+        # Skip definitions that start within an already-selected outer range
+        if definition.start_line <= covered_end:
+            continue
+        selected.append(definition)
+        covered_end = definition.end_line
+    return selected
 
 
 def _register_definitions_from_package(

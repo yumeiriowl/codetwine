@@ -48,7 +48,7 @@
       ],
       "name": "parse_file",
       "file": "codetwine/codetwine/import_to_path_py/import_to_path.py",
-      "usage_context": "        return\n\n    # Parse the file, extract definitions, and register each definition name in symbol_to_file_map\n    root_node = parse_file(abs_path)[0]\n    for defn in extract_definitions(root_node, definition_dict):\n        if defn.name:\n            _put_symbol(symbol_to_file_map, defn.name, file_rel)"
+      "usage_context": "        return\n\n    # Parse the file, extract definitions, and register each definition name in symbol_to_file_map\n    root_node = parse_file(abs_path)[0]\n    definition_list = extract_definitions(root_node, definition_dict)\n    for defn in _select_top_level_definitions(definition_list):\n        if defn.name:"
     },
     {
       "lines": [

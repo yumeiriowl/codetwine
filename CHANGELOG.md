@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- `doc_template.json`: heading format instruction for the `definitions` section (`` ## `<name>` ``)
+
+### Fixed
+- `extract_definitions()`: extract methods, constructors and fields declared inside a class, struct, interface, enum or object
+- `extract_definitions()`: extract Kotlin `val` / `var` / `const val`
+- Updated sample output
+
 ## 0.3.0 - 2026-07-25
 
 ### Added

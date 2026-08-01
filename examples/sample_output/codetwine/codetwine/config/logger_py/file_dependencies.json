@@ -37,6 +37,13 @@
       "context": "class _SkipBlankFormatter(logging.Formatter):\n    \"\"\"Formatter that skips log messages consisting only of blank lines or whitespace.\"\"\"\n\n    def format(self, record: logging.LogRecord) -> str:\n        \"\"\"Format a log record, returning an empty string to skip blank-line messages.\n\n        Args:\n            record: The log record to format.\n\n        Returns:\n            str: The formatted log string, or an empty string for blank-line messages.\n        \"\"\"\n        # Suppress output to the log file when the message is whitespace-only\n        if record.getMessage().strip() in (\"\", \"\\n\"):\n            return \"\"\n        return super().format(record)"
     },
     {
+      "name": "format",
+      "type": "function_definition",
+      "start_line": 23,
+      "end_line": 35,
+      "context": "    def format(self, record: logging.LogRecord) -> str:\n        \"\"\"Format a log record, returning an empty string to skip blank-line messages.\n\n        Args:\n            record: The log record to format.\n\n        Returns:\n            str: The formatted log string, or an empty string for blank-line messages.\n        \"\"\"\n        # Suppress output to the log file when the message is whitespace-only\n        if record.getMessage().strip() in (\"\", \"\\n\"):\n            return \"\"\n        return super().format(record)"
+    },
+    {
       "name": "setup_logging",
       "type": "function_definition",
       "start_line": 38,

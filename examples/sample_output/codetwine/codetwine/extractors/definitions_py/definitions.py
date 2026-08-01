@@ -47,8 +47,18 @@ def extract_definitions(
     definition_list: list[DefinitionInfo] = []
 
     # AST node types for which child node traversal continues even after being recorded as a definition.
-    # e.g. namespace_definition contains class and function definitions inside.
-    _CONTAINER_DEFINITION_TYPES = {"namespace_definition"}
+    # e.g. namespace_definition contains class and function definitions inside,
+    # and class bodies contain methods, constructors and fields.
+    _CONTAINER_DEFINITION_TYPES = {
+        "namespace_definition",   # C++
+        "class_definition",       # Python
+        "class_declaration",      # Java / Kotlin / JS / TS
+        "class_specifier",        # C++
+        "struct_specifier",       # C / C++
+        "interface_declaration",  # Java / TS
+        "enum_declaration",       # Java / TS
+        "object_declaration",     # Kotlin
+    }
 
     # BFS traversal of the AST using a deque
     node_queue = deque([root_node])
@@ -182,7 +192,8 @@ def _extract_name(node: Node, name_type: str) -> str | None:
         name_type: The value specified in definition_dict of settings.py.
                    Standard pattern: "identifier", "type_identifier", etc.
                    Special pattern: "__assignment__", "__variable_declarator__",
-                                    "__function_declarator__", "__init_declarator__"
+                                    "__function_declarator__", "__init_declarator__",
+                                    "__declarator_name__", "__kotlin_property__"
 
     Returns:
         The definition name string, or None if extraction fails.
@@ -193,7 +204,8 @@ def _extract_name(node: Node, name_type: str) -> str | None:
     if name_type == "__assignment__":
         return _extract_assignment_name(node)
 
-    # JS/TS: lexical_declaration / variable_declaration > variable_declarator > identifier
+    # JS/TS/Java: lexical_declaration / variable_declaration / field_declaration
+    #             > variable_declarator > identifier
     if name_type == "__variable_declarator__":
         return _extract_variable_declarator_name(node)
 
@@ -204,6 +216,14 @@ def _extract_name(node: Node, name_type: str) -> str | None:
     # C/C++: function_definition > function_declarator > identifier
     if name_type == "__function_declarator__":
         return _extract_function_declarator_name(node)
+
+    # C/C++: function_declarator > identifier (free function) / field_identifier (class member)
+    if name_type == "__declarator_name__":
+        return _extract_declarator_name(node)
+
+    # Kotlin: property_declaration > variable_declaration > identifier
+    if name_type == "__kotlin_property__":
+        return _extract_kotlin_property_name(node)
 
     # Standard pattern: search direct children for one matching name_type
     for child in node.children:
@@ -245,7 +265,7 @@ def _extract_assignment_name(node: Node) -> str | None:
 
 
 def _extract_variable_declarator_name(node: Node) -> str | None:
-    """Extract the variable name from a JS/TS variable declaration.
+    """Extract the variable name from a JS/TS variable declaration or a Java field declaration.
 
     Target AST structure:
         lexical_declaration              <- this node is passed as the argument
@@ -256,10 +276,12 @@ def _extract_variable_declarator_name(node: Node) -> str | None:
                +-- =
                +-- (value)
 
-    The same structure applies to variable_declaration (var declarations).
+    The same structure applies to variable_declaration (var declarations) and to
+    Java field_declaration (modifiers + type + declarator: variable_declarator).
+    When several variables are declared at once (e.g. int a, b;), the first name is returned.
 
     Args:
-        node: A lexical_declaration or variable_declaration node.
+        node: A lexical_declaration, variable_declaration or field_declaration node.
 
     Returns:
         The variable name string, or None if extraction fails.
@@ -292,6 +314,9 @@ def _extract_function_declarator_name(node: Node) -> str | None:
     becomes a qualified_identifier (e.g. "Shape::get_name"). In that case,
     the method name is obtained from the last identifier within the qualified_identifier.
 
+    For methods defined inline in a class or struct body, the declarator is a
+    field_identifier instead of an identifier.
+
     Args:
         node: A function_definition node.
 
@@ -306,7 +331,7 @@ def _extract_function_declarator_name(node: Node) -> str | None:
     name_node = func_decl.child_by_field_name("declarator")
     if not name_node:
         return None
-    if name_node.type == "identifier":
+    if name_node.type in ("identifier", "field_identifier"):
         return name_node.text.decode("utf-8")
     # C++ class method implementation: qualified_identifier like Shape::get_name
     if name_node.type == "qualified_identifier":
@@ -315,6 +340,62 @@ def _extract_function_declarator_name(node: Node) -> str | None:
             if qc.type == "identifier":
                 last_id = qc.text.decode("utf-8")
         return last_id
+    return None
+
+
+def _extract_declarator_name(node: Node) -> str | None:
+    """Extract the function name from a C/C++ function_declarator.
+
+    Target AST structure:
+        function_declarator              <- this node is passed as the argument
+          +-- declarator: identifier "freeFunction"        <- free function / constructor
+          |   or field_identifier "m"                      <- method declared in a class body
+          +-- parameters: parameter_list
+
+    A class member declaration (e.g. int m();) names the method with a
+    field_identifier, while a free function prototype and a C++ constructor
+    declaration use an identifier.
+
+    Args:
+        node: A function_declarator node.
+
+    Returns:
+        The function name string, or None if the name node is of another type
+        (e.g. a pointer or an operator declarator).
+    """
+    name_node = node.child_by_field_name("declarator")
+    if name_node and name_node.type in ("identifier", "field_identifier"):
+        return name_node.text.decode("utf-8")
+    return None
+
+
+def _extract_kotlin_property_name(node: Node) -> str | None:
+    """Extract the property name from a Kotlin val / var declaration.
+
+    Target AST structure:
+        property_declaration             <- this node is passed as the argument
+          +-- val / var
+          +-- variable_declaration
+          |    +-- identifier "TOP"      <- extract this
+          |    +-- (: type)
+          +-- =
+          +-- (value)
+
+    The same structure is used for top-level constants and for properties
+    declared in a class body.
+
+    Args:
+        node: A property_declaration node.
+
+    Returns:
+        The property name string, or None if no variable_declaration is found
+        (e.g. a destructuring declaration such as val (a, b) = pair).
+    """
+    for child in node.children:
+        if child.type == "variable_declaration":
+            for name_node in child.children:
+                if name_node.type == "identifier":
+                    return name_node.text.decode("utf-8")
     return None
 
 
