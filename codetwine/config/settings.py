@@ -85,6 +85,21 @@ PARSE_CACHE_MAX_FILES = get_config_value(
     "PARSE_CACHE_MAX_FILES", default=200, var_type=int
 )
 
+# == Output settings ========================================
+# Which form the whole-project analysis result is written in.
+#   json   ... project_knowledge.json only
+#   sqlite ... project_knowledge.sqlite only
+#   both   ... both files
+# The per-file JSON files under the output directory are written in every case.
+KNOWLEDGE_FORMAT = get_config_value(
+    "KNOWLEDGE_FORMAT", default="json", var_type=str
+).strip().lower()
+if KNOWLEDGE_FORMAT not in ("json", "sqlite", "both"):
+    raise ValueError(
+        f"KNOWLEDGE_FORMAT must be one of json / sqlite / both, "
+        f"but got '{KNOWLEDGE_FORMAT}'. Set it in the .env file or your shell."
+    )
+
 # == Analysis settings =============================================
 ENABLE_LLM_DOC = get_config_value("ENABLE_LLM_DOC", default=True, var_type=bool)
 SUMMARY_MAX_CHARS: int = get_config_value("SUMMARY_MAX_CHARS", default=600, var_type=int)

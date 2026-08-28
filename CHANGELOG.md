@@ -3,6 +3,8 @@
 ## Unreleased
 
 ### Added
+- `KNOWLEDGE_FORMAT` setting (`json` / `sqlite` / `both`) selecting the form of the whole-project result
+- `codetwine/knowledge_db.py`: SQLite output (`project_knowledge.sqlite`) built from the per-file JSON files, with a read API (`open_knowledge`, `iter_files`, `get_file`, `callers_of`, `callees_of`, `find_definitions`)
 - `PARSE_CACHE_MAX_FILES` setting capping how many files' parse results are kept in memory
 - `doc_template.json`: heading format instruction for the `definitions` section (`` ## `<name>` ``)
 
