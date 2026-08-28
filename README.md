@@ -1,10 +1,11 @@
 # codetwine
 
-A CLI tool that analyzes source code with tree-sitter, extracts key definitions and dependencies, generates design documents via LLM, and consolidates everything into a single unified JSON.
-The unified JSON can be used as input material for LLM-powered code search and Q&A, such as RLM, GraphRAG, and agent search.
+A CLI tool that analyzes source code with tree-sitter, extracts key definitions and dependencies, generates design documents via LLM, and consolidates everything into a single knowledge file.
+The knowledge file can be used as input material for LLM-powered code search and Q&A, such as RLM, GraphRAG, and agent search.
 
 - Dependencies are extracted at the symbol level (functions, classes)
 - Design documents are generated per file, taking dependencies into account
+- The consolidated result is written as a single JSON, a SQLite database, or both (`KNOWLEDGE_FORMAT`)
 - Outputs dependency graphs in Mermaid format
 
 ## Table of Contents
@@ -272,14 +273,19 @@ conn = knowledge_db.open_knowledge("output/my-project/project_knowledge.sqlite")
 for entry in knowledge_db.iter_files(conn):
     print(entry["file"])
 
+# One entry per file, in the structure of project_knowledge.json's "project_dependencies"
+for dep in knowledge_db.iter_dependencies(conn):
+    print(dep["file"], dep["summary"])
+
 entry = knowledge_db.get_file(conn, "my-project/src/main_py/main.py")
 callees = knowledge_db.callees_of(conn, entry["file"])
 callers = knowledge_db.callers_of(conn, entry["file"])
 hits = knowledge_db.find_definitions(conn, "parse_file")
+partial_hits = knowledge_db.find_definitions(conn, "parse", partial=True)
 ```
 
-`callers` and `callees` come from two separate analyses, so they are stored in both
-directions rather than one being derived from the other.
+`file_edges` holds both directions as they were analyzed. `callers` and `callees` come
+from two separate analyses and do not always mirror each other.
 
 ## 📋 Output JSON Schema
 

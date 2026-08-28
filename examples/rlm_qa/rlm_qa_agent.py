@@ -155,7 +155,7 @@ for section in detail["doc"]["sections"]:
 """
 
 
-def build_doc_schema(store) -> str:
+def build_doc_schema(store: knowledge_store.Store) -> str:
     """
     Extract the doc section list from the first file that has one
     and dynamically generate text to embed in instructions.
@@ -318,7 +318,7 @@ def ask(rlm: dspy.RLM, question: str) -> str:
     return result.answer
 
 
-def main():
+def main() -> None:
     """Interactive mode - enter questions to get answers"""
     knowledge_path = TARGET_KNOWLEDGE_PATH
 

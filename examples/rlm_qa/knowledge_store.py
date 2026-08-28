@@ -1,8 +1,8 @@
 """Read access to a codetwine knowledge file, from either output form.
 
-The agent tools go through a store instead of holding the whole analysis, so a
-project_knowledge.sqlite is read one file at a time. A project_knowledge.json has to be
-parsed as a whole, so JsonStore keeps it in memory; the two answer the same questions.
+The agent tools ask a store for one file at a time. SqliteStore queries the database per
+file; JsonStore has to parse the whole file first and keeps it in memory. The two answer
+the same questions.
 
     store = open_store("output/my-project/project_knowledge.sqlite")
     store.dependencies()        # the file graph and the summaries (small)
@@ -19,7 +19,7 @@ from codetwine import knowledge_db
 class JsonStore:
     """A store backed by a project_knowledge.json held in memory."""
 
-    def __init__(self, path: str):
+    def __init__(self, path: str) -> None:
         """Read the whole knowledge file.
 
         Args:
@@ -65,7 +65,7 @@ class JsonStore:
 class SqliteStore:
     """A store backed by a project_knowledge.sqlite, queried per file."""
 
-    def __init__(self, path: str):
+    def __init__(self, path: str) -> None:
         """Open the database. Nothing but the connection is held.
 
         Args:
@@ -96,7 +96,12 @@ class SqliteStore:
         self._conn.close()
 
 
-def open_store(knowledge_path: str) -> JsonStore | SqliteStore:
+# Either store. The two carry the same methods, so a caller takes one without caring
+# which form the knowledge file is in
+Store = JsonStore | SqliteStore
+
+
+def open_store(knowledge_path: str) -> Store:
     """Open a knowledge file, choosing the store from the path's extension.
 
     Args:
