@@ -4,39 +4,48 @@
     {
       "name": "_language_map",
       "type": "expression_statement",
-      "start_line": 6,
-      "end_line": 6,
+      "start_line": 7,
+      "end_line": 7,
       "context": "_language_map = TREE_SITTER_LANGUAGES"
     },
     {
       "name": "parse_cache",
       "type": "expression_statement",
-      "start_line": 10,
-      "end_line": 10,
-      "context": "parse_cache: dict[str, tuple[Node, bytes]] = {}"
+      "start_line": 13,
+      "end_line": 13,
+      "context": "parse_cache: OrderedDict[str, tuple[Node, bytes]] = OrderedDict()"
     },
     {
       "name": "parse_file",
       "type": "function_definition",
-      "start_line": 13,
-      "end_line": 44,
-      "context": "def parse_file(file_path: str) -> tuple[Node, bytes]:\n    \"\"\"Read a file, parse it with tree-sitter, and return (AST root node, byte content).\n\n    Parse results are cached at module level to avoid re-parsing the same file.\n\n    Args:\n        file_path: Absolute path of the file to parse.\n\n    Returns:\n        A (root_node, content) tuple.\n    \"\"\"\n    # Return from cache if available\n    if file_path in parse_cache:\n        return parse_cache[file_path]\n\n    # Get the corresponding language from the file extension\n    ext = os.path.splitext(file_path)[1].lstrip(\".\")\n\n    # Initialize the Parser with the Language object for this extension\n    parser = Parser(_language_map[ext])\n\n    # Read the file content in binary mode\n    with open(file_path, \"rb\") as f:\n        content = f.read()\n\n    # Parse with tree-sitter to generate the AST\n    tree = parser.parse(content)\n    result = (tree.root_node, content)\n\n    # Store in cache\n    parse_cache[file_path] = result\n    return result"
+      "start_line": 16,
+      "end_line": 55,
+      "context": "def parse_file(file_path: str) -> tuple[Node, bytes]:\n    \"\"\"Read a file, parse it with tree-sitter, and return (AST root node, byte content).\n\n    Parse results are cached at module level to avoid re-parsing the same file.\n    The cache holds at most PARSE_CACHE_MAX_FILES entries; when it is full, the least\n    recently used entry is discarded and that file is parsed again the next time it is\n    requested. PARSE_CACHE_MAX_FILES = 0 disables the limit.\n\n    Args:\n        file_path: Absolute path of the file to parse.\n\n    Returns:\n        A (root_node, content) tuple.\n    \"\"\"\n    # Return from cache if available, marking the entry as most recently used\n    cached = parse_cache.get(file_path)\n    if cached is not None:\n        parse_cache.move_to_end(file_path)\n        return cached\n\n    # Get the corresponding language from the file extension\n    ext = os.path.splitext(file_path)[1].lstrip(\".\")\n\n    # Initialize the Parser with the Language object for this extension\n    parser = Parser(_language_map[ext])\n\n    # Read the file content in binary mode\n    with open(file_path, \"rb\") as f:\n        content = f.read()\n\n    # Parse with tree-sitter to generate the AST\n    tree = parser.parse(content)\n    result = (tree.root_node, content)\n\n    # Store in cache and drop the oldest entries once the limit is exceeded\n    parse_cache[file_path] = result\n    if PARSE_CACHE_MAX_FILES > 0:\n        while len(parse_cache) > PARSE_CACHE_MAX_FILES:\n            parse_cache.popitem(last=False)\n    return result"
     }
   ],
   "callee_usages": [
     {
       "lines": [
-        6
+        7
       ],
       "name": "TREE_SITTER_LANGUAGES",
       "from": "codetwine/codetwine/config/settings_py/settings.py",
       "target_context": "TREE_SITTER_LANGUAGES: dict[str, Language] = _expand_ext_aliases(\n    {ext: cfg.language for ext, cfg in _LANG_REGISTRY.items()}\n)"
+    },
+    {
+      "lines": [
+        52,
+        53
+      ],
+      "name": "PARSE_CACHE_MAX_FILES",
+      "from": "codetwine/codetwine/config/settings_py/settings.py",
+      "target_context": "PARSE_CACHE_MAX_FILES = get_config_value(\n    \"PARSE_CACHE_MAX_FILES\", default=200, var_type=int\n)"
     }
   ],
   "caller_usages": [
     {
       "lines": [
-        41
+        47
       ],
       "name": "parse_file",
       "file": "codetwine/codetwine/file_analyzer_py/file_analyzer.py",
@@ -44,7 +53,7 @@
     },
     {
       "lines": [
-        426
+        429
       ],
       "name": "parse_file",
       "file": "codetwine/codetwine/import_to_path_py/import_to_path.py",
@@ -52,16 +61,16 @@
     },
     {
       "lines": [
-        246
+        266
       ],
       "name": "parse_cache.clear",
       "file": "codetwine/codetwine/pipeline_py/pipeline.py",
-      "usage_context": "    save_consolidated_json(base_output_dir, all_file_list, knowledge_path, symbol_deps, summary_map)\n\n    # Clear parse result cache to free memory\n    parse_cache.clear()\n\n    print(\"Analysis complete.\")\n    logger.info(\"Analysis complete.\")"
+      "usage_context": "        )\n\n    # Clear parse result cache to free memory\n    parse_cache.clear()\n\n    print(\"Analysis complete.\")\n    logger.info(\"Analysis complete.\")"
     },
     {
       "lines": [
         220,
-        261
+        254
       ],
       "name": "parse_file",
       "file": "codetwine/codetwine/extractors/usage_analysis_py/usage_analysis.py",

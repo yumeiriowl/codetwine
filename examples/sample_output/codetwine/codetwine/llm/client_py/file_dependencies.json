@@ -100,13 +100,13 @@
     },
     {
       "lines": [
-        377,
-        446,
-        522,
-        612,
-        695,
-        781,
-        981
+        373,
+        442,
+        518,
+        608,
+        691,
+        778,
+        978
       ],
       "name": "LLMClient",
       "file": "codetwine/codetwine/doc_creator_py/doc_creator.py",
@@ -114,7 +114,7 @@
     },
     {
       "lines": [
-        148
+        157
       ],
       "name": "LLMClient",
       "file": "codetwine/codetwine/pipeline_py/pipeline.py",

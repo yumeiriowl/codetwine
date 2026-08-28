@@ -1,0 +1,136 @@
+{
+  "file": "codetwine/examples/rlm_qa/knowledge_store_py/knowledge_store.py",
+  "definitions": [
+    {
+      "name": "JsonStore",
+      "type": "class_definition",
+      "start_line": 19,
+      "end_line": 62,
+      "context": "class JsonStore:\n    \"\"\"A store backed by a project_knowledge.json held in memory.\"\"\"\n\n    def __init__(self, path: str) -> None:\n        \"\"\"Read the whole knowledge file.\n\n        Args:\n            path: File path to project_knowledge.json.\n        \"\"\"\n        with open(path, \"r\", encoding=\"utf-8\") as f:\n            self._data = json.load(f)\n        self.project_name = self._data.get(\"project_name\", \"\")\n        self.base_dir = os.path.dirname(path)\n        self._by_file = {e[\"file\"]: e for e in self._data.get(\"files\", [])}\n\n    def dependencies(self) -> list[dict]:\n        \"\"\"Return one {\"file\", \"summary\", \"callers\", \"callees\"} entry per file.\"\"\"\n        return self._data.get(\"project_dependencies\", [])\n\n    def entry(self, file: str) -> dict | None:\n        \"\"\"Return one file's {\"file\", \"file_dependencies\", \"doc\"} entry, or None.\"\"\"\n        return self._by_file.get(file)\n\n    def iter_entries(self) -> Iterator[dict]:\n        \"\"\"Yield every file's entry, one at a time.\"\"\"\n        return iter(self._data.get(\"files\", []))\n\n    def find_definitions(self, name: str, partial: bool = False) -> list[dict]:\n        \"\"\"Return every definition matching a name, as {\"file\", \"name\", \"type\", lines}.\"\"\"\n        found = []\n        for entry in self.iter_entries():\n            for d in entry.get(\"file_dependencies\", {}).get(\"definitions\", []):\n                hit = (name.lower() in d[\"name\"].lower()) if partial else (d[\"name\"] == name)\n                if hit:\n                    found.append({\"file\": entry[\"file\"], \"name\": d[\"name\"],\n                                  \"type\": d.get(\"type\", \"\"),\n                                  \"start_line\": d[\"start_line\"],\n                                  \"end_line\": d[\"end_line\"]})\n        return found\n\n    def close(self) -> None:\n        \"\"\"Release the data. Present so both stores are used the same way.\"\"\"\n        self._data = {}\n        self._by_file = {}"
+    },
+    {
+      "name": "__init__",
+      "type": "function_definition",
+      "start_line": 22,
+      "end_line": 32,
+      "context": "    def __init__(self, path: str) -> None:\n        \"\"\"Read the whole knowledge file.\n\n        Args:\n            path: File path to project_knowledge.json.\n        \"\"\"\n        with open(path, \"r\", encoding=\"utf-8\") as f:\n            self._data = json.load(f)\n        self.project_name = self._data.get(\"project_name\", \"\")\n        self.base_dir = os.path.dirname(path)\n        self._by_file = {e[\"file\"]: e for e in self._data.get(\"files\", [])}"
+    },
+    {
+      "name": "dependencies",
+      "type": "function_definition",
+      "start_line": 34,
+      "end_line": 36,
+      "context": "    def dependencies(self) -> list[dict]:\n        \"\"\"Return one {\"file\", \"summary\", \"callers\", \"callees\"} entry per file.\"\"\"\n        return self._data.get(\"project_dependencies\", [])"
+    },
+    {
+      "name": "entry",
+      "type": "function_definition",
+      "start_line": 38,
+      "end_line": 40,
+      "context": "    def entry(self, file: str) -> dict | None:\n        \"\"\"Return one file's {\"file\", \"file_dependencies\", \"doc\"} entry, or None.\"\"\"\n        return self._by_file.get(file)"
+    },
+    {
+      "name": "iter_entries",
+      "type": "function_definition",
+      "start_line": 42,
+      "end_line": 44,
+      "context": "    def iter_entries(self) -> Iterator[dict]:\n        \"\"\"Yield every file's entry, one at a time.\"\"\"\n        return iter(self._data.get(\"files\", []))"
+    },
+    {
+      "name": "find_definitions",
+      "type": "function_definition",
+      "start_line": 46,
+      "end_line": 57,
+      "context": "    def find_definitions(self, name: str, partial: bool = False) -> list[dict]:\n        \"\"\"Return every definition matching a name, as {\"file\", \"name\", \"type\", lines}.\"\"\"\n        found = []\n        for entry in self.iter_entries():\n            for d in entry.get(\"file_dependencies\", {}).get(\"definitions\", []):\n                hit = (name.lower() in d[\"name\"].lower()) if partial else (d[\"name\"] == name)\n                if hit:\n                    found.append({\"file\": entry[\"file\"], \"name\": d[\"name\"],\n                                  \"type\": d.get(\"type\", \"\"),\n                                  \"start_line\": d[\"start_line\"],\n                                  \"end_line\": d[\"end_line\"]})\n        return found"
+    },
+    {
+      "name": "close",
+      "type": "function_definition",
+      "start_line": 59,
+      "end_line": 62,
+      "context": "    def close(self) -> None:\n        \"\"\"Release the data. Present so both stores are used the same way.\"\"\"\n        self._data = {}\n        self._by_file = {}"
+    },
+    {
+      "name": "SqliteStore",
+      "type": "class_definition",
+      "start_line": 65,
+      "end_line": 96,
+      "context": "class SqliteStore:\n    \"\"\"A store backed by a project_knowledge.sqlite, queried per file.\"\"\"\n\n    def __init__(self, path: str) -> None:\n        \"\"\"Open the database. Nothing but the connection is held.\n\n        Args:\n            path: File path to project_knowledge.sqlite.\n        \"\"\"\n        self._conn = knowledge_db.open_knowledge(path)\n        self.project_name = knowledge_db.get_project_name(self._conn) or \"\"\n        self.base_dir = os.path.dirname(path)\n\n    def dependencies(self) -> list[dict]:\n        \"\"\"Return one {\"file\", \"summary\", \"callers\", \"callees\"} entry per file.\"\"\"\n        return list(knowledge_db.iter_dependencies(self._conn))\n\n    def entry(self, file: str) -> dict | None:\n        \"\"\"Return one file's {\"file\", \"file_dependencies\", \"doc\"} entry, or None.\"\"\"\n        return knowledge_db.get_file(self._conn, file)\n\n    def iter_entries(self) -> Iterator[dict]:\n        \"\"\"Yield every file's entry, one at a time.\"\"\"\n        return knowledge_db.iter_files(self._conn)\n\n    def find_definitions(self, name: str, partial: bool = False) -> list[dict]:\n        \"\"\"Return every definition matching a name, as {\"file\", \"name\", \"type\", lines}.\"\"\"\n        return knowledge_db.find_definitions(self._conn, name, partial=partial)\n\n    def close(self) -> None:\n        \"\"\"Close the database connection.\"\"\"\n        self._conn.close()"
+    },
+    {
+      "name": "__init__",
+      "type": "function_definition",
+      "start_line": 68,
+      "end_line": 76,
+      "context": "    def __init__(self, path: str) -> None:\n        \"\"\"Open the database. Nothing but the connection is held.\n\n        Args:\n            path: File path to project_knowledge.sqlite.\n        \"\"\"\n        self._conn = knowledge_db.open_knowledge(path)\n        self.project_name = knowledge_db.get_project_name(self._conn) or \"\"\n        self.base_dir = os.path.dirname(path)"
+    },
+    {
+      "name": "dependencies",
+      "type": "function_definition",
+      "start_line": 78,
+      "end_line": 80,
+      "context": "    def dependencies(self) -> list[dict]:\n        \"\"\"Return one {\"file\", \"summary\", \"callers\", \"callees\"} entry per file.\"\"\"\n        return list(knowledge_db.iter_dependencies(self._conn))"
+    },
+    {
+      "name": "entry",
+      "type": "function_definition",
+      "start_line": 82,
+      "end_line": 84,
+      "context": "    def entry(self, file: str) -> dict | None:\n        \"\"\"Return one file's {\"file\", \"file_dependencies\", \"doc\"} entry, or None.\"\"\"\n        return knowledge_db.get_file(self._conn, file)"
+    },
+    {
+      "name": "iter_entries",
+      "type": "function_definition",
+      "start_line": 86,
+      "end_line": 88,
+      "context": "    def iter_entries(self) -> Iterator[dict]:\n        \"\"\"Yield every file's entry, one at a time.\"\"\"\n        return knowledge_db.iter_files(self._conn)"
+    },
+    {
+      "name": "find_definitions",
+      "type": "function_definition",
+      "start_line": 90,
+      "end_line": 92,
+      "context": "    def find_definitions(self, name: str, partial: bool = False) -> list[dict]:\n        \"\"\"Return every definition matching a name, as {\"file\", \"name\", \"type\", lines}.\"\"\"\n        return knowledge_db.find_definitions(self._conn, name, partial=partial)"
+    },
+    {
+      "name": "close",
+      "type": "function_definition",
+      "start_line": 94,
+      "end_line": 96,
+      "context": "    def close(self) -> None:\n        \"\"\"Close the database connection.\"\"\"\n        self._conn.close()"
+    },
+    {
+      "name": "Store",
+      "type": "expression_statement",
+      "start_line": 101,
+      "end_line": 101,
+      "context": "Store = JsonStore | SqliteStore"
+    },
+    {
+      "name": "open_store",
+      "type": "function_definition",
+      "start_line": 104,
+      "end_line": 115,
+      "context": "def open_store(knowledge_path: str) -> Store:\n    \"\"\"Open a knowledge file, choosing the store from the path's extension.\n\n    Args:\n        knowledge_path: File path to project_knowledge.json or project_knowledge.sqlite.\n\n    Returns:\n        A SqliteStore for a \".sqlite\" path, a JsonStore otherwise.\n    \"\"\"\n    if knowledge_path.endswith(\".sqlite\"):\n        return SqliteStore(knowledge_path)\n    return JsonStore(knowledge_path)"
+    }
+  ],
+  "callee_usages": [],
+  "caller_usages": [
+    {
+      "lines": [
+        159
+      ],
+      "name": "knowledge_store.Store",
+      "file": "codetwine/examples/rlm_qa/rlm_qa_agent_py/rlm_qa_agent.py",
+      "usage_context": "\"\"\"\n\n\ndef build_doc_schema(store: knowledge_store.Store) -> str:\n    \"\"\"\n    Extract the doc section list from the first file that has one\n    and dynamically generate text to embed in instructions."
+    },
+    {
+      "lines": [
+        199
+      ],
+      "name": "knowledge_store.open_store",
+      "file": "codetwine/examples/rlm_qa/rlm_qa_agent_py/rlm_qa_agent.py",
+      "usage_context": "    Returns:\n        A dict with \"project_name\" / \"project_dependencies\" keys.\n    \"\"\"\n    qa_tools.store = knowledge_store.open_store(knowledge_path)\n\n    project_data = {\n        \"project_name\": qa_tools.store.project_name,"
+    }
+  ]
+}

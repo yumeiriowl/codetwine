@@ -70,7 +70,7 @@
     {
       "lines": [
         52,
-        288
+        281
       ],
       "name": "extract_typed_aliases",
       "file": "codetwine/codetwine/extractors/usage_analysis_py/usage_analysis.py",
@@ -79,7 +79,7 @@
     {
       "lines": [
         60,
-        295
+        288
       ],
       "name": "extract_usages",
       "file": "codetwine/codetwine/extractors/usage_analysis_py/usage_analysis.py",

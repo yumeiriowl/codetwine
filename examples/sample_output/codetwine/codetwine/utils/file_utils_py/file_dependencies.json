@@ -58,8 +58,8 @@
         225,
         250,
         267,
-        360,
-        365
+        359,
+        361
       ],
       "name": "output_path_to_rel",
       "file": "codetwine/codetwine/doc_creator_py/doc_creator.py",
@@ -67,7 +67,7 @@
     },
     {
       "lines": [
-        1084
+        1082
       ],
       "name": "resolve_file_output_dir",
       "file": "codetwine/codetwine/doc_creator_py/doc_creator.py",
@@ -75,7 +75,7 @@
     },
     {
       "lines": [
-        52
+        55
       ],
       "name": "copy_path_to_rel",
       "file": "codetwine/codetwine/pipeline_py/pipeline.py",
@@ -83,8 +83,8 @@
     },
     {
       "lines": [
-        87,
-        117
+        90,
+        125
       ],
       "name": "resolve_file_output_dir",
       "file": "codetwine/codetwine/pipeline_py/pipeline.py",
@@ -92,7 +92,7 @@
     },
     {
       "lines": [
-        91
+        94
       ],
       "name": "is_file_unchanged",
       "file": "codetwine/codetwine/pipeline_py/pipeline.py",
@@ -100,7 +100,7 @@
     },
     {
       "lines": [
-        25
+        31
       ],
       "name": "rel_to_copy_path",
       "file": "codetwine/codetwine/output_py/output.py",
@@ -108,18 +108,18 @@
     },
     {
       "lines": [
-        43,
-        93,
-        160
+        49,
+        108,
+        233
       ],
       "name": "resolve_file_output_dir",
       "file": "codetwine/codetwine/output_py/output.py",
-      "usage_context": "    \"\"\"\n    summary_map: dict[str, str | None] = {}\n    for file_rel in all_file_list:\n        output_file_dir = resolve_file_output_dir(base_output_dir, file_rel)\n        doc_path = os.path.join(output_file_dir, \"doc.json\")\n        summary = None\n        if os.path.exists(doc_path):\n...\n    files_list: list[dict] = []\n\n    for file_rel in all_file_list:\n        output_file_dir = resolve_file_output_dir(base_output_dir, file_rel)\n\n        entry: dict = {\"file\": to_output_path(base_output_dir, file_rel)}\n"
+      "usage_context": "    \"\"\"\n    summary_map: dict[str, str | None] = {}\n    for file_rel in all_file_list:\n        output_file_dir = resolve_file_output_dir(base_output_dir, file_rel)\n        doc_path = os.path.join(output_file_dir, \"doc.json\")\n        summary = None\n        if os.path.exists(doc_path):\n...\n        A dict with a \"file\" key plus \"file_dependencies\" and \"doc\" where those JSON\n        files exist. None when neither exists.\n    \"\"\"\n    output_file_dir = resolve_file_output_dir(base_output_dir, file_rel)\n\n    entry: dict = {\"file\": to_output_path(base_output_dir, file_rel)}\n"
     },
     {
       "lines": [
-        171,
-        177
+        244,
+        250
       ],
       "name": "output_path_to_rel",
       "file": "codetwine/codetwine/output_py/output.py",
@@ -127,7 +127,7 @@
     },
     {
       "lines": [
-        279
+        349
       ],
       "name": "copy_path_to_rel",
       "file": "codetwine/codetwine/output_py/output.py",

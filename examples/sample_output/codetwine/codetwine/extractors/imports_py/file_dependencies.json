@@ -48,15 +48,15 @@
   "caller_usages": [
     {
       "lines": [
-        73
+        71
       ],
       "name": "extract_imports",
       "file": "codetwine/codetwine/file_analyzer_py/file_analyzer.py",
-      "usage_context": "\n        # Parse import statements and create an \"imported name -> dependency file\" dict\n        symbol_to_file_map, alias_to_original = build_symbol_to_file_map(\n            extract_imports(root_node, language, import_query_str),\n            target_file_rel,\n            project_file_set,\n            file_ext,"
+      "usage_context": "    if language and import_query_str:\n        # Parse import statements and create an \"imported name -> dependency file\" dict\n        symbol_to_file_map, alias_to_original = build_symbol_to_file_map(\n            extract_imports(root_node, language, import_query_str),\n            target_file_rel,\n            project_file_set,\n            file_ext,"
     },
     {
       "lines": [
-        268
+        261
       ],
       "name": "extract_imports",
       "file": "codetwine/codetwine/extractors/usage_analysis_py/usage_analysis.py",

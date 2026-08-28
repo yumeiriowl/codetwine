@@ -2,216 +2,286 @@
 
 # Overview & Purpose
 
-`qa_tools.py` provides the tool functions and shared state used by the RLM-based question-answering agent (`rlm_qa_agent.py`) to explore a previously analyzed codebase via its `project_knowledge.json` representation. It exists as a separate module so that these tools can be passed directly as callables into `dspy.RLM(tools=[...])` and so that the loaded project data/base directory can be held as module-level state (`project_data`, `base_dir`) accessible both to the tool functions and to the agent that populates them via `load_project()`-style initialization (seen in `rlm_qa_agent.py`, which sets `qa_tools.project_data` and `qa_tools.base_dir`).
+## 1. Module Summary
+Expose a set of read-only query tools that let an LLM agent inspect a pre-built project knowledge store (source files, definitions, dependencies, and design docs) without ever loading the full analysis into the agent's context.
 
-The module's responsibility is narrowly scoped to read-only inspection of the analyzed project:
-- Reading raw source file contents from disk.
-- Querying which files/usages depend on a given file.
-- Performing graph-based BFS traversal over definitions and their dependency/dependent relationships, as encoded in the project knowledge JSON.
+## 2. When to Use This Module
+- **Reading raw source of a file**: call `read_source_file(path)` when you need the actual text of a source file (e.g., to extract a specific function's code by line range).
+- **Inspecting a single file's structure and docs**: call `get_file_detail(file)` when you have already narrowed down to one file and need its definitions, callee/caller usages, and design document (summary + sections).
+- **Keyword lookup across the whole project**: call `search_text(keyword, limit)` when you don't know which file to look at and want to find where a term appears in summaries, doc sections, definition source, or dependency contexts.
+- **Finding dependents of a file**: call `get_files_using(target_file)` when you need to know which files import/use a given file, based on partial path matching against `callee_usages`.
+- **Exploring dependency relationships around a symbol**: call `graph_search(name, hops, direction)` when you need a bounded-hop dependency graph (callers/callees/both) rooted at a specific definition name, useful for impact analysis or tracing call chains.
+- **Initializing the module before use**: the module-level `store` variable must be set (typically via `qa_tools.store = knowledge_store.open_store(...)` performed by the caller, e.g. `rlm_qa_agent.py`) before any tool function is called; all tools return an error dict/message/list if `store` is `None`.
 
-### Public Interface
+## 3. Public Interface Table
 
-| Name | Arguments | Return | Responsibility |
+| Name | Arguments (type) | Return type | Responsibility |
 |---|---|---|---|
-| `project_data` (module variable) | — | `dict` or `None` | Holds the entire parsed `project_knowledge.json`, set externally before tool use. |
-| `base_dir` (module variable) | — | `str` or `None` | Holds the base directory for resolving source file paths, set externally before tool use. |
-| `read_source_file(path: str)` | `path`: file path as listed in the JSON `file` field | `str` | Reads and returns the content of a source file (stripping the leading project name from the path), or an error message on failure. |
-| `get_files_using(target_file: str)` | `target_file`: file path to search for (partial match) | `list[{"file": str, "usage": dict}]` | Finds files whose `callee_usages` entries reference `target_file`, returning the dependent files and matching usage records. |
-| `graph_search(name: str, hops: int = 1, direction: str = "both")` | `name`: definition name (exact, falling back to partial match); `hops`: BFS depth; `direction`: `"outgoing"`, `"incoming"`, or `"both"` | `dict` with `start`, `hops`, `direction`, `nodes`, `edges` | Performs a BFS over the dependency graph of definitions (using `callee_usages`/`caller_usages` and line ranges) to collect dependency (outgoing) and/or dependent (incoming) definitions up to N hops from the starting definition. |
+| `store` | — (module-level variable, `KnowledgeStore` or `None`) | — | Holds the active knowledge store instance that all tool functions query; must be set via `load_project()` before use. |
+| `SEARCH_HIT_LIMIT` | — (constant, `int`) | — | Default maximum number of hits returned by `search_text`. |
+| `read_source_file` | `path` (str) | `str` | Reads and returns the content of a source file copied into the output directory, stripping the project name prefix; returns an error string on failure. |
+| `get_file_detail` | `file` (str) | `dict` | Retrieves one file's definitions, callee/caller dependency usages, and design document from the store. |
+| `search_text` | `keyword` (str), `limit` (int, default `SEARCH_HIT_LIMIT`) | `list` | Case-insensitively searches doc summaries/sections, definition source, and dependency contexts across the whole project, stopping once the hit limit is reached. |
+| `get_files_using` | `target_file` (str) | `list` | Finds files whose `callee_usages` entries partially match the given target file path, i.e., the file's dependents. |
+| `graph_search` | `name` (str), `hops` (int, default `1`), `direction` (str, default `"both"`) | `dict` | Performs a BFS over definitions and their outgoing/incoming dependency edges starting from a named definition, up to a given number of hops. |
 
-### Design Notes
-
-- **Module-level shared state instead of a class**: `project_data` and `base_dir` are plain module globals rather than encapsulated in an object, allowing the RLM tool functions to be passed as simple, stateless-signature callables (required by the tool interface) while still sharing context set once by the caller (`rlm_qa_agent.py`).
-- **Graceful degradation via string/dict error returns**: rather than raising exceptions, functions like `read_source_file` and `graph_search` return descriptive error strings/dicts (e.g., `"Error reading {path}: {e}"`, `{"error": ...}`), which is suited for consumption by an LLM-driven agent that inspects tool output as text.
-- **Exact-then-partial match fallback**: `graph_search` first attempts an exact name match for the start node and falls back to a case-insensitive substring match, improving usability when exact definition names are unknown.
-- **Graph reconstruction from flat usage records**: dependency/dependent edges are not stored explicitly as a graph but are derived on-the-fly from each file's `callee_usages`/`caller_usages` and definitions' line ranges, using line-range containment checks to attribute a usage to the enclosing definition (or to a synthetic `__module__` node when no enclosing definition is found).
-- **BFS traversal with deduplication**: `graph_search` uses a `deque`-based BFS with `visited` node keys and a `seen_edges` set to avoid duplicate nodes/edges when multiple usages point to the same target.
+## 4. Design Decisions
+- **Module-level singleton store**: rather than passing a store instance to each function, the module relies on a single shared `store` variable set externally by `load_project()`, keeping tool function signatures simple for LLM tool-calling while avoiding holding the entire project analysis in the sandbox/agent context.
+- **Per-file lazy entry caching in `graph_search`**: `deps_of` reads each file's dependency data through the store only once per search via an internal cache (`entry_cache`), avoiding redundant store lookups during BFS traversal.
+- **Early-exit search with limit-checking callback**: `search_text` uses an internal `add()` closure that both records a hit and signals when the limit is reached, allowing the search loop to terminate scanning as soon as enough hits are found rather than scanning the entire project unconditionally.
+- **Exact-then-partial match fallback in `graph_search`**: the start definition is first looked up via exact match (`store.find_definitions(name)`) and only falls back to partial matching if no exact match exists, prioritizing precision over recall for the search entry point.
 
 # Definition Design Specifications
 
-## `project_data`
+## Module variable: `store`
 
-Module-level variable holding the entire parsed `project_knowledge.json` document (a dict with `project_name` and `files` list). It is `None` until `load_project()` (in the caller module) assigns it, and all other functions in this module read from it as their sole data source. Centralizing state as a module-level variable allows the tool functions to be passed directly as callables (e.g., to `dspy.RLM`) without needing to carry an explicit context/session object.
+| Aspect | Description |
+|---|---|
+| Type | `KnowledgeStore` instance or `None` |
+| Responsibility | Holds the single, process-wide handle to the project's knowledge base (backed by `project_knowledge.json` or `project_knowledge.sqlite`), so every tool function can query it without receiving it as a parameter. |
+| When to use | Set once by the caller (`rlm_qa_agent.py`) via `qa_tools.store = knowledge_store.open_store(knowledge_path)` right after project load; all tool functions read it thereafter. |
+| Design decisions | Module-level singleton instead of dependency injection, chosen so that the analysis data is not held inside the LLM sandbox/agent context — only the store handle is shared, keeping large project data out of the reasoning context. |
+| Constraints & edge cases | Every public tool function must guard against `store is None` and return an error dict/list/string; this guard is duplicated in each function rather than centralized. |
 
-## `base_dir`
+## Constant: `SEARCH_HIT_LIMIT`
 
-Module-level variable storing the directory path from which relative source file paths (as recorded in `project_data`) should be resolved. Must be set by the caller (typically to the directory containing the loaded JSON file) before `read_source_file` is used; if left `None`, `read_source_file` reports an initialization error instead of failing with a low-level exception.
+| Aspect | Description |
+|---|---|
+| Type | `int` (value `40`) |
+| Responsibility | Default cap on the number of hits `search_text` returns before it stops scanning further entries. |
+| When to use | Used automatically as the default value of `search_text`'s `limit` parameter; callers can override it per call. |
+| Constraints & edge cases | Purely a default; does not enforce an upper bound if a caller passes a larger `limit`. |
 
-## `read_source_file`
+## Function: `read_source_file(path: str) -> str`
 
-Reads and returns the full text content of a source file referenced by a `file` field in `project_data`.
+| Aspect | Description |
+|---|---|
+| Responsibility | Reads and returns the full text of a source file that was copied into the output directory, resolving it relative to the loaded project's base directory. |
+| When to use | Called after narrowing down to a specific file (e.g., via `get_file_detail`) when the caller needs the actual source text, such as to extract a function body by line range. |
+| Design decisions | Strips a leading `"<project_name>/"` prefix from `path` before joining with `store.base_dir`, because the `file` field in stored data is prefixed with the project name but the on-disk copy is not. |
+| Constraints & edge cases | Requires `store` to be initialized (`load_project()` called first) or returns an error string. Returns a human-readable error string (not an exception) on any `OSError` during read, so callers must check for an `"Error"`-prefixed string. Assumes file is UTF-8 encoded. |
 
-- `path` (str): a file path as it appears in the JSON `file` field, optionally prefixed with the project name (e.g. `"code_anarizer/extract_imports/extract_imports.py"`).
-- Returns (str): the file's full text content, or a human-readable error string if the file cannot be read.
+## Function: `get_file_detail(file: str) -> dict`
 
-This function exists to let downstream consumers (e.g., an LLM-driven agent) fetch actual source code referenced by structural metadata in the project knowledge graph, since the JSON itself does not embed file contents.
+| Aspect | Description |
+|---|---|
+| Responsibility | Returns the detailed record for a single file — its definitions, callee/caller usages, and design document — data that is intentionally excluded from the bulk `project_data` to keep it light. |
+| When to use | Called once a caller has identified a specific file of interest (e.g., from `project_dependencies` or a search result) and needs its structural details. |
+| Return type explanation | Returns a nested `dict` combining three record shapes: `file` (path string), `file_dependencies` (dict of three lists: `definitions`, `callee_usages`, `caller_usages`, each a list of small dicts), and `doc` (dict with `summary` and a list of `sections`). On failure, a single-key `{"error": str}` dict is returned instead. |
+| Design decisions | Delegates matching entirely to `store.entry(file)`; the function itself has no matching logic (exact key expected). |
+| Constraints & edge cases | Requires `store` to be initialized. Returns `{"error": ...}` both when the store is uninitialized and when the file is not found — callers must check for the `"error"` key in either case since the shape differs from the success case. |
 
-Design notes:
-- The function strips the leading `project_name/` segment from the input path before joining it with `base_dir`, since paths in the JSON are project-relative but files were copied into a separate `base_dir` without that prefix.
-- Failures (missing file, encoding issues, permission errors, etc.) are caught and returned as a formatted string rather than raised, so that this function is safe to call directly as an agent tool without crashing the caller on bad input.
-- Requires `base_dir` to have been initialized beforehand; otherwise returns an explicit error message instead of attempting a read.
+## Function: `search_text(keyword: str, limit: int = SEARCH_HIT_LIMIT) -> list`
 
-## `get_files_using`
+| Aspect | Description |
+|---|---|
+| Responsibility | Performs a case-insensitive full-text search across all entries' doc summaries, doc sections, definition source contexts, and both callee/caller usage contexts, to let the caller locate relevant files/definitions by content. |
+| When to use | Called when the caller has a topic/term/name in mind but does not yet know which file(s) are relevant. |
+| Design decisions | Uses a nested `add()` closure that both appends a hit and reports whether the `limit` has been reached, allowing the outer loops to short-circuit (`return hits`) as soon as the cap is hit rather than scanning the whole project — an early-exit strategy across five different match categories in a single pass per entry. |
+| Constraints & edge cases | If `store` is `None`, returns a **list containing one error dict** (`[{"error": ...}]`), which is a different failure shape than `get_file_detail`'s bare dict — callers must handle this inconsistency. Matching is purely substring-based (`in`), not tokenized or fuzzy. Missing/`None` fields (e.g., `doc.get("summary")`) are defensively treated as empty strings before lowering. `limit` caps total hits across all five kinds combined, not per kind. |
 
-Finds all recorded usages across the entire project whose dependency `from` path contains the given `target_file` as a substring, effectively listing dependents of a file.
+## Function: `get_files_using(target_file: str) -> list`
 
-- `target_file` (str): a file path or path fragment to search for; matched via substring containment against each usage's `from` field.
-- Returns (list): a list of `{"file": str, "usage": dict}` entries, where `file` is the path of the file that performs the usage and `usage` is the raw usage record (as found in `callee_usages`) pointing at `target_file`.
+| Aspect | Description |
+|---|---|
+| Responsibility | Finds all recorded usages across the project whose `callee_usages[].from` field partially matches the given file path, i.e., identifies dependents of a target file. |
+| When to use | Called when the caller wants to know which other files/modules depend on a specific file before deciding whether it is safe to describe/change it. |
+| Design decisions | Matching is a plain substring check (`target_file in usage.get("from", "")`), not a path-normalized or exact match, so a short/partial path fragment can over-match multiple files. |
+| Constraints & edge cases | If `store` is `None`, returns `[{"error": ...}]` (list-wrapped error, consistent with `search_text`). No result deduplication — the same file can appear multiple times if it has multiple matching usages. |
 
-This function exists to answer "who depends on this file" queries by scanning `callee_usages` across all files, complementing the per-definition dependency data with a file-level reverse lookup.
+## Function: `graph_search(name: str, hops: int = 1, direction: str = "both") -> dict`
 
-Design notes / constraints:
-- Matching is a simple substring check (`target_file in usage["from"]`), not exact path equality, so partial or ambiguous fragments can produce false positives across similarly named files or directories.
-- Assumes `project_data` has already been loaded; it does not guard against `project_data` being `None` and will raise if called before `load_project()`.
-
-## `graph_search`
-
-Performs a breadth-first search over the project's definitions (functions/classes/etc. across all files) treating definitions as graph nodes and their usage relationships (`callee_usages` / `caller_usages`) as edges, returning the subgraph reachable within a given number of hops from a starting definition.
-
-- `name` (str): the definition name to start from. First looked up via exact match against definition names across all files; if no exact match exists, falls back to a case-insensitive substring match.
-- `hops` (int): maximum BFS depth to traverse (1 = only direct neighbors of the start node).
-- `direction` (str): one of `"outgoing"` (follow what the current definition calls/uses), `"incoming"` (follow what calls/uses the current definition), or `"both"`.
-- Returns (dict): `{"start": "file:name", "hops": int, "direction": str, "nodes": [...], "edges": [...]}` where each node is `{"key", "file", "name", "type", "hop", "via"}` and each edge is `{"source", "target", "hop"}`, using `"file:name"` as the node key format.
-
-This function exists to let an agent explore call/usage relationships transitively (beyond the single-hop views provided by `get_files_using`), reconstructing a local dependency graph around a definition of interest for reasoning about impact or context.
-
-Design notes:
-- Node identity is the composite key `"file:name"` rather than name alone, since the same definition name can exist in multiple files; this avoids collisions when merging nodes from different files during BFS.
-- For outgoing edges, a usage is only considered "inside" a definition if its recorded line numbers fall within that definition's `start_line`/`end_line` range; this is how the code attributes module-level usages (lines not inside any known definition) to a synthetic `"__module__"` node instead of dropping them.
-- For incoming edges, the calling definition is identified by finding which definition in the source file contains the usage's line numbers; if no definition contains it, the caller is likewise attributed to `"__module__"`.
-- Edges and visited nodes are deduplicated using `(source, target, direction)` identity, so the same relationship is not duplicated even if referenced by multiple usage records.
-- If `name` matches no definition at all (neither exact nor partial), an `{"error": ...}` dict is returned instead of an empty graph, distinguishing "not found" from "found but no neighbors."
-- Requires `project_data` to be loaded; returns an explicit error dict (rather than raising) if it is `None`.
+| Aspect | Description |
+|---|---|
+| Responsibility | Performs a breadth-first search over the dependency graph implied by definitions and their callee/caller usages, starting from a named definition, to surface its dependencies and/or dependents up to a hop limit. |
+| When to use | Called when the caller needs to understand the local dependency neighborhood of a specific function/class/definition (e.g., "what does X call, and what calls X") rather than a single file's details. |
+| Design decisions | • Definition lookup first tries an exact match via `store.find_definitions(name)`, falling back to a partial match (`partial=True`) only if the exact search yields nothing — favors precision over recall by default.<br>• Internally caches file entries in `entry_cache` (a local `dict[str, dict \| None]`) keyed by file path so that any file touched during the BFS is read from the store at most once, even if visited via multiple edges.<br>• Nodes and edges are keyed by the composite string `"file:name"` rather than object identity, so definitions with the same name in different files are distinguished, but two different anonymous/module-level regions in the same file are not.<br>• Special-cases the pseudo-definition name `"__module__"` for outgoing traversal: when the current node is not an actual definition (i.e., `current_def` is `None`) but is literally named `"__module__"`, usage lines that fall outside every known definition's line range are attributed to module-level code.<br>• For incoming edges, the calling definition is resolved by scanning the source file's definitions for one whose line range contains the usage's line(s); if none is found, the source is attributed to `"__module__"` with an empty type.<br>• Deduplicates edges via a `seen_edges` set keyed by `(source_key, target_key, direction_label)`, and deduplicates nodes via `visited`, so a BFS revisiting the same edge/node through a different path is not recorded twice. |
+| Constraints & edge cases | Requires `store` to be initialized, else returns `{"error": ...}` (bare dict, differing again from the list-wrapped error shape used elsewhere). Returns `{"error": f"Definition '{name}' not found"}` if neither exact nor partial match succeeds. The `hops` parameter bounds BFS depth via `current_hop >= hops` check before expanding a node — nodes at exactly `hops` distance are recorded, but their own edges are not expanded further. `direction` must be one of `"outgoing"`, `"incoming"`, `"both"`; any other value silently results in neither branch executing (no outgoing/incoming expansion), effectively returning only the start node with no edges. Target/source definition "type" lookups depend on the target/source file's definitions list matching by name only (not by line range), so overloaded/duplicate names in the same file can yield an inexact type. |
 
 # Dependency Description
 
-**Dependencies (what this file uses)**
+## Dependencies (modules this file imports)
 
-This file relies only on standard library modules (`os` and `collections.deque`) for file path handling and BFS queue management; it has no project-internal file dependencies.
+This file has no project-internal module dependencies. Its only imports (`os`, `collections.deque`) are standard library modules and are therefore excluded per the exclusion rule. The `store` module variable referenced throughout the file is not a static import but an external object assigned at runtime by `examples/rlm_qa/rlm_qa_agent.py` (see Dependents below); this file does not itself depend on any other project module to define its own logic.
 
-**Dependents (what uses this file)**
+## Dependents (modules that import this file)
 
-`examples/rlm_qa/rlm_qa_agent.py` depends on this file. It sets `qa_tools.project_data` and `qa_tools.base_dir` after loading the project's JSON knowledge file, initializing the module-level state that the tool functions in this file rely on to operate. It also uses `qa_tools.read_source_file`, `qa_tools.get_files_using`, and `qa_tools.graph_search` as callable tools registered with an RLM instance, enabling the agent to read source file contents, find files that use a given file, and perform dependency graph searches over the project's definitions.
+- `examples/rlm_qa/rlm_qa_agent.py` → `qa_tools.py` : assigns the `store` attribute (`qa_tools.store = knowledge_store.open_store(knowledge_path)`) so that the tool functions in this file have access to a `KnowledgeStore` instance to query.
+- `examples/rlm_qa/rlm_qa_agent.py` → `qa_tools.py` : reads `qa_tools.store.project_name` and `qa_tools.store.dependencies()` to build the `project_data` dictionary passed to the agent.
+- `examples/rlm_qa/rlm_qa_agent.py` → `qa_tools.py` : registers `qa_tools.get_file_detail` as a tool for `dspy.RLM`, allowing the agent to retrieve a file's definitions, dependency usages, and design document.
+- `examples/rlm_qa/rlm_qa_agent.py` → `qa_tools.py` : registers `qa_tools.search_text` as a tool for `dspy.RLM`, allowing the agent to search the project for keyword occurrences.
+- `examples/rlm_qa/rlm_qa_agent.py` → `qa_tools.py` : registers `qa_tools.read_source_file` as a tool for `dspy.RLM`, allowing the agent to read raw source file content.
+- `examples/rlm_qa/rlm_qa_agent.py` → `qa_tools.py` : registers `qa_tools.get_files_using` as a tool for `dspy.RLM`, allowing the agent to find files that depend on a given file.
+- `examples/rlm_qa/rlm_qa_agent.py` → `qa_tools.py` : registers `qa_tools.graph_search` as a tool for `dspy.RLM`, allowing the agent to perform BFS-based dependency graph searches from a definition name.
 
-The dependency between the two files is unidirectional: `rlm_qa_agent.py` depends on `qa_tools.py` for its data state and tool functions, while `qa_tools.py` does not reference or depend on `rlm_qa_agent.py` in any way.
+## Dependency Direction
+
+The relationship between this file and `examples/rlm_qa/rlm_qa_agent.py` is unidirectional: `rlm_qa_agent.py` depends on and drives `qa_tools.py`, both by initializing its `store` state and by consuming its exposed tool functions. `qa_tools.py` itself does not import or reference `rlm_qa_agent.py` or any other project-internal module.
 
 # Data Flow
 
-## Input
+## 1. Inputs
 
-| Source | Format | Set by |
+- **`store` (module-level global)**: A `KnowledgeStore` instance assigned externally by the caller (`rlm_qa_agent.py` via `load_project()`), exposing `project_name`, `base_dir`, `entry(file)`, `iter_entries()`, `dependencies()`, and `find_definitions(name, partial=False)`. All tool functions read from this object rather than holding their own copy of the analysis data.
+- **Function arguments** (supplied by the calling agent/LLM tool invocation):
+  - `read_source_file(path: str)` — a file path string as it appears in the project's JSON/knowledge data (possibly prefixed with the project name).
+  - `get_file_detail(file: str)` — a file path string matching a key in the store's entries.
+  - `search_text(keyword: str, limit: int = SEARCH_HIT_LIMIT)` — a search keyword and an optional result cap.
+  - `get_files_using(target_file: str)` — a (partial) file path string.
+  - `graph_search(name: str, hops: int = 1, direction: str = "both")` — a definition name, hop count, and traversal direction.
+- **Indirect file reads**: `read_source_file` performs an OS-level file read (`open(...)`) under `store.base_dir` joined with the (possibly stripped) path.
+- **Store-backed data reads**: `get_file_detail`, `search_text`, `get_files_using`, and `graph_search` pull per-file entries (`file_dependencies`, `doc`) through `store.entry(...)` / `store.iter_entries()`, without loading the whole analysis into memory at once.
+
+## 2. Transformation Overview
+
+**`read_source_file`**
+1. Validate `store` is initialized.
+2. Normalize `path` by stripping a leading `"{project_name}/"` prefix if present.
+3. Join with `store.base_dir` to build a full filesystem path.
+4. Open and read the file as UTF-8 text.
+5. Return raw string content, or an error string on `OSError`.
+
+**`get_file_detail`**
+1. Validate `store`.
+2. Fetch entry via `store.entry(file)`.
+3. Return the entry dict as-is (containing `file`, `file_dependencies`, `doc`), or an error dict if not found.
+
+**`search_text`**
+1. Validate `store`; lower-case the keyword.
+2. Iterate every entry from `store.iter_entries()` (streamed, one file at a time).
+3. For each entry, sequentially scan: doc summary → doc sections → definitions' `context` → callee_usages' `target_context` → caller_usages' `usage_context`, each case-insensitively checked against the keyword.
+4. Each match is appended as a `{"kind", "file", "name"}` hit via the local `add()` helper, which also checks the `limit`.
+5. Early-exit (return) as soon as `limit` hits are collected; otherwise continue to the next entry.
+6. Return the accumulated hits list (fan-in of scattered matches into one flat list).
+
+**`get_files_using`**
+1. Validate `store`.
+2. Iterate every entry's `callee_usages`.
+3. Filter usages whose `from` field contains `target_file` as a substring.
+4. Collect matches into `{"file", "usage"}` dicts.
+5. Return the list.
+
+**`graph_search`**
+1. Validate `store`; set up an `entry_cache` dict to memoize `store.entry(file_path)` lookups (avoids re-reading the same file entry multiple times during traversal).
+2. Resolve the start node: `store.find_definitions(name)` (exact), falling back to `partial=True` if no exact match; error out if nothing is found. Build `start_key = "file:name"`.
+3. Run BFS using a `deque` queue seeded with `(start_key, start_file, start_name, hop=0)` and a `visited` set to prevent revisits.
+4. At each dequeued node (stopping once `current_hop >= hops`):
+   - Look up the current definition's line range (`current_def`) within its file's `definitions`.
+   - **Outgoing branch** (if `direction` is `"outgoing"` or `"both"`): scan `callee_usages`, keep only usages whose line numbers fall inside the current definition's range (or, for `"__module__"`, lines outside all definitions), resolve target file/name/type, add new `edges` and `nodes` (deduplicated via `seen_edges`/`visited`), and enqueue unvisited targets at `next_hop`.
+   - **Incoming branch** (if `direction` is `"incoming"` or `"both"`): scan `caller_usages` matching the current definition's name, resolve the calling definition (or `"__module__"` if none matches) in the source file via its own definitions' line ranges, add edges/nodes, and enqueue unvisited sources at `next_hop`.
+5. This fans out one node into potentially many edges/nodes per hop, and merges back into a single shared `nodes`/`edges`/`visited` collection (BFS frontier expansion, not real concurrency — purely sequential).
+6. Terminate when the queue is exhausted or hop depth exceeded; assemble the final result dict.
+
+## 3. Outputs
+
+- **`read_source_file`** → `str`: full file content, or an `"Error reading {path}: {e}"` message string.
+- **`get_file_detail`** → `dict`: the file's entry (`file`, `file_dependencies`, `doc`) or `{"error": str}`.
+- **`search_text`** → `list[dict]`: list of hits `{"kind", "file", "name"}`, or `[{"error": str}]` if store not initialized.
+- **`get_files_using`** → `list[dict]`: list of `{"file", "usage"}` entries, or `[{"error": str}]`.
+- **`graph_search`** → `dict`: BFS traversal result (`start`, `hops`, `direction`, `nodes`, `edges`), or `{"error": str}`.
+- **Side effects**: None of the functions write files or mutate `store`; they are read-only against the store and filesystem (except in-function local caches like `entry_cache`, `hits`, `visited`, which are discarded on return).
+
+## 4. Key Data Structures
+
+### `file_dependencies` (embedded in store entries, consumed by all functions except `read_source_file`)
+
+| Field / Key | Type | Purpose |
 |---|---|---|
-| `project_data` | `dict` parsed from `project_knowledge.json` (must contain `project_name` and `files` list) | External caller (`rlm_qa_agent.py`) assigns directly to module-level variable before tool functions are invoked |
-| `base_dir` | `str` — directory containing the source JSON (used as root for relative file paths) | External caller assigns directly to module-level variable |
+| `definitions` | `list[dict]` | Definitions (functions/classes) in the file |
+| `definitions[].name` | `str` | Definition identifier |
+| `definitions[].type` | `str` | Kind of definition (e.g., function, class) |
+| `definitions[].start_line` / `end_line` | `int` | Line range used to map usages to owning definitions |
+| `definitions[].context` | `str` | Source snippet searched by `search_text` |
+| `callee_usages` | `list[dict]` | Symbols this file's code calls/imports |
+| `callee_usages[].lines` | `list[int]` | Line numbers of usage, used to locate owning definition |
+| `callee_usages[].name` | `str` | Name of the used symbol |
+| `callee_usages[].from` | `str` | File path the symbol originates from |
+| `callee_usages[].target_context` | `str` | Source context of the target, searched by `search_text` |
+| `caller_usages` | `list[dict]` | Places elsewhere that use this file's definitions |
+| `caller_usages[].lines` | `list[int]` | Line numbers of usage in the caller file |
+| `caller_usages[].name` | `str` | Name of the definition being used |
+| `caller_usages[].file` | `str` | File path of the caller |
+| `caller_usages[].usage_context` | `str` | Source context searched by `search_text` |
 
-Both variables are `None` until externally initialized (e.g., via a `load_project()`-style function in the dependent module). Each tool function checks for `None` and returns/handles an error state instead of proceeding.
+### `doc` (embedded in store entries)
 
-## Core Data Structure: `project_data`
+| Field / Key | Type | Purpose |
+|---|---|---|
+| `summary` | `str` | Free-text file summary, searched by `search_text` |
+| `sections` | `list[dict]` | Structured documentation sections |
+| `sections[].id` | `str` | Section identifier |
+| `sections[].title` | `str` | Section title, returned as `name` in `search_text` "section" hits |
+| `sections[].content` | `str` | Section body text, searched by `search_text` |
 
-```
-project_data = {
-  "project_name": str,
-  "files": [
-    {
-      "file": str,                     # source file path
-      "file_dependencies": {
-        "definitions":     [ {name, type, start_line, end_line}, ... ],
-        "callee_usages":   [ {name, from, lines: [int, ...]}, ... ],
-        "caller_usages":   [ {name, file, lines: [int, ...]}, ... ]
-      }
-    },
-    ...
-  ]
-}
-```
+### `search_text` hit dict
 
-- **definitions**: functions/classes declared in a file, with their line ranges (used to map "which usage line belongs to which definition").
-- **callee_usages**: references *made by* this file to definitions elsewhere (`from` = target file, `name` = target symbol).
-- **caller_usages**: references *made to* this file's definitions by other files (`file` = source file, `lines` = call-site lines).
+| Field / Key | Type | Purpose |
+|---|---|---|
+| `kind` | `str` | One of `"summary"`, `"section"`, `"definition"`, `"callee"`, `"caller"` |
+| `file` | `str` | File path where the match occurred |
+| `name` | `str` | Definition/section/usage name associated with the match |
 
-## Processing Flow per Function
+### `get_files_using` result item
 
-### `read_source_file(path)`
-```
-path (JSON-listed path)
-   → strip leading "project_name/" prefix
-   → join with base_dir
-   → open & read file
-   → return file content (str) or error message (str)
-```
-Output: raw text content of a source file, or a formatted error string.
+| Field / Key | Type | Purpose |
+|---|---|---|
+| `file` | `str` | File whose `callee_usages` matched |
+| `usage` | `dict` | The matching `callee_usages` entry (see `file_dependencies.callee_usages[]` above) |
 
-### `get_files_using(target_file)`
-```
-project_data.files
-   → for each file, iterate callee_usages
-   → filter usages where target_file is a substring of usage["from"]
-   → collect {file, usage} pairs
-```
-Output: `list[dict]` — each item is `{"file": <consumer file path>, "usage": <matched callee_usage entry>}`. Represents dependents of `target_file`.
+### `graph_search` result
 
-### `graph_search(name, hops, direction)`
-```
-Step 1: Locate start definition
-   project_data.files.definitions → exact name match → fallback to case-insensitive substring match
-   → start_key = "file:name"
+| Field / Key | Type | Purpose |
+|---|---|---|
+| `start` | `str` | `"file:name"` key of the BFS root |
+| `hops` | `int` | Requested max hop depth |
+| `direction` | `str` | `"outgoing"`, `"incoming"`, or `"both"` |
+| `nodes` | `list[dict]` | Discovered definition nodes |
+| `edges` | `list[dict]` | Discovered dependency edges |
 
-Step 2: BFS traversal (queue-based, up to `hops` levels)
-   For each dequeued node (file, definition, hop):
-     - outgoing (direction ∈ {outgoing, both}):
-         callee_usages of current file
-           → filter usages whose lines fall within current definition's line range
-           → resolve target definition's type by looking up target file's definitions
-           → build edge (current → target) and new node
-     - incoming (direction ∈ {incoming, both}):
-         caller_usages of current file matching current definition's name
-           → resolve source definition by locating which definition's line range contains the usage line
-             (falls back to "__module__" if no enclosing definition found)
-           → build edge (source → current) and new node
+### `graph_search` node dict
 
-Step 3: Deduplicate nodes (visited set) and edges (seen_edges set) to avoid cycles/repeats
-```
+| Field / Key | Type | Purpose |
+|---|---|---|
+| `key` | `str` | `"file:name"` unique node identifier |
+| `file` | `str` | File containing the definition |
+| `name` | `str` | Definition name (or `"__module__"` for module-level usage) |
+| `type` | `str` | Definition type, when resolvable |
+| `hop` | `int` | BFS distance from the start node |
+| `via` | `str` | `"outgoing"` or `"incoming"`, indicating discovery direction |
 
-Output structure:
-```
-{
-  "start": "file:name",
-  "hops": int,
-  "direction": str,
-  "nodes": [ {key, file, name, type, hop, via}, ... ],
-  "edges": [ {source, target, hop}, ... ]
-}
-```
-Or `{"error": str}` if `project_data` is unset or the definition is not found.
+### `graph_search` edge dict
 
-## Output Destinations
-
-All three functions return plain Python data (`str`, `list`, `dict`) directly to the caller — there is no file writing or external I/O beyond the read in `read_source_file`. The dependent module (`rlm_qa_agent.py`) registers these functions as callable tools for an LLM-driven agent (`dspy.RLM`), meaning their return values are ultimately consumed as tool outputs within that agent's reasoning loop.
+| Field / Key | Type | Purpose |
+|---|---|---|
+| `source` | `str` | `"file:name"` key of the edge's source node |
+| `target` | `str` | `"file:name"` key of the edge's target node |
+| `hop` | `int` | Hop level at which the edge was discovered |
 
 # Error Handling
 
-**Overall Strategy**
+## 1. Overall Strategy
 
-This module adopts a **graceful degradation** approach over fail-fast. Errors are captured and returned as part of the normal return value (strings or dict fields) rather than raised as exceptions, allowing the calling agent/LLM tool pipeline to continue operating without crashing. Uninitialized state and missing data are treated as recoverable conditions signaled to the caller through descriptive return values instead of exceptions.
+This file follows a **graceful degradation, return-value-based** error handling policy rather than raising exceptions. Every public tool function checks preconditions (primarily whether the module-level `store` has been initialized) and, on failure, returns an error indicator embedded in the function's normal return type (a string, dict, or list) instead of throwing. This allows the calling agent/LM loop to inspect the result and decide how to proceed without a crash. The only place a native exception is caught explicitly is file I/O in `read_source_file`, which follows a **catch-and-report** approach: the `OSError` is caught and turned into a descriptive string message. There is no retry logic, no logging, and no process termination anywhere in this file; all failures are surfaced to the caller as data.
 
-**Error Patterns and Handling Policy**
+## 2. Error Pattern Table
 
-| Error Type | Handling | Impact |
-|---|---|---|
-| `base_dir` not initialized (`load_project()` not called) | Returns an explicit error string instructing to call `load_project()` first, instead of raising | `read_source_file` returns a message string in place of file content; caller must detect this via string content |
-| File read failure (missing file, permission, encoding issue) | Caught via broad `except Exception`, returns formatted error string including path and exception message | `read_source_file` silently returns an error string rather than propagating the exception, so downstream code must inspect the returned string |
-| `project_data` not loaded (`None`) in `graph_search` | Explicit `None` check returns a dict with an `"error"` key | `graph_search` returns early with a structured error object instead of raising `AttributeError` |
-| Definition `name` not found (`graph_search`) | Falls back from exact match to case-insensitive partial match; if still not found, returns a dict with an `"error"` key | Caller receives a clear indication that no matching definition exists rather than an empty/ambiguous result |
-| Missing/absent nested fields in JSON structure (e.g., `file_dependencies`, `callee_usages`, `caller_usages`, `lines`) | Consistently accessed via `.get(...)` with default empty dict/list, avoiding `KeyError` | Absent fields are silently treated as empty collections, so traversal continues without interruption but may silently omit expected data |
-| `get_files_using` with no matches | No explicit error handling; simply returns an empty list | Caller receives an empty list, indistinguishable from "no dependents found" vs. potential misuse (e.g., malformed `target_file`) |
-| `project_data` not loaded in `get_files_using` | No `None` check is performed (unlike `graph_search`) | Will raise an unhandled exception (e.g., `TypeError`) if called before `load_project()`, differing in behavior from `graph_search` |
+| Error Type | Trigger Condition | Handling | Recoverable? | Impact |
+|---|---|---|---|---|
+| Store not initialized | `store is None` when calling `read_source_file`, `get_file_detail`, `search_text`, `get_files_using`, or `graph_search` before `load_project()` sets `qa_tools.store` | Return an error string/dict/list (e.g. `"Error: store not initialized..."`, `{"error": "..."}`, `[{"error": "..."}]`) instead of raising | Yes (caller can call `load_project()` and retry) | Requested operation yields no data but the process continues |
+| File read failure | `open()` raises `OSError` in `read_source_file` (e.g. file missing, permission issue, bad path) | Caught via `except OSError as e` and converted to string `f"Error reading {path}: {e}"` | Yes (caller can inspect message and choose a different path) | Only that single file read fails; no other tool affected |
+| File not found in project | `get_file_detail` called with a `file` not present in the store (`store.entry(file)` returns `None`) | Return `{"error": f"File '{file}' not found"}` | Yes (caller can adjust the file argument) | Only that lookup returns no detail |
+| Definition not found | `graph_search` cannot find `name` via exact match or partial match in `store.find_definitions` | Return `{"error": f"Definition '{name}' not found"}` | Yes (caller can adjust the search term) | Graph traversal is skipped entirely; no partial result returned |
+| Missing/partial dependency data | `deps_of()` returns an empty dict when `store.entry()` yields `None` or lacks `file_dependencies`; similarly missing `doc`/`sections` fields in `search_text` are defaulted with `or {}` / `or []` | Silently treated as empty structures, loop/branch is skipped (`if not deps: continue`) | Yes (implicitly, no failure raised) | That file/node contributes no further nodes/edges/hits, but overall search/BFS continues |
+| Search hit limit reached | `search_text` accumulates hits and reaches `limit` during scanning | Scanning stops early (`add()` returns True, causing `return hits`) | Yes (not a failure, deliberate short-circuit) | Search terminates before scanning the whole project; results may be incomplete but function returns normally |
 
-**Design Considerations**
+## 3. Design Notes
 
-- The module relies on module-level global state (`project_data`, `base_dir`) that must be set externally by `load_project()` in `rlm_qa_agent.py`; error handling for uninitialized state is only partially and inconsistently applied across functions (`read_source_file` and `graph_search` check for it, `get_files_using` does not).
-- Returning errors as data (strings or dict fields) rather than exceptions appears intentional to keep these functions usable as tool-call targets in an LLM-driven interpreter/agent context, where uncaught exceptions could break the calling loop.
-- Use of `.get()` with defaults throughout the dependency-traversal logic reflects a defensive stance toward variability/incompleteness in the JSON dependency graph structure, prioritizing continued traversal over strict validation.
+- **Uniform "return-as-error" convention**: Every tool mirrors its normal successful return shape (string, dict, or list) when reporting an error, so callers (including an LLM-driven agent) can use consistent, type-predictable inspection logic rather than needing exception handling.
+- **No logging or side effects**: The module performs no logging of errors; all error information is only ever conveyed through the return value, keeping the tools stateless and side-effect-free aside from reads through `store`.
+- **Defensive defaulting over exceptions**: Throughout `search_text` and `graph_search`, missing dict keys (`doc`, `sections`, `file_dependencies`, `definitions`, etc.) are handled with `.get(..., default)` / `or {}` patterns rather than exceptions, favoring silent continuation over failure when the underlying knowledge store has incomplete entries.
+- **Caching to limit repeated failures**: `graph_search` caches file entries in `entry_cache` so a file whose lookup fails (`None`) is only attempted once per search rather than repeatedly triggering the same missing-data path across BFS iterations.
+- **No global fail-fast except for the initialization guard**: The only condition treated uniformly across all tools as a blocking precondition is the uninitialized `store`; beyond that, all other lookups (missing file, missing definition, missing dependency data) degrade gracefully rather than halting the tool.
 
 # Summary
 
-qa_tools.py supplies read-only tool functions and shared module state (`project_data`, `base_dir`) for an RLM QA agent to explore a project_knowledge.json codebase graph. Public API: `read_source_file(path)` reads source text; `get_files_using(target_file)` finds dependents via substring match on callee_usages; `graph_search(name, hops, direction)` BFS-traverses definitions/usages into a subgraph (nodes/edges keyed "file:name"). Errors return as strings/dicts, not exceptions. State is set externally by rlm_qa_agent.py; no internal dependencies beyond stdlib.
+Provides read-only LLM tool functions querying a module-level `store` (KnowledgeStore) to inspect project knowledge without loading it into agent context. Functions: `read_source_file(path:str)->str`, `get_file_detail(file:str)->dict`, `search_text(keyword:str, limit:int)->list`, `get_files_using(target_file:str)->list`, `graph_search(name:str, hops:int, direction:str)->dict`. Consumes/produces `file_dependencies` (definitions, callee_usages, caller_usages dicts), `doc` (summary/sections), search hit dicts, and BFS graph result (`nodes`/`edges` dicts).

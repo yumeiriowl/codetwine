@@ -1,0 +1,132 @@
+{
+  "file": "codetwine/codetwine/knowledge_db_py/knowledge_db.py",
+  "definitions": [
+    {
+      "name": "logger",
+      "type": "expression_statement",
+      "start_line": 23,
+      "end_line": 23,
+      "context": "logger = logging.getLogger(__name__)"
+    },
+    {
+      "name": "SCHEMA_VERSION",
+      "type": "expression_statement",
+      "start_line": 26,
+      "end_line": 26,
+      "context": "SCHEMA_VERSION = \"1\""
+    },
+    {
+      "name": "_SCHEMA",
+      "type": "expression_statement",
+      "start_line": 28,
+      "end_line": 58,
+      "context": "_SCHEMA = \"\"\"\nCREATE TABLE meta (\n    key   TEXT PRIMARY KEY,\n    value TEXT\n);\n\nCREATE TABLE files (\n    file              TEXT PRIMARY KEY,   -- \"project_name/copy_path\"\n    summary           TEXT,               -- doc.json summary, NULL when there is none\n    file_dependencies TEXT,               -- file_dependencies.json body as JSON text\n    doc               TEXT                -- doc.json body as JSON text, NULL when absent\n);\n\nCREATE TABLE file_edges (\n    file      TEXT NOT NULL,\n    direction TEXT NOT NULL,              -- \"caller\" or \"callee\", as seen from file\n    other     TEXT NOT NULL,\n    PRIMARY KEY (file, direction, other)\n);\nCREATE INDEX idx_file_edges_other ON file_edges(direction, other);\n\nCREATE TABLE definitions (\n    file       TEXT NOT NULL,\n    name       TEXT NOT NULL,\n    type       TEXT,\n    start_line INTEGER,\n    end_line   INTEGER\n);\nCREATE INDEX idx_definitions_name ON definitions(name);\nCREATE INDEX idx_definitions_file ON definitions(file);\n\"\"\""
+    },
+    {
+      "name": "_definition_rows",
+      "type": "function_definition",
+      "start_line": 61,
+      "end_line": 78,
+      "context": "def _definition_rows(file_path: str, file_deps: dict) -> Iterator[tuple]:\n    \"\"\"Yield the definitions table rows for one file.\n\n    Args:\n        file_path: The file's path in \"project_name/copy_path\" format.\n        file_deps: The file_dependencies member of a consolidated entry.\n\n    Yields:\n        A (file, name, type, start_line, end_line) tuple per definition.\n    \"\"\"\n    for definition in file_deps.get(\"definitions\", []):\n        yield (\n            file_path,\n            definition.get(\"name\"),\n            definition.get(\"type\"),\n            definition.get(\"start_line\"),\n            definition.get(\"end_line\"),\n        )"
+    },
+    {
+      "name": "save_consolidated_sqlite",
+      "type": "function_definition",
+      "start_line": 81,
+      "end_line": 164,
+      "context": "def save_consolidated_sqlite(\n    base_output_dir: str,\n    all_file_list: list[str],\n    output_path: str,\n    symbol_deps: dict[str, dict[str, set[str]]],\n    summary_map: dict[str, str | None],\n) -> None:\n    \"\"\"Write the entire project's analysis results to a SQLite database.\n\n    Any existing database at output_path is replaced. The per-file JSON files are the\n    source of truth and the database is rebuilt from them on every run.\n\n    Each file's analysis results are read, inserted and released before the next file is\n    read, so only one file is held in memory at a time.\n\n    Args:\n        base_output_dir: Base output directory for file_dependencies.\n        all_file_list: List of relative paths of files to analyze.\n        output_path: Output file path for the SQLite database.\n        symbol_deps: Return value of build_symbol_level_deps (symbol-level dependency info).\n        summary_map: Return value of build_summary_map (file relative path -> summary text or None).\n    \"\"\"\n    project_name = os.path.basename(base_output_dir)\n\n    if os.path.exists(output_path):\n        os.remove(output_path)\n\n    written_count = 0\n    connection = sqlite3.connect(output_path)\n    try:\n        connection.executescript(_SCHEMA)\n        connection.executemany(\n            \"INSERT INTO meta (key, value) VALUES (?, ?)\",\n            [\n                (\"project_name\", project_name),\n                (\"schema_version\", SCHEMA_VERSION),\n                (\"created_at\", datetime.now(timezone.utc).isoformat()),\n            ],\n        )\n\n        # One row per file, plus its definitions index\n        for file_rel in all_file_list:\n            entry = build_file_entry(base_output_dir, file_rel)\n            if entry is None:\n                continue\n            file_deps = entry.get(\"file_dependencies\")\n            doc = entry.get(\"doc\")\n            connection.execute(\n                \"INSERT INTO files (file, summary, file_dependencies, doc) \"\n                \"VALUES (?, ?, ?, ?)\",\n                (\n                    entry[\"file\"],\n                    summary_map.get(file_rel),\n                    json.dumps(file_deps, ensure_ascii=False) if file_deps else None,\n                    json.dumps(doc, ensure_ascii=False) if doc else None,\n                ),\n            )\n            if file_deps:\n                connection.executemany(\n                    \"INSERT INTO definitions \"\n                    \"(file, name, type, start_line, end_line) VALUES (?, ?, ?, ?, ?)\",\n                    _definition_rows(entry[\"file\"], file_deps),\n                )\n            written_count += 1\n\n        # Both directions, each as symbol_deps holds it\n        for file_rel in all_file_list:\n            file_path = to_output_path(base_output_dir, file_rel)\n            for direction in (\"caller\", \"callee\"):\n                connection.executemany(\n                    \"INSERT OR IGNORE INTO file_edges (file, direction, other) \"\n                    \"VALUES (?, ?, ?)\",\n                    [(file_path, direction, to_output_path(base_output_dir, other))\n                     for other in sorted(symbol_deps[file_rel][direction + \"s\"])],\n                )\n\n        connection.commit()\n    finally:\n        connection.close()\n\n    logger.info(\n        f\"Consolidated SQLite output: {output_path} \"\n        f\"(files: {written_count}/{len(all_file_list)})\"\n    )"
+    },
+    {
+      "name": "open_knowledge",
+      "type": "function_definition",
+      "start_line": 167,
+      "end_line": 183,
+      "context": "def open_knowledge(path: str) -> sqlite3.Connection:\n    \"\"\"Open a knowledge database for reading.\n\n    Args:\n        path: Path to the SQLite database.\n\n    Returns:\n        A read-only connection whose rows come back as sqlite3.Row.\n\n    Raises:\n        FileNotFoundError: When there is no database at that path.\n    \"\"\"\n    if not os.path.exists(path):\n        raise FileNotFoundError(f\"no knowledge database: {path}\")\n    connection = sqlite3.connect(f\"file:{path}?mode=ro\", uri=True)\n    connection.row_factory = sqlite3.Row\n    return connection"
+    },
+    {
+      "name": "get_project_name",
+      "type": "function_definition",
+      "start_line": 186,
+      "end_line": 198,
+      "context": "def get_project_name(connection: sqlite3.Connection) -> str | None:\n    \"\"\"Return the analyzed project's name.\n\n    Args:\n        connection: An open knowledge database connection.\n\n    Returns:\n        The project name, or None when the meta table does not carry one.\n    \"\"\"\n    row = connection.execute(\n        \"SELECT value FROM meta WHERE key = 'project_name'\"\n    ).fetchone()\n    return row[\"value\"] if row else None"
+    },
+    {
+      "name": "_row_to_entry",
+      "type": "function_definition",
+      "start_line": 201,
+      "end_line": 216,
+      "context": "def _row_to_entry(row: sqlite3.Row) -> dict:\n    \"\"\"Turn one files row back into a consolidated JSON entry.\n\n    Args:\n        row: A row of the files table.\n\n    Returns:\n        A dict with a \"file\" key plus \"file_dependencies\" and \"doc\" where the row\n        carries them.\n    \"\"\"\n    entry: dict = {\"file\": row[\"file\"]}\n    if row[\"file_dependencies\"] is not None:\n        entry[\"file_dependencies\"] = json.loads(row[\"file_dependencies\"])\n    if row[\"doc\"] is not None:\n        entry[\"doc\"] = json.loads(row[\"doc\"])\n    return entry"
+    },
+    {
+      "name": "iter_files",
+      "type": "function_definition",
+      "start_line": 219,
+      "end_line": 231,
+      "context": "def iter_files(connection: sqlite3.Connection) -> Iterator[dict]:\n    \"\"\"Yield every file entry, one at a time, in insertion order.\n\n    The entries have the same structure as the consolidated JSON's \"files\" elements.\n\n    Args:\n        connection: An open knowledge database connection.\n\n    Yields:\n        One consolidated entry per file.\n    \"\"\"\n    for row in connection.execute(\"SELECT * FROM files ORDER BY rowid\"):\n        yield _row_to_entry(row)"
+    },
+    {
+      "name": "iter_dependencies",
+      "type": "function_definition",
+      "start_line": 234,
+      "end_line": 253,
+      "context": "def iter_dependencies(connection: sqlite3.Connection) -> Iterator[dict]:\n    \"\"\"Yield every file's summary and dependency lists, one at a time, in insertion order.\n\n    The entries have the same structure as the consolidated JSON's\n    \"project_dependencies\" elements.\n\n    Args:\n        connection: An open knowledge database connection.\n\n    Yields:\n        A dict with {\"file\", \"summary\", \"callers\", \"callees\"} keys.\n    \"\"\"\n    for row in connection.execute(\n            \"SELECT file, summary FROM files ORDER BY rowid\"):\n        yield {\n            \"file\": row[\"file\"],\n            \"summary\": row[\"summary\"],\n            \"callers\": callers_of(connection, row[\"file\"]),\n            \"callees\": callees_of(connection, row[\"file\"]),\n        }"
+    },
+    {
+      "name": "get_file",
+      "type": "function_definition",
+      "start_line": 256,
+      "end_line": 269,
+      "context": "def get_file(connection: sqlite3.Connection, file: str) -> dict | None:\n    \"\"\"Return one file's entry.\n\n    Args:\n        connection: An open knowledge database connection.\n        file: The file path in \"project_name/copy_path\" format.\n\n    Returns:\n        The consolidated entry, or None when the database holds no such file.\n    \"\"\"\n    row = connection.execute(\n        \"SELECT * FROM files WHERE file = ?\", (file,)\n    ).fetchone()\n    return _row_to_entry(row) if row else None"
+    },
+    {
+      "name": "callees_of",
+      "type": "function_definition",
+      "start_line": 272,
+      "end_line": 287,
+      "context": "def callees_of(connection: sqlite3.Connection, file: str) -> list[str]:\n    \"\"\"Return the files that a file depends on, sorted.\n\n    Args:\n        connection: An open knowledge database connection.\n        file: The file path in \"project_name/copy_path\" format.\n\n    Returns:\n        The dependency target file paths.\n    \"\"\"\n    rows = connection.execute(\n        \"SELECT other FROM file_edges WHERE file = ? AND direction = 'callee' \"\n        \"ORDER BY other\",\n        (file,),\n    )\n    return [row[\"other\"] for row in rows]"
+    },
+    {
+      "name": "callers_of",
+      "type": "function_definition",
+      "start_line": 290,
+      "end_line": 305,
+      "context": "def callers_of(connection: sqlite3.Connection, file: str) -> list[str]:\n    \"\"\"Return the files recorded as depending on a file, sorted.\n\n    Args:\n        connection: An open knowledge database connection.\n        file: The file path in \"project_name/copy_path\" format.\n\n    Returns:\n        The dependent file paths.\n    \"\"\"\n    rows = connection.execute(\n        \"SELECT other FROM file_edges WHERE file = ? AND direction = 'caller' \"\n        \"ORDER BY other\",\n        (file,),\n    )\n    return [row[\"other\"] for row in rows]"
+    },
+    {
+      "name": "find_definitions",
+      "type": "function_definition",
+      "start_line": 308,
+      "end_line": 332,
+      "context": "def find_definitions(connection: sqlite3.Connection, name: str,\n                     partial: bool = False) -> list[dict]:\n    \"\"\"Return every definition with a given name, without reading any file body.\n\n    Args:\n        connection: An open knowledge database connection.\n        name: The definition name to look for.\n        partial: False matches the name exactly. True matches any name containing it,\n            case-insensitively.\n\n    Returns:\n        A list of {\"file\", \"name\", \"type\", \"start_line\", \"end_line\"} dicts.\n    \"\"\"\n    columns = \"SELECT file, name, type, start_line, end_line FROM definitions \"\n    order = \" ORDER BY file, start_line\"\n    if partial:\n        # ESCAPE keeps a name containing % or _ from being read as a wildcard\n        pattern = name.replace(\"\\\\\", \"\\\\\\\\\").replace(\"%\", \"\\\\%\").replace(\"_\", \"\\\\_\")\n        rows = connection.execute(\n            columns + \"WHERE name LIKE ? ESCAPE '\\\\'\" + order,\n            (f\"%{pattern}%\",),\n        )\n    else:\n        rows = connection.execute(columns + \"WHERE name = ?\" + order, (name,))\n    return [dict(row) for row in rows]"
+    }
+  ],
+  "callee_usages": [
+    {
+      "lines": [
+        123
+      ],
+      "name": "build_file_entry",
+      "from": "codetwine/codetwine/output_py/output.py",
+      "target_context": "def build_file_entry(base_output_dir: str, file_rel: str) -> dict | None:\n    \"\"\"Read one file's file_dependencies.json and doc.json into a single consolidated entry.\n\n    This is the element structure of the consolidated JSON's \"files\", and the source of\n    one row of the SQLite knowledge database.\n\n    The \"file\" field is held once at the top level of the entry and removed from the\n    nested file_dependencies and doc.\n\n    Args:\n        base_output_dir: Base output directory for file_dependencies.\n        file_rel: Relative path of the file from the project root.\n\n    Returns:\n        A dict with a \"file\" key plus \"file_dependencies\" and \"doc\" where those JSON\n        files exist. None when neither exists.\n    \"\"\"\n    output_file_dir = resolve_file_output_dir(base_output_dir, file_rel)\n\n    entry: dict = {\"file\": to_output_path(base_output_dir, file_rel)}\n\n    # file_dependencies.json loading\n    # Paths were already converted to output format during individual JSON save, so use as-is\n    deps_path = os.path.join(output_file_dir, \"file_dependencies.json\")\n    if os.path.exists(deps_path):\n        with open(deps_path, \"r\", encoding=\"utf-8\") as f:\n            file_deps = json.load(f)\n        file_deps.pop(\"file\", None)\n        entry[\"file_dependencies\"] = file_deps\n\n    # doc.json loading\n    doc_path = os.path.join(output_file_dir, \"doc.json\")\n    if os.path.exists(doc_path):\n        with open(doc_path, \"r\", encoding=\"utf-8\") as f:\n            doc = json.load(f)\n        doc.pop(\"file\", None)\n        entry[\"doc\"] = doc\n\n    if len(entry) == 1:\n        logger.warning(f\"Analysis results not found for {file_rel}\")\n        return None\n    return entry"
+    },
+    {
+      "lines": [
+        148,
+        153
+      ],
+      "name": "to_output_path",
+      "from": "codetwine/codetwine/output_py/output.py",
+      "target_context": "def to_output_path(base_output_dir: str, rel_path: str) -> str:\n    \"\"\"Convert a file relative path to the \"project_name/copy_path\" format.\n\n    Args:\n        base_output_dir: Base output directory (the trailing directory name is the project name).\n        rel_path: Relative path from the project root.\n\n    Returns:\n        A string in \"project_name/copy_path\" format.\n    \"\"\"\n    project_name = os.path.basename(base_output_dir)\n    return f\"{project_name}/{rel_to_copy_path(rel_path)}\""
+    }
+  ],
+  "caller_usages": [
+    {
+      "lines": [
+        261
+      ],
+      "name": "save_consolidated_sqlite",
+      "file": "codetwine/codetwine/pipeline_py/pipeline.py",
+      "usage_context": "        print(\"Generating consolidated SQLite database...\")\n        logger.info(\"Generating consolidated SQLite database...\")\n        knowledge_db_path = os.path.join(base_output_dir, \"project_knowledge.sqlite\")\n        save_consolidated_sqlite(\n            base_output_dir, all_file_list, knowledge_db_path, symbol_deps, summary_map,\n        )\n"
+    }
+  ]
+}

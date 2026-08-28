@@ -1,6 +1,9 @@
 import os
 import json
 import logging
+import textwrap
+from collections.abc import Iterator
+from typing import TextIO
 from codetwine.utils.file_utils import (
     rel_to_copy_path,
     copy_path_to_rel,
@@ -9,6 +12,9 @@ from codetwine.utils.file_utils import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Indentation applied to each element written into a top-level JSON array
+_ARRAY_ITEM_INDENT = "    "
 
 
 def to_output_path(base_output_dir: str, rel_path: str) -> str:
@@ -51,6 +57,96 @@ def build_summary_map(
     return summary_map
 
 
+def iter_dependency_entries(
+    base_output_dir: str,
+    all_file_list: list[str],
+    symbol_deps: dict[str, dict[str, set[str]]],
+    summary_map: dict[str, str | None],
+) -> Iterator[dict]:
+    """Yield one {file, summary, callers, callees} entry per file, in list order.
+
+    This is the element structure of project_dependency_summary.json's "files" and of
+    the consolidated JSON's "project_dependencies". All paths are converted to the
+    "project_name/copy_path" format.
+
+    Args:
+        base_output_dir: Base output directory for file_dependencies.
+        all_file_list: List of relative paths of files to analyze.
+        symbol_deps: Return value of build_symbol_level_deps (symbol-level dependency info).
+        summary_map: Return value of build_summary_map (file relative path -> summary text or None).
+
+    Yields:
+        A dict with {"file", "summary", "callers", "callees"} keys.
+    """
+    for file_rel in all_file_list:
+        deps = symbol_deps[file_rel]
+        yield {
+            "file": to_output_path(base_output_dir, file_rel),
+            "summary": summary_map.get(file_rel),
+            "callers": sorted(to_output_path(base_output_dir, c) for c in deps["callers"]),
+            "callees": sorted(to_output_path(base_output_dir, c) for c in deps["callees"]),
+        }
+
+
+def build_file_entry(base_output_dir: str, file_rel: str) -> dict | None:
+    """Read one file's file_dependencies.json and doc.json into a single consolidated entry.
+
+    This is the element structure of the consolidated JSON's "files", and the source of
+    one row of the SQLite knowledge database.
+
+    The "file" field is held once at the top level of the entry and removed from the
+    nested file_dependencies and doc.
+
+    Args:
+        base_output_dir: Base output directory for file_dependencies.
+        file_rel: Relative path of the file from the project root.
+
+    Returns:
+        A dict with a "file" key plus "file_dependencies" and "doc" where those JSON
+        files exist. None when neither exists.
+    """
+    output_file_dir = resolve_file_output_dir(base_output_dir, file_rel)
+
+    entry: dict = {"file": to_output_path(base_output_dir, file_rel)}
+
+    # file_dependencies.json loading
+    # Paths were already converted to output format during individual JSON save, so use as-is
+    deps_path = os.path.join(output_file_dir, "file_dependencies.json")
+    if os.path.exists(deps_path):
+        with open(deps_path, "r", encoding="utf-8") as f:
+            file_deps = json.load(f)
+        file_deps.pop("file", None)
+        entry["file_dependencies"] = file_deps
+
+    # doc.json loading
+    doc_path = os.path.join(output_file_dir, "doc.json")
+    if os.path.exists(doc_path):
+        with open(doc_path, "r", encoding="utf-8") as f:
+            doc = json.load(f)
+        doc.pop("file", None)
+        entry["doc"] = doc
+
+    if len(entry) == 1:
+        logger.warning(f"Analysis results not found for {file_rel}")
+        return None
+    return entry
+
+
+def _write_array_item(f: TextIO, entry: dict, is_first: bool) -> None:
+    """Write one element of a top-level JSON array, with the separator before it.
+
+    Args:
+        f: An open text file positioned right after the array's "[".
+        entry: The element to write.
+        is_first: True for the first element of the array (no leading comma).
+    """
+    if not is_first:
+        f.write(",\n")
+    f.write(textwrap.indent(
+        json.dumps(entry, indent=2, ensure_ascii=False), _ARRAY_ITEM_INDENT
+    ))
+
+
 def save_consolidated_json(
     base_output_dir: str,
     all_file_list: list[str],
@@ -68,6 +164,9 @@ def save_consolidated_json(
 
     All file paths in the consolidated JSON use the "project_name/copy_path" format.
 
+    Each entry is written to the output file as soon as it is read, so only one file's
+    analysis results are held in memory at a time.
+
     Args:
         base_output_dir: Base output directory for file_dependencies.
         all_file_list: List of relative paths of files to analyze.
@@ -75,61 +174,35 @@ def save_consolidated_json(
         symbol_deps: Return value of build_symbol_level_deps (symbol-level dependency info).
         summary_map: Return value of build_summary_map (file relative path -> summary text or None).
     """
-    # Build entries for project_dependencies
-    converted_deps: list[dict] = []
-    for file_rel in all_file_list:
-        deps = symbol_deps[file_rel]
-        converted_deps.append({
-            "file": to_output_path(base_output_dir, file_rel),
-            "summary": summary_map.get(file_rel),
-            "callers": sorted(to_output_path(base_output_dir, c) for c in deps["callers"]),
-            "callees": sorted(to_output_path(base_output_dir, c) for c in deps["callees"]),
-        })
-
-    # Build consolidated entries for each file's dependency info and design document
-    files_list: list[dict] = []
-
-    for file_rel in all_file_list:
-        output_file_dir = resolve_file_output_dir(base_output_dir, file_rel)
-
-        entry: dict = {"file": to_output_path(base_output_dir, file_rel)}
-
-        # file_dependencies.json loading
-        deps_path = os.path.join(output_file_dir, "file_dependencies.json")
-        if os.path.exists(deps_path):
-            with open(deps_path, "r", encoding="utf-8") as f:
-                file_deps = json.load(f)
-            # Unify the file field at the entry's top level and remove it from the individual JSON side
-            # Paths were already converted to output format during individual JSON save, so use as-is
-            file_deps.pop("file", None)
-            entry["file_dependencies"] = file_deps
-
-        # doc.json loading
-        doc_path = os.path.join(output_file_dir, "doc.json")
-        if os.path.exists(doc_path):
-            with open(doc_path, "r", encoding="utf-8") as f:
-                doc = json.load(f)
-            # Unify the file field at the entry's top level and remove it from the individual JSON side
-            doc.pop("file", None)
-            entry["doc"] = doc
-
-        if len(entry) > 1: 
-            files_list.append(entry)
-        else:
-            logger.warning(f"Consolidated JSON: analysis results not found for {file_rel}")
-
-    consolidated = {
-        "project_name": os.path.basename(base_output_dir),
-        "project_dependencies": converted_deps,
-        "files": files_list,
-    }
+    project_name = os.path.basename(base_output_dir)
+    written_count = 0
 
     with open(output_path, "w", encoding="utf-8") as f:
-        json.dump(consolidated, f, indent=2, ensure_ascii=False)
+        f.write("{\n")
+        f.write(f'  "project_name": {json.dumps(project_name, ensure_ascii=False)},\n')
+
+        # project_dependencies: the dependency graph with each file's summary
+        f.write('  "project_dependencies": [\n')
+        dep_entries = iter_dependency_entries(
+            base_output_dir, all_file_list, symbol_deps, summary_map
+        )
+        for index, dep_entry in enumerate(dep_entries):
+            _write_array_item(f, dep_entry, index == 0)
+
+        # files: each file's dependency info and design document
+        f.write('\n  ],\n  "files": [\n')
+        for file_rel in all_file_list:
+            entry = build_file_entry(base_output_dir, file_rel)
+            if entry is None:
+                continue
+            _write_array_item(f, entry, written_count == 0)
+            written_count += 1
+
+        f.write("\n  ]\n}")
 
     logger.info(
         f"Consolidated JSON output: {output_path} "
-        f"(files: {len(files_list)}/{len(all_file_list)})"
+        f"(files: {written_count}/{len(all_file_list)})"
     )
 
 
@@ -197,32 +270,29 @@ def save_dependency_summary(
     Args:
         base_output_dir: Base output directory for file_dependencies.
         all_file_list: List of relative paths of files to analyze.
-        output_path: Output file path for the consolidated JSON.
+        output_path: Output file path for the dependency graph + summary JSON.
         symbol_deps: Return value of build_symbol_level_deps (symbol-level dependency info).
         summary_map: Return value of build_summary_map (file relative path -> summary text or None).
     """
-    files_list: list[dict] = []
-    for file_rel in all_file_list:
-        deps = symbol_deps[file_rel]
-        files_list.append({
-            "file": to_output_path(base_output_dir, file_rel),
-            "summary": summary_map.get(file_rel),
-            "callers": sorted(to_output_path(base_output_dir, c) for c in deps["callers"]),
-            "callees": sorted(to_output_path(base_output_dir, c) for c in deps["callees"]),
-        })
-
-    result = {
-        "project_name": os.path.basename(base_output_dir),
-        "files": files_list,
-    }
+    project_name = os.path.basename(base_output_dir)
+    written_count = 0
 
     with open(output_path, "w", encoding="utf-8") as f:
-        json.dump(result, f, indent=2, ensure_ascii=False)
+        f.write("{\n")
+        f.write(f'  "project_name": {json.dumps(project_name, ensure_ascii=False)},\n')
+        f.write('  "files": [\n')
+        dep_entries = iter_dependency_entries(
+            base_output_dir, all_file_list, symbol_deps, summary_map
+        )
+        for dep_entry in dep_entries:
+            _write_array_item(f, dep_entry, written_count == 0)
+            written_count += 1
+        f.write("\n  ]\n}")
 
     summary_count = sum(1 for s in summary_map.values() if s is not None)
     logger.info(
         f"Dependency graph + summary JSON output: {output_path} "
-        f"(files: {len(files_list)}, with summary: {summary_count})"
+        f"(files: {written_count}, with summary: {summary_count})"
     )
 
 

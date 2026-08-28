@@ -4,22 +4,22 @@
     {
       "name": "logger",
       "type": "expression_statement",
-      "start_line": 17,
-      "end_line": 17,
+      "start_line": 16,
+      "end_line": 16,
       "context": "logger = logging.getLogger(__name__)"
     },
     {
       "name": "get_file_dependencies",
       "type": "function_definition",
-      "start_line": 20,
-      "end_line": 101,
-      "context": "def get_file_dependencies(\n    target_file: str,\n    project_dir: str,\n    project_dep_list: list[dict],\n) -> dict:\n    \"\"\"Called for each file from process_all_files, returns a dict containing definition info,\n    callee_usages, and caller_usages that serves as the source data for file_dependencies.json.\n\n    Args:\n        target_file: Absolute path of the target file to analyze.\n        project_dir: Absolute path to the project root.\n        project_dep_list: Dependency info list output by save_project_dependencies.\n\n    Returns:\n        A dict with {\"file\", \"definitions\", \"callee_usages\", \"caller_usages\"} keys.\n    \"\"\"\n    target_file_rel = os.path.relpath(target_file, project_dir).replace(\"\\\\\", \"/\")\n    file_ext = os.path.splitext(target_file)[1].lstrip(\".\")\n    # Per-language definition extraction settings (None for unsupported languages)\n    definition_dict = DEFINITION_DICTS.get(file_ext)\n\n    root_node, content = parse_file(target_file)\n\n    # Convert content to text lines and extract source code from each definition's line range\n    content_lines = content.decode(\"utf-8\").splitlines()\n    definition_list = [\n        {\n            \"name\":       d.name,\n            \"type\":       d.type,\n            \"start_line\": d.start_line,\n            \"end_line\":   d.end_line,\n            \"context\":    \"\\n\".join(content_lines[d.start_line - 1 : d.end_line]),\n        }\n        for d in extract_definitions(root_node, definition_dict)\n    ]\n\n    # import / usage analysis\n    usage_list: list = []\n    caller_usages: list = []\n\n    language, import_query_str = get_import_params(file_ext)\n\n    if language and import_query_str:\n        # Build the set of relative paths for project files\n        project_file_set: set[str] = set()\n        for dep_info in project_dep_list:\n            project_file_set.add(dep_info[\"file\"])\n\n        # Detect source root prefixes (e.g. \"src/main/java/\") present in the project\n        source_root_set = detect_source_roots(project_file_set)\n\n        # Parse import statements and create an \"imported name -> dependency file\" dict\n        symbol_to_file_map, alias_to_original = build_symbol_to_file_map(\n            extract_imports(root_node, language, import_query_str),\n            target_file_rel,\n            project_file_set,\n            file_ext,\n            project_dir,\n            source_root_set,\n        )\n\n        # Get the list of usage locations and dependency target source code\n        usage_list = build_usage_info_list(\n            root_node,\n            symbol_to_file_map,\n            project_dir,\n            file_ext,\n            alias_to_original,\n        )\n\n        # Collect locations where functions/classes/variables defined in this file are used in other project files\n        caller_usages = build_caller_usages(\n            target_file_rel, project_dep_list,\n            project_dir, project_file_set,\n        )\n\n    return {\n        \"file\":          target_file_rel,\n        \"definitions\":   definition_list,\n        \"callee_usages\": usage_list,\n        \"caller_usages\": caller_usages,\n    }"
+      "start_line": 19,
+      "end_line": 99,
+      "context": "def get_file_dependencies(\n    target_file: str,\n    project_dir: str,\n    project_file_set: set[str],\n    source_root_set: set[str],\n    caller_map: dict[str, list[str]],\n) -> dict:\n    \"\"\"Called for each file from process_all_files, returns a dict containing definition info,\n    callee_usages, and caller_usages that serves as the source data for file_dependencies.json.\n\n    project_file_set, source_root_set and caller_map are the same for every file of one\n    project; the caller builds them once and passes the same values to every call.\n\n    Args:\n        target_file: Absolute path of the target file to analyze.\n        project_dir: Absolute path to the project root.\n        project_file_set: Set of relative paths of all files within the project.\n        source_root_set: Source root prefixes present in the project (e.g. \"src/main/java/\").\n        caller_map: A {file relative path: list of files depending on it} dict.\n\n    Returns:\n        A dict with {\"file\", \"definitions\", \"callee_usages\", \"caller_usages\"} keys.\n    \"\"\"\n    target_file_rel = os.path.relpath(target_file, project_dir).replace(\"\\\\\", \"/\")\n    file_ext = os.path.splitext(target_file)[1].lstrip(\".\")\n    # Per-language definition extraction settings (None for unsupported languages)\n    definition_dict = DEFINITION_DICTS.get(file_ext)\n\n    root_node, content = parse_file(target_file)\n\n    # Convert content to text lines and extract source code from each definition's line range\n    content_lines = content.decode(\"utf-8\").splitlines()\n    definition_list = [\n        {\n            \"name\":       d.name,\n            \"type\":       d.type,\n            \"start_line\": d.start_line,\n            \"end_line\":   d.end_line,\n            \"context\":    \"\\n\".join(content_lines[d.start_line - 1 : d.end_line]),\n        }\n        for d in extract_definitions(root_node, definition_dict)\n    ]\n\n    # import / usage analysis\n    usage_list: list = []\n    caller_usages: list = []\n\n    language, import_query_str = get_import_params(file_ext)\n\n    if language and import_query_str:\n        # Parse import statements and create an \"imported name -> dependency file\" dict\n        symbol_to_file_map, alias_to_original = build_symbol_to_file_map(\n            extract_imports(root_node, language, import_query_str),\n            target_file_rel,\n            project_file_set,\n            file_ext,\n            project_dir,\n            source_root_set,\n        )\n\n        # Get the list of usage locations and dependency target source code\n        usage_list = build_usage_info_list(\n            root_node,\n            symbol_to_file_map,\n            project_dir,\n            file_ext,\n            alias_to_original,\n        )\n\n        # Collect locations where functions/classes/variables defined in this file are used in other project files\n        caller_usages = build_caller_usages(\n            target_file_rel, caller_map.get(target_file_rel, []),\n            project_dir, project_file_set,\n        )\n\n    return {\n        \"file\":          target_file_rel,\n        \"definitions\":   definition_list,\n        \"callee_usages\": usage_list,\n        \"caller_usages\": caller_usages,\n    }"
     }
   ],
   "callee_usages": [
     {
       "lines": [
-        39
+        45
       ],
       "name": "DEFINITION_DICTS.get",
       "from": "codetwine/codetwine/config/settings_py/settings.py",
@@ -27,15 +27,15 @@
     },
     {
       "lines": [
-        41
+        47
       ],
       "name": "parse_file",
       "from": "codetwine/codetwine/parsers/ts_parser_py/ts_parser.py",
-      "target_context": "def parse_file(file_path: str) -> tuple[Node, bytes]:\n    \"\"\"Read a file, parse it with tree-sitter, and return (AST root node, byte content).\n\n    Parse results are cached at module level to avoid re-parsing the same file.\n\n    Args:\n        file_path: Absolute path of the file to parse.\n\n    Returns:\n        A (root_node, content) tuple.\n    \"\"\"\n    # Return from cache if available\n    if file_path in parse_cache:\n        return parse_cache[file_path]\n\n    # Get the corresponding language from the file extension\n    ext = os.path.splitext(file_path)[1].lstrip(\".\")\n\n    # Initialize the Parser with the Language object for this extension\n    parser = Parser(_language_map[ext])\n\n    # Read the file content in binary mode\n    with open(file_path, \"rb\") as f:\n        content = f.read()\n\n    # Parse with tree-sitter to generate the AST\n    tree = parser.parse(content)\n    result = (tree.root_node, content)\n\n    # Store in cache\n    parse_cache[file_path] = result\n    return result"
+      "target_context": "def parse_file(file_path: str) -> tuple[Node, bytes]:\n    \"\"\"Read a file, parse it with tree-sitter, and return (AST root node, byte content).\n\n    Parse results are cached at module level to avoid re-parsing the same file.\n    The cache holds at most PARSE_CACHE_MAX_FILES entries; when it is full, the least\n    recently used entry is discarded and that file is parsed again the next time it is\n    requested. PARSE_CACHE_MAX_FILES = 0 disables the limit.\n\n    Args:\n        file_path: Absolute path of the file to parse.\n\n    Returns:\n        A (root_node, content) tuple.\n    \"\"\"\n    # Return from cache if available, marking the entry as most recently used\n    cached = parse_cache.get(file_path)\n    if cached is not None:\n        parse_cache.move_to_end(file_path)\n        return cached\n\n    # Get the corresponding language from the file extension\n    ext = os.path.splitext(file_path)[1].lstrip(\".\")\n\n    # Initialize the Parser with the Language object for this extension\n    parser = Parser(_language_map[ext])\n\n    # Read the file content in binary mode\n    with open(file_path, \"rb\") as f:\n        content = f.read()\n\n    # Parse with tree-sitter to generate the AST\n    tree = parser.parse(content)\n    result = (tree.root_node, content)\n\n    # Store in cache and drop the oldest entries once the limit is exceeded\n    parse_cache[file_path] = result\n    if PARSE_CACHE_MAX_FILES > 0:\n        while len(parse_cache) > PARSE_CACHE_MAX_FILES:\n            parse_cache.popitem(last=False)\n    return result"
     },
     {
       "lines": [
-        53
+        59
       ],
       "name": "extract_definitions",
       "from": "codetwine/codetwine/extractors/definitions_py/definitions.py",
@@ -43,7 +43,7 @@
     },
     {
       "lines": [
-        60
+        66
       ],
       "name": "get_import_params",
       "from": "codetwine/codetwine/import_to_path_py/import_to_path.py",
@@ -51,15 +51,7 @@
     },
     {
       "lines": [
-        69
-      ],
-      "name": "detect_source_roots",
-      "from": "codetwine/codetwine/import_to_path_py/import_to_path.py",
-      "target_context": "def detect_source_roots(project_file_set: set[str]) -> set[str]:\n    \"\"\"Detect source root prefixes that actually exist in the project file set.\n\n    Checks each known source root pattern (e.g. \"src/main/java/\") against\n    the project file paths to find which prefixes are actually in use.\n    Only patterns that appear as a prefix of at least one file are returned.\n\n    Args:\n        project_file_set: Set of relative file paths within the project.\n\n    Returns:\n        A set of source root prefix strings that exist in the project.\n        Empty set if no known source root patterns are found.\n    \"\"\"\n    source_root_set: set[str] = set()\n    for pattern in SOURCE_ROOT_PATTERNS:\n        for file_path in project_file_set:\n            if file_path.startswith(pattern):\n                source_root_set.add(pattern)\n                break\n    return source_root_set"
-    },
-    {
-      "lines": [
-        72
+        70
       ],
       "name": "build_symbol_to_file_map",
       "from": "codetwine/codetwine/import_to_path_py/import_to_path.py",
@@ -67,7 +59,7 @@
     },
     {
       "lines": [
-        73
+        71
       ],
       "name": "extract_imports",
       "from": "codetwine/codetwine/extractors/imports_py/imports.py",
@@ -75,7 +67,7 @@
     },
     {
       "lines": [
-        82
+        80
       ],
       "name": "build_usage_info_list",
       "from": "codetwine/codetwine/extractors/usage_analysis_py/usage_analysis.py",
@@ -83,21 +75,21 @@
     },
     {
       "lines": [
-        91
+        89
       ],
       "name": "build_caller_usages",
       "from": "codetwine/codetwine/extractors/usage_analysis_py/usage_analysis.py",
-      "target_context": "def build_caller_usages(\n    target_file_rel: str,\n    project_dep_list: list[dict],\n    project_dir: str,\n    project_file_set: set[str],\n) -> list[dict]:\n    \"\"\"Collect the lines where names defined in this file are used in other project\n    files, producing data for the caller_usages JSON output.\n\n    Args:\n        target_file_rel: Relative path of this file from the project root.\n        project_dep_list: Dependency info list output by save_project_dependencies.\n        project_dir: Absolute path to the project root.\n        project_file_set: Set of file paths within the project.\n\n    Returns:\n        A list of dicts containing usage location information.\n    \"\"\"\n    # Step 1: Get the list of callers for this file\n    caller_file_list: list[str] = []\n    for dep_info in project_dep_list:\n        if dep_info[\"file\"] == target_file_rel:\n            caller_file_list = dep_info[\"callers\"]\n            break\n\n    caller_usages: list[dict] = []\n\n    # For C/C++, retrieve target definition names once outside the caller loop and cache them\n    target_definition_names: list[str] | None = None\n\n    for caller_rel in caller_file_list:\n        caller_abs = os.path.join(project_dir, caller_rel)\n        caller_ext = os.path.splitext(caller_rel)[1].lstrip(\".\")\n\n        caller_root = parse_file(caller_abs)[0]\n\n        # Retrieve parameters for import extraction\n        language, import_query_str = get_import_params(caller_ext)\n        if not language:\n            continue\n\n        caller_import_list = extract_imports(\n            caller_root, language, import_query_str\n        )\n\n        # Step 2: Collect names that the caller imports from the target\n        names_from_target, target_definition_names = _collect_names_from_target(\n            caller_import_list, target_file_rel, caller_ext,\n            caller_rel, project_file_set, project_dir,\n            target_definition_names,\n        )\n\n        # Step 3: Extract and aggregate lines where those names are used within the caller\n        if names_from_target:\n            usage_node_types = USAGE_NODE_TYPES.get(caller_ext)\n\n            # Add typed variable aliases to the tracking set\n            typed_alias_parent_types = (\n                usage_node_types.get(\"typed_alias_parent_types\", set())\n                if usage_node_types else set()\n            )\n            typed_aliases = extract_typed_aliases(\n                caller_root, set(names_from_target), typed_alias_parent_types\n            )\n            for var_name in typed_aliases:\n                if var_name not in names_from_target:\n                    names_from_target.append(var_name)\n\n            usage_list = extract_usages(\n                caller_root, set(names_from_target), usage_node_types\n            )\n\n            # Hold the caller's source code line by line (for usage_context extraction)\n            caller_source_lines: list[str] | None = None\n            if usage_list:\n                try:\n                    with open(caller_abs, \"r\", encoding=\"utf-8\") as f:\n                        caller_source_lines = f.read().splitlines()\n                except (OSError, UnicodeDecodeError):\n                    pass\n\n            # Step 4: Group by (name, file) and accumulate into lines list\n            # Remap alias variable names to original type names for grouping\n            groups: dict[str, dict] = {}\n            for usage in usage_list:\n                name = usage.name\n                root_symbol = name.split(\".\")[0]\n                if root_symbol in typed_aliases:\n                    name = typed_aliases[root_symbol] + name[len(root_symbol):]\n\n                if name not in groups:\n                    groups[name] = {\n                        \"lines\": [usage.line],\n                        \"name\":  name,\n                        \"file\":  caller_rel,\n                    }\n                else:\n                    groups[name][\"lines\"].append(usage.line)\n\n            # Step 5: Extract usage_context from the usage locations of each group\n            # Remove duplicate lines before extracting context\n            for group in groups.values():\n                group[\"lines\"] = sorted(set(group[\"lines\"]))\n            _max_context_locations = 2\n            _context_radius = 3\n            if caller_source_lines:\n                total_lines = len(caller_source_lines)\n                for group in groups.values():\n                    context_parts = []\n                    for line_no in group[\"lines\"][:_max_context_locations]:\n                        start = max(0, line_no - 1 - _context_radius)\n                        end = min(total_lines, line_no - 1 + _context_radius + 1)\n                        snippet = \"\\n\".join(caller_source_lines[start:end])\n                        context_parts.append(snippet)\n                    group[\"usage_context\"] = \"\\n...\\n\".join(context_parts)\n\n            caller_usages.extend(groups.values())\n\n    return caller_usages"
+      "target_context": "def build_caller_usages(\n    target_file_rel: str,\n    caller_file_list: list[str],\n    project_dir: str,\n    project_file_set: set[str],\n) -> list[dict]:\n    \"\"\"Collect the lines where names defined in this file are used in other project\n    files, producing data for the caller_usages JSON output.\n\n    Args:\n        target_file_rel: Relative path of this file from the project root.\n        caller_file_list: Relative paths of the files depending on this file.\n        project_dir: Absolute path to the project root.\n        project_file_set: Set of file paths within the project.\n\n    Returns:\n        A list of dicts containing usage location information.\n    \"\"\"\n    caller_usages: list[dict] = []\n\n    # For C/C++, retrieve target definition names once outside the caller loop and cache them\n    target_definition_names: list[str] | None = None\n\n    for caller_rel in caller_file_list:\n        caller_abs = os.path.join(project_dir, caller_rel)\n        caller_ext = os.path.splitext(caller_rel)[1].lstrip(\".\")\n\n        caller_root = parse_file(caller_abs)[0]\n\n        # Retrieve parameters for import extraction\n        language, import_query_str = get_import_params(caller_ext)\n        if not language:\n            continue\n\n        caller_import_list = extract_imports(\n            caller_root, language, import_query_str\n        )\n\n        # Step 1: Collect names that the caller imports from the target\n        names_from_target, target_definition_names = _collect_names_from_target(\n            caller_import_list, target_file_rel, caller_ext,\n            caller_rel, project_file_set, project_dir,\n            target_definition_names,\n        )\n\n        # Step 2: Extract and aggregate lines where those names are used within the caller\n        if names_from_target:\n            usage_node_types = USAGE_NODE_TYPES.get(caller_ext)\n\n            # Add typed variable aliases to the tracking set\n            typed_alias_parent_types = (\n                usage_node_types.get(\"typed_alias_parent_types\", set())\n                if usage_node_types else set()\n            )\n            typed_aliases = extract_typed_aliases(\n                caller_root, set(names_from_target), typed_alias_parent_types\n            )\n            for var_name in typed_aliases:\n                if var_name not in names_from_target:\n                    names_from_target.append(var_name)\n\n            usage_list = extract_usages(\n                caller_root, set(names_from_target), usage_node_types\n            )\n\n            # Hold the caller's source code line by line (for usage_context extraction)\n            caller_source_lines: list[str] | None = None\n            if usage_list:\n                try:\n                    with open(caller_abs, \"r\", encoding=\"utf-8\") as f:\n                        caller_source_lines = f.read().splitlines()\n                except (OSError, UnicodeDecodeError):\n                    pass\n\n            # Step 3: Group by (name, file) and accumulate into lines list\n            # Remap alias variable names to original type names for grouping\n            groups: dict[str, dict] = {}\n            for usage in usage_list:\n                name = usage.name\n                root_symbol = name.split(\".\")[0]\n                if root_symbol in typed_aliases:\n                    name = typed_aliases[root_symbol] + name[len(root_symbol):]\n\n                if name not in groups:\n                    groups[name] = {\n                        \"lines\": [usage.line],\n                        \"name\":  name,\n                        \"file\":  caller_rel,\n                    }\n                else:\n                    groups[name][\"lines\"].append(usage.line)\n\n            # Step 4: Extract usage_context from the usage locations of each group\n            # Remove duplicate lines before extracting context\n            for group in groups.values():\n                group[\"lines\"] = sorted(set(group[\"lines\"]))\n            _max_context_locations = 2\n            _context_radius = 3\n            if caller_source_lines:\n                total_lines = len(caller_source_lines)\n                for group in groups.values():\n                    context_parts = []\n                    for line_no in group[\"lines\"][:_max_context_locations]:\n                        start = max(0, line_no - 1 - _context_radius)\n                        end = min(total_lines, line_no - 1 + _context_radius + 1)\n                        snippet = \"\\n\".join(caller_source_lines[start:end])\n                        context_parts.append(snippet)\n                    group[\"usage_context\"] = \"\\n...\\n\".join(context_parts)\n\n            caller_usages.extend(groups.values())\n\n    return caller_usages"
     }
   ],
   "caller_usages": [
     {
       "lines": [
-        121
+        129
       ],
       "name": "get_file_dependencies",
       "file": "codetwine/codetwine/pipeline_py/pipeline.py",
-      "usage_context": "\n            os.makedirs(output_file_dir, exist_ok=True)\n\n            dep_result = get_file_dependencies(\n                file_abs, project_dir, project_dep_list,\n            )\n"
+      "usage_context": "\n            os.makedirs(output_file_dir, exist_ok=True)\n\n            dep_result = get_file_dependencies(\n                file_abs, project_dir,\n                project_file_set, source_root_set, caller_map,\n            )"
     }
   ]
 }

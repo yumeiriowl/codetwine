@@ -109,9 +109,9 @@ def generate_candidate_path_list(
     current-directory relative paths, etc.) are declaratively defined via config fields,
     so this function contains no language-specific if-branches.
 
-    Deduplication: If base_path already has one of the extensions in alt_ext_list
-    (e.g. C/C++ #include "stdio.h"), appending alternative extensions is skipped
-    to prevent meaningless candidates like "stdio.h.h".
+    When base_path already has one of the extensions in alt_ext_list (e.g. C/C++
+    #include "stdio.h", JS/TS import "./helpers.js"), base_path is used as the candidate
+    itself and no extension is appended, so no "stdio.h.h" candidate is produced.
 
     Args:
         base_path: The base path converted from the module name (e.g. "src/utils", "stdio.h").
@@ -135,8 +135,11 @@ def generate_candidate_path_list(
     # Generate candidates from the project root
     root_candidate_list: list[str] = []
 
-    # Try a file with the same extension (skip if base_path already has an extension)
-    if not has_known_ext:
+    # base_path already carries a known extension: it is the file path itself.
+    # Otherwise try a file with the same extension as the current file
+    if has_known_ext:
+        root_candidate_list.append(base_path)
+    else:
         root_candidate_list.append(base_path + src_ext_with_dot)
 
     # Python package: try __init__.py (the directory may be a package)

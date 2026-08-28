@@ -104,7 +104,7 @@
   "caller_usages": [
     {
       "lines": [
-        53
+        59
       ],
       "name": "extract_definitions",
       "file": "codetwine/codetwine/file_analyzer_py/file_analyzer.py",
@@ -112,7 +112,7 @@
     },
     {
       "lines": [
-        427
+        430
       ],
       "name": "extract_definitions",
       "file": "codetwine/codetwine/import_to_path_py/import_to_path.py",
@@ -120,9 +120,9 @@
     },
     {
       "lines": [
-        434,
-        435,
-        447
+        437,
+        438,
+        450
       ],
       "name": "DefinitionInfo",
       "file": "codetwine/codetwine/import_to_path_py/import_to_path.py",

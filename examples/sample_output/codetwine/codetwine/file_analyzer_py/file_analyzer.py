@@ -8,7 +8,6 @@ from codetwine.extractors.usage_analysis import (
 )
 from codetwine.import_to_path import (
     build_symbol_to_file_map,
-    detect_source_roots,
     get_import_params,
 )
 from codetwine.extractors.imports import extract_imports
@@ -20,15 +19,22 @@ logger = logging.getLogger(__name__)
 def get_file_dependencies(
     target_file: str,
     project_dir: str,
-    project_dep_list: list[dict],
+    project_file_set: set[str],
+    source_root_set: set[str],
+    caller_map: dict[str, list[str]],
 ) -> dict:
     """Called for each file from process_all_files, returns a dict containing definition info,
     callee_usages, and caller_usages that serves as the source data for file_dependencies.json.
 
+    project_file_set, source_root_set and caller_map are the same for every file of one
+    project; the caller builds them once and passes the same values to every call.
+
     Args:
         target_file: Absolute path of the target file to analyze.
         project_dir: Absolute path to the project root.
-        project_dep_list: Dependency info list output by save_project_dependencies.
+        project_file_set: Set of relative paths of all files within the project.
+        source_root_set: Source root prefixes present in the project (e.g. "src/main/java/").
+        caller_map: A {file relative path: list of files depending on it} dict.
 
     Returns:
         A dict with {"file", "definitions", "callee_usages", "caller_usages"} keys.
@@ -60,14 +66,6 @@ def get_file_dependencies(
     language, import_query_str = get_import_params(file_ext)
 
     if language and import_query_str:
-        # Build the set of relative paths for project files
-        project_file_set: set[str] = set()
-        for dep_info in project_dep_list:
-            project_file_set.add(dep_info["file"])
-
-        # Detect source root prefixes (e.g. "src/main/java/") present in the project
-        source_root_set = detect_source_roots(project_file_set)
-
         # Parse import statements and create an "imported name -> dependency file" dict
         symbol_to_file_map, alias_to_original = build_symbol_to_file_map(
             extract_imports(root_node, language, import_query_str),
@@ -89,7 +87,7 @@ def get_file_dependencies(
 
         # Collect locations where functions/classes/variables defined in this file are used in other project files
         caller_usages = build_caller_usages(
-            target_file_rel, project_dep_list,
+            target_file_rel, caller_map.get(target_file_rel, []),
             project_dir, project_file_set,
         )
 

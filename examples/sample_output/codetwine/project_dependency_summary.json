@@ -3,7 +3,7 @@
   "files": [
     {
       "file": "codetwine/main_py/main.py",
-      "summary": "main.py is CodeTwine's CLI entry point, orchestrating startup without business logic. It provides parse_args() (CLI parsing), resolve_dirs(args) (merges CLI args with .env defaults, with special rule: --project-dir alone forces output to REPO_ROOT/output), and main() (sets up logging, resolves dirs, conditionally builds LLMClient based on ENABLE_LLM_DOC, then runs process_all_files via asyncio.run). Key data: argparse.Namespace, resolved (project_dir, output_dir) tuple, optional LLMClient. Depends on settings.py, logger.py, LLMClient, and pipeline.py; fails fast with no internal error handling.",
+      "summary": "CLI entry point orchestrating project analysis: parses args, resolves dirs, optionally builds LLMClient, runs pipeline. Functions: `parse_args() -> argparse.Namespace`; `resolve_dirs(args: argparse.Namespace) -> tuple[str, str]`; `main() -> None`. Consumes settings (`DEFAULT_PROJECT_DIR`, `DEFAULT_OUTPUT_DIR`, `REPO_ROOT`, `ENABLE_LLM_DOC`: str/bool) and produces `(project_dir, output_dir): tuple[str, str]` passed with an `LLMClient|None` to `process_all_files` via `asyncio.run`.",
       "callers": [],
       "callees": [
         "codetwine/codetwine/config/logger_py/logger.py",
@@ -14,7 +14,7 @@
     },
     {
       "file": "codetwine/codetwine/file_analyzer_py/file_analyzer.py",
-      "summary": "`file_analyzer.py` orchestrates per-file dependency analysis, exposing `get_file_dependencies(target_file, project_dir, project_dep_list) -> dict`. It sequences parsing, definition extraction, import resolution, and callee/caller usage analysis by delegating to specialized modules (parsers, extractors, import_to_path), without performing parsing/AST logic itself. Returns `{\"file\", \"definitions\", \"callee_usages\", \"caller_usages\"}`. Gracefully skips import/usage analysis for unsupported languages while still returning definitions. Used by `pipeline.py`; has no reverse dependency. Fails fast on I/O/decoding errors, otherwise relies on dependencies' graceful degradation.",
+      "summary": "Orchestrates single-file dependency analysis by parsing a file, extracting definitions, and resolving callee/caller symbol usages. Public function: `get_file_dependencies(target_file: str, project_dir: str, project_file_set: set[str], source_root_set: set[str], caller_map: dict[str, list[str]]) -> dict`. Produces/consumes `DefinitionInfo`, `ImportInfo`, `symbol_to_file_map: dict[str,str]`, `alias_to_original: dict[str,str]`; returns dict with `file: str`, `definitions: list[dict]`, `callee_usages: list[dict]`, `caller_usages: list[dict]`.",
       "callers": [
         "codetwine/codetwine/pipeline_py/pipeline.py"
       ],
@@ -29,11 +29,12 @@
     },
     {
       "file": "codetwine/codetwine/import_to_path_py/import_to_path.py",
-      "summary": "`import_to_path.py` is CodeTwine's language-agnostic import resolution engine, bridging raw import strings to project file paths and symbol→file maps. Key functions: `detect_source_roots`, `resolve_relative_import`, `generate_candidate_path_list`, `resolve_module_to_project_path`, `build_symbol_to_file_map`, `get_import_params`. Driven declaratively by `IMPORT_RESOLVE_CONFIG`/`SOURCE_ROOT_PATTERNS`/`DEFINITION_DICTS`. Used by `file_analyzer.py`, `usage_analysis.py`, `dependency_graph.py`. Favors graceful degradation (None/empty) over exceptions; logs warnings on symbol conflicts.",
+      "summary": "Resolves import/include module names to project file paths and builds symbol→file lookup maps for usage tracing. Key functions: `detect_source_roots(project_file_set: set[str])->set[str]`, `resolve_module_to_project_path(module: str, current_file_rel: str, project_file_set: set[str], source_root_set: set[str]|None)->str|None`, `build_symbol_to_file_map(import_info_list, current_file_rel: str, project_file_set: set[str], file_ext: str, project_dir: str, source_root_set)->tuple[dict,dict]`, `get_import_params(file_ext: str)->tuple[Language,str]|tuple[None,None]`. Uses `ImportInfo`, `DefinitionInfo`, `symbol_to_file_map`, `alias_to_original`.",
       "callers": [
         "codetwine/codetwine/extractors/dependency_graph_py/dependency_graph.py",
         "codetwine/codetwine/extractors/usage_analysis_py/usage_analysis.py",
-        "codetwine/codetwine/file_analyzer_py/file_analyzer.py"
+        "codetwine/codetwine/file_analyzer_py/file_analyzer.py",
+        "codetwine/codetwine/pipeline_py/pipeline.py"
       ],
       "callees": [
         "codetwine/codetwine/config/settings_py/settings.py",
@@ -42,8 +43,18 @@
       ]
     },
     {
+      "file": "codetwine/codetwine/knowledge_db_py/knowledge_db.py",
+      "summary": "Builds/queries a SQLite knowledge DB mirroring project_knowledge.json. save_consolidated_sqlite(base_output_dir:str, all_file_list:list[str], output_path:str, symbol_deps:dict[str,dict[str,set[str]]], summary_map:dict[str,str|None])->None rebuilds it file-by-file. Read functions: open_knowledge(path:str)->Connection, get_project_name, iter_files/iter_dependencies (Iterator[dict]), get_file(file:str)->dict|None, callees_of/callers_of(file:str)->list[str], find_definitions(name:str,partial:bool)->list[dict]. Tables: meta, files, file_edges, definitions.",
+      "callers": [
+        "codetwine/codetwine/pipeline_py/pipeline.py"
+      ],
+      "callees": [
+        "codetwine/codetwine/output_py/output.py"
+      ]
+    },
+    {
       "file": "codetwine/codetwine/doc_creator_py/doc_creator.py",
-      "summary": "`doc_creator.py` is CodeTwine's document-generation engine, exposing one public entry point, `generate_all_docs`, which topologically orders files by dependency depth, then generates/reuses design documents per file via LLM calls, handling context-overflow via staged prompt reduction, and persisting `doc.json`/`doc.md`. Key data: `project_dep_list`, `file_dependencies.json`, `doc_map` (accumulated docs), `summary_cache`, and template-defined sections/summary. Supports incremental regeneration and MD↔JSON sync. Depends on `file_utils`, `LLMClient`, `settings`; used by `pipeline.py`.",
+      "summary": "Orchestrates async LLM generation of per-file design docs in dependency-topological order, with context-overflow fallback and change-based reuse. Main API: `async generate_all_docs(base_output_dir: str, project_dep_list: list[dict], llm_client: LLMClient, max_workers: int, changed_files: set[str]|None) -> None`. Consumes `project_dep_list` (dicts with file/callers/callees) and per-file `file_dependencies.json`; produces `doc` dicts (`file`, `sections: list[dict]`, `summary: str`) saved as `doc.md`/`doc.json`, plus in-memory `doc_summary_map: dict[str,str]` and `summary_cache: dict[str,str]`.",
       "callers": [
         "codetwine/codetwine/pipeline_py/pipeline.py"
       ],
@@ -56,7 +67,7 @@
     },
     {
       "file": "codetwine/codetwine/pipeline_py/pipeline.py",
-      "summary": "`pipeline.py` is the orchestration layer coordinating CodeTwine's full analysis workflow: dependency-graph build → change detection → per-file extraction → LLM doc generation → summary/graph/consolidated JSON output. Public interface: async `process_all_files(project_dir, output_dir, llm_client, max_workers)`, plus helpers `_convert_dep_list_to_internal_paths`, `_detect_changed_files`, `_process_file_dependencies`. Manages conversion between \"project_name/copy_path\" and relative-path formats, tracks `project_dep_list`/`all_file_list`/`changed_files`, shares `symbol_deps`/`summary_map` across output stages, and clears `parse_cache` on completion. Uses per-file fail-soft error handling.",
+      "summary": "Orchestrates full project analysis: dependency graph build, per-file extraction, change detection, doc generation, and consolidated output writing.\n\nPublic API: `async process_all_files(project_dir: str, output_dir: str, llm_client: LLMClient | None, max_workers: int = MAX_WORKERS) -> None`.\n\nKey data: `project_dep_list`/`all_file_list` (list[dict]/list[str]), `changed_files` (set[str]), `symbol_deps` (dict[str, dict[str, set[str]]]), `summary_map` (dict[str, str|None]).",
       "callers": [
         "codetwine/main_py/main.py"
       ],
@@ -65,6 +76,8 @@
         "codetwine/codetwine/doc_creator_py/doc_creator.py",
         "codetwine/codetwine/extractors/dependency_graph_py/dependency_graph.py",
         "codetwine/codetwine/file_analyzer_py/file_analyzer.py",
+        "codetwine/codetwine/import_to_path_py/import_to_path.py",
+        "codetwine/codetwine/knowledge_db_py/knowledge_db.py",
         "codetwine/codetwine/llm/client_py/client.py",
         "codetwine/codetwine/output_py/output.py",
         "codetwine/codetwine/parsers/ts_parser_py/ts_parser.py",
@@ -73,8 +86,9 @@
     },
     {
       "file": "codetwine/codetwine/output_py/output.py",
-      "summary": "`codetwine/output.py` aggregates scattered per-file `file_dependencies.json`/`doc.json` artifacts into project-level outputs: consolidated JSON (`project_knowledge.json`), a lightweight dependency+summary JSON, and a Mermaid dependency graph (`.md`). Key functions: `to_output_path` (path normalization), `build_summary_map`, `build_symbol_level_deps` (symbol-level callers/callees), `save_consolidated_json`, `save_dependency_summary`, `save_dependency_graph_as_mermaid`. Depends on `file_utils.py` for path conversions; used only by `pipeline.py`. Uses graceful degradation for missing artifacts, fail-fast on malformed JSON.",
+      "summary": "Aggregates per-file dependency/doc JSON into project-wide outputs (consolidated JSON, dependency summary, Mermaid graph). Key functions: `to_output_path(base_output_dir:str, rel_path:str)->str`, `build_summary_map(base_output_dir:str, all_file_list:list[str])->dict[str,str|None]`, `build_symbol_level_deps(...)->dict[str,dict[str,set[str]]]`, `iter_dependency_entries(...)->Iterator[dict]`, `build_file_entry(...)->dict|None`, `save_consolidated_json`, `save_dependency_summary`, `save_dependency_graph_as_mermaid`. Core structures: `symbol_deps` (callers/callees sets), `summary_map`, dependency entries `{file,summary,callers,callees}`.",
       "callers": [
+        "codetwine/codetwine/knowledge_db_py/knowledge_db.py",
         "codetwine/codetwine/pipeline_py/pipeline.py"
       ],
       "callees": [
@@ -83,7 +97,7 @@
     },
     {
       "file": "codetwine/codetwine/llm/__init___py/__init__.py",
-      "summary": "`codetwine/llm/__init__.py` is a thin facade module that re-exports `litellm`'s `ContextWindowExceededError` under the `codetwine.llm` namespace (via `__all__`). It adds no logic, validation, or transformation—purely indirection to decouple consumers from `litellm` internals. Its single public interface is the exception type itself, used by consumers (e.g., `doc_creator.py`) to catch context-overflow failures and trigger fallback behavior (e.g., returning `None` or retrying with reduced prompts). Dependency direction is unidirectional: consumers depend on this module, not vice versa.",
+      "summary": "Re-exports `ContextWindowExceededError` (an `Exception` subclass from `litellm`) to give internal code a stable, decoupled import path under `codetwine.llm` instead of depending directly on `litellm`. No functions are defined; the only public symbol is `ContextWindowExceededError`. Key data structure: `__all__` (`list[str]`), containing `\"ContextWindowExceededError\"` to control wildcard-import exports. Used by consumers (e.g., `doc_creator.py`) to catch context-window overflow errors from LLM generation calls.",
       "callers": [
         "codetwine/codetwine/doc_creator_py/doc_creator.py"
       ],
@@ -91,7 +105,7 @@
     },
     {
       "file": "codetwine/codetwine/llm/client_py/client.py",
-      "summary": "`codetwine/llm/client.py` centralizes async LLM access via `LLMClient`, wrapping `litellm.acompletion`. `__init__(model, api_key, api_base)` validates config (raises `ValueError` if no model), storing defaults from `settings.py`. `generate(prompt, max_tokens)` returns generated text or `None`, short-circuiting on empty prompts and delegating to private `_call_with_retry`, which retries on `RateLimitError`, re-raises `ContextWindowExceededError`, and returns `None` on other `APIError`s. Used by `main.py`, `doc_creator.py`, `pipeline.py` for stateless, provider-agnostic LLM text generation with built-in retry/error handling.",
+      "summary": "LLMClient: async wrapper around litellm for sending prompts to an LLM and returning generated text with rate-limit retry logic.\n\n- `LLMClient(model: str, api_key: str, api_base: str)`\n- `async generate(prompt: str, max_tokens: int) -> str | None`\n\nConsumes settings (LLM_MODEL, LLM_API_KEY, LLM_API_BASE, MAX_RETRIES, RETRY_WAIT, DOC_MAX_TOKENS). Builds `kwargs` dict (model, max_tokens, messages: list[dict]) for litellm.acompletion; returns stripped response text or None.",
       "callers": [
         "codetwine/codetwine/doc_creator_py/doc_creator.py",
         "codetwine/codetwine/pipeline_py/pipeline.py",
@@ -103,7 +117,7 @@
     },
     {
       "file": "codetwine/codetwine/config/logger_py/logger.py",
-      "summary": "`codetwine/config/logger.py` centralizes logging setup for CodeTwine. Its sole public function, `setup_logging(level=logging.INFO)`, configures the root logger with a console handler (WARNING+) and a rotating file handler (`logs/codetwine.log`, 1MB, 5 backups) at the given level, using a shared `_SkipBlankFormatter` that suppresses blank/whitespace-only messages. It also caps `httpx`, `httpcore`, and `LiteLLM` loggers at WARNING. Depends only on stdlib; used by `main.py` at startup. No error handling—failures propagate (fail-fast).",
+      "summary": "Configures app-wide logging by attaching console (WARNING+) and rotating file (1MiB, 5 backups) handlers to the root logger, with blank-line suppression.\n\nPublic API: `setup_logging(level: int = logging.INFO) -> None`.\n\nUses `_SkipBlankFormatter(logging.Formatter)` to suppress blank/whitespace `logging.LogRecord` messages. Constants: `_LOG_DIR` (str), `_LOG_FORMAT` (str), `_MAX_BYTES`/`_BACKUP_COUNT` (int). No internal dependencies; consumed by `main.py`.",
       "callers": [
         "codetwine/main_py/main.py"
       ],
@@ -111,7 +125,7 @@
     },
     {
       "file": "codetwine/codetwine/config/settings_py/settings.py",
-      "summary": "`settings.py` is CodeTwine's central config module: loads env vars (via `get_config_value`, with typed coercion and fail-fast on missing required keys) for LLM/client, path, concurrency, and doc-summarization settings; and defines a per-language tree-sitter registry (`_LANG_REGISTRY`/`LangConfig`) covering Python, Java, C/C++, Kotlin, JS/TS. Auto-generates public dicts (`TREE_SITTER_LANGUAGES`, `DEFINITION_DICTS`, `IMPORT_QUERIES`, `USAGE_NODE_TYPES`, `IMPORT_RESOLVE_CONFIG`, `SAME_PACKAGE_VISIBLE`) with extension-alias expansion. No internal deps; consumed project-wide as pure config.",
+      "summary": "Centralizes env-driven config and per-language tree-sitter settings for CodeTwine. Main function: `get_config_value(key: str, default=Any, var_type: type) -> str|int|float|bool|None`. Key structures: `LangConfig` dataclass (language, definition_dict, import_query, usage_node_types, import_resolve, same_package_visible); dicts `TREE_SITTER_LANGUAGES`, `DEFINITION_DICTS`, `IMPORT_QUERIES`, `USAGE_NODE_TYPES`, `IMPORT_RESOLVE_CONFIG`, `SAME_PACKAGE_VISIBLE` (all keyed by extension str); plus scalar constants (paths, LLM/model settings, `EXCLUDE_PATTERNS: list[str]`, `SOURCE_ROOT_PATTERNS: list[str]`).",
       "callers": [
         "codetwine/codetwine/doc_creator_py/doc_creator.py",
         "codetwine/codetwine/extractors/dependency_graph_py/dependency_graph.py",
@@ -127,7 +141,7 @@
     },
     {
       "file": "codetwine/codetwine/extractors/definitions_py/definitions.py",
-      "summary": "**Summary:** `definitions.py` provides language-agnostic BFS traversal over tree-sitter ASTs to extract code definitions (functions, classes, variables) via a configurable `definition_dict` mapping node types to name-extraction rules (direct child or sentinel-based helpers). Public API: `DefinitionInfo` dataclass (name, type, start_line, end_line) and `extract_definitions(root_node, definition_dict) -> list[DefinitionInfo]`, sorted by line. Handles decorators, forward declarations, include guards, and destructuring via graceful fallback (no exceptions). Used by `file_analyzer.py`, `import_to_path.py`, `usage_analysis.py`; no internal dependencies.",
+      "summary": "Extracts structural definitions (functions, classes, vars, etc.) from a tree-sitter AST via BFS, using a language-specific mapping of node types to name-extraction strategies. Public API: `DefinitionInfo` dataclass (name: str, type: str, start_line: int, end_line: int); `extract_definitions(root_node: Node, definition_dict: dict[str, str]) -> list[DefinitionInfo]`, sorted by start_line. No internal deps; used by file_analyzer.py, import_to_path.py, usage_analysis.py.",
       "callers": [
         "codetwine/codetwine/extractors/usage_analysis_py/usage_analysis.py",
         "codetwine/codetwine/file_analyzer_py/file_analyzer.py",
@@ -137,7 +151,7 @@
     },
     {
       "file": "codetwine/codetwine/extractors/usage_analysis_py/usage_analysis.py",
-      "summary": "`usage_analysis.py` orchestrates cross-file symbol usage resolution for CodeTwine, built atop AST/import/definition primitives. Public API: `build_usage_info_list` (finds in-file usages of imported symbols, attaches definition source → `callee_usages`) and `build_caller_usages` (finds where a file's definitions are used by dependents, with context snippets → `caller_usages`). Uses config-driven, language-agnostic dispatch, alias resolution before grouping, dict-keyed deduplication, lazy caching of target definitions, and graceful degradation on missing config/I/O errors. Consumed by `file_analyzer.py`.",
+      "summary": "Builds bidirectional cross-file usage records linking symbol usages to their definitions. Public API: `build_usage_info_list(root_node, symbol_to_file_map: dict[str,str], project_dir: str, file_ext: str, alias_to_original: dict[str,str]|None) -> list[dict]` and `build_caller_usages(target_file_rel: str, caller_file_list: list[str], project_dir: str, project_file_set: set[str]) -> list[dict]`. Key structures: usage group dicts (`lines`, `name`, `from`/`file`, `target_context`/`usage_context`), `UsageInfo`, `ImportInfo`, `symbol_to_file_map`.",
       "callers": [
         "codetwine/codetwine/file_analyzer_py/file_analyzer.py"
       ],
@@ -153,7 +167,7 @@
     },
     {
       "file": "codetwine/codetwine/extractors/usages_py/usages.py",
-      "summary": "`usages.py` locates where tracked symbols (imports, classes, functions) are used in an AST. Public API: `UsageInfo` (name, line), `extract_usages` (finds calls/attributes/identifiers/type-refs matching given names, dedup'd) and `extract_typed_aliases` (maps variable names to imported types via typed declarations). Both use config-driven, iterative DFS to stay language-agnostic (Python/Java/Kotlin/C/C++). No project-internal dependencies; used by `usage_analysis.py` to build symbol-to-file mappings. Degrades gracefully when config is missing; no exceptions raised.",
+      "summary": "Extracts AST-based usage locations of tracked symbol names (calls, attributes, identifiers, type refs). Public API: `UsageInfo(name: str, line: int)` dataclass; `extract_usages(root_node: Node, imported_names: set[str], usage_node_types: dict|None) -> list[UsageInfo]`; `extract_typed_aliases(root_node: Node, imported_names: set[str], typed_alias_parent_types: set[str]) -> dict[str, str]`. Uses config dict `usage_node_types` with sets like `call_types`, `attribute_types`, `skip_parent_types`. No internal deps; consumed by `usage_analysis.py`.",
       "callers": [
         "codetwine/codetwine/extractors/usage_analysis_py/usage_analysis.py"
       ],
@@ -161,7 +175,7 @@
     },
     {
       "file": "codetwine/codetwine/extractors/dependency_graph_py/dependency_graph.py",
-      "summary": "dependency_graph.py performs project-wide dependency analysis: `build_project_dependencies(project_dir)` walks the project, resolves imports/same-package refs into a file-level caller/callee graph (list of `{file, callers, callees}` dicts, paths as \"project_name/copy_path\"). `extract_callee_source(callee_file_path, callee_name, project_dir)` returns source text of a symbol's definition via BFS over tree-sitter ASTs. Uses ts_parser, imports.py, import_to_path.py; consumed by pipeline.py and usage_analysis.py. Emphasizes graceful degradation and absolute-path keyed intermediate maps.",
+      "summary": "Builds project-wide file dependency graphs by resolving imports and same-package references. Public API: `extract_callee_source(callee_file_path: str, callee_name: str, project_dir: str) -> str|None`; `build_project_dependencies(project_dir: str) -> list[dict]` returning `{\"file\",\"callers\",\"callees\"}` (path strings). Key structures: `file_callee_map`/`file_caller_map` (abs path -> set/list of abs paths), `dir_ext_groups` for same-package grouping.",
       "callers": [
         "codetwine/codetwine/extractors/usage_analysis_py/usage_analysis.py",
         "codetwine/codetwine/pipeline_py/pipeline.py"
@@ -176,7 +190,7 @@
     },
     {
       "file": "codetwine/codetwine/extractors/imports_py/imports.py",
-      "summary": "`imports.py` provides language-agnostic extraction of import statements from tree-sitter ASTs, using externally-supplied query strings (standardized captures: `@module`, `@name`, `@import_node`) to avoid per-language parsing logic. Public API: `ImportInfo` dataclass (module, names, line, module_alias, alias_map) and `extract_imports(root_node, language, import_query_str) -> list[ImportInfo]`, which groups matches by `(module, line)`, resolving aliases/wildcards. Helper functions handle alias detection and quote/bracket stripping. No internal dependencies; consumed by `file_analyzer.py`, `usage_analysis.py`, `dependency_graph.py` for cross-file symbol/dependency resolution.",
+      "summary": "Extracts import/dependency statements from a tree-sitter AST into normalized `ImportInfo` records. Public API: `ImportInfo(module: str, names: list[str], line: int, module_alias: str|None, alias_map: dict[str,str]|None)` dataclass; `extract_imports(root_node: Node, language: Language, import_query_str: str|None) -> list[ImportInfo]`, which runs per-language tree-sitter queries, groups matches by (module, line), and resolves aliases/wildcards.",
       "callers": [
         "codetwine/codetwine/extractors/dependency_graph_py/dependency_graph.py",
         "codetwine/codetwine/extractors/usage_analysis_py/usage_analysis.py",
@@ -186,7 +200,7 @@
     },
     {
       "file": "codetwine/codetwine/utils/file_utils_py/file_utils.py",
-      "summary": "`file_utils.py` is a dependency-free shared utility centralizing path-conversion and file-comparison logic used by pipeline.py, output.py, doc_creator.py, and dependency_graph.py. It provides symmetric encode/decode functions (`rel_to_copy_path`/`copy_path_to_rel`, `output_path_to_rel`) that map relative source paths to collision-safe copy-destination paths (`{parent}/{stem}_{ext}/{filename}`) and output paths (project-prefixed), plus `resolve_file_output_dir` for locating output artifacts, and `compute_file_hash`/`is_file_unchanged` for SHA256-based incremental-processing checks. Favors fallback/identity returns over exceptions for malformed paths.",
+      "summary": "Provides path-conversion and file-hashing utilities mapping project-relative paths to a flattened, collision-free output directory structure. Key functions: rel_to_copy_path(rel_path: str)->str, copy_path_to_rel(copy_path: str)->str, output_path_to_rel(output_path: str)->str, resolve_file_output_dir(base_output_dir: str, file_rel: str)->str, compute_file_hash(file_path: str)->str, is_file_unchanged(source_path: str, copied_path: str)->bool. Operates purely on str/bool values; no complex data structures, only path strings and SHA256 hex digests.",
       "callers": [
         "codetwine/codetwine/doc_creator_py/doc_creator.py",
         "codetwine/codetwine/extractors/dependency_graph_py/dependency_graph.py",
@@ -197,7 +211,7 @@
     },
     {
       "file": "codetwine/codetwine/parsers/ts_parser_py/ts_parser.py",
-      "summary": "`ts_parser.py` centralizes tree-sitter AST parsing for CodeTwine. Its core interface, `parse_file(file_path)`, reads a file as bytes, selects a tree-sitter `Language` via extension lookup in `TREE_SITTER_LANGUAGES`, parses it, and returns `(root_node, content)`. Results are memoized in module-level `parse_cache` (dict keyed by file_path), shared across consumers (`file_analyzer.py`, `import_to_path.py`, `usage_analysis.py`, `dependency_graph.py`) to avoid redundant I/O/parsing. No error handling—unsupported extensions or unreadable files raise natively. `pipeline.py` clears the cache post-analysis.",
+      "summary": "Parses source files into tree-sitter ASTs with LRU caching. Public API: `parse_file(file_path: str) -> tuple[Node, bytes]` reads/parses a file (language chosen via extension using `TREE_SITTER_LANGUAGES`); `parse_cache: OrderedDict[str, tuple[Node, bytes]]` module-level cache, cleared via `parse_cache.clear()`. Eviction bounded by `PARSE_CACHE_MAX_FILES` (0 = unbounded). No error handling; exceptions propagate.",
       "callers": [
         "codetwine/codetwine/extractors/dependency_graph_py/dependency_graph.py",
         "codetwine/codetwine/extractors/usage_analysis_py/usage_analysis.py",
@@ -211,15 +225,24 @@
     },
     {
       "file": "codetwine/examples/rlm_qa/rlm_qa_agent_py/rlm_qa_agent.py",
-      "summary": "`rlm_qa_agent.py` is the standalone CLI orchestrator that wires `dspy.RLM`, a Deno-sandboxed `PythonInterpreter`, and `qa_tools` to answer questions over `project_knowledge.json`. Key functions: `load_project` (populates `qa_tools.project_data`/`base_dir`), `build_doc_schema` (derives doc-section schema), `create_interpreter` (Deno sandbox setup), `create_qa_agent` (builds LMs, instructions, Signature, RLM), `ask` (runs query), `main` (interactive REPL with cleanup). Depends solely on `qa_tools` for state/tools; no dependents. Handles startup errors fatally, loop errors gracefully, guarantees interpreter shutdown.",
+      "summary": "Bootstraps a `dspy.RLM` Q&A agent answering questions about a project knowledge file via sandboxed tool calls. Key functions: `build_doc_schema(store)->str`, `load_project(knowledge_path:str)->dict`, `create_interpreter()->PythonInterpreter`, `create_qa_agent(knowledge_path:str)->dspy.RLM`, `ask(rlm, question:str)->str`, `main()->None`. Core data: `project_data` dict (`project_name:str`, `project_dependencies:list[dict]` with file/summary/callers/callees), used as RLM signature input alongside `question:str`→`answer:str`.",
       "callers": [],
       "callees": [
+        "codetwine/examples/rlm_qa/knowledge_store_py/knowledge_store.py",
         "codetwine/examples/rlm_qa/qa_tools_py/qa_tools.py"
       ]
     },
     {
+      "file": "codetwine/examples/rlm_qa/knowledge_store_py/knowledge_store.py",
+      "summary": "Provides uniform access to codetwine knowledge files (JSON/SQLite) via `JsonStore`/`SqliteStore` (path:str), unified as `Store` alias, chosen by `open_store(knowledge_path:str)->Store`. Both expose `dependencies()->list[dict]`, `entry(file:str)->dict|None`, `iter_entries()->Iterator[dict]`, `find_definitions(name:str, partial:bool)->list[dict]`, `close()->None`, plus `project_name`/`base_dir` attrs. Key structures: dependency entries `{file,summary,callers,callees}`, file entries `{file,file_dependencies,doc}`, definition records `{file,name,type,start_line,end_line}`.",
+      "callers": [
+        "codetwine/examples/rlm_qa/rlm_qa_agent_py/rlm_qa_agent.py"
+      ],
+      "callees": []
+    },
+    {
       "file": "codetwine/examples/rlm_qa/qa_tools_py/qa_tools.py",
-      "summary": "qa_tools.py supplies read-only tool functions and shared module state (`project_data`, `base_dir`) for an RLM QA agent to explore a project_knowledge.json codebase graph. Public API: `read_source_file(path)` reads source text; `get_files_using(target_file)` finds dependents via substring match on callee_usages; `graph_search(name, hops, direction)` BFS-traverses definitions/usages into a subgraph (nodes/edges keyed \"file:name\"). Errors return as strings/dicts, not exceptions. State is set externally by rlm_qa_agent.py; no internal dependencies beyond stdlib.",
+      "summary": "Provides read-only LLM tool functions querying a module-level `store` (KnowledgeStore) to inspect project knowledge without loading it into agent context. Functions: `read_source_file(path:str)->str`, `get_file_detail(file:str)->dict`, `search_text(keyword:str, limit:int)->list`, `get_files_using(target_file:str)->list`, `graph_search(name:str, hops:int, direction:str)->dict`. Consumes/produces `file_dependencies` (definitions, callee_usages, caller_usages dicts), `doc` (summary/sections), search hit dicts, and BFS graph result (`nodes`/`edges` dicts).",
       "callers": [
         "codetwine/examples/rlm_qa/rlm_qa_agent_py/rlm_qa_agent.py"
       ],

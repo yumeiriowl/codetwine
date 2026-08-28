@@ -2,228 +2,303 @@
 
 # Overview & Purpose
 
-## Role in the Project
+## 1. Module Summary
+Extract, from a source file's AST, the locations where a given set of tracked symbol names are used (calls, attribute access, identifiers, type/namespace references) and the type-annotated variable aliases that refer to those symbols.
 
-`codetwine/extractors/usages.py` is responsible for locating where previously-detected symbols (e.g., imported names, classes, functions) are actually **used** within a source file's AST. It complements import/definition extraction modules by answering "where and how is this symbol referenced in the code?" This information is consumed by `codetwine/extractors/usage_analysis.py`, which builds a symbol-to-file mapping and uses this module to determine cross-file usage relationships and typed-variable aliasing.
+## 2. When to Use This Module
+- **Finding where imported/target symbols are referenced in code**: call `extract_usages` with the AST root, a set of symbol names to track, and the language-specific `usage_node_types` config to get a deduplicated, line-sorted list of `UsageInfo` entries describing each usage site.
+- **Resolving typed variable declarations back to an imported type**: call `extract_typed_aliases` with the AST root, the set of imported type names, and `typed_alias_parent_types` (language-specific declaration node types) to get a `{variable_name: type_name}` mapping (e.g., `{"genre": "Genre"}"`), so that variables of a tracked type can also be tracked as usages of that type.
+- **Building a cross-file symbol usage map**: as done in `usage_analysis.py`, first call `extract_typed_aliases` to expand the tracked-name set with local variable aliases of imported types, then call `extract_usages` with the expanded name set to capture both direct references and references via aliased variables.
 
-The module is kept separate because usage detection requires language-agnostic AST traversal logic that must handle many syntactic variations (function calls, attribute access, identifiers, type references, qualified/namespaced identifiers, typed declarations) across multiple languages (Python, Java, Kotlin, C/C++) driven by configurable node-type sets (`USAGE_NODE_TYPES` in `config.py`), isolating this complexity from higher-level orchestration logic.
+## 3. Public Interface Table
 
-## Main Public Interfaces
-
-| Name | Arguments | Return Value | Responsibility |
+| Name | Arguments (type) | Return type | Responsibility |
 |---|---|---|---|
-| `UsageInfo` (dataclass) | `name: str`, `line: int` | — | Represents a single usage occurrence (symbol name + 1-based line number). |
-| `extract_usages` | `root_node: Node`, `imported_names: set[str]`, `usage_node_types: dict \| None = None` | `list[UsageInfo]` | DFS-traverses the AST to find calls, attribute accesses, identifiers, and type/namespace references matching `imported_names`; deduplicates and returns results. |
-| `extract_typed_aliases` | `root_node: Node`, `imported_names: set[str]`, `typed_alias_parent_types: set[str]` | `dict[str, str]` | Finds typed variable declarations (e.g., `Genre genre`) whose type is in `imported_names`, returning a variable-name → type-name mapping. |
+| `UsageInfo` (dataclass) | fields: `name: str`, `line: int` | — | Represents a single usage location: the symbol name used and its 1-based line number. |
+| `extract_usages` | `root_node: Node`, `imported_names: set[str]`, `usage_node_types: dict \| None` | `list[UsageInfo]` | Traverses the AST via DFS, detects usages of tracked names in calls, attribute access, identifiers, and type/namespace references, and returns a deduplicated list. |
+| `extract_typed_aliases` | `root_node: Node`, `imported_names: set[str]`, `typed_alias_parent_types: set[str]` | `dict[str, str]` | Traverses the AST to find typed variable declarations whose declared type is in `imported_names`, and returns a variable-name-to-type-name mapping. |
 
-### Internal Helper Functions (not part of the public API, but supporting logic)
-
-| Name | Responsibility |
-|---|---|
-| `_deduplicate` | Removes redundant same-line entries (keeping more detailed names like `module.attr` over `module`) and duplicate `(name, line)` pairs. |
-| `_is_function_part_of_call` | Determines if an attribute node is the callee part of a call node (to avoid double-counting). |
-| `_parse_call_node` | Extracts usage info from the first child of a call node (identifier, attribute, or qualified identifier). |
-| `_parse_attribute_node` | Extracts usage info from standalone `module.attr`-style attribute access. |
-| `_parse_identifier_node` | Extracts usage info from plain identifiers, applying skip rules for declaration/import contexts. |
-| `_extract_type_and_var` | Extracts type name and associated variable name(s) from a typed declaration node, handling Java/Kotlin/C/C++ AST shape differences. |
-
-## Design Decisions
-
-- **Iterative DFS with an explicit stack** (rather than recursion) is used in both `extract_usages` and `extract_typed_aliases` to traverse the AST, avoiding recursion depth issues on large files.
-- **Configuration-driven behavior**: node type sets (`call_types`, `attribute_types`, `skip_parent_types`, `skip_parent_types_for_type_ref`, `skip_name_field_types`) are injected via `usage_node_types`, allowing the same traversal logic to support multiple languages without hardcoding syntax per language.
-- **Separation of concerns via dedicated parser helpers** (`_parse_call_node`, `_parse_attribute_node`, `_parse_identifier_node`): each node-type category has its own extraction function, keeping the main traversal loop in `extract_usages` readable and focused on dispatch.
-- **Post-processing deduplication (`_deduplicate`)** is applied as a final pass rather than during traversal, simplifying the traversal logic and centralizing the "prefer more specific match" rule (e.g., `module.attr` over `module`) in one place.
-- **Graceful degradation**: `extract_usages` returns an empty list when `usage_node_types` is falsy, and `extract_typed_aliases` returns an empty dict when `typed_alias_parent_types` is empty, allowing languages without usage-tracking configuration to be safely skipped by callers.
+## 4. Design Decisions
+- **Configuration-driven, language-agnostic traversal**: Node-type sets (`call_types`, `attribute_types`, `skip_parent_types`, etc.) are injected via `usage_node_types`/`typed_alias_parent_types` rather than hardcoded, allowing the same traversal logic to support multiple languages (Python, Java, Kotlin, C/C++) with different AST shapes.
+- **DFS via explicit stack**: Both `extract_usages` and `extract_typed_aliases` use an explicit node stack instead of recursion to walk the AST, avoiding recursion-depth concerns on large files.
+- **Post-hoc deduplication over precise real-time filtering**: Rather than preventing all redundant/overlapping matches during traversal (e.g., "module" vs "module.attr"), the module collects all candidate usages first and applies `_deduplicate` afterward to keep only the most specific name per line.
+- **Special-cased skip rules for syntactic positions**: `skip_parent_types` (and its type-reference variant `skip_parent_types_for_type_ref`) and `skip_name_field_types` allow fine-grained exclusion of identifiers that appear in declaration/import syntax (not actual usages), while still detecting usages on the "value" side of constructs like default parameters.
 
 # Definition Design Specifications
 
-## `UsageInfo`
+## `UsageInfo` (dataclass)
 
-A dataclass representing a single detected usage of a tracked symbol, storing the symbol `name` (str) and the 1-based `line` (int) number where it appears.
+**Signature:** `@dataclass class UsageInfo`
 
-Exists to provide a uniform, minimal record type shared by all extraction and deduplication logic in this module, decoupling downstream consumers from raw tree-sitter node details.
+**Responsibility:** Represents a single detected usage of a tracked symbol at a specific source location, serving as the common return unit for all usage-extraction functions in this module.
 
-Line numbers are stored as 1-based (converted from tree-sitter's 0-based `start_point`) to match conventional editor/file line numbering used by callers.
+**When to use:** Instantiated internally whenever the AST traversal identifies a node that references a name in the caller-supplied `imported_names` set.
 
-## `extract_usages`
+**Fields:**
 
-Takes `root_node` (tree-sitter `Node`, the AST root), `imported_names` (`set[str]`, symbols to track), and `usage_node_types` (`dict | None`, per-language node type configuration). Returns `list[UsageInfo]`, deduplicated usage records.
+| Field | Type | Purpose |
+|---|---|---|
+| `name` | `str` | The symbol name being used (may be a simple name or a dotted/qualified form such as `"module.attr"`) |
+| `line` | `int` | 1-based line number of the usage location in the source file |
 
-Serves as the main entry point for locating where imported/tracked symbols are referenced in source code, abstracting over language-specific AST shapes via the `usage_node_types` configuration so the same traversal logic works across languages.
+**Design decisions:** No `__eq__`/hashing customization beyond the dataclass default; deduplication logic (`_deduplicate`) manually builds `(name, line)` keys instead of relying on dataclass equality/hash, allowing it to also perform substring-based redundancy filtering.
 
-Uses an explicit stack-based DFS rather than recursion, likely to avoid recursion-depth issues on large ASTs and to allow selectively skipping subtrees (e.g., pushing only `node.children` and `continue`-ing) when a parent type indicates the subtree should not be treated as ordinary identifiers.
+**Constraints & edge cases:** `name` can contain dots (e.g., `"module.attr"`), which is significant for the deduplication logic that checks prefix relationships between entries on the same line.
 
-Key design decisions:
-- Node types are checked in a specific priority order (call types, then attribute types, then `qualified_identifier`, then type/namespace identifiers, then plain identifiers) so that composite constructs (calls, attribute chains, qualified names) are captured as a single higher-level usage instead of being fragmented into multiple lower-level identifier usages.
-- `qualified_identifier` and type-reference nodes each have their own skip-parent logic (`skip_parent_types` vs. `skip_parent_types_for_type_ref`) because type references (e.g., in parameter/method declarations) should be tracked as usages even in contexts where plain identifiers should not be.
-- Returns an empty list immediately when `usage_node_types` is falsy, allowing languages without usage-tracking configuration to be safely skipped by callers.
-- Required keys (`call_types`, `attribute_types`, `skip_parent_types`) must be present in `usage_node_types`; optional keys default to empty sets or to `skip_parent_types`.
+---
 
-Edge case: when a `qualified_identifier` or type-reference node's parent is in the relevant skip set, its children are still pushed onto the stack for further traversal rather than being discarded entirely, so nested usages are not lost even when the outer node is skipped.
+## `extract_usages(root_node: Node, imported_names: set[str], usage_node_types: dict | None = None) -> list[UsageInfo]`
 
-## `_deduplicate`
+**Responsibility:** Entry point that walks an entire AST and produces a deduplicated list of all locations where any of `imported_names` is referenced, covering calls, attribute access, plain identifiers, type/namespace references, and C++ qualified identifiers.
 
-Takes `usage_list` (`list[UsageInfo]`, possibly containing duplicates or redundant entries). Returns a `list[UsageInfo]` sorted by ascending line number with duplicates and redundant shorter names removed.
+**When to use:** Called once per source file (or per caller context) after imports have been resolved to a `symbol_to_file_map`, to find where imported symbols are actually used — both for the main pass and for typed-alias-expanded name sets, as shown in `usage_analysis.py`.
 
-Exists to reconcile multiple detections of the same logical usage (e.g., a plain identifier usage and a more specific attribute-access usage on the same line) into a single, most-informative entry per line.
+**Design decisions:**
+- Uses an explicit stack for DFS instead of recursion, avoiding Python recursion-depth limits on large files.
+- Dispatches on `node.type` via an `if/elif` chain instead of a dict lookup, so each node type is handled by exactly one branch even though multiple type categories could theoretically overlap (e.g., `call_types` vs `attribute_types` vs `_TYPE_REFERENCE_NODE_TYPES` are treated as mutually exclusive per node).
+- `qualified_identifier` (C++ `a::b`) is special-cased separately from the generic type-reference handling: only the first matching child (`namespace_identifier`/`identifier`/`type_identifier`) is checked and recorded, then the loop `break`s, preventing duplicate reporting of the same scope reference from nested children.
+- For `qualified_identifier` and type-reference nodes (`type_identifier`/`namespace_identifier`), when the parent is in the relevant skip set, children are still pushed onto the stack (`continue`) rather than fully skipped, so nested valid usages are not lost even though the parent node itself is excluded.
+- `skip_parent_types_for_type_ref` defaults to `skip_parent_types` when absent, allowing languages to reuse one skip configuration unless a distinct one is needed for type references.
+- Final results always pass through `_deduplicate`, so line-level redundancy (e.g. `module` vs `module.attr`) is resolved centrally rather than at each detection site.
 
-Key design decision: grouping by line number and preferring the longest dotted name (`"module.attr"` over `"module"`) reflects the assumption that a more qualified name is a strict refinement of a shorter one appearing on the same line, so the shorter one is redundant rather than a distinct usage.
+**Constraints & edge cases:**
+- Returns `[]` immediately if `usage_node_types` is falsy (`None` or empty dict) — used for languages without usage-tracking configuration.
+- Requires `usage_node_types` to contain `"call_types"`, `"attribute_types"`, and `"skip_parent_types"` keys; missing required keys raise `KeyError`.
+- `"skip_name_field_types"` and `"skip_parent_types_for_type_ref"` are optional with documented fallbacks.
+- Node types not covered by any branch (call/attribute/qualified_identifier/type-reference/identifier) are traversed but otherwise ignored.
 
-Constraint: deduplication logic (prefix matching) is applied per line only; identical `(name, line)` pairs across the whole list are removed via a separate seen-key check.
+---
 
-## `_is_function_part_of_call`
+## `_deduplicate(usage_list: list[UsageInfo]) -> list[UsageInfo]`
 
-Takes `node` (`Node`, an attribute-type node) and `call_types` (`set[str]`). Returns `bool` indicating whether this attribute node is the callee expression of a call node (and thus should not be separately recorded as a standalone attribute usage).
+**Responsibility:** Collapses redundant and duplicate usage entries so that, on a given line, a shorter name subsumed by a more detailed dotted name is dropped, and repeated `(name, line)` pairs are collapsed to one.
 
-Exists to prevent double-counting: when an attribute access like `module.func` is the function part of `module.func()`, the call-handling logic already records the usage, so the attribute node itself must be excluded.
+**When to use:** Invoked once at the end of `extract_usages` on the full accumulated usage list; not intended for external/standalone use.
 
-Design decision: identifies the callee by comparing node identity (`child.id == node.id`) against the call node's first matching child (`identifier` or same attribute type), rather than relying on field names, to remain robust across languages whose grammars may not expose a named "function" field uniformly.
+**Design decisions:**
+- Groups usages by line first, then within each line checks, for every usage, whether another usage's name starts with `usage.name + "."` — this handles the case where both a bare module usage and a `module.attr` usage were recorded for the same line, keeping only the more specific one.
+- Iterates lines in ascending sorted order to guarantee a deterministic, line-ascending output ordering.
+- Uses a `seen_keys` set of `(name, line)` tuples for duplicate suppression rather than relying on dataclass equality, since `UsageInfo` does not define custom hashing behavior needed for use in a set directly (dataclass default equality/hash could work, but the tuple-key approach is used regardless).
 
-## `_parse_call_node`
+**Constraints & edge cases:** If two distinct names on the same line have a prefix relationship not intended as module/attribute (unlikely in practice given how names are constructed), the shorter one would incorrectly be dropped; this is an inherent heuristic limitation tied to the `"module"` vs `"module.attr"` convention produced by `_parse_call_node`/`_parse_attribute_node`.
 
-Takes `node` (`Node`, a call-type node), `imported_names` (`set[str]`), and `attribute_types` (`set[str]`). Returns `UsageInfo | None` for the call's target symbol if it matches a tracked name.
+---
 
-Exists to extract the invoked symbol from call expressions across several call-target shapes: simple identifier calls, attribute-based calls (`module.func()`), and C++ scope-resolved calls (`ns::func()`).
+## `_is_function_part_of_call(node: Node, call_types: set[str]) -> bool`
 
-Design decision: only the first child of the call node is inspected (loop breaks after the first iteration) since, in the supported grammars, the first child of a call node is always the callee expression; this avoids misinterpreting call arguments as usages.
+**Responsibility:** Determines whether a given attribute-access node is merely the callee expression of a call node (e.g., the `module.func` part of `module.func()`), to avoid double-reporting it as a standalone attribute usage.
 
-Edge case: for attribute-type callees, only the leading segment before the first `.` is checked against `imported_names`, but the full dotted name is stored, preserving specificity for later deduplication.
+**When to use:** Called from `extract_usages` whenever a node matches `attribute_types`, before deciding whether to independently parse it as an attribute usage.
 
-## `_parse_attribute_node`
+**Design decisions:** Checks the parent's children for the first one whose type is `"identifier"` or matches the current node's own type, and compares node identity (`.id`) rather than value equality, to correctly identify positional "first child" matching even when multiple children share a type.
 
-Takes `node` (`Node`, an attribute-access node) and `imported_names` (`set[str]`). Returns `UsageInfo | None` based on whether the leading component of the dotted attribute path is a tracked name.
+**Constraints & edge cases:** Only inspects the immediate parent; if the parent's type is not in `call_types`, returns `False` regardless of grandparent structure. Assumes the callee is always among the parent's children with type `"identifier"` or the same type as `node`.
 
-Exists to detect standalone attribute-access usages (as opposed to attribute expressions that are merely the callee of a call, which are filtered out beforehand by `_is_function_part_of_call`).
+---
 
-Design decision: matches only on the leading segment (`name.split(".")[0]`) against `imported_names` while storing the full attribute text as `name`, allowing precise reporting of exactly which attribute was accessed while still keying the match on the imported root symbol.
+## `_parse_call_node(node: Node, imported_names: set[str], attribute_types: set[str]) -> UsageInfo | None`
 
-## `_parse_identifier_node`
+**Responsibility:** Extracts a `UsageInfo` from a function-call AST node by inspecting only its first child (the callee expression), supporting simple calls, attribute-based calls, and C++ scope-resolved calls.
 
-Takes `node` (`Node`, an identifier node), `imported_names` (`set[str]`), `skip_parent_types` (`set[str]`), and `skip_name_field_types` (`set[str]`). Returns `UsageInfo | None`.
+**When to use:** Called by `extract_usages` for every node whose type is in `call_types`.
 
-Exists to detect simple, non-compound symbol references while filtering out identifiers that are part of syntactic declarations (parameter names, import statement components, etc.) rather than actual usages.
+**Design decisions:**
+- Only the first child of the call node is examined (enforced via an unconditional `break` at the end of the first loop iteration), reflecting the assumption that the callee is always the first child in the supported grammars.
+- For attribute-style callees (`module.func`), the full dotted text is kept as the reported `name`, but matching against `imported_names` is done on the leading segment (`name.split(".")[0]`) so partial import matching works while preserving specificity for deduplication.
+- For `qualified_identifier` callees, only the first matching sub-child among `namespace_identifier`/`identifier`/`type_identifier` is checked, then breaks — mirroring the same "single scope segment" strategy used elsewhere.
 
-Key design decision: `skip_name_field_types` enables a finer-grained skip than `skip_parent_types` — for node types like default/keyword parameters where only the declared name (identified via the parent's `"name"` field) should be ignored, while a same-node "value" child (e.g., a default value referencing an imported symbol) is still treated as a genuine usage. This distinguishes declaration sites from reference sites within the same parent construct.
+**Constraints & edge cases:** Returns `None` if the call has no children, if the first child's type doesn't match any handled case, or if the extracted name is not in `imported_names`. Does not examine any child beyond the first.
 
-## `extract_typed_aliases`
+---
 
-Takes `root_node` (`Node`), `imported_names` (`set[str]`, tracked type names), and `typed_alias_parent_types` (`set[str]`, node types representing typed declarations). Returns `dict[str, str]` mapping variable name to its declared imported type name.
+## `_parse_attribute_node(node: Node, imported_names: set[str]) -> UsageInfo | None`
 
-Exists to support tracking of usages that occur indirectly through a locally-declared variable typed with an imported class/type (e.g., `Genre genre`), so that later uses of `genre` alone can be attributed back to the `Genre` symbol by callers (as seen in `usage_analysis.py`, which merges these aliases into the tracked symbol set before calling `extract_usages`).
+**Responsibility:** Extracts a `UsageInfo` from a standalone attribute-access node (e.g., `module.attr`) when its leading component matches a tracked import.
 
-Design decision: uses the same stack-based DFS pattern as `extract_usages` for consistency, but only needs to find declaration nodes matching `typed_alias_parent_types` rather than performing full symbol classification.
+**When to use:** Called by `extract_usages` for nodes matching `attribute_types` that are not the callee part of a call (per `_is_function_part_of_call`).
 
-Edge case/constraint: returns an empty dict immediately if `typed_alias_parent_types` is empty. A variable is excluded from the result if its name equals the type name (`var_name != type_name`), avoiding self-referential or nonsensical aliasing entries. Only declarations whose extracted type is present in `imported_names` are included.
+**Design decisions:** Uses the full node text (potentially multi-level, e.g. `a.b.c`) as the reported name but only validates the first `.`-separated segment against `imported_names`.
 
-## `_extract_type_and_var`
+**Constraints & edge cases:** Returns `None` if the leading segment isn't tracked, even if a later segment happens to match an imported name.
 
-Takes `node` (`Node`, a typed-declaration node). Returns `tuple[str | None, list[str]]` — the declared type name (or `None` if not found) and the list of variable names declared under that type.
+---
 
-Exists to normalize differing AST shapes across Java, Kotlin, and C/C++ typed-declaration grammars into a single (type, variables) representation, so `extract_typed_aliases` can remain language-agnostic.
+## `_parse_identifier_node(node: Node, imported_names: set[str], skip_parent_types: set[str], skip_name_field_types: set[str]) -> UsageInfo | None`
 
-Design decision: handles nested wrapper nodes explicitly — `user_type` (Kotlin) for locating the inner `type_identifier`, and `variable_declarator`/`init_declarator` (Java/C/C++) for locating the inner `identifier` — since in these grammars the variable name is not a direct child of the declaration node but nested one level deeper.
+**Responsibility:** Determines whether a plain identifier node represents a genuine usage of a tracked symbol, filtering out identifiers that are purely syntactic (declaration names, import statements, parameter names).
 
-Edge case: a declaration node may contain multiple identifier-like children (e.g., multiple declarators), all of which are appended to `var_names`, supporting multi-variable declarations of a single type such as `Genre a, b;`.
+**When to use:** Called by `extract_usages` for every node of type `"identifier"` that wasn't already handled as part of a call or attribute node.
+
+**Design decisions:**
+- Implements a two-tier skip strategy: for parent types in `skip_name_field_types`, only the specific child bound to the parent's `"name"` field is skipped (via `child_by_field_name("name")` identity check), allowing the "value" side of constructs like default parameters (`x=some_var`) to still be detected as usage.
+- For parent types in the coarser `skip_parent_types`, the identifier is unconditionally skipped regardless of field role.
+- The `skip_name_field_types` check takes precedence (`elif`) over the general `skip_parent_types` check, so a parent type should logically belong to at most one of the two categories for correct behavior.
+
+**Constraints & edge cases:** If a parent node has no `"name"` field (unexpected grammar shape), `name_child` is `None` and the identifier is not skipped by that branch, falling through to the plain name-match check. Assumes `skip_name_field_types` and `skip_parent_types` are configured without overlapping semantics per parent type.
+
+---
+
+## `extract_typed_aliases(root_node: Node, imported_names: set[str], typed_alias_parent_types: set[str]) -> dict[str, str]`
+
+**Responsibility:** Scans the AST for typed variable/parameter/field declarations whose declared type is one of the tracked imported names, producing a mapping from variable name to the imported type name (e.g., `{"genre": "Genre"}`) so that usages of the variable can later be attributed to the imported type's originating file.
+
+**When to use:** Called before (or in place of) `extract_usages` to expand the tracked-name set with local aliases of imported types, as done in `usage_analysis.py` where resulting variable names are merged into `symbol_to_file_map`/`names_from_target` prior to calling `extract_usages`.
+
+**Design decisions:**
+- Uses the same stack-based DFS pattern as `extract_usages` for consistency, but with a simpler single-condition check (`node.type in typed_alias_parent_types`) since no skip-list logic is needed at this stage.
+- Delegates the actual type/variable-name extraction to `_extract_type_and_var`, keeping language-structure handling isolated from the traversal/aggregation logic.
+- Excludes self-referential mappings where `var_name == type_name` (e.g., avoids mapping a type name to itself in edge cases where the extraction logic might otherwise conflate them).
+
+**Constraints & edge cases:** Returns `{}` immediately if `typed_alias_parent_types` is empty/falsy. If multiple declarations across the file declare different types for the same variable name, later occurrences (processed later in the DFS/stack order, which is not strictly source order due to `stack.extend`) overwrite earlier ones in the returned dict, since it's a plain `dict` assignment with no conflict handling.
+
+---
+
+## `_extract_type_and_var(node: Node) -> tuple[str | None, list[str]]`
+
+**Responsibility:** Extracts the declared type name and the list of variable names from a single typed-declaration node, normalizing differences between Java/C/C++ (`type_identifier` + `variable_declarator`/`init_declarator`) and Kotlin (`user_type` wrapping `type_identifier`, plus `simple_identifier`) grammars.
+
+**When to use:** Called once per matching node inside `extract_typed_aliases`'s traversal loop; not intended for standalone use outside that context.
+
+**Design decisions:**
+- Iterates only the direct children of the declaration node (no deeper recursion), relying on the grammars' shallow structure for these declaration types; nested `variable_declarator`/`init_declarator` children are inspected one level deeper specifically to reach the `identifier` inside them.
+- For Kotlin's `user_type`, only the first `type_identifier` sub-child found is used (`break` after assignment), assuming a single type identifier per `user_type` node.
+- Supports multiple variable names per declaration by appending to `var_names` in a list rather than assuming a single variable (relevant for cases like multi-declarator statements), though `type_name` is a single value.
+
+**Constraints & edge cases:** Returns `(None, [])` if no recognized child types are found. If a declaration node contains multiple `type_identifier` children (unexpected in the documented grammars), the last one encountered wins since `type_name` is repeatedly overwritten. Does not handle recursive/nested type expressions beyond the one-level `variable_declarator`/`init_declarator` unwrapping.
 
 # Dependency Description
 
-### Dependencies (what this file uses)
+### Dependencies (modules this file imports)
 
-- **tree_sitter (`Node`)**: Used purely as a type annotation for AST node parameters throughout the module. This file relies on the `tree_sitter` library's AST node structure (`type`, `children`, `parent`, `text`, `start_point`, `child_by_field_name`) to traverse and inspect syntax trees, but this is an external library dependency rather than a project-internal one.
+This file has no project-internal module dependencies. It only relies on external packages (`dataclasses`, `tree_sitter`), which are excluded per instructions. All logic in `codetwine/extractors/usages.py` is self-contained, operating directly on the `Node` objects passed in from callers and the `UsageInfo` dataclass defined internally.
 
-This file has no project-internal dependencies; it operates solely on generic AST `Node` objects and configuration dictionaries (`usage_node_types`, `typed_alias_parent_types`) passed in by its callers, without importing any other project module.
+### Dependents (modules that import this file)
 
-### Dependents (what uses this file)
+- `codetwine/extractors/usage_analysis.py → codetwine/extractors/usages.py` : uses `extract_typed_aliases` to build a variable-name-to-type-name mapping from typed variable declarations in the AST, based on a set of imported type names (`symbol_to_file_map.keys()` or `names_from_target`) and `typed_alias_parent_types` derived from `usage_node_types`.
+- `codetwine/extractors/usage_analysis.py → codetwine/extractors/usages.py` : uses `extract_usages` to extract a list of `UsageInfo` symbol usage locations from an AST (`root_node` / `caller_root`), given a set of tracked names (which include both directly imported symbols and typed-alias variable names) and the `usage_node_types` configuration.
 
-- **`codetwine/extractors/usage_analysis.py`**: This module depends on `usages.py` for two core capabilities:
-  - It calls `extract_typed_aliases` to detect typed variable declarations (e.g., a variable declared with an imported type) and build a mapping from variable names to their declared type names, which it then merges into its own symbol-to-file mapping so that aliased variables are tracked alongside their original type names.
-  - It calls `extract_usages` to scan an AST and produce a deduplicated list of `UsageInfo` records for a given set of tracked symbol names (including the aliases resolved via `extract_typed_aliases`), using `usage_node_types` configuration to drive language-specific detection rules.
+### Dependency Direction
 
-The dependency direction is **unidirectional**: `usage_analysis.py` depends on `usages.py` for AST-based usage and alias extraction, while `usages.py` has no knowledge of or dependency on `usage_analysis.py` or any other project file.
+The relationship is unidirectional: `codetwine/extractors/usage_analysis.py` depends on `codetwine/extractors/usages.py` by calling its exported functions (`extract_usages`, `extract_typed_aliases`). This file (`usages.py`) does not import or depend on `usage_analysis.py` or any other project-internal module.
 
 # Data Flow
 
-## Input
+## 1. Inputs
 
-| Source | Format | Description |
+This module receives no file or config reads directly; all data enters as function arguments from callers in `usage_analysis.py`:
+
+- **`root_node`** (`tree_sitter.Node`): The root of an AST for a source file, produced by tree-sitter parsing upstream.
+- **`imported_names`** (`set[str]`): The set of symbol names (typically imported/aliased names) whose usages should be detected. Built by callers from `symbol_to_file_map.keys()` or similar name lists.
+- **`usage_node_types`** (`dict | None`): Per-language configuration dict (from `USAGE_NODE_TYPES` in `config.py`), containing:
+  - `call_types` (`set[str]`, required)
+  - `attribute_types` (`set[str]`, required)
+  - `skip_parent_types` (`set[str]`, required)
+  - `skip_name_field_types` (`set[str]`, optional)
+  - `skip_parent_types_for_type_ref` (`set[str]`, optional)
+  - `typed_alias_parent_types` (`set[str]`, optional, used only by `extract_typed_aliases`)
+- **`typed_alias_parent_types`** (`set[str]`): Node type names representing typed variable declarations (e.g. `field_declaration`, `property_declaration`), passed separately into `extract_typed_aliases`.
+
+## 2. Transformation Overview
+
+The module implements two independent but related pipelines that both traverse the same AST via an explicit stack-based DFS (no recursion).
+
+**Pipeline A: `extract_usages`**
+1. **Config unpacking** – Extract node-type sets (`call_types`, `attribute_types`, `skip_parent_types`, etc.) from `usage_node_types`; short-circuit to `[]` if config is missing.
+2. **DFS traversal** – Pop nodes off a stack, classify each by `node.type` into one of: call node, attribute node, `qualified_identifier`, type/namespace reference (`type_identifier` / `namespace_identifier`), or plain `identifier`. All children are always pushed for continued traversal regardless of branch taken.
+3. **Per-branch extraction**:
+   - Call nodes → `_parse_call_node` inspects only the first child (identifier, attribute, or qualified_identifier) to detect calls like `func()`, `module.func()`, `ns::func()`.
+   - Attribute nodes → skipped if they are the callee part of a call (`_is_function_part_of_call`), otherwise parsed by `_parse_attribute_node` for `module.attr` patterns.
+   - `qualified_identifier` → scope-resolution parsing (`ns::Type`), skipping import/package contexts via `skip_parent_types`.
+   - Type/namespace reference nodes → checked against `imported_names` unless their parent is in `skip_parent_types_for_type_ref`.
+   - Plain identifiers → `_parse_identifier_node` filters out syntactic positions (declarations, name fields) using `skip_parent_types` / `skip_name_field_types`.
+4. **Accumulation** – Matches are collected into a flat `list[UsageInfo]`.
+5. **Deduplication (`_deduplicate`)** – Group by line, drop shorter names when a more qualified name (`name.attr`) exists on the same line, then drop exact `(name, line)` duplicates. Result sorted by ascending line number.
+
+**Pipeline B: `extract_typed_aliases`**
+1. **Guard** – Return `{}` if `typed_alias_parent_types` is empty.
+2. **DFS traversal** – Same stack-based approach; nodes matching `typed_alias_parent_types` are inspected.
+3. **Per-node extraction (`_extract_type_and_var`)** – Language-specific child pattern matching extracts a `type_name` and list of `var_names` (handling Java `variable_declarator`, Kotlin `user_type`, C/C++ `init_declarator`, etc.).
+4. **Filtering & mapping** – Only declarations whose `type_name` is in `imported_names` are kept; each `var_name` (excluding self-referential matches) is mapped to its `type_name` in the output dict.
+
+**Cross-pipeline data flow (in `usage_analysis.py`, the consumer)**: `extract_typed_aliases` output is used to extend `imported_names`/`symbol_to_file_map` with alias variable names before calling `extract_usages`, so type-alias resolution feeds into usage detection as an enrichment stage, though this merging happens outside this file.
+
+## 3. Outputs
+
+- **`extract_usages`** → `list[UsageInfo]`: deduplicated, line-sorted list of detected symbol usages.
+- **`extract_typed_aliases`** → `dict[str, str]`: mapping from variable name to the imported type name it was declared with.
+- No file writes or external side effects occur within this module; all output is via return values.
+
+## 4. Key Data Structures
+
+### `UsageInfo` (dataclass)
+| Field / Key | Type | Purpose |
 |---|---|---|
-| `root_node` | `tree_sitter.Node` | AST root of a source file, provided by callers in `usage_analysis.py` |
-| `imported_names` | `set[str]` | Symbol names to track (typically keys of `symbol_to_file_map`, possibly extended with alias variable names) |
-| `usage_node_types` / `typed_alias_parent_types` | `dict` / `set[str]` | Per-language node-type configuration derived from `USAGE_NODE_TYPES` in config.py |
+| `name` | `str` | The symbol name found in use (may be a simple name or dotted `module.attr` form) |
+| `line` | `int` | 1-based line number of the usage occurrence |
 
-## Main Transformation Flow
-
-### `extract_usages`
-```
-root_node ──► DFS stack traversal ──► per-node-type dispatch ──► UsageInfo (raw) ──► _deduplicate ──► list[UsageInfo]
-```
-1. **Config unpack**: `usage_node_types` is destructured into `call_types`, `attribute_types`, `skip_parent_types`, `skip_name_field_types`, `skip_parent_types_for_type_ref`.
-2. **DFS traversal**: nodes are popped from a stack; each node's children are pushed back regardless of branch taken (full-tree scan).
-3. **Node classification & extraction** (mutually exclusive per node):
-   - `call_types` → `_parse_call_node` inspects only the first child (identifier / attribute / qualified_identifier) to detect calls like `func()`, `module.func()`, `ns::func()`.
-   - `attribute_types` (not the function part of a call, checked via `_is_function_part_of_call`) → `_parse_attribute_node` detects `module.attr` style access.
-   - `qualified_identifier` → scope part (`namespace_identifier`/`identifier`/`type_identifier`) is checked directly against `imported_names`; skipped if parent is in `skip_parent_types`.
-   - `type_identifier` / `namespace_identifier` → checked against `imported_names` using `skip_parent_types_for_type_ref` for skip logic.
-   - `identifier` → `_parse_identifier_node` applies `skip_parent_types` / `skip_name_field_types` rules to filter out declaration/import syntax noise, keeping only real references.
-4. **Deduplication**: `_deduplicate` groups raw `UsageInfo` by `line`, removes shorter names when a more qualified name (`name.` prefix) exists on the same line, and removes exact `(name, line)` duplicates. Result sorted by ascending line number.
-
-### `extract_typed_aliases`
-```
-root_node ──► DFS stack traversal ──► nodes matching typed_alias_parent_types ──► _extract_type_and_var ──► {var_name: type_name}
-```
-1. DFS traversal similar to above, but simpler (no classification branches besides membership in `typed_alias_parent_types`).
-2. For each matching node, `_extract_type_and_var` parses children to find a type name (`type_identifier`, or nested inside `user_type`) and variable names (`identifier`, `simple_identifier`, or nested inside `variable_declarator`/`init_declarator`).
-3. Only pairs where `type_name` is in `imported_names` are kept; self-referential (`var_name == type_name`) entries are excluded.
-
-## Output
-
-| Function | Output Type | Structure | Destination |
-|---|---|---|---|
-| `extract_usages` | `list[UsageInfo]` | `{name: str, line: int}` per entry | Consumed by `usage_analysis.py` to map usages to source files via `symbol_to_file_map` |
-| `extract_typed_aliases` | `dict[str, str]` | `{variable_name: type_name}` | Used by `usage_analysis.py` to extend `symbol_to_file_map` (alias variable → same file as its type) and to extend the tracked `imported_names` set before calling `extract_usages` |
-
-## Key Data Structures
-
-| Structure | Fields | Purpose |
+### `usage_node_types` (input dict, schema)
+| Key | Type | Purpose |
 |---|---|---|
-| `UsageInfo` (dataclass) | `name: str`, `line: int` | Represents one detected usage occurrence (symbol name + 1-based line number) |
-| `usage_node_types` (input dict) | `call_types`, `attribute_types`, `skip_parent_types`, `skip_name_field_types` (optional), `skip_parent_types_for_type_ref` (optional) | Language-specific rules controlling which AST node types represent calls/attributes and which parent contexts to skip |
-| `by_line` (internal, in `_deduplicate`) | `{line: list[UsageInfo]}` | Groups usages per line to resolve redundancy between short and qualified names |
-| `aliases` (output of `extract_typed_aliases`) | `{var_name: type_name}` | Maps locally declared variable names to their imported type, enabling indirect usage tracking (e.g., `genre` → `Genre`) |
+| `call_types` | `set[str]` | AST node types representing function/method calls |
+| `attribute_types` | `set[str]` | AST node types representing attribute/member access |
+| `skip_parent_types` | `set[str]` | Parent node types under which identifier usages should be ignored (e.g. import statements) |
+| `skip_name_field_types` | `set[str]` (optional) | Parent node types where only the "name" field child is skipped, "value" side still tracked |
+| `skip_parent_types_for_type_ref` | `set[str]` (optional) | Parent node types to skip specifically for type/namespace reference nodes; defaults to `skip_parent_types` |
+| `typed_alias_parent_types` | `set[str]` (optional, used by caller) | Node types representing typed variable declarations |
+
+### Typed alias mapping (output of `extract_typed_aliases`)
+| Key | Type | Purpose |
+|---|---|---|
+| variable name | `str` (dict key) | Local variable/field name declared with an imported type |
+| type name | `str` (dict value) | The imported type name used in the declaration |
+
+### Intermediate: `(type_name, var_names)` tuple from `_extract_type_and_var`
+| Field | Type | Purpose |
+|---|---|---|
+| `type_name` | `str \| None` | Extracted declared type (from `type_identifier` or `user_type`) |
+| `var_names` | `list[str]` | Extracted variable/field names declared with that type |
+
+### `by_line` (internal dict in `_deduplicate`)
+| Key | Type | Purpose |
+|---|---|---|
+| line number | `int` (dict key) | Groups usages occurring on the same source line |
+| usages | `list[UsageInfo]` (dict value) | All `UsageInfo` entries found on that line, used for redundancy filtering |
 
 # Error Handling
 
-## Overall Strategy
+## 1. Overall Strategy
 
-This module follows a **graceful degradation** strategy with no explicit exception handling (no `try/except` blocks anywhere in the file). Instead, robustness is achieved through:
+This module employs a **graceful degradation** strategy with no explicit exception handling (no `try/except` blocks anywhere in the file). Instead, error avoidance is achieved through:
 
-- **Defensive configuration checks**: Functions validate their configuration inputs (`usage_node_types`, `typed_alias_parent_types`) at the entry point and return empty results (`[]` or `{}`) rather than raising errors when configuration is absent.
-- **Optional-key tolerance**: Missing optional keys in `usage_node_types` (e.g., `skip_name_field_types`, `skip_parent_types_for_type_ref`) are handled via `.get()` with sensible defaults, avoiding `KeyError`.
-- **Null-safety checks**: Node traversal code consistently checks for `None` (e.g., `parent`, `name_child`) before dereferencing, preventing `AttributeError`.
-- **Silent skipping over failure**: When a node doesn't match expected patterns (unrecognized structure, name not in `imported_names`, etc.), the function simply returns `None` or continues traversal, rather than raising an error.
+- **Defensive guards**: Functions check for `None`/empty inputs upfront (`if not usage_node_types: return []`, `if not typed_alias_parent_types: return {}`) and short-circuit to safe default return values.
+- **Silent skipping via return `None`**: Helper functions such as `_parse_call_node`, `_parse_attribute_node`, and `_parse_identifier_node` return `None` when a node does not match expected conditions, and callers simply skip appending to the result list rather than raising errors.
+- **Optional key handling with `.get()`**: Dictionary lookups for optional configuration keys (`skip_name_field_types`, `skip_parent_types_for_type_ref`) use `.get()` with sensible defaults instead of raising `KeyError`.
+- **No propagation to callers**: There is no raising or re-raising of exceptions; the module assumes malformed or unexpected AST structures simply yield no usage/alias data rather than causing failures.
 
-Overall, the module assumes it will be fed a valid, well-formed AST (`tree_sitter.Node`) and does not attempt to validate the AST structure itself; it only guards against absent/optional configuration and incomplete node relationships (missing parent/child fields) that are expected to occur naturally across different languages/grammars.
+This is effectively a "best-effort extraction" design: if the AST doesn't match expected shapes, the code produces an empty or partial result rather than crashing.
 
-## Main Error Patterns and Handling
+## 2. Error Pattern Table
 
-| Error Type | Handling | Impact |
-|---|---|---|
-| `usage_node_types` is `None`/empty | Early return of an empty list before any processing | `extract_usages` yields no usages for the file/language; no exception surfaces to caller |
-| `typed_alias_parent_types` is empty | Early return of an empty dict before any processing | `extract_typed_aliases` yields no aliases; no exception surfaces to caller |
-| Missing optional config keys (`skip_name_field_types`, `skip_parent_types_for_type_ref`) | Retrieved via `.get()` with default (empty set or fallback to `skip_parent_types`) | Traversal continues with reduced/default skip behavior instead of crashing |
-| Required config keys (`call_types`, `attribute_types`, `skip_parent_types`) missing | Direct dict indexing (`usage_node_types["..."]`) — no guard | Would raise `KeyError`; treated as a caller/config contract violation rather than a runtime condition to degrade gracefully from |
-| Node has no parent (`node.parent` is `None`) | Checked explicitly before accessing `parent.type` | Skip logic is bypassed safely; node is still processed as a normal candidate |
-| Node text decoding (`.text.decode("utf-8")`) | No guard around decode calls | Assumes AST node text is always valid UTF-8, consistent with tree-sitter's guarantees; failures are not anticipated |
-| Name not found among `imported_names` | Function returns `None` / loop simply continues | Node is silently excluded from results; not treated as an error condition |
-| Node type does not match any recognized pattern (e.g., `_extract_type_and_var` finds no `type_identifier`) | Returns `(None, [])` and caller checks truthiness before use | Declaration is skipped without alias entry; no propagation of failure |
-| Duplicate/redundant usage entries on the same line | Handled by `_deduplicate` via string-prefix and key-based filtering | Ensures cleaner output list rather than an error state; purely a data-quality normalization step, not error handling |
+| Error Type | Trigger Condition | Handling | Recoverable? | Impact |
+|---|---|---|---|---|
+| Missing configuration | `usage_node_types` is `None` or empty (language has no usage tracking defined) | Immediately return empty list `[]` | Yes | No usages extracted for that file/language; no crash |
+| Missing typed-alias configuration | `typed_alias_parent_types` is empty | Immediately return empty dict `{}` | Yes | No aliases extracted; no crash |
+| Required config keys absent | `call_types`, `attribute_types`, or `skip_parent_types` missing from `usage_node_types` | Direct dict indexing (`usage_node_types["..."]`) — would raise `KeyError` | No | Function call fails; caller (`usage_analysis.py`) not shown to catch this, so exception would propagate |
+| Optional config keys absent | `skip_name_field_types` / `skip_parent_types_for_type_ref` not present | `.get()` with fallback default (empty set or `skip_parent_types`) | Yes | Behaves as if feature is disabled or falls back to base skip logic |
+| Unmatched/unexpected node shape | Call/attribute/identifier node doesn't match any recognized pattern (e.g., first child isn't `identifier`/attribute/qualified_identifier) | Helper returns `None`; no `UsageInfo` appended | Yes | That particular node is simply not recorded as a usage |
+| Name not in tracked set | Extracted `name` (identifier, attribute, type reference, qualified identifier) not in `imported_names` | Conditional check fails; nothing appended | Yes | Node is effectively ignored, treated as irrelevant usage |
+| Type/variable not found in declaration | `_extract_type_and_var` finds no `type_identifier`/`user_type` or no identifier children | Returns `(None, [])`; caller's `if type_name and type_name in imported_names` guard skips it | Yes | Declaration contributes no alias entries |
+| Self-referential alias | `var_name == type_name` in `extract_typed_aliases` | Explicit skip via `if var_name != type_name` | Yes | Prevents nonsensical alias mapping (e.g., `Genre -> Genre`) |
+| Duplicate/redundant usage entries | Same name appears multiple times per line, or a shorter name is subsumed by a longer dotted name on the same line | Deduplication logic in `_deduplicate` filters using string-prefix and set-based key checks | Yes | Result list is cleaned rather than causing errors |
 
-## Design Considerations
+## 3. Design Notes
 
-- The module draws a clear line between **configuration errors** (required keys assumed present, accessed directly and would fail loudly via `KeyError`) and **data/traversal irregularities** (parent/child absence, unmatched node types, unregistered names), which are treated as normal, expected variation across languages and handled gracefully.
-- Because the AST structure varies significantly between languages (Java, Kotlin, C/C++, etc.), the functions are written to tolerate structural absence (e.g., no `type_identifier` child, no `parent`) as a normal case rather than an anomaly, reflecting the multi-language design intent described in the docstrings.
-- No logging or diagnostic reporting is performed on skipped/unmatched cases; the module relies entirely on return values (`None`, empty collections) to communicate "nothing found" to callers, keeping the traversal logic simple and side-effect-free.
+- The module treats the AST as a best-effort, heterogeneous input source (multiple languages, multiple grammar shapes), so the design favors "return nothing meaningful found" over raising exceptions for structural mismatches — this keeps traversal robust across differing tree-sitter grammars (Java, Kotlin, C/C++, etc.).
+- Required configuration keys (`call_types`, `attribute_types`, `skip_parent_types`) are treated as **mandatory contract** values from `USAGE_NODE_TYPES` in `config.py`; the code does not defensively guard against their absence, implying the responsibility for supplying valid configuration lies with the caller (`usage_analysis.py`), consistent with a fail-fast expectation at the configuration boundary while runtime AST traversal remains fault-tolerant.
+- Optional keys are handled leniently via `.get()` fallback, reflecting a deliberate distinction between "core" settings (must exist) and "extension" settings (degrade gracefully when absent).
+- The deduplication step acts as a final normalization/cleanup pass rather than an error-correction mechanism, ensuring consistent output even when the traversal logic produces overlapping or redundant entries by design (e.g., both `call_types` and `attribute_types` potentially matching related nodes).
+- No logging is performed anywhere in this file; there is no logging-and-continue behavior — omissions and skips happen silently by design, consistent with the module's role as a pure data-extraction utility rather than a diagnostic component.
 
 # Summary
 
-`usages.py` locates where tracked symbols (imports, classes, functions) are used in an AST. Public API: `UsageInfo` (name, line), `extract_usages` (finds calls/attributes/identifiers/type-refs matching given names, dedup'd) and `extract_typed_aliases` (maps variable names to imported types via typed declarations). Both use config-driven, iterative DFS to stay language-agnostic (Python/Java/Kotlin/C/C++). No project-internal dependencies; used by `usage_analysis.py` to build symbol-to-file mappings. Degrades gracefully when config is missing; no exceptions raised.
+Extracts AST-based usage locations of tracked symbol names (calls, attributes, identifiers, type refs). Public API: `UsageInfo(name: str, line: int)` dataclass; `extract_usages(root_node: Node, imported_names: set[str], usage_node_types: dict|None) -> list[UsageInfo]`; `extract_typed_aliases(root_node: Node, imported_names: set[str], typed_alias_parent_types: set[str]) -> dict[str, str]`. Uses config dict `usage_node_types` with sets like `call_types`, `attribute_types`, `skip_parent_types`. No internal deps; consumed by `usage_analysis.py`.
