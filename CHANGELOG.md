@@ -8,9 +8,13 @@
 - `PARSE_CACHE_MAX_FILES` setting capping how many files' parse results are kept in memory
 - `knowledge_db.iter_dependencies()`: read each file's summary and dependency lists back from the database
 - `examples/rlm_qa`: accepts a `project_knowledge.sqlite` as well as a `project_knowledge.json` (`TARGET_JSON_PATH` renamed to `TARGET_KNOWLEDGE_PATH`)
+- `examples/rlm_qa/knowledge_store.py`: per-file read access to either knowledge file form
+- `examples/rlm_qa`: `get_file_detail()` and `search_text()` tools
+- `knowledge_db.find_definitions()`: `partial` argument for a case-insensitive contains match
 - `doc_template.json`: heading format instruction for the `definitions` section (`` ## `<name>` ``)
 
 ### Changed
+- `examples/rlm_qa`: the agent now receives only the file graph and per-file summaries; definitions, source code and design documents are fetched per file through the tools instead of being sent into the sandbox
 - `parse_file()`: the parse cache is now a bounded LRU, so the syntax trees of a whole project are no longer held at once
 - `save_consolidated_json()` / `save_dependency_summary()`: entries are written one at a time instead of being assembled in a list first
 - `generate_all_docs()`: only each design document's summary is carried forward between levels, not its full section text

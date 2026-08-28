@@ -478,7 +478,9 @@ The design document generation step is skipped. Dependency information (`file_de
 
 ## 💡 Usage Example: RLM QA Agent
 
-`examples/rlm_qa/` contains a sample that performs interactive Q&A against `project_knowledge.json` as a usage example for the consolidated JSON. It uses dspy's RLM and PythonInterpreter to generate answers by manipulating the JSON with Python code.
+`examples/rlm_qa/` contains a sample that performs interactive Q&A against a knowledge file as a usage example for the consolidated output. It uses dspy's RLM and PythonInterpreter to generate answers by manipulating data with Python code.
+
+The agent receives only the file graph and one summary per file. Definitions, source code and design documents are fetched per file through host-side tools (`get_file_detail`, `search_text`, `read_source_file`, `get_files_using`, `graph_search`), so the whole analysis is never sent into the sandbox. Against a knowledge file of a few thousand files, this keeps what the sandbox receives at a few megabytes instead of the whole consolidated output.
 
 ### Sample Output
 
@@ -499,7 +501,7 @@ uv run python examples/rlm_qa/rlm_qa_agent.py
 
 By default, the sample output in `examples/sample_output/` is used. To use your own project's output, edit `TARGET_KNOWLEDGE_PATH` in `rlm_qa_agent.py`.
 
-Either form of the knowledge file works: a path ending in `.sqlite` is read through `codetwine/knowledge_db.py`, any other path is read as `project_knowledge.json`. Both produce the same data for the agent.
+Either form of the knowledge file works: a path ending in `.sqlite` is queried per file through `codetwine/knowledge_db.py`, any other path is read as `project_knowledge.json`. Both answer the same questions. Only the SQLite form avoids holding the whole analysis in memory.
 
 ## 🏗️ Project Structure
 
@@ -538,6 +540,7 @@ codetwine/
     ├── doc_template_python.json  # Python-optimized design document template
     ├── rlm_qa/                   # RLM QA agent sample
     │   ├── rlm_qa_agent.py       # Interactive Q&A agent
+    │   ├── knowledge_store.py    # Read access to either knowledge file form
     │   └── qa_tools.py           # Tool definitions for the agent
     └── sample_output/            # Sample output (codetwine analyzed against itself)
 ```

@@ -305,19 +305,28 @@ def callers_of(connection: sqlite3.Connection, file: str) -> list[str]:
     return [row["other"] for row in rows]
 
 
-def find_definitions(connection: sqlite3.Connection, name: str) -> list[dict]:
+def find_definitions(connection: sqlite3.Connection, name: str,
+                     partial: bool = False) -> list[dict]:
     """Return every definition with a given name, without reading any file body.
 
     Args:
         connection: An open knowledge database connection.
-        name: The definition name to look for (exact match).
+        name: The definition name to look for.
+        partial: False matches the name exactly. True matches any name containing it,
+            case-insensitively.
 
     Returns:
         A list of {"file", "name", "type", "start_line", "end_line"} dicts.
     """
-    rows = connection.execute(
-        "SELECT file, name, type, start_line, end_line FROM definitions "
-        "WHERE name = ? ORDER BY file, start_line",
-        (name,),
-    )
+    columns = "SELECT file, name, type, start_line, end_line FROM definitions "
+    order = " ORDER BY file, start_line"
+    if partial:
+        # ESCAPE keeps a name containing % or _ from being read as a wildcard
+        pattern = name.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        rows = connection.execute(
+            columns + "WHERE name LIKE ? ESCAPE '\\'" + order,
+            (f"%{pattern}%",),
+        )
+    else:
+        rows = connection.execute(columns + "WHERE name = ?" + order, (name,))
     return [dict(row) for row in rows]

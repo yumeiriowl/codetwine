@@ -23,7 +23,7 @@ import subprocess
 import sys
 import dspy
 from dspy.primitives.python_interpreter import PythonInterpreter
-from codetwine import knowledge_db
+import knowledge_store
 import qa_tools
 
 
@@ -35,6 +35,9 @@ LLM_MODEL = "anthropic/claude-opus-4-6"
 
 # Sub-LLM model name used for llm_query/llm_query_batched within RLM sandbox
 SUB_LLM_MODEL = "anthropic/claude-sonnet-4-6"
+
+# The data handed to the RLM sandbox, built by load_project()
+project_data: dict = {}
 
 # API key (obtained from environment variable)
 LLM_API_KEY = os.environ.get("LLM_API_KEY", "")
@@ -56,34 +59,42 @@ TARGET_KNOWLEDGE_PATH = f"{os.path.dirname(__file__)}/../sample_output/codetwine
 # Template variables (embedded via .replace()):
 #   <<<DOC_SCHEMA>>> : result of build_doc_schema()
 #   <<<RLM_OUTPUT_LANGUAGE>>> : value of OUTPUT_LANGUAGE
-INSTRUCTIONS_TEMPLATE = """You are an agent that explores a project design document in JSON format.
-Manipulate the input project_data variable with Python code and answer the question.
+INSTRUCTIONS_TEMPLATE = """You are an agent that explores a project design document.
+Manipulate the input project_data variable with Python code, call the tools for anything
+it does not carry, and answer the question.
 Always write your answer in <<<RLM_OUTPUT_LANGUAGE>>>.
 
 ## Important rules
-**Do not print() the entire project_data**: The data is too large and the output will be truncated. Extract and print() only the parts you need.
+**project_data holds only the file graph and one summary per file.** Definitions, source
+code and design documents are not in it. Use the tools to fetch those for the files you
+have narrowed down to.
+**Do not print() the entire project_data**: it is large and the output will be truncated.
+Extract and print() only the parts you need.
 
 ## Investigation rules
 - Always verify your answer against the actual source code before responding. Do not answer from memory or assumption alone.
-  - Use `definitions[].context` to check specific function/class source code
+  - Use `search_text(keyword)` to find where a term appears across the project
+  - Use `get_file_detail(file)` to get one file's definitions, dependency usages and design document
+  - Use `definitions[].context` from get_file_detail() to check specific function/class source code
   - Use `read_source_file(file_path)` when you need the entire file content
   - When answering about behavior, logic, or data flow, read the relevant code and confirm the implementation matches your answer.
 - If information is not found in the codebase, say so. Never fabricate or guess.
 
-## JSON Schema
+## project_data schema
 
 ### Top level
 - `project_name` (str): Project name
-- `project_dependencies` (array): Project-wide dependency graph (for understanding overall structure, entry point search)
-- `files` (array): Per-file detailed information (dependency details, design documents, source code)
+- `project_dependencies` (array): Project-wide dependency graph and per-file summaries
 
 ### project_dependencies[]
-- `file` (str): File path
+- `file` (str): File path. This is the value the tools take
 - `summary` (str|null): Summary of the file (null if not yet generated)
 - `callers` (str[]): Files calling this file (dependents)
 - `callees` (str[]): Files this file calls (dependencies)
 
-### files[]
+## get_file_detail(file) return schema
+
+### Top level
 - `file` (str): File path
 - `file_dependencies` (object): Dependency details
 - `doc` (object): Design document
@@ -117,25 +128,8 @@ Always write your answer in <<<RLM_OUTPUT_LANGUAGE>>>.
 
 ### Keyword search (across all fields)
 ```python
-keyword = "search_term"
-kw = keyword.lower()
-for f in project_data["files"]:
-    fp = f["file"]
-    deps = f["file_dependencies"]
-    if kw in f["doc"]["summary"].lower():
-        print(f"summary: {fp}")
-    for s in f["doc"]["sections"]:
-        if kw in s["content"].lower():
-            print(f"section: {fp} / {s['title']}")
-    for d in deps["definitions"]:
-        if kw in d.get("context", "").lower():
-            print(f"definition: {fp} / {d['name']}")
-    for u in deps["callee_usages"]:
-        if u.get("target_context") and kw in u["target_context"].lower():
-            print(f"callee: {fp} -> {u['from']} / {u['name']}")
-    for c in deps["caller_usages"]:
-        if c.get("usage_context") and kw in c["usage_context"].lower():
-            print(f"caller: {c['file']} -> {fp} / {c['name']}")
+for hit in search_text("search_term"):
+    print(hit["kind"], hit["file"], hit["name"])
 ```
 
 ### Entry point search and dependency investigation
@@ -145,27 +139,36 @@ entry_points = [f["file"] for f in project_data["project_dependencies"] if not f
 print(entry_points)
 
 # Investigate dependencies and dependents of a file
-target = [f for f in project_data["files"] if "module_name" in f["file"]][0]
-print("Dependencies:", [(u["from"], u["name"]) for u in target["file_dependencies"]["callee_usages"]])
-print("Dependents:", [(c["file"], c["name"]) for c in target["file_dependencies"]["caller_usages"]])
+target = [f["file"] for f in project_data["project_dependencies"] if "module_name" in f["file"]][0]
+deps = get_file_detail(target)["file_dependencies"]
+print("Dependencies:", [(u["from"], u["name"]) for u in deps["callee_usages"]])
+print("Dependents:", [(c["file"], c["name"]) for c in deps["caller_usages"]])
+```
+
+### Reading one file's design document
+```python
+detail = get_file_detail(project_data["project_dependencies"][0]["file"])
+for section in detail["doc"]["sections"]:
+    print(section["title"])
+    print(section["content"])
 ```
 """
 
 
-def build_doc_schema(project_data: dict) -> str:
+def build_doc_schema(store) -> str:
     """
-    Extract doc section list from the loaded knowledge data
+    Extract the doc section list from the first file that has one
     and dynamically generate text to embed in instructions.
 
     Args:
-        project_data: Loaded knowledge data
+        store: An open knowledge store
 
     Returns:
         Text listing doc sections
     """
     sections = []
-    for file_entry in project_data.get("files", []):
-        doc = file_entry.get("doc", {})
+    for file_entry in store.iter_entries():
+        doc = file_entry.get("doc") or {}
         if doc.get("sections"):
             sections = doc["sections"]
             break
@@ -176,47 +179,32 @@ def build_doc_schema(project_data: dict) -> str:
     return "**doc.sections list for this project (each section has content in its content field):**\n" + section_table
 
 
-def _load_from_sqlite(db_path: str) -> dict:
-    """Read a project_knowledge.sqlite into the same dict shape as project_knowledge.json.
+def load_project(knowledge_path: str) -> dict:
+    """Open the knowledge file, give the store to qa_tools, and build project_data.
 
-    Args:
-        db_path: File path to project_knowledge.sqlite.
+    A ".sqlite" path is queried per file; any other path is read as
+    project_knowledge.json. Both answer the same questions.
 
-    Returns:
-        A dict with "project_name" / "project_dependencies" / "files" keys.
-    """
-    connection = knowledge_db.open_knowledge(db_path)
-    try:
-        return {
-            "project_name": knowledge_db.get_project_name(connection) or "",
-            "project_dependencies": list(knowledge_db.iter_dependencies(connection)),
-            "files": list(knowledge_db.iter_files(connection)),
-        }
-    finally:
-        connection.close()
-
-
-def load_project(knowledge_path: str):
-    """Load the knowledge file and set qa_tools module variables.
-
-    A ".sqlite" path is read through codetwine.knowledge_db; any other path is read as
-    project_knowledge.json. Both produce the same project_data structure.
-
-    The RLM sandbox receives project_data as a whole, so the entries are materialized
-    here in either case.
+    project_data is what the RLM sandbox receives, so it carries only the file graph and
+    one summary per file. The definitions, source code and design documents stay behind
+    the tools, which run on the host.
 
     Args:
         knowledge_path: File path to project_knowledge.json or project_knowledge.sqlite.
+
+    Returns:
+        A dict with "project_name" / "project_dependencies" keys.
     """
-    if knowledge_path.endswith(".sqlite"):
-        qa_tools.project_data = _load_from_sqlite(knowledge_path)
-    else:
-        with open(knowledge_path, "r", encoding="utf-8") as f:
-            qa_tools.project_data = json.load(f)
+    qa_tools.store = knowledge_store.open_store(knowledge_path)
 
-    qa_tools.base_dir = os.path.dirname(knowledge_path)
+    project_data = {
+        "project_name": qa_tools.store.project_name,
+        "project_dependencies": qa_tools.store.dependencies(),
+    }
 
-    print(f"[OK] Loaded {len(qa_tools.project_data['files'])} files from project '{qa_tools.project_data['project_name']}'")
+    print(f"[OK] Loaded {len(project_data['project_dependencies'])} files "
+          f"from project '{project_data['project_name']}'")
+    return project_data
 
 
 def create_interpreter() -> PythonInterpreter:
@@ -267,15 +255,16 @@ def create_qa_agent(knowledge_path: str) -> dspy.RLM:
     Returns:
         Configured dspy.RLM instance
     """
-    # Load project data
-    load_project(knowledge_path)
+    # Open the knowledge file and build the data the sandbox receives
+    global project_data
+    project_data = load_project(knowledge_path)
 
     # Initialize LLM
     lm = dspy.LM(LLM_MODEL, api_key=LLM_API_KEY, api_base=LLM_API_BASE)
     sub_lm = dspy.LM(SUB_LLM_MODEL, api_key=LLM_API_KEY, api_base=LLM_API_BASE)
 
     # Embed doc schema and output language into the template to build instructions
-    doc_schema = build_doc_schema(qa_tools.project_data)
+    doc_schema = build_doc_schema(qa_tools.store)
     instructions = (
         INSTRUCTIONS_TEMPLATE
         .replace("<<<DOC_SCHEMA>>>", doc_schema)
@@ -294,6 +283,8 @@ def create_qa_agent(knowledge_path: str) -> dspy.RLM:
     rlm = dspy.RLM(
         signature,
         tools=[
+            qa_tools.get_file_detail,
+            qa_tools.search_text,
             qa_tools.read_source_file,
             qa_tools.get_files_using,
             qa_tools.graph_search,
@@ -321,7 +312,7 @@ def ask(rlm: dspy.RLM, question: str) -> str:
         Answer text
     """
     result = rlm(
-        project_data=qa_tools.project_data,
+        project_data=project_data,
         question=question,
     )
     return result.answer
