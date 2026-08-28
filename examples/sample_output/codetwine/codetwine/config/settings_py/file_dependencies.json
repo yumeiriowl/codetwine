@@ -107,10 +107,17 @@
       "context": "PARSE_CACHE_MAX_FILES = get_config_value(\n    \"PARSE_CACHE_MAX_FILES\", default=200, var_type=int\n)"
     },
     {
+      "name": "KNOWLEDGE_FORMATS",
+      "type": "expression_statement",
+      "start_line": 92,
+      "end_line": 92,
+      "context": "KNOWLEDGE_FORMATS = (\"json\", \"sqlite\", \"both\")"
+    },
+    {
       "name": "KNOWLEDGE_FORMAT",
       "type": "expression_statement",
-      "start_line": 94,
-      "end_line": 96,
+      "start_line": 99,
+      "end_line": 101,
       "context": "KNOWLEDGE_FORMAT = get_config_value(\n    \"KNOWLEDGE_FORMAT\", default=\"json\", var_type=str\n).strip().lower()"
     },
     {
@@ -525,7 +532,7 @@
     },
     {
       "lines": [
-        158
+        159
       ],
       "name": "MAX_WORKERS",
       "file": "codetwine/codetwine/pipeline_py/pipeline.py",
@@ -533,20 +540,31 @@
     },
     {
       "lines": [
-        221
+        183,
+        186
+      ],
+      "name": "KNOWLEDGE_FORMATS",
+      "file": "codetwine/codetwine/pipeline_py/pipeline.py",
+      "usage_context": "        ValueError: When KNOWLEDGE_FORMAT is not one of KNOWLEDGE_FORMATS.\n    \"\"\"\n    # Checked before any analysis runs\n    if KNOWLEDGE_FORMAT not in KNOWLEDGE_FORMATS:\n        raise ValueError(\n            f\"KNOWLEDGE_FORMAT must be one of \"\n            f\"{' / '.join(KNOWLEDGE_FORMATS)}, but got '{KNOWLEDGE_FORMAT}'. \"\n...\n    if KNOWLEDGE_FORMAT not in KNOWLEDGE_FORMATS:\n        raise ValueError(\n            f\"KNOWLEDGE_FORMAT must be one of \"\n            f\"{' / '.join(KNOWLEDGE_FORMATS)}, but got '{KNOWLEDGE_FORMAT}'. \"\n            f\"Set it in the .env file or your shell.\"\n        )\n"
+    },
+    {
+      "lines": [
+        183,
+        186,
+        261,
+        269
+      ],
+      "name": "KNOWLEDGE_FORMAT",
+      "file": "codetwine/codetwine/pipeline_py/pipeline.py",
+      "usage_context": "        ValueError: When KNOWLEDGE_FORMAT is not one of KNOWLEDGE_FORMATS.\n    \"\"\"\n    # Checked before any analysis runs\n    if KNOWLEDGE_FORMAT not in KNOWLEDGE_FORMATS:\n        raise ValueError(\n            f\"KNOWLEDGE_FORMAT must be one of \"\n            f\"{' / '.join(KNOWLEDGE_FORMATS)}, but got '{KNOWLEDGE_FORMAT}'. \"\n...\n    if KNOWLEDGE_FORMAT not in KNOWLEDGE_FORMATS:\n        raise ValueError(\n            f\"KNOWLEDGE_FORMAT must be one of \"\n            f\"{' / '.join(KNOWLEDGE_FORMATS)}, but got '{KNOWLEDGE_FORMAT}'. \"\n            f\"Set it in the .env file or your shell.\"\n        )\n"
+    },
+    {
+      "lines": [
+        233
       ],
       "name": "ENABLE_LLM_DOC",
       "file": "codetwine/codetwine/pipeline_py/pipeline.py",
       "usage_context": "    )\n\n    # == Step 3: Generate design documents in topological order ================\n    if ENABLE_LLM_DOC:\n        print(\"Generating design documents...\")\n        logger.info(\"Generating design documents...\")\n        await generate_all_docs("
-    },
-    {
-      "lines": [
-        249,
-        257
-      ],
-      "name": "KNOWLEDGE_FORMAT",
-      "file": "codetwine/codetwine/pipeline_py/pipeline.py",
-      "usage_context": "    save_dependency_graph_as_mermaid(base_output_dir, mermaid_output_path, symbol_deps)\n\n    # == Step 5: Generate the consolidated result ============================\n    if KNOWLEDGE_FORMAT in (\"json\", \"both\"):\n        print(\"Generating consolidated JSON...\")\n        logger.info(\"Generating consolidated JSON...\")\n        knowledge_path = os.path.join(base_output_dir, \"project_knowledge.json\")\n...\n            base_output_dir, all_file_list, knowledge_path, symbol_deps, summary_map,\n        )\n\n    if KNOWLEDGE_FORMAT in (\"sqlite\", \"both\"):\n        print(\"Generating consolidated SQLite database...\")\n        logger.info(\"Generating consolidated SQLite database...\")\n        knowledge_db_path = os.path.join(base_output_dir, \"project_knowledge.sqlite\")"
     },
     {
       "lines": [

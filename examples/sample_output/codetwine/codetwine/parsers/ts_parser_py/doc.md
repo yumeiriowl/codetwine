@@ -2,162 +2,142 @@
 
 # Overview & Purpose
 
-## 1. Module Summary
-Parses source files into tree-sitter ASTs and caches the results with an LRU eviction policy to avoid redundant re-parsing across the codebase.
+### Role within the project
 
-## 2. When to Use This Module
-- When any module needs the AST root node and raw byte content of a source file for further analysis (e.g., extracting definitions, imports, or usages), call `parse_file(file_path)` to obtain a `(root_node, content)` tuple.
-- When a long-running process (e.g., a full pipeline run) has finished analyzing files and wants to release memory held by cached syntax trees, call `parse_cache.clear()`.
-- When multiple parts of the pipeline (definition extraction, import resolution, dependency graph building, usage analysis) need to parse the same file repeatedly, rely on this module's caching so the file is only read and parsed once per cache lifetime (unless evicted).
+`ts_parser.py` centralizes all tree-sitter parsing logic for the codebase. It provides a single, cached entry point for turning a source file into a parsed AST, so that every other module that needs to inspect source code (definition extraction, import resolution, usage/dependency analysis) does not have to re-implement file reading, language selection, or tree-sitter setup. By isolating this concern in one file, the project avoids duplicated parsing code and redundant re-parsing of the same file across multiple analysis passes (e.g., `file_analyzer.py`, `import_to_path.py`, `usage_analysis.py`, and `dependency_graph.py` all rely on it).
 
-## 3. Public Interface Table
-| Name | Arguments (type) | Return type | Responsibility |
+It exists as a separate file because parsing is a cross-cutting infrastructure concern: it depends on tree-sitter internals and language configuration (`TREE_SITTER_LANGUAGES`, `PARSE_CACHE_MAX_FILES` from `config/settings.py`), but the resulting `(root_node, content)` pairs are consumed by many unrelated extractors/analyzers throughout the project. Keeping this logic in one module ensures consistent caching behavior and a single source of truth for how files are read and parsed.
+
+### Main public interfaces
+
+| Name | Arguments | Return | Responsibility |
 |---|---|---|---|
-| `parse_file` | `file_path: str` | `tuple[Node, bytes]` | Reads a file, parses it with the appropriate tree-sitter language based on file extension, and returns its AST root node and raw byte content; caches results and reuses cached entries when available. |
-| `parse_cache` | — (module-level `OrderedDict[str, tuple[Node, bytes]]`) | — | Holds cached parse results keyed by file path, ordered from least to most recently used; callers may invoke `parse_cache.clear()` to free memory. |
+| `parse_file` | `file_path: str` | `tuple[Node, bytes]` | Reads a file, parses it with tree-sitter based on its extension, caches the result, and returns the AST root node plus raw file content. |
+| `parse_cache` | — (module-level `OrderedDict[str, tuple[Node, bytes]]`) | — | Exposes the LRU-ordered cache of parsed files so callers (e.g., `pipeline.py`) can clear it explicitly to free memory. |
 
-## 4. Design Decisions
-- Uses an `OrderedDict` as a manual LRU cache: on cache hit, the entry is moved to the end via `move_to_end`; on insertion, the oldest entry (`popitem(last=False)`) is evicted once the cache exceeds `PARSE_CACHE_MAX_FILES`.
-- `PARSE_CACHE_MAX_FILES = 0` disables the eviction limit entirely, allowing unbounded caching.
-- The language used for parsing is resolved dynamically from the file's extension via the `TREE_SITTER_LANGUAGES` mapping, decoupling this module from any specific language.
-- Caching is file-content-based per path only (not content-hash based); a cached tree persists until evicted or `parse_cache` is cleared, regardless of whether the underlying file has changed.
+### Design patterns / decisions
+
+- **Module-level cache (Memoization / Singleton cache)**: `parse_cache` is a module-level `OrderedDict` shared across all callers, avoiding repeated disk I/O and re-parsing for files accessed from multiple analysis stages.
+- **LRU eviction policy**: The cache tracks usage order manually—`move_to_end` marks an entry as most recently used on cache hit, and `popitem(last=False)` evicts the least recently used entry when the cache exceeds `PARSE_CACHE_MAX_FILES`. A value of `0` disables the size limit entirely, per the configured design.
+- **Extension-based language dispatch**: The parser selects the appropriate tree-sitter `Language` object by looking up the file's extension in `TREE_SITTER_LANGUAGES` (built and expanded in `config/settings.py`), decoupling language-specific configuration from the parsing logic itself.
+- **Explicit cache invalidation hook**: By exposing `parse_cache` itself (not just `parse_file`), the design allows external code (`pipeline.py`) to clear the cache at the end of an analysis run, since a `Node` keeps its whole underlying tree alive in memory.
 
 # Definition Design Specifications
 
-## `_language_map`
-
-- **Signature**: `_language_map: dict[str, Language]` (module-level alias)
-- **Responsibility**: Provides a short, local alias to `TREE_SITTER_LANGUAGES` so that `parse_file` can look up the appropriate tree-sitter `Language` object by file extension.
-- **When to use**: Referenced internally by `parse_file` when constructing a `Parser` for a given file extension; not intended for direct external use.
-- **Design decisions**: Simple re-binding of the imported settings dict, avoiding repeated attribute access to the settings module.
-- **Constraints & edge cases**: Any extension not present in `TREE_SITTER_LANGUAGES` will raise a `KeyError` when accessed.
-
 ## `parse_cache`
 
-- **Signature**: `parse_cache: OrderedDict[str, tuple[Node, bytes]]`
-- **Responsibility**: Module-level LRU-style cache storing previously parsed files, keyed by absolute file path, to avoid redundant parsing across the codebase.
-- **When to use**: Populated and read automatically by `parse_file`; cleared externally (e.g., by `pipeline.py` calling `parse_cache.clear()`) once analysis is complete to free memory.
-- **Design decisions**:
-  - Uses `OrderedDict` to maintain insertion/access order, enabling least-recently-used (LRU) eviction via `move_to_end` and `popitem(last=False)`.
-  - Each entry keeps a `Node` (tree-sitter AST root) alive, which implicitly keeps the whole parsed tree alive since a `Node` holds a reference to its tree.
-  - Size is bounded by `PARSE_CACHE_MAX_FILES`; a value of `0` disables the size limit entirely (no eviction occurs).
-- **Constraints & edge cases**:
-  - Keys must be consistent (e.g., always absolute paths) for cache hits to work correctly; the module does not normalize paths itself.
-  - If `PARSE_CACHE_MAX_FILES` is `0`, the cache can grow unbounded, which is a known trade-off for disabling eviction.
-  - External code (`pipeline.py`) directly manipulates the cache via `.clear()`, so this module's encapsulation of the cache is not strict.
+Module-level `OrderedDict` mapping absolute file paths to `(root_node, content)` tuples, ordered from least to most recently used. Exists to persist tree-sitter parse results across calls within a single analysis run, avoiding redundant re-parsing of the same file by multiple callers (definition extraction, import resolution, usage/dependency analysis). Using an `OrderedDict` allows O(1) LRU tracking via `move_to_end` on access and `popitem(last=False)` for eviction. Because a tree-sitter `Node` keeps its entire owning tree alive, each cache entry effectively retains the full parsed AST and raw file bytes in memory until evicted; capping cache size bounds memory usage. Exposed at module level so external code (e.g., `pipeline.py`) can explicitly call `parse_cache.clear()` to release memory once analysis completes.
 
 ## `parse_file`
 
-- **Signature**: `parse_file(file_path: str) -> tuple[Node, bytes]`
-  - `file_path`: absolute path of the file to parse.
-  - Return type: a tuple of `(root_node, content)` where `root_node` is the tree-sitter AST root (`Node`) and `content` is the raw file bytes.
-- **Responsibility**: Reads a source file, parses it into an AST using the tree-sitter language inferred from its extension, and returns the root node plus raw content, using a cache to avoid redundant work.
-- **When to use**: Called whenever a caller needs the AST and raw bytes of a project source file — e.g., definition extraction, import resolution, or usage analysis in other modules (`file_analyzer.py`, `import_to_path.py`, `usage_analysis.py`, `dependency_graph.py`).
+Reads a source file, parses it into a tree-sitter AST, and returns the result, using a bounded module-level LRU cache to avoid redundant re-parsing.
+
+- **Arguments**: `file_path: str` — absolute path of the file to parse.
+- **Returns**: `tuple[Node, bytes]` — the AST root node and the raw file content read in binary mode.
+- **Responsibility/intent**: Centralizes file reading and tree-sitter parsing so all other modules (definition extraction, import resolution, usage/dependency graph building) obtain a consistent, cached AST for a given file instead of re-parsing it on every request.
 - **Design decisions**:
-  - Implements an LRU cache manually on top of `OrderedDict`: a cache hit moves the entry to the end (most recently used); insertion of a new entry may trigger eviction of the oldest (least recently used) entry from the front.
-  - Language selection is derived purely from the file's extension (via `os.path.splitext`, stripped of the leading dot), delegating the extension-to-`Language` mapping to `TREE_SITTER_LANGUAGES`.
-  - File is read in binary mode (`"rb"`) so tree-sitter can operate on raw bytes, matching tree-sitter's byte-offset-based node API.
-  - Eviction logic only runs when `PARSE_CACHE_MAX_FILES > 0`, allowing the cache to be effectively unbounded when the setting is `0`.
-- **Constraints & edge cases**:
-  - If the file extension is not a key in `TREE_SITTER_LANGUAGES` (i.e., in `_language_map`), a `KeyError` is raised when constructing the `Parser`.
-  - If the file does not exist or cannot be opened, the standard file I/O exception (`FileNotFoundError`, `PermissionError`, etc.) propagates.
-  - Assumes `file_path` is used consistently as the cache key; passing different string representations of the same file (e.g., relative vs. absolute) results in separate cache entries and re-parsing.
-  - Does not handle parse errors from tree-sitter itself — tree-sitter's `parser.parse` returns a tree even for syntactically invalid content (with error nodes), so no exception handling is needed there, but this file does not inspect for parse errors.
+  - Cache lookups and insertions use the file's absolute path as the key; a cache hit triggers `move_to_end` to mark the entry most-recently-used, implementing LRU eviction with an `OrderedDict`.
+  - The language used to construct the `Parser` is selected by looking up the file extension (lowercased, without the leading dot) in `TREE_SITTER_LANGUAGES`; this ties parsing behavior directly to the extension-to-language mapping defined in configuration.
+  - Returning `(root_node, content)` together (rather than root_node alone) lets callers map byte-offset ranges in the AST back to source text (e.g., for extracting line ranges) without re-reading the file.
+  - Cache eviction only occurs when `PARSE_CACHE_MAX_FILES > 0`; a value of 0 disables the size limit entirely, allowing unbounded caching if configured.
+  - Eviction removes entries one at a time via `popitem(last=False)` until the cache size is within the configured limit, ensuring only the least-recently-used entries are dropped.
+- **Edge cases/constraints**:
+  - `file_path` must correspond to a file whose extension exists as a key in `TREE_SITTER_LANGUAGES`; otherwise a `KeyError` occurs when constructing the `Parser`.
+  - The file is expected to exist and be readable; no explicit error handling is performed for missing files or read failures beyond what `open` raises.
+  - Extensions are derived via `os.path.splitext` and stripped of the leading dot, so files without an extension or with unsupported extensions are not handled gracefully.
 
 # Dependency Description
 
-## Dependencies (modules this file imports)
+### Dependencies (what this file uses)
 
-- `codetwine/parsers/ts_parser.py` → `codetwine/config/settings.py` (`TREE_SITTER_LANGUAGES`): retrieves the extension-to-`Language` object mapping used to select the correct tree-sitter grammar for a given file's extension when constructing a `Parser`.
-- `codetwine/parsers/ts_parser.py` → `codetwine/config/settings.py` (`PARSE_CACHE_MAX_FILES`): retrieves the configured cache size limit that determines when the module-level `parse_cache` should evict least-recently-used entries (a value of `0` disables the limit).
+- **`codetwine/config/settings.py`**
+  - `TREE_SITTER_LANGUAGES`: Provides the extension-to-`Language` object mapping used to select the correct tree-sitter grammar for a given file based on its file extension. This mapping is consumed via `_language_map` when initializing the `Parser` instance for a target file.
+  - `PARSE_CACHE_MAX_FILES`: Supplies the configured upper bound on the number of cached parse results. This value is used to determine when the least-recently-used entries in `parse_cache` should be evicted, controlling memory usage of the module-level cache.
 
-## Dependents (modules that import this file)
+### Dependents (what uses this file)
 
-- `codetwine/file_analyzer.py` → `codetwine/parsers/ts_parser.py` (`parse_file`): parses a target file to obtain its AST root node and byte content, which are then used to extract definitions and their corresponding source code lines.
-- `codetwine/import_to_path.py` → `codetwine/parsers/ts_parser.py` (`parse_file`): parses a file to obtain its AST root node, used to extract definitions and register their names in a symbol-to-file mapping.
-- `codetwine/pipeline.py` → `codetwine/parsers/ts_parser.py` (`parse_cache`): clears the module-level parse result cache at the end of analysis to free memory.
-- `codetwine/extractors/usage_analysis.py` → `codetwine/parsers/ts_parser.py` (`parse_file`): parses both target files and caller files to obtain AST root nodes, used for extracting definition names and analyzing imports/usages.
-- `codetwine/extractors/dependency_graph.py` → `codetwine/parsers/ts_parser.py` (`parse_file`): parses callee files and general source files to obtain AST root nodes, used for resolving definitions and extracting import statements to build the dependency graph.
+- **`codetwine/file_analyzer.py`**: Calls `parse_file` to obtain the AST root node and raw byte content of a target file, which is then used for definition extraction and source-line lookups.
+- **`codetwine/import_to_path.py`**: Calls `parse_file` to parse a file and obtain its root node, which is used to extract definitions and register them in a symbol-to-file mapping.
+- **`codetwine/pipeline.py`**: Accesses `parse_cache` directly to clear the module-level cache after analysis completes, freeing memory held by cached ASTs.
+- **`codetwine/extractors/usage_analysis.py`**: Calls `parse_file` to parse both target definition files and caller files, using the resulting root nodes to extract definitions and imports for usage analysis.
+- **`codetwine/extractors/dependency_graph.py`**: Calls `parse_file` to parse callee files and files containing import statements, using the root nodes to resolve dependencies and build the dependency graph.
 
-## Dependency Direction
-
-- The relationship between `codetwine/parsers/ts_parser.py` and `codetwine/config/settings.py` is **unidirectional**: `ts_parser.py` depends on configuration values exposed by `settings.py`, while `settings.py` has no dependency on `ts_parser.py`.
-- The relationships between `codetwine/parsers/ts_parser.py` and each of `codetwine/file_analyzer.py`, `codetwine/import_to_path.py`, `codetwine/pipeline.py`, `codetwine/extractors/usage_analysis.py`, and `codetwine/extractors/dependency_graph.py` are **unidirectional**: each dependent module calls into `ts_parser.py`'s `parse_file` function or accesses its `parse_cache`, while `ts_parser.py` has no dependency on any of these modules.
+The dependency direction is unidirectional: this file depends on `codetwine/config/settings.py` for language and caching configuration, while the listed dependents rely on this file's `parse_file` function (and, in one case, direct access to `parse_cache`) to obtain parsed ASTs; none of these relationships are reciprocated by `ts_parser.py`.
 
 # Data Flow
 
-## 1. Inputs
+## Input
+| Source | Format |
+|---|---|
+| `file_path` argument | Absolute path string of a source file to parse |
+| Module-level `parse_cache` | In-memory `OrderedDict[str, tuple[Node, bytes]]` keyed by file path, checked before doing any file I/O |
+| `TREE_SITTER_LANGUAGES` | dict mapping file extension → tree-sitter `Language` object, used to select the correct grammar |
+| `PARSE_CACHE_MAX_FILES` | int config value controlling cache size limit (0 = unlimited) |
+| File system | Raw file bytes read from `file_path` in binary mode |
 
-- **`file_path: str`** — Absolute path of the file to parse, passed as an argument to `parse_file()`.
-- **File system content** — Raw bytes read from disk at `file_path` via binary file read.
-- **`TREE_SITTER_LANGUAGES: dict[str, Language]`** — Module-level config dict (from `settings.py`) mapping file extensions (without the leading dot) to tree-sitter `Language` objects, aliased locally as `_language_map`.
-- **`PARSE_CACHE_MAX_FILES: int`** — Module-level config value (from `settings.py`) defining the maximum number of cached entries; `0` means unlimited.
-- **`parse_cache: OrderedDict[str, tuple[Node, bytes]]`** — Module-level mutable cache state, consulted as an implicit input on every call.
+## Transformation Flow
+```
+file_path
+   │
+   ├─► [1] Cache lookup: parse_cache.get(file_path)
+   │        │ hit → move_to_end (mark as most-recently-used) → return cached result
+   │        │ miss → continue
+   │
+   ├─► [2] Extension extraction: os.path.splitext(file_path) → ext
+   │
+   ├─► [3] Language resolution: TREE_SITTER_LANGUAGES[ext] → Language object
+   │        → Parser(language) constructed
+   │
+   ├─► [4] File read: open(file_path, "rb") → raw bytes (content)
+   │
+   ├─► [5] Parse: parser.parse(content) → tree
+   │        → result = (tree.root_node, content)
+   │
+   └─► [6] Cache update:
+            parse_cache[file_path] = result
+            if PARSE_CACHE_MAX_FILES > 0:
+                evict least-recently-used entries (popitem(last=False))
+                until len(parse_cache) <= PARSE_CACHE_MAX_FILES
+```
 
-## 2. Transformation Overview
+## Output
+| Destination | Format |
+|---|---|
+| Return value to caller | `tuple[Node, bytes]` — `(root_node, content)`: tree-sitter AST root node and raw file bytes |
+| `parse_cache` (side effect) | Updated/reordered entry `file_path → (root_node, content)`, potentially with oldest entries evicted |
 
-1. **Cache lookup** — The incoming `file_path` is looked up in `parse_cache`. If a cached `(Node, bytes)` tuple exists, it is moved to the end of the `OrderedDict` (marking it most-recently-used) and returned immediately, bypassing all further stages.
-2. **Extension resolution** — On a cache miss, the file extension is extracted from `file_path` (stripped of the leading dot) to serve as the lookup key into `_language_map`.
-3. **Language resolution** — The extension key is used to fetch the corresponding tree-sitter `Language` object from `_language_map`, which is used to construct a `Parser` instance.
-4. **File read** — The file at `file_path` is opened in binary mode and its full contents are read into a `bytes` object.
-5. **Parsing** — The `Parser` parses the raw bytes into a tree-sitter syntax tree; the tree's `root_node` is extracted.
-6. **Result assembly** — `(root_node, content)` is packaged into a tuple named `result`.
-7. **Cache insertion & eviction** — `result` is stored in `parse_cache` under `file_path`. If `PARSE_CACHE_MAX_FILES > 0` and the cache size exceeds that limit, the least-recently-used entries (from the front of the `OrderedDict`) are evicted one at a time until the size constraint is satisfied.
-8. **Return** — `result` is returned to the caller, identical in shape whether it came from cache or fresh parsing.
-
-There is no async or parallel branching; the flow is strictly sequential with a single early-return short-circuit for cache hits.
-
-## 3. Outputs
-
-- **Return value**: `tuple[Node, bytes]` — the tree-sitter AST `root_node` and the raw file `content` as bytes. This is the sole output consumed by all dependents (`file_analyzer.py`, `import_to_path.py`, `usage_analysis.py`, `dependency_graph.py`) to extract definitions, imports, and source text.
-- **Side effect**: mutation of module-level `parse_cache` (insertion of new entries, reordering of existing entries, eviction of stale entries). This state persists across calls within the process and is exposed to other modules (e.g., `pipeline.py` calls `parse_cache.clear()` to release memory after analysis completes).
-
-## 4. Key Data Structures
+## Key Data Structures
 
 **`parse_cache: OrderedDict[str, tuple[Node, bytes]]`**
+- Key: absolute file path (string)
+- Value: tuple of `(root_node, content)`
+  - `root_node`: tree-sitter `Node`, root of the parsed AST; keeps the entire tree alive in memory
+  - `content`: raw file bytes as read from disk
+- Ordering: least-recently-used (front) to most-recently-used (back), maintained via `move_to_end` on cache hits and insertion on cache misses; used to implement LRU eviction bounded by `PARSE_CACHE_MAX_FILES`
 
-| Field / Key | Type | Purpose |
-|---|---|---|
-| key | `str` | Absolute file path used as cache identifier |
-| value[0] | `tree_sitter.Node` | Root AST node of the parsed file (keeps the whole tree alive) |
-| value[1] | `bytes` | Raw byte content of the file, used for decoding/text extraction by callers |
-
-**`_language_map` / `TREE_SITTER_LANGUAGES: dict[str, Language]`**
-
-| Field / Key | Type | Purpose |
-|---|---|---|
-| key | `str` | File extension without leading dot (e.g., `"py"`, `"js"`) |
-| value | `tree_sitter.Language` | Grammar object used to construct a `Parser` for that extension |
-
-**`result: tuple[Node, bytes]`** (return value / cache entry)
-
-| Field / Key | Type | Purpose |
-|---|---|---|
-| root_node | `tree_sitter.Node` | Entry point into the parsed syntax tree for downstream traversal (definition/import extraction) |
-| content | `bytes` | Full file content, later decoded (e.g., to UTF-8 text lines) by consumers |
+**Result tuple `(Node, bytes)`**
+- Returned to all downstream consumers (`file_analyzer.py`, `import_to_path.py`, `usage_analysis.py`, `dependency_graph.py`)
+- `Node` (AST root) is used by callers for definition/import extraction via tree-sitter queries
+- `bytes` (raw content) is used by callers for decoding text (e.g., extracting source lines)
 
 # Error Handling
 
-## 1. Overall Strategy
+**Overall strategy:** `parse_file` follows a fail-fast approach with no explicit exception handling. It performs no validation or error suppression of its own; any failure in file access, extension lookup, or parsing is allowed to propagate directly to the caller as an unhandled exception. There is no fallback, retry, or default-value behavior.
 
-This file adopts a **fail-fast** strategy with no explicit exception handling. `parse_file` performs no try-except blocks of its own; any error occurring during extension lookup, file reading, or parsing propagates directly to the caller. There is no fallback language, no retry logic, and no logging of failures — errors are surfaced immediately and unmodified, relying on upstream callers (or the process itself) to decide how to react.
+**Main error patterns and handling policies:**
 
-## 2. Error Pattern Table
+| Error type | Handling | Impact |
+|---|---|---|
+| Unsupported/unknown file extension (extension not present in `TREE_SITTER_LANGUAGES`) | Not caught; dictionary lookup (`_language_map[ext]`) raises `KeyError` | Propagates to caller; parsing aborts for that file |
+| File does not exist / permission denied when opening the file | Not caught; `open(file_path, "rb")` raises `OSError`/`FileNotFoundError` | Propagates to caller; no cache entry is created |
+| Malformed or invalid source content causing parser issues | Not caught; relies on tree-sitter's `Parser.parse` behavior (tree-sitter itself is generally tolerant and produces an error-containing tree rather than raising) | If tree-sitter does raise, it propagates; otherwise a tree with error nodes is returned and cached as-is |
+| Cache miss vs. hit | Handled via a simple `dict.get` check (`cached is not None`); no error is raised for a miss, it simply proceeds to parse | Normal control flow, not an error condition |
 
-| Error Type | Trigger Condition | Handling | Recoverable? | Impact |
-|---|---|---|---|---|
-| `KeyError` | File extension (from `os.path.splitext`) is not present as a key in `_language_map` (`TREE_SITTER_LANGUAGES`), i.e., an unsupported/unmapped language | Not caught; exception propagates to caller | No | `parse_file` call fails; caller must handle or the process terminates |
-| `FileNotFoundError` / `OSError` | `file_path` does not exist or is inaccessible (permissions, I/O issue) during `open(file_path, "rb")` | Not caught; exception propagates to caller | No | File cannot be parsed; caller must handle or the process terminates |
-| Parser/tree-sitter internal errors | Malformed input to `Parser(...)` construction or `parser.parse(content)` raising due to unexpected content/state | Not caught; exception propagates to caller | No | Parsing aborts for that file; no cache entry is stored |
-| Cache staleness (not a raised error) | Same `file_path` is requested again after underlying file content on disk has changed | Cached `(root_node, content)` is returned as-is without re-reading/re-parsing | N/A (silent behavior, not an exception) | Caller may work with outdated AST/content; no error signaled |
-
-## 3. Design Notes
-
-- The function intentionally keeps no defensive checks (e.g., no explicit validation of `ext` or file existence) before invoking dependent operations, delegating error detection entirely to the underlying `os.path`, built-in `open`, and `tree_sitter.Parser` APIs.
-- Because failures are not caught here, the responsibility for graceful degradation (e.g., skipping unparsable files) lies with the multiple call sites listed in the dependents (`file_analyzer.py`, `import_to_path.py`, `usage_analysis.py`, `dependency_graph.py`), consistent with this file being a shared low-level utility rather than a policy-owning component.
-- The LRU cache (`parse_cache`) only affects performance and memory usage, not error handling: a failed parse is never cached, so a subsequent call for the same `file_path` will retry the full read/parse sequence and can raise the same or a different error again.
-- No logging calls exist in this file, so error visibility depends entirely on how calling code manages exceptions (e.g., whether it wraps calls in its own try-except or lets them propagate further, as seen in `pipeline.py`'s reliance on `parse_cache.clear()` for cleanup, which is unaffected by parse failures).
+**Design considerations:**
+- The function intentionally delegates error responsibility to callers (e.g., `file_analyzer.py`, `import_to_path.py`, `dependency_graph.py`, `usage_analysis.py`), which are expected to ensure the file path and extension are valid before calling `parse_file`.
+- Because failures are not caught, a failed parse never pollutes `parse_cache`—entries are only stored after `parser.parse` and file reading succeed, keeping the cache consistent.
+- No logging or error wrapping is performed at this layer, keeping the module minimal and leaving diagnostic/error-reporting concerns to higher-level orchestration code (e.g., `pipeline.py`).
 
 # Summary
 
-Parses source files into tree-sitter ASTs with LRU caching. Public API: `parse_file(file_path: str) -> tuple[Node, bytes]` reads/parses a file (language chosen via extension using `TREE_SITTER_LANGUAGES`); `parse_cache: OrderedDict[str, tuple[Node, bytes]]` module-level cache, cleared via `parse_cache.clear()`. Eviction bounded by `PARSE_CACHE_MAX_FILES` (0 = unbounded). No error handling; exceptions propagate.
+`ts_parser.py` centralizes tree-sitter parsing: reads source files, selects language via extension (`TREE_SITTER_LANGUAGES`), and returns cached `(root_node, content)` ASTs. Public interface: `parse_file(file_path)` and module-level `parse_cache` (LRU `OrderedDict`, bounded by `PARSE_CACHE_MAX_FILES`, clearable externally). Used by file_analyzer, import_to_path, usage_analysis, dependency_graph for consistent parsing; pipeline.py clears cache post-run. No error handling—failures (bad extension, missing file) propagate to callers. Ensures single source of truth for parsing/caching across the project.

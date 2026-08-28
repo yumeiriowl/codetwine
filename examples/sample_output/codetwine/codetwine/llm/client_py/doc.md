@@ -2,216 +2,168 @@
 
 # Overview & Purpose
 
-## 1. Module Summary
-Provides an async wrapper around litellm's completion API that sends a prompt to a configured LLM and returns the generated text, applying retry logic for rate-limit errors.
+## Role and Responsibilities
 
-## 2. When to Use This Module
-- When a component needs to send a prompt to an LLM and obtain generated text (e.g., code summarization or documentation generation): instantiate `LLMClient` and call `await generate(prompt, max_tokens)`.
-- When the caller wants LLM calls to be resilient to transient rate-limit (429) errors without implementing retry logic itself: use `LLMClient.generate`, which internally retries up to `MAX_RETRIES` times with `RETRY_WAIT` seconds between attempts.
-- When the caller needs to be notified explicitly if the prompt exceeds the model's context window (e.g., to trigger chunking or fallback logic upstream): call `LLMClient.generate`, which propagates `ContextWindowExceededError` instead of swallowing it.
-- When constructing an LLM-backed pipeline component (as done in `main.py` and `codetwine/pipeline.py`) that conditionally enables LLM-based documentation: instantiate `LLMClient()` using default settings from `codetwine/config/settings.py`.
+`codetwine/llm/client.py` provides a single, centralized abstraction (`LLMClient`) for making asynchronous LLM API calls via the `litellm` library. It exists as a separate file to isolate all LLM communication concerns—model configuration, request construction, retry/backoff logic, and error handling—from the rest of the application (e.g., `codetwine/doc_creator.py`, `codetwine/pipeline.py`, and `main.py`), which consume this client to generate documentation summaries without needing to know the details of provider selection, rate-limit handling, or the underlying API library.
 
-## 3. Public Interface Table
+The module reads its default configuration (model name, API key, API base, retry count, retry wait time, and max output tokens) from `codetwine/config/settings.py`, keeping provider/runtime configuration centralized there while this file focuses purely on the call mechanics.
 
-| Name | Arguments (type) | Return type | Responsibility |
+## Public Interfaces
+
+| Name | Arguments | Return Value | Responsibility |
 |---|---|---|---|
-| `LLMClient` (class) | `model: str = LLM_MODEL`, `api_key: str = LLM_API_KEY`, `api_base: str = LLM_API_BASE` | — | Holds LLM connection configuration (model name, API key, API base URL) and validates that a model is set. |
-| `async LLMClient.generate` | `prompt: str`, `max_tokens: int = DOC_MAX_TOKENS` | `str \| None` | Sends a prompt to the LLM with retry-aware handling and returns the generated text, or `None` if the prompt is empty or generation fails. |
+| `LLMClient.__init__` | `model: str = LLM_MODEL`, `api_key: str = LLM_API_KEY`, `api_base: str = LLM_API_BASE` | `None` | Initializes the client with model/API settings; raises `ValueError` if no model is configured. |
+| `LLMClient._call_with_retry` | `prompt: str`, `max_tokens: int` | `str \| None` | Calls `litellm.acompletion` with retry on rate-limit errors, re-raises `ContextWindowExceededError`, and returns `None` on API errors or exhausted retries. |
+| `LLMClient.generate` | `prompt: str`, `max_tokens: int = DOC_MAX_TOKENS` | `str \| None` | Public entry point: validates the prompt is non-empty and delegates to `_call_with_retry` to produce the generated text. |
 
-## 4. Design Decisions
-- Differentiated error handling strategy: `litellm.RateLimitError` triggers bounded retries with a fixed wait (`RETRY_WAIT`), `ContextWindowExceededError` is deliberately re-raised (not retried or swallowed) so callers can handle context-length issues explicitly, and other `openai.APIError` failures fail fast by returning `None` without retry.
-- Optional parameters (`api_key`, `api_base`) are only included in the request payload when explicitly set, relying on litellm/provider defaults otherwise.
+## Design Decisions
+
+- **Adapter/Wrapper pattern**: `LLMClient` wraps `litellm.acompletion`, presenting a simplified, project-specific interface (`generate`) so callers don't interact directly with `litellm` or `openai` exception types beyond what's necessary.
+- **Retry-with-backoff strategy**: On `litellm.RateLimitError` (HTTP 429), the client retries up to `MAX_RETRIES` times, sleeping `RETRY_WAIT` seconds between attempts, and logs/returns `None` when retries are exhausted—centralizing resilience logic in one place rather than duplicating it across callers.
+- **Selective error propagation**: `ContextWindowExceededError` is deliberately re-raised (not swallowed), allowing calling code to handle context-length-specific failures differently (e.g., splitting/summarizing input), while generic `openai.APIError` failures are logged and suppressed by returning `None`, treating them as non-retryable.
+- **Fail-fast configuration validation**: The constructor raises a `ValueError` immediately if `model` is empty, preventing misconfigured clients from being used downstream.
+- **Optional parameter inclusion**: `api_key` and `api_base` are only added to the request kwargs if truthy, deferring to `litellm`/provider defaults otherwise.
 
 # Definition Design Specifications
 
-## `class LLMClient`
+## `LLMClient`
 
-**Responsibility**: Provides an async wrapper around `litellm.acompletion` to send prompts to an LLM provider (OpenAI-compatible) with configurable model/credentials and built-in retry logic for rate-limiting.
+Async wrapper around litellm's OpenAI-compatible completion API, providing a unified interface for prompt-based text generation regardless of the underlying provider. Its responsibility is to centralize model/API configuration and retry logic so that callers (e.g., `main.py`, `codetwine/doc_creator.py`, `codetwine/pipeline.py`) do not need to handle provider-specific details or transient failures themselves.
 
-**When to use**: Instantiated once by callers (e.g., `main.py`, `codetwine/pipeline.py`, `codetwine/doc_creator.py`) that need to generate LLM-based text (such as code summaries or documentation) from a prompt string.
+Design intent: by relying on litellm, the client abstracts away differences between LLM providers, using the model name prefix for provider auto-detection. The class enforces at construction time that a model must be configured, failing fast rather than allowing silent misconfiguration to propagate into async call sites.
 
-**Design decisions**:
-- Delegates provider-specific behavior entirely to `litellm`, relying on the model name prefix to auto-detect the provider rather than implementing per-provider logic.
-- Optional parameters (`api_key`, `api_base`) are only added to the request kwargs if truthy, allowing default provider behavior when unset.
+## `__init__`
 
-**Constraints & edge cases**:
-- Raises `ValueError` at construction time if `model` is falsy (empty string), preventing usage without a configured model.
-- Relies on module-level defaults (`LLM_MODEL`, `LLM_API_KEY`, `LLM_API_BASE`) from settings if no explicit constructor arguments are passed.
+Arguments: `model` (str, litellm-formatted model identifier, defaults to `LLM_MODEL`), `api_key` (str, provider API key, defaults to `LLM_API_KEY`), `api_base` (str, custom endpoint base URL, defaults to `LLM_API_BASE`). No return value.
 
-### `__init__(self, model: str = LLM_MODEL, api_key: str = LLM_API_KEY, api_base: str = LLM_API_BASE) -> None`
+Responsible for validating and storing the configuration needed for every subsequent API call. Raises `ValueError` immediately if `model` is empty/falsy, since a missing model makes the client unusable and this should surface at initialization rather than at first call, giving a clear actionable error message pointing to environment configuration.
 
-**Responsibility**: Validates and stores the model name, API key, and API base URL used for all subsequent LLM calls made by this instance.
+## `_call_with_retry`
 
-**When to use**: Called implicitly when creating an `LLMClient()` instance, typically once per application run.
+Arguments: `prompt` (str, the fully-formed text to send to the LLM), `max_tokens` (int, upper bound on generated tokens). Returns `str | None`: the stripped generated text on success, or `None` if generation could not be completed.
 
-**Constraints & edge cases**:
-- If `model` is empty/`None`, raises `ValueError` with guidance to set `LLM_MODEL` via `.env` or shell environment.
-- `api_key` and `api_base` are not validated; empty values are accepted and simply omitted from API call kwargs later.
+This method exists to isolate the retry/error-handling policy from the public `generate` entry point, keeping request construction and failure handling in one place. It builds the `litellm.acompletion` keyword arguments conditionally, only including `api_key`/`api_base` when they are set, so that litellm's own defaults or environment-based resolution can apply when they are not explicitly configured on the client.
 
-| Attribute | Type | Purpose |
-|---|---|---|
-| `model` | `str` | Model identifier in litellm format, determines provider routing |
-| `api_key` | `str` | Provider API key, used only if non-empty |
-| `api_base` | `str` | Custom endpoint base URL, used only if non-empty |
+Design decisions:
+- Retries only on `litellm.RateLimitError` (HTTP 429), waiting `RETRY_WAIT` seconds between attempts, up to `MAX_RETRIES` total attempts; this reflects the assumption that rate-limit errors are transient and worth waiting out, whereas other errors are not.
+- `ContextWindowExceededError` is deliberately re-raised rather than swallowed, since this is a caller-level input-sizing problem that the retry loop cannot fix and callers may need to handle specially (e.g., by truncating or chunking input).
+- Generic `openai.APIError` is treated as non-retryable: it is logged and `None` is returned immediately, on the assumption that such errors (e.g., malformed requests) will not be resolved by retrying.
+- If all retry attempts are exhausted on rate-limit errors, the method logs an error and returns `None` rather than raising, keeping failure signaling consistent (`None`) across all non-context-window failure modes.
 
----
+Edge case: if the loop completes without hitting a `return` or `raise` in any branch (not expected under normal control flow given the exhaustive except handling), the function implicitly returns `None` due to the `for` loop finishing without a final return statement.
 
-### `async def _call_with_retry(self, prompt: str, max_tokens: int) -> str | None`
+## `generate`
 
-**Signature explanation**: Returns either the generated response text (`str`) or `None` if generation failed after retries or due to a non-retryable error.
+Arguments: `prompt` (str, the prompt text to send to the LLM), `max_tokens` (int, defaults to `DOC_MAX_TOKENS`, the generation length limit). Returns `str | None`: the generated text, or `None` if `prompt` is falsy/empty or generation failed.
 
-**Responsibility**: Executes the actual LLM API call via `litellm.acompletion`, handling rate-limit retries and distinguishing recoverable vs. non-recoverable errors.
-
-**When to use**: Called internally by `generate()`; not intended to be invoked directly by external callers.
-
-**Design decisions**:
-- Retries only on `litellm.RateLimitError`, waiting `RETRY_WAIT` seconds between attempts, up to `MAX_RETRIES` total attempts.
-- Explicitly re-raises `ContextWindowExceededError` instead of catching it, allowing callers to handle context-length failures differently (e.g., by chunking input) rather than silently returning `None`.
-- Catches `openai.APIError` and fails immediately without retry, treating it as a non-transient error.
-- Builds the `kwargs` dict conditionally to omit `api_key`/`api_base` when not configured, rather than passing empty strings to litellm.
-
-**Constraints & edge cases**:
-- If all `MAX_RETRIES` attempts are exhausted due to rate limiting, logs an error and returns `None` (does not raise).
-- On `openai.APIError`, returns `None` immediately without exhausting retries.
-- Assumes `response.choices[0].message.content` is a non-`None` string (calls `.strip()` on it without null-checking); would raise an `AttributeError` if the API returns no content.
-- If the loop completes without hitting any `return`/`raise` in the try/except branches, the function implicitly returns `None` (Python default), though this path is only reachable if an attempt neither raises nor returns, which is not expected given the code structure.
-
-**Concurrency semantics**: Async function; awaits `litellm.acompletion` for the network call and `asyncio.sleep` during rate-limit backoff. Calls are sequential (attempts happen one at a time within the retry loop, not in parallel).
-
----
-
-### `async def generate(self, prompt: str, max_tokens: int = DOC_MAX_TOKENS) -> str | None`
-
-**Signature explanation**: Returns generated text as `str`, or `None` if the prompt is empty or generation failed.
-
-**Responsibility**: Serves as the public entry point for text generation, guarding against empty prompts before delegating to the retry-enabled API call.
-
-**When to use**: Called by external modules (`doc_creator.py`) whenever a prompt needs to be sent to the LLM to produce a summary or generated text, using either the default `DOC_MAX_TOKENS` limit or a caller-specified token budget.
-
-**Design decisions**: Short-circuits with `None` for falsy `prompt` input rather than making an API call, avoiding unnecessary requests.
-
-**Constraints & edge cases**:
-- Does not catch `ContextWindowExceededError` raised by `_call_with_retry`; it propagates to the caller, meaning callers of `generate` must handle this exception themselves.
-- `max_tokens` is passed through without validation (e.g., no check for negative or zero values).
-
-**Concurrency semantics**: Async function; awaits `_call_with_retry`, which internally performs sequential (non-parallel) network calls/retries.
+This is the public entry point intended for external callers, providing an input guard so that empty prompts short-circuit without making a network call, and otherwise delegating to `_call_with_retry` for the actual API interaction and retry handling. Keeping this method thin ensures the retry/error-handling complexity remains isolated in a single internal method.
 
 # Dependency Description
 
-### Dependencies (modules this file imports)
+## Dependencies (what this file uses)
 
-- `codetwine/llm/client.py` → `codetwine/config/settings.py` (`LLM_MODEL`) : obtains the default model name used to initialize `LLMClient`, and validates that it is set before constructing the client.
-- `codetwine/llm/client.py` → `codetwine/config/settings.py` (`LLM_API_KEY`) : obtains the default provider API key used to authenticate calls to the LLM API.
-- `codetwine/llm/client.py` → `codetwine/config/settings.py` (`LLM_API_BASE`) : obtains the default base URL for custom/self-hosted LLM API endpoints.
-- `codetwine/llm/client.py` → `codetwine/config/settings.py` (`MAX_RETRIES`) : determines how many times to retry an LLM API call after rate-limit errors before giving up.
-- `codetwine/llm/client.py` → `codetwine/config/settings.py` (`RETRY_WAIT`) : determines how many seconds to wait between retry attempts on rate-limit errors.
-- `codetwine/llm/client.py` → `codetwine/config/settings.py` (`DOC_MAX_TOKENS`) : provides the default maximum output token limit used when generating text via `generate()`.
+`codetwine/llm/client.py` relies on `codetwine/config/settings.py` for all runtime configuration needed to construct and operate the `LLMClient`:
 
-### Dependents (modules that import this file)
+- **LLM_MODEL**: Used as the default model identifier passed to `litellm.acompletion`. It also drives a validation check in `__init__` that raises a `ValueError` if no model is configured, ensuring the client cannot be instantiated without a valid target model.
+- **LLM_API_KEY**: Supplies the default API key for authenticating requests to the LLM provider. It is conditionally added to the request kwargs when calling the API.
+- **LLM_API_BASE**: Supplies the default base URL for custom or self-hosted LLM endpoints, conditionally included in the API call parameters.
+- **MAX_RETRIES**: Controls how many times `_call_with_retry` attempts the LLM call before giving up on rate-limit errors.
+- **RETRY_WAIT**: Defines the wait time (in seconds) between retry attempts when a rate-limit error occurs.
+- **DOC_MAX_TOKENS**: Used as the default value for the `max_tokens` parameter in `generate`, capping the length of LLM-generated output.
 
-- `main.py` → `codetwine/llm/client.py` (`LLMClient`) : instantiates `LLMClient` (conditioned on `ENABLE_LLM_DOC`) and passes it into `process_all_files` to enable LLM-based documentation generation for the project.
-- `codetwine/doc_creator.py` → `codetwine/llm/client.py` (`LLMClient`) : receives an `LLMClient` instance as a parameter in `_summarize_code` and `_summarize_callee_usages` to send code/context to the LLM and obtain concise summaries.
-- `codetwine/pipeline.py` → `codetwine/llm/client.py` (`LLMClient`) : accepts an `LLMClient | None` instance in `process_all_files` to drive LLM-based document generation across all analyzed files.
+These constants allow `LLMClient` to be configured centrally without hardcoding provider details, retry behavior, or token limits.
 
-### Dependency Direction
+## Dependents (what uses this file)
 
-All relationships are unidirectional. `codetwine/llm/client.py` depends on `codetwine/config/settings.py` for configuration values, while `main.py`, `codetwine/doc_creator.py`, and `codetwine/pipeline.py` depend on `codetwine/llm/client.py` for LLM access via `LLMClient`. There is no reverse dependency in either direction (settings.py does not depend on client.py, and client.py does not depend on its dependents).
+- **main.py**: Instantiates `LLMClient` (conditionally, based on `ENABLE_LLM_DOC`) and passes it into `process_all_files` for the documentation generation pipeline.
+- **codetwine/pipeline.py**: Accepts an `LLMClient` instance (or `None`) as a parameter in `process_all_files`, using it to drive LLM-based processing across the analyzed project files.
+- **codetwine/doc_creator.py**: Uses `LLMClient` in `_summarize_code` and `_summarize_callee_usages` to generate concise summaries of code blocks and large callee usage contexts via LLM calls.
+
+The dependency direction is unidirectional: `main.py`, `codetwine/pipeline.py`, and `codetwine/doc_creator.py` depend on `codetwine/llm/client.py` for LLM interaction capabilities, while `client.py` itself has no dependency on these files.
 
 # Data Flow
 
-## 1. Inputs
+## Input
+- **Source**: Callers such as `codetwine/doc_creator.py` (`_summarize_code`, `_summarize_callee_usages`) and `codetwine/pipeline.py` (`process_all_files`) instantiate `LLMClient` and call `generate(prompt, max_tokens)`.
+- **Format**:
+  - `prompt: str` — a completed natural-language/code prompt string.
+  - `max_tokens: int` — optional, defaults to `DOC_MAX_TOKENS` from settings.
+  - Constructor inputs (`model`, `api_key`, `api_base`) default to config values (`LLM_MODEL`, `LLM_API_KEY`, `LLM_API_BASE`) loaded from `codetwine/config/settings.py`.
 
-`LLMClient` receives data from two sources:
+## Main Transformation Flow
 
-- **Constructor arguments** (with config-driven defaults):
-  - `model: str` — defaults to `LLM_MODEL` (string; raises `ValueError` if empty)
-  - `api_key: str` — defaults to `LLM_API_KEY` (string, may be empty)
-  - `api_base: str` — defaults to `LLM_API_BASE` (string, may be empty)
-- **Method call arguments**:
-  - `prompt: str` — the text to send to the LLM, passed by callers (e.g., `doc_creator.py`)
-  - `max_tokens: int` — defaults to `DOC_MAX_TOKENS` from config
-- **Config constants** consumed internally during retry logic: `MAX_RETRIES` (int), `RETRY_WAIT` (int, seconds)
+```
+generate(prompt, max_tokens)
+    │
+    ├─ guard: empty prompt → return None
+    │
+    └─ _call_with_retry(prompt, max_tokens)
+            │
+            ├─ build kwargs dict:
+            │     { model, max_tokens,
+            │       messages: [{role: "user", content: prompt}],
+            │       api_key? , api_base? }
+            │
+            ├─ loop up to MAX_RETRIES:
+            │     await litellm.acompletion(**kwargs)
+            │        │
+            │        ├─ success → extract response.choices[0].message.content
+            │        │             → strip() → return str
+            │        │
+            │        ├─ RateLimitError → sleep(RETRY_WAIT), retry
+            │        │                   (or return None if retries exhausted)
+            │        │
+            │        ├─ ContextWindowExceededError → re-raise (propagated to caller)
+            │        │
+            │        └─ openai.APIError → log error, return None immediately
+            │
+            └─ return generated text or None
+```
 
-## 2. Transformation Overview
+- The prompt/config values are assembled into a single request payload (`kwargs`) sent to `litellm.acompletion`, an OpenAI-compatible async completion call.
+- The raw API response object is narrowed down to just the text content field, trimmed of whitespace.
+- Error conditions are converted into either a retry loop, an immediate `None`, or a re-raised exception, rather than propagating raw API response data.
 
-1. **Initialization**: `__init__` validates `model` is non-empty, then stores `model`, `api_key`, and `api_base` as instance state.
-2. **Entry validation (`generate`)**: An incoming `prompt` is checked; if falsy (`None`/empty string), the method short-circuits and returns `None` immediately without calling the API.
-3. **Request assembly (`_call_with_retry`)**: For a valid prompt, a `kwargs` dict is built containing `model`, `max_tokens`, and a `messages` list with a single user-role message wrapping `prompt`. `api_key`/`api_base` are conditionally added only if truthy.
-4. **Retry loop**: The assembled kwargs are passed to `litellm.acompletion` (async network call) inside a loop bounded by `MAX_RETRIES`:
-   - On success: the response object's `choices[0].message.content` is extracted and `.strip()`-ed into the final output string, and the loop exits via return.
-   - On `litellm.RateLimitError`: if attempts remain, the coroutine sleeps `RETRY_WAIT` seconds (`asyncio.sleep`) and loops again, re-sending the same request; if it's the last attempt, `None` is returned after logging an error.
-   - On `ContextWindowExceededError`: the exception is re-raised immediately (not swallowed), propagating to the caller.
-   - On `openai.APIError`: no retry occurs; the error is logged and `None` is returned immediately.
-5. **Result propagation**: The extracted/stripped text (or `None`) from `_call_with_retry` is returned as-is by `generate` to the calling code.
+## Output
+- **Format**: `str | None`
+  - `str`: stripped generated text from the LLM response.
+  - `None`: returned when prompt is empty, rate limit retries are exhausted, or an `openai.APIError` occurs.
+  - Exception: `ContextWindowExceededError` is not swallowed—it is re-raised to the caller.
+- **Destination**: Returned to calling code (e.g., `doc_creator.py` summarization functions, `pipeline.py` orchestration), which uses the text or handles the `None`/exception case.
 
-There is no fan-out/fan-in within this file itself — each `generate` call is a single async request-response cycle with sequential (not parallel) retries. Concurrency across multiple prompts (if any) is managed by external callers (e.g., `pipeline.py`), not by this module.
+## Key Data Structures
 
-## 3. Outputs
-
-- **Return value of `generate`**: `str | None` — either the stripped text content of the LLM's response, or `None` if:
-  - the input prompt was empty/falsy,
-  - rate limiting exhausted all retries,
-  - an `openai.APIError` occurred.
-- **Raised exception**: `ContextWindowExceededError` may propagate out of `generate`/`_call_with_retry` to the caller (not caught/converted to `None`).
-- **Side effects**: Log messages via `logger.warning` (rate limit retry notice) and `logger.error` (rate limit exhaustion, API error) — no file writes or other persistent side effects occur in this module.
-- **Network calls**: An outbound async API request is made per attempt via `litellm.acompletion`.
-
-## 4. Key Data Structures
-
-### `kwargs` (request payload dict, built in `_call_with_retry`)
-
-| Field / Key | Type | Purpose |
+| Structure | Fields | Purpose |
 |---|---|---|
-| `model` | `str` | Model identifier passed to litellm, determines provider routing |
-| `max_tokens` | `int` | Caps the length of the generated output |
-| `messages` | `list[dict]` | Conversation payload; single entry `{"role": "user", "content": prompt}` |
-| `api_key` (optional) | `str` | Provider API key, included only if `self.api_key` is truthy |
-| `api_base` (optional) | `str` | Custom endpoint URL, included only if `self.api_base` is truthy |
+| `self` (instance state) | `model: str`, `api_key: str`, `api_base: str` | Holds connection/config parameters reused across all `generate` calls |
+| `kwargs` (request payload) | `model`, `max_tokens`, `messages` (list with one `{role, content}` dict), optional `api_key`, `api_base` | Assembled per-call arguments passed directly to `litellm.acompletion` |
+| `response` (litellm result) | `choices[0].message.content` (only field accessed) | External API response; only the message text is extracted |
 
-### `messages` entry (dict inside `kwargs["messages"]`)
-
-| Field / Key | Type | Purpose |
-|---|---|---|
-| `role` | `str` | Fixed to `"user"`, denotes the message sender role for the chat API |
-| `content` | `str` | The raw `prompt` text supplied by the caller |
-
-### `LLMClient` instance state
-
-| Field | Type | Purpose |
-|---|---|---|
-| `model` | `str` | LLM model identifier used for every API call |
-| `api_key` | `str` | Credential used to authenticate with the LLM provider |
-| `api_base` | `str` | Custom base URL for API requests (empty means default provider endpoint) |
+No persistent or shared data structures are maintained beyond the client's own configuration attributes; each `generate` call is stateless aside from retry/backoff timing controlled by `MAX_RETRIES` and `RETRY_WAIT`.
 
 # Error Handling
 
-## 1. Overall Strategy
+## Overall Strategy
 
-`LLMClient` applies a mixed strategy depending on the error's nature: **retry with fallback** for transient/rate-limit failures, **fail-fast (re-raise)** for context-length errors that the caller must handle, and **log-and-return-None (graceful degradation)** for non-recoverable API errors. Additionally, at construction time the class enforces **fail-fast validation** for missing configuration. Overall, the client is designed so that a single generation failure never crashes the calling pipeline (it returns `None` instead), except for the context-window overflow case, which is deliberately propagated upward for higher-level handling.
+`LLMClient` adopts a **graceful degradation** approach for transient or unrecoverable LLM call failures, returning `None` instead of propagating most exceptions, while making a single deliberate exception — context window overflow — **fail-fast** by re-raising it to the caller. This allows upstream orchestration code (e.g., `doc_creator.py`, `pipeline.py`) to treat `None` as a uniform "generation failed" signal without needing to catch multiple exception types, while still surfacing context-size problems explicitly so callers can react (e.g., by chunking or resizing input).
 
-## 2. Error Pattern Table
+## Error Patterns and Handling Policy
 
-| Error Type | Trigger Condition | Handling | Recoverable? | Impact |
-|---|---|---|---|---|
-| `ValueError` (missing model) | `model` argument is empty/falsy at `LLMClient.__init__` | Immediately raises `ValueError` with a guidance message | No | Object construction fails; caller cannot use the client at all |
-| `litellm.RateLimitError` | LLM API responds with HTTP 429 (rate limit exceeded) during `acompletion` call | Logs a warning, waits `RETRY_WAIT` seconds, and retries up to `MAX_RETRIES` attempts | Yes (retried); becomes No after exhausting retries | Temporary delay in generation; returns `None` if all retries fail, allowing caller to continue without a result |
-| `ContextWindowExceededError` | Prompt/token count exceeds the model's context window | Immediately re-raised without logging or retry | No (within this method) | Propagates to caller, who is responsible for handling oversized-input scenarios (e.g., truncation/splitting) |
-| `openai.APIError` | Any other OpenAI-compatible API error (e.g., invalid request, server error) not covered by the above | Logs the error message and returns `None` immediately (no retry) | No | Generation fails for this call; caller receives `None` and continues |
-| Empty prompt | `prompt` argument is empty/falsy in `generate()` | Returns `None` immediately without calling the API | Yes (treated as a no-op, not a failure) | No API call made; caller receives `None` as if generation failed |
+| Error Type | Handling | Impact |
+|---|---|---|
+| Empty/falsy `prompt` (in `generate`) | Short-circuits before calling the API, returns `None` immediately | No API call is made; caller receives `None` as if generation failed |
+| `litellm.RateLimitError` (HTTP 429) | Retried up to `MAX_RETRIES` attempts with a fixed `RETRY_WAIT` second delay between attempts, logged as a warning on each retry | Temporary rate limiting is absorbed transparently; if all retries fail, error is logged and `None` is returned |
+| `litellm.ContextWindowExceededError` | Caught and immediately re-raised (no retry, no logging here) | Propagates to the caller, allowing distinct handling (e.g., input truncation) instead of silent failure |
+| `openai.APIError` (and subclasses) | Caught, logged as an error, no retry attempted | Fails immediately; `None` is returned to indicate failure |
+| All attempts exhausted for rate limiting | Logged as an error ("max retries reached") | `None` returned; caller must handle absence of result |
 
-## 3. Design Notes
+## Design Considerations
 
-- Rate-limit errors are treated as transient and given a bounded retry budget (`MAX_RETRIES`, `RETRY_WAIT`), reflecting the assumption that such errors often resolve after a short wait.
-- `ContextWindowExceededError` is intentionally not retried or converted to `None`; it is re-raised so that upstream logic (e.g., document creation or summarization pipelines) can decide on remediation such as reducing input size, rather than the client silently failing.
-- General `openai.APIError` is treated as non-transient (e.g., malformed request, auth issue) and is not retried, favoring quick failure with logging over wasted retry attempts.
-- Returning `None` (rather than raising) for recoverable failure paths allows calling code (e.g., `doc_creator.py`, `pipeline.py`) to continue processing other files/units even when a single LLM call fails, supporting a log-and-continue behavior at the pipeline level while the client itself remains a thin, predictable interface.
-- Configuration validation (`model` presence) is fail-fast at construction time, ensuring misconfiguration is caught early rather than surfacing as a runtime API error deep inside the retry logic.
+- Retry logic is scoped narrowly to rate-limit errors only; other API errors are treated as non-retryable to avoid masking persistent issues (e.g., invalid requests, auth failures) behind repeated retries.
+- `ContextWindowExceededError` is deliberately excluded from the "return `None`" pattern used elsewhere, since it represents a structural/input-size problem that the caller is expected to handle differently (not a transient failure suitable for silent suppression).
+- The consistent `str | None` return contract across `generate` and `_call_with_retry` centralizes failure signaling, simplifying error handling for dependents that only need to check for `None`.
+- Retry wait time and retry count are externalized via configuration (`MAX_RETRIES`, `RETRY_WAIT`) rather than hardcoded, allowing tuning without code changes.
 
 # Summary
 
-LLMClient: async wrapper around litellm for sending prompts to an LLM and returning generated text with rate-limit retry logic.
-
-- `LLMClient(model: str, api_key: str, api_base: str)`
-- `async generate(prompt: str, max_tokens: int) -> str | None`
-
-Consumes settings (LLM_MODEL, LLM_API_KEY, LLM_API_BASE, MAX_RETRIES, RETRY_WAIT, DOC_MAX_TOKENS). Builds `kwargs` dict (model, max_tokens, messages: list[dict]) for litellm.acompletion; returns stripped response text or None.
+`codetwine/llm/client.py` defines `LLMClient`, an async wrapper around `litellm.acompletion` centralizing LLM configuration and retry logic. `__init__(model, api_key, api_base)` validates config, raising `ValueError` if model is missing. `generate(prompt, max_tokens)` is the public entry point, guarding empty prompts and delegating to `_call_with_retry`, which builds request kwargs, retries on `RateLimitError` up to `MAX_RETRIES`, re-raises `ContextWindowExceededError`, and returns `None` on other API errors. Returns `str | None`. Used by `doc_creator.py`, `pipeline.py`, `main.py`.

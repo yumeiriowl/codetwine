@@ -86,6 +86,11 @@ PARSE_CACHE_MAX_FILES = get_config_value(
 )
 
 # == Output settings ========================================
+# The accepted values of KNOWLEDGE_FORMAT. process_all_files() checks the setting
+# against this before it analyses anything; what it checks is the value the pipeline
+# module holds at that point, not what the environment held at import time
+KNOWLEDGE_FORMATS = ("json", "sqlite", "both")
+
 # Which form the whole-project analysis result is written in.
 #   json   ... project_knowledge.json only
 #   sqlite ... project_knowledge.sqlite only
@@ -94,11 +99,6 @@ PARSE_CACHE_MAX_FILES = get_config_value(
 KNOWLEDGE_FORMAT = get_config_value(
     "KNOWLEDGE_FORMAT", default="json", var_type=str
 ).strip().lower()
-if KNOWLEDGE_FORMAT not in ("json", "sqlite", "both"):
-    raise ValueError(
-        f"KNOWLEDGE_FORMAT must be one of json / sqlite / both, "
-        f"but got '{KNOWLEDGE_FORMAT}'. Set it in the .env file or your shell."
-    )
 
 # == Analysis settings =============================================
 ENABLE_LLM_DOC = get_config_value("ENABLE_LLM_DOC", default=True, var_type=bool)

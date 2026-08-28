@@ -26,6 +26,7 @@ from codetwine.config.settings import (
     MAX_WORKERS,
     ENABLE_LLM_DOC,
     KNOWLEDGE_FORMAT,
+    KNOWLEDGE_FORMATS,
 )
 
 logger = logging.getLogger(__name__)
@@ -174,7 +175,18 @@ async def process_all_files(
         output_dir: Output directory for analysis results.
         llm_client: LLM summary generation client.
         max_workers: Maximum number of files to process concurrently.
+
+    Raises:
+        ValueError: When KNOWLEDGE_FORMAT is not one of KNOWLEDGE_FORMATS.
     """
+    # Checked before any analysis runs
+    if KNOWLEDGE_FORMAT not in KNOWLEDGE_FORMATS:
+        raise ValueError(
+            f"KNOWLEDGE_FORMAT must be one of "
+            f"{' / '.join(KNOWLEDGE_FORMATS)}, but got '{KNOWLEDGE_FORMAT}'. "
+            f"Set it in the .env file or your shell."
+        )
+
     project_name = os.path.basename(project_dir)
     base_output_dir = os.path.join(output_dir, project_name)
     os.makedirs(base_output_dir, exist_ok=True)
