@@ -21,6 +21,7 @@
 - `get_file_dependencies()`: takes the project file set, source roots and caller map from the caller instead of rebuilding them per file
 
 ### Fixed
+- `KNOWLEDGE_FORMAT`: an unusable value no longer stops `import codetwine`. It is checked at the start of `process_all_files()` instead, before anything is analysed, so a caller that replaces the setting in the pipeline's namespace is not stopped by what the environment holds
 - `generate_candidate_path_list()`: resolve an import whose specifier already carries a known extension (JS/TS `import "./helpers.js"`). Such a path is now tried as it is instead of only as a directory index
 - `extract_definitions()`: extract methods, constructors and fields declared inside a class, struct, interface, enum or object
 - `extract_definitions()`: extract Kotlin `val` / `var` / `const val`
