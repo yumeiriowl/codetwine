@@ -31,13 +31,10 @@ import qa_tools
 
 # LLM model name used by dspy.LM (litellm format)
 # Examples: "anthropic/<model>", "openai/<model>", "gemini/<model>", "ollama/<model>"
-LLM_MODEL = "anthropic/claude-opus-4-6"
+LLM_MODEL = "anthropic/claude-sonnet-5"
 
 # Sub-LLM model name used for llm_query/llm_query_batched within RLM sandbox
-SUB_LLM_MODEL = "anthropic/claude-sonnet-4-6"
-
-# The data handed to the RLM sandbox, built by load_project()
-project_data: dict = {}
+SUB_LLM_MODEL = "anthropic/claude-sonnet-5"
 
 # API key (obtained from environment variable)
 LLM_API_KEY = os.environ.get("LLM_API_KEY", "")
@@ -53,6 +50,10 @@ OUTPUT_LANGUAGE = "English"
 # KNOWLEDGE_FORMAT=json / both, or a project_knowledge.sqlite written by
 # KNOWLEDGE_FORMAT=sqlite / both
 TARGET_KNOWLEDGE_PATH = f"{os.path.dirname(__file__)}/../sample_output/codetwine/project_knowledge.json"
+
+
+# The data handed to the RLM sandbox, built by load_project()
+project_data: dict = {}
 
 
 # ===== Signature instructions template =====
