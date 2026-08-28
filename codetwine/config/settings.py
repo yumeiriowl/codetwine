@@ -78,6 +78,13 @@ MAX_WORKERS = get_config_value("MAX_WORKERS", default=4, var_type=int)
 MAX_RETRIES = get_config_value("MAX_RETRIES", default=3, var_type=int)
 RETRY_WAIT = get_config_value("RETRY_WAIT", default=2, var_type=int)
 
+# Maximum number of files whose parse results are kept in memory at once.
+# The least recently used entry is discarded once the count exceeds this value.
+# 0 keeps every parse result until the run ends.
+PARSE_CACHE_MAX_FILES = get_config_value(
+    "PARSE_CACHE_MAX_FILES", default=200, var_type=int
+)
+
 # == Analysis settings =============================================
 ENABLE_LLM_DOC = get_config_value("ENABLE_LLM_DOC", default=True, var_type=bool)
 SUMMARY_MAX_CHARS: int = get_config_value("SUMMARY_MAX_CHARS", default=600, var_type=int)

@@ -150,6 +150,7 @@ The following options can be configured in the `.env` file.
 | `MAX_WORKERS` | Number of parallel workers for document generation | `4` |
 | `MAX_RETRIES` | Number of retries for LLM API calls | `3` |
 | `RETRY_WAIT` | Wait time in seconds between retries | `2` |
+| `PARSE_CACHE_MAX_FILES` | Number of files whose parse results are kept in memory at once. Lowering it reduces peak memory on large repositories at the cost of re-parsing; `0` keeps every parse result until the run ends | `200` |
 
 ### Analysis Settings
 
@@ -180,6 +181,7 @@ The following options can be configured in the `.env` file.
 5. **Save all outputs as JSON**
    - Saved to `<output directory>/<project name>`
    - All dependencies and design documents are consolidated into a single JSON (`project_knowledge.json`)
+   - Each file's entry is written as soon as it is read, so the consolidated result is never assembled in memory as a whole
    - Dependency graphs and design documents are also output as Markdown for readability
 
 Note: LLM API calls are only made in step 4. No LLM is used in other steps.

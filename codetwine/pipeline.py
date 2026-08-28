@@ -14,6 +14,7 @@ from codetwine.output import (
     build_summary_map,
 )
 from codetwine.doc_creator import generate_all_docs
+from codetwine.import_to_path import detect_source_roots
 from codetwine.llm.client import LLMClient
 from codetwine.utils.file_utils import (
     copy_path_to_rel,
@@ -111,6 +112,11 @@ def _process_file_dependencies(
     print(f"Extracting dependencies for {len(files_to_process)} files...")
     logger.info(f"Extracting dependencies for {len(files_to_process)} files...")
 
+    # Lookups that are the same for every file, built once and passed to each call
+    project_file_set = {info["file"] for info in project_dep_list}
+    source_root_set = detect_source_roots(project_file_set)
+    caller_map = {info["file"]: info.get("callers", []) for info in project_dep_list}
+
     for file_rel in files_to_process:
         try:
             file_abs = os.path.join(project_dir, file_rel)
@@ -119,7 +125,8 @@ def _process_file_dependencies(
             os.makedirs(output_file_dir, exist_ok=True)
 
             dep_result = get_file_dependencies(
-                file_abs, project_dir, project_dep_list,
+                file_abs, project_dir,
+                project_file_set, source_root_set, caller_map,
             )
 
             # Convert paths to output format (project_name/copy_path)
@@ -240,7 +247,9 @@ async def process_all_files(
     print("Generating consolidated JSON...")
     logger.info("Generating consolidated JSON...")
     knowledge_path = os.path.join(base_output_dir, "project_knowledge.json")
-    save_consolidated_json(base_output_dir, all_file_list, knowledge_path, symbol_deps, summary_map)
+    save_consolidated_json(
+        base_output_dir, all_file_list, knowledge_path, symbol_deps, summary_map,
+    )
 
     # Clear parse result cache to free memory
     parse_cache.clear()

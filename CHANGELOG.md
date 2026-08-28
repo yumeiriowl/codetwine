@@ -3,7 +3,14 @@
 ## Unreleased
 
 ### Added
+- `PARSE_CACHE_MAX_FILES` setting capping how many files' parse results are kept in memory
 - `doc_template.json`: heading format instruction for the `definitions` section (`` ## `<name>` ``)
+
+### Changed
+- `parse_file()`: the parse cache is now a bounded LRU, so the syntax trees of a whole project are no longer held at once
+- `save_consolidated_json()` / `save_dependency_summary()`: entries are written one at a time instead of being assembled in a list first
+- `generate_all_docs()`: only each design document's summary is carried forward between levels, not its full section text
+- `get_file_dependencies()`: takes the project file set, source roots and caller map from the caller instead of rebuilding them per file
 
 ### Fixed
 - `extract_definitions()`: extract methods, constructors and fields declared inside a class, struct, interface, enum or object

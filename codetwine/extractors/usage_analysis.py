@@ -226,7 +226,7 @@ def _load_target_definitions(
 
 def build_caller_usages(
     target_file_rel: str,
-    project_dep_list: list[dict],
+    caller_file_list: list[str],
     project_dir: str,
     project_file_set: set[str],
 ) -> list[dict]:
@@ -235,20 +235,13 @@ def build_caller_usages(
 
     Args:
         target_file_rel: Relative path of this file from the project root.
-        project_dep_list: Dependency info list output by save_project_dependencies.
+        caller_file_list: Relative paths of the files depending on this file.
         project_dir: Absolute path to the project root.
         project_file_set: Set of file paths within the project.
 
     Returns:
         A list of dicts containing usage location information.
     """
-    # Step 1: Get the list of callers for this file
-    caller_file_list: list[str] = []
-    for dep_info in project_dep_list:
-        if dep_info["file"] == target_file_rel:
-            caller_file_list = dep_info["callers"]
-            break
-
     caller_usages: list[dict] = []
 
     # For C/C++, retrieve target definition names once outside the caller loop and cache them
@@ -269,14 +262,14 @@ def build_caller_usages(
             caller_root, language, import_query_str
         )
 
-        # Step 2: Collect names that the caller imports from the target
+        # Step 1: Collect names that the caller imports from the target
         names_from_target, target_definition_names = _collect_names_from_target(
             caller_import_list, target_file_rel, caller_ext,
             caller_rel, project_file_set, project_dir,
             target_definition_names,
         )
 
-        # Step 3: Extract and aggregate lines where those names are used within the caller
+        # Step 2: Extract and aggregate lines where those names are used within the caller
         if names_from_target:
             usage_node_types = USAGE_NODE_TYPES.get(caller_ext)
 
@@ -305,7 +298,7 @@ def build_caller_usages(
                 except (OSError, UnicodeDecodeError):
                     pass
 
-            # Step 4: Group by (name, file) and accumulate into lines list
+            # Step 3: Group by (name, file) and accumulate into lines list
             # Remap alias variable names to original type names for grouping
             groups: dict[str, dict] = {}
             for usage in usage_list:
@@ -323,7 +316,7 @@ def build_caller_usages(
                 else:
                     groups[name]["lines"].append(usage.line)
 
-            # Step 5: Extract usage_context from the usage locations of each group
+            # Step 4: Extract usage_context from the usage locations of each group
             # Remove duplicate lines before extracting context
             for group in groups.values():
                 group["lines"] = sorted(set(group["lines"]))

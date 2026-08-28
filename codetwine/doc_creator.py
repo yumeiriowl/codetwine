@@ -333,14 +333,13 @@ def _build_summary_prompt(
 
 def _build_callee_context_summary(
     file_deps: dict,
-    doc_map: dict[str, dict],
+    doc_summary_map: dict[str, str],
 ) -> str:
-    """Extract only summary text (doc_map[file]["summary"]) from design documents
-    of dependency files and concatenate them into a single string.
+    """Concatenate the design document summaries of the dependency files into a single string.
 
     Args:
         file_deps: The target file's file_dependencies.json.
-        doc_map: A map of file relative path -> generated design document dict.
+        doc_summary_map: A map of file relative path -> generated design document summary.
 
     Returns:
         Context text combining only the summaries.
@@ -354,13 +353,10 @@ def _build_callee_context_summary(
     callee_files = sorted(callee_set)
 
     # Retrieve and concatenate summaries for each dependency file
-    # callee_usages' from is in output format; doc_map keys are source relative paths, so reverse-convert
+    # callee_usages' from is in output format; doc_summary_map keys are source relative paths, so reverse-convert
     parts = []
     for callee_file in callee_files:
-        doc = doc_map.get(output_path_to_rel(callee_file))
-        if not doc:
-            continue
-        summary = doc.get("summary", "")
+        summary = doc_summary_map.get(output_path_to_rel(callee_file))
         if summary:
             parts.append(f"- **{output_path_to_rel(callee_file)}**: {summary}")
     return "\n".join(parts)
@@ -690,7 +686,7 @@ async def _generate_section_with_fallback(
 async def _generate_file_doc(
     file_rel: str,
     file_output_dir: str,
-    doc_map: dict[str, dict],
+    doc_summary_map: dict[str, str],
     template: dict,
     llm_client: LLMClient,
     summary_cache: dict[str, str],
@@ -704,7 +700,8 @@ async def _generate_file_doc(
     Args:
         file_rel: Relative path from the project root (e.g. "src/foo.py").
         file_output_dir: Output directory for this file (source copy and JSON are stored here).
-        doc_map: Design document dict of processed files (for callee context reference).
+        doc_summary_map: Design document summaries of processed files, keyed by file
+            relative path (for callee context reference).
         template: Template dict.
         llm_client: LLM client.
         summary_cache: Shared cache mapping code-hash -> summary text (context-overflow fallback).
@@ -731,7 +728,7 @@ async def _generate_file_doc(
         file_deps = json.load(f)
 
     # Prepare callee context (dependency doc summaries only)
-    callee_context = _build_callee_context_summary(file_deps, doc_map)
+    callee_context = _build_callee_context_summary(file_deps, doc_summary_map)
 
     # For header files, get the corresponding implementation file's source code
     implementation_context = _build_implementation_context(file_rel, file_output_dir)
@@ -988,7 +985,7 @@ async def generate_all_docs(
     1. Load the template.
     2. Topologically sort project_dependencies and arrange by level.
     3. Starting from level 0 (no dependencies), generate documents for each level in parallel.
-    4. Hold generated document summaries in doc_map for use as context in subsequent levels.
+    4. Hold generated document summaries in doc_summary_map for use as context in subsequent levels.
     5. Save each file's document in JSON + Markdown format.
 
     When changed_files is specified, if a file itself has not changed and none of its
@@ -1017,9 +1014,10 @@ async def generate_all_docs(
     print(start_msg)
     logger.info(start_msg)
 
-    # Dict holding design documents of processed files
-    # Key: file relative path, Value: design document dict {file, sections, summary}
-    doc_map: dict[str, dict] = {}
+    # Dict holding the summaries of processed files. Only the summary is carried
+    # forward between levels; the section text is not kept after a document is saved.
+    # Key: file relative path, Value: design document summary text
+    doc_summary_map: dict[str, str] = {}
 
     # Shared code-summary cache for the whole run (context-overflow fallback).
     # Key: SHA256 of a code block, Value: its behavior summary. Reused across
@@ -1105,7 +1103,7 @@ async def generate_all_docs(
                     pass  # Fall back to regeneration on read failure
 
         doc = await _generate_file_doc(
-            file_rel, output_dir, doc_map, template, llm_client, summary_cache,
+            file_rel, output_dir, doc_summary_map, template, llm_client, summary_cache,
         )
         if doc:
             _save_doc(doc, output_dir)
@@ -1139,11 +1137,11 @@ async def generate_all_docs(
                     continue
                 file_rel, doc = result
                 if doc:
-                    doc_map[file_rel] = doc
+                    doc_summary_map[file_rel] = doc.get("summary", "")
 
     done_msg = (
         f"Design document generation completed. "
-        f"Generated: {len(doc_map)} / "
+        f"Generated: {len(doc_summary_map)} / "
         f"Total: {sum(len(level) for level in level_list)}"
     )
     print(done_msg)
