@@ -231,6 +231,28 @@ def iter_files(connection: sqlite3.Connection) -> Iterator[dict]:
         yield _row_to_entry(row)
 
 
+def iter_dependencies(connection: sqlite3.Connection) -> Iterator[dict]:
+    """Yield every file's summary and dependency lists, one at a time, in insertion order.
+
+    The entries have the same structure as the consolidated JSON's
+    "project_dependencies" elements.
+
+    Args:
+        connection: An open knowledge database connection.
+
+    Yields:
+        A dict with {"file", "summary", "callers", "callees"} keys.
+    """
+    for row in connection.execute(
+            "SELECT file, summary FROM files ORDER BY rowid"):
+        yield {
+            "file": row["file"],
+            "summary": row["summary"],
+            "callers": callers_of(connection, row["file"]),
+            "callees": callees_of(connection, row["file"]),
+        }
+
+
 def get_file(connection: sqlite3.Connection, file: str) -> dict | None:
     """Return one file's entry.
 

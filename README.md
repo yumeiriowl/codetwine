@@ -164,8 +164,7 @@ The per-file JSON files are written in every case, and the SQLite database is bu
 them. On a repository with several thousand files, `sqlite` lets a reader query one file
 at a time instead of loading the whole consolidated JSON into memory.
 
-`project_knowledge.json` is what the RLM QA agent example reads, so keep `json` or `both`
-when using it.
+The RLM QA agent example reads either form.
 
 ### Analysis Settings
 
@@ -498,7 +497,9 @@ The design document generation step is skipped. Dependency information (`file_de
 uv run python examples/rlm_qa/rlm_qa_agent.py
 ```
 
-By default, the sample output in `examples/sample_output/` is used. To use your own project's output, edit `TARGET_JSON_PATH` in `rlm_qa_agent.py`.
+By default, the sample output in `examples/sample_output/` is used. To use your own project's output, edit `TARGET_KNOWLEDGE_PATH` in `rlm_qa_agent.py`.
+
+Either form of the knowledge file works: a path ending in `.sqlite` is read through `codetwine/knowledge_db.py`, any other path is read as `project_knowledge.json`. Both produce the same data for the agent.
 
 ## 🏗️ Project Structure
 

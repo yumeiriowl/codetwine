@@ -6,6 +6,8 @@
 - `KNOWLEDGE_FORMAT` setting (`json` / `sqlite` / `both`) selecting the form of the whole-project result
 - `codetwine/knowledge_db.py`: SQLite output (`project_knowledge.sqlite`) built from the per-file JSON files, with a read API (`open_knowledge`, `iter_files`, `get_file`, `callers_of`, `callees_of`, `find_definitions`)
 - `PARSE_CACHE_MAX_FILES` setting capping how many files' parse results are kept in memory
+- `knowledge_db.iter_dependencies()`: read each file's summary and dependency lists back from the database
+- `examples/rlm_qa`: accepts a `project_knowledge.sqlite` as well as a `project_knowledge.json` (`TARGET_JSON_PATH` renamed to `TARGET_KNOWLEDGE_PATH`)
 - `doc_template.json`: heading format instruction for the `definitions` section (`` ## `<name>` ``)
 
 ### Changed
@@ -15,6 +17,7 @@
 - `get_file_dependencies()`: takes the project file set, source roots and caller map from the caller instead of rebuilding them per file
 
 ### Fixed
+- `generate_candidate_path_list()`: resolve an import whose specifier already carries a known extension (JS/TS `import "./helpers.js"`). Such a path is now tried as it is instead of only as a directory index
 - `extract_definitions()`: extract methods, constructors and fields declared inside a class, struct, interface, enum or object
 - `extract_definitions()`: extract Kotlin `val` / `var` / `const val`
 - Updated sample output
