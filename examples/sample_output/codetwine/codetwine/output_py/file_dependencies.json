@@ -136,9 +136,9 @@
     },
     {
       "lines": [
+        133,
         136,
-        139,
-        142
+        139
       ],
       "name": "to_output_path",
       "file": "codetwine/codetwine/pipeline_py/pipeline.py",
@@ -146,7 +146,7 @@
     },
     {
       "lines": [
-        249
+        245
       ],
       "name": "build_symbol_level_deps",
       "file": "codetwine/codetwine/pipeline_py/pipeline.py",
@@ -154,7 +154,7 @@
     },
     {
       "lines": [
-        251
+        247
       ],
       "name": "build_summary_map",
       "file": "codetwine/codetwine/pipeline_py/pipeline.py",
@@ -162,7 +162,7 @@
     },
     {
       "lines": [
-        254
+        250
       ],
       "name": "save_dependency_summary",
       "file": "codetwine/codetwine/pipeline_py/pipeline.py",
@@ -170,7 +170,7 @@
     },
     {
       "lines": [
-        258
+        254
       ],
       "name": "save_dependency_graph_as_mermaid",
       "file": "codetwine/codetwine/pipeline_py/pipeline.py",
@@ -178,7 +178,7 @@
     },
     {
       "lines": [
-        265
+        261
       ],
       "name": "save_consolidated_json",
       "file": "codetwine/codetwine/pipeline_py/pipeline.py",

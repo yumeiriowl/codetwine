@@ -144,22 +144,3 @@ def compute_file_hash(file_path: str) -> str:
             h.update(chunk)
     return h.hexdigest()
 
-
-def is_file_unchanged(source_path: str, copied_path: str) -> bool:
-    """Compare the SHA256 hashes of the original file and its copy in the output
-    directory, returning True if the file has not changed.
-
-    Returns False (treated as changed) if the copy does not exist at the destination.
-
-    Args:
-        source_path: Absolute path of the original file in the project.
-        copied_path: Absolute path of the copied file in the output directory.
-
-    Returns:
-        True if the hashes match.
-    """
-    # Treat as changed if the copy does not exist at the destination
-    if not os.path.exists(copied_path):
-        return False
-    # Compare the SHA256 hashes of both files
-    return compute_file_hash(source_path) == compute_file_hash(copied_path)

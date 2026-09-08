@@ -72,6 +72,9 @@ class LLMClient:
                     kwargs["api_base"] = self.api_base
 
                 response = await litellm.acompletion(**kwargs)
+                # The text is returned as it is when the output was cut at max_tokens
+                if response.choices[0].finish_reason == "length":
+                    logger.warning(f"LLM output was cut at {max_tokens} tokens (DOC_MAX_TOKENS)")
                 # Extract and return the generated text from the response
                 return response.choices[0].message.content.strip()
 

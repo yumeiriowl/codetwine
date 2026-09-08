@@ -42,24 +42,17 @@
       "start_line": 130,
       "end_line": 145,
       "context": "def compute_file_hash(file_path: str) -> str:\n    \"\"\"Return the SHA256 hash of a file as a hex string.\n\n    Args:\n        file_path: Absolute path of the file to hash.\n\n    Returns:\n        SHA256 hash as a hex string.\n    \"\"\"\n    # Initialize a SHA256 hash object\n    h = hashlib.sha256()\n    # Read and hash in 8KB chunks\n    with open(file_path, \"rb\") as f:\n        for chunk in iter(lambda: f.read(8192), b\"\"):\n            h.update(chunk)\n    return h.hexdigest()"
-    },
-    {
-      "name": "is_file_unchanged",
-      "type": "function_definition",
-      "start_line": 148,
-      "end_line": 165,
-      "context": "def is_file_unchanged(source_path: str, copied_path: str) -> bool:\n    \"\"\"Compare the SHA256 hashes of the original file and its copy in the output\n    directory, returning True if the file has not changed.\n\n    Returns False (treated as changed) if the copy does not exist at the destination.\n\n    Args:\n        source_path: Absolute path of the original file in the project.\n        copied_path: Absolute path of the copied file in the output directory.\n\n    Returns:\n        True if the hashes match.\n    \"\"\"\n    # Treat as changed if the copy does not exist at the destination\n    if not os.path.exists(copied_path):\n        return False\n    # Compare the SHA256 hashes of both files\n    return compute_file_hash(source_path) == compute_file_hash(copied_path)"
     }
   ],
   "callee_usages": [],
   "caller_usages": [
     {
       "lines": [
-        225,
-        250,
-        267,
-        359,
-        361
+        229,
+        254,
+        271,
+        363,
+        365
       ],
       "name": "output_path_to_rel",
       "file": "codetwine/codetwine/doc_creator_py/doc_creator.py",
@@ -67,7 +60,15 @@
     },
     {
       "lines": [
-        1082
+        777
+      ],
+      "name": "compute_file_hash",
+      "file": "codetwine/codetwine/doc_creator_py/doc_creator.py",
+      "usage_context": "        \"file\": file_rel,\n        \"sections\": section_list,\n        \"summary\": summary or \"\",\n        \"source_hash\": compute_file_hash(source_file),\n    }\n\n"
+    },
+    {
+      "lines": [
+        1104
       ],
       "name": "resolve_file_output_dir",
       "file": "codetwine/codetwine/doc_creator_py/doc_creator.py",
@@ -83,20 +84,20 @@
     },
     {
       "lines": [
-        91,
-        126
+        90,
+        123
       ],
       "name": "resolve_file_output_dir",
       "file": "codetwine/codetwine/pipeline_py/pipeline.py",
-      "usage_context": "    changed: set[str] = set()\n    for file_rel in all_file_list:\n        file_abs = os.path.join(project_dir, file_rel)\n        output_file_dir = resolve_file_output_dir(base_output_dir, file_rel)\n        copied_path = os.path.join(output_file_dir, os.path.basename(file_rel))\n        deps_json_path = os.path.join(output_file_dir, \"file_dependencies.json\")\n\n...\n    for file_rel in files_to_process:\n        try:\n            file_abs = os.path.join(project_dir, file_rel)\n            output_file_dir = resolve_file_output_dir(base_output_dir, file_rel)\n\n            os.makedirs(output_file_dir, exist_ok=True)\n"
+      "usage_context": "    changed: set[str] = set()\n    for file_rel in all_file_list:\n        file_abs = os.path.join(project_dir, file_rel)\n        doc = load_doc(resolve_file_output_dir(base_output_dir, file_rel))\n\n        if doc is None or doc.get(\"source_hash\") != compute_file_hash(file_abs):\n            changed.add(file_rel)\n...\n    for file_rel in files_to_process:\n        try:\n            file_abs = os.path.join(project_dir, file_rel)\n            output_file_dir = resolve_file_output_dir(base_output_dir, file_rel)\n\n            os.makedirs(output_file_dir, exist_ok=True)\n"
     },
     {
       "lines": [
-        95
+        92
       ],
-      "name": "is_file_unchanged",
+      "name": "compute_file_hash",
       "file": "codetwine/codetwine/pipeline_py/pipeline.py",
-      "usage_context": "        copied_path = os.path.join(output_file_dir, os.path.basename(file_rel))\n        deps_json_path = os.path.join(output_file_dir, \"file_dependencies.json\")\n\n        if not is_file_unchanged(file_abs, copied_path) or not os.path.exists(deps_json_path):\n            changed.add(file_rel)\n    return changed\n"
+      "usage_context": "        file_abs = os.path.join(project_dir, file_rel)\n        doc = load_doc(resolve_file_output_dir(base_output_dir, file_rel))\n\n        if doc is None or doc.get(\"source_hash\") != compute_file_hash(file_abs):\n            changed.add(file_rel)\n    return changed\n"
     },
     {
       "lines": [

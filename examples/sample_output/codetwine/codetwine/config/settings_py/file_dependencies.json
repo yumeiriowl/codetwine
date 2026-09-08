@@ -48,7 +48,7 @@
       "type": "expression_statement",
       "start_line": 62,
       "end_line": 62,
-      "context": "DOC_MAX_TOKENS = get_config_value(\"DOC_MAX_TOKENS\", default=8192, var_type=int)"
+      "context": "DOC_MAX_TOKENS = get_config_value(\"DOC_MAX_TOKENS\", default=16384, var_type=int)"
     },
     {
       "name": "REPO_ROOT",
@@ -473,9 +473,9 @@
     },
     {
       "lines": [
-        288,
-        329,
-        399
+        292,
+        333,
+        403
       ],
       "name": "OUTPUT_LANGUAGE",
       "file": "codetwine/codetwine/doc_creator_py/doc_creator.py",
@@ -483,7 +483,7 @@
     },
     {
       "lines": [
-        398
+        402
       ],
       "name": "CODE_SUMMARY_MAX_CHARS",
       "file": "codetwine/codetwine/doc_creator_py/doc_creator.py",
@@ -491,8 +491,8 @@
     },
     {
       "lines": [
-        465,
-        539
+        469,
+        543
       ],
       "name": "CODE_SUMMARY_TRIGGER_LINES",
       "file": "codetwine/codetwine/doc_creator_py/doc_creator.py",
@@ -500,7 +500,7 @@
     },
     {
       "lines": [
-        664
+        668
       ],
       "name": "ENABLE_CODE_SUMMARY",
       "file": "codetwine/codetwine/doc_creator_py/doc_creator.py",
@@ -508,7 +508,7 @@
     },
     {
       "lines": [
-        792
+        799
       ],
       "name": "SUMMARY_MAX_CHARS",
       "file": "codetwine/codetwine/doc_creator_py/doc_creator.py",
@@ -516,7 +516,7 @@
     },
     {
       "lines": [
-        979
+        1001
       ],
       "name": "MAX_WORKERS",
       "file": "codetwine/codetwine/doc_creator_py/doc_creator.py",
@@ -524,7 +524,7 @@
     },
     {
       "lines": [
-        1002
+        1024
       ],
       "name": "DOC_TEMPLATE_PATH",
       "file": "codetwine/codetwine/doc_creator_py/doc_creator.py",
@@ -532,7 +532,7 @@
     },
     {
       "lines": [
-        159
+        156
       ],
       "name": "MAX_WORKERS",
       "file": "codetwine/codetwine/pipeline_py/pipeline.py",
@@ -540,8 +540,8 @@
     },
     {
       "lines": [
-        183,
-        186
+        180,
+        183
       ],
       "name": "KNOWLEDGE_FORMATS",
       "file": "codetwine/codetwine/pipeline_py/pipeline.py",
@@ -549,10 +549,10 @@
     },
     {
       "lines": [
+        180,
         183,
-        186,
-        261,
-        269
+        257,
+        265
       ],
       "name": "KNOWLEDGE_FORMAT",
       "file": "codetwine/codetwine/pipeline_py/pipeline.py",
@@ -560,11 +560,11 @@
     },
     {
       "lines": [
-        233
+        225
       ],
       "name": "ENABLE_LLM_DOC",
       "file": "codetwine/codetwine/pipeline_py/pipeline.py",
-      "usage_context": "    )\n\n    # == Step 3: Generate design documents in topological order ================\n    if ENABLE_LLM_DOC:\n        print(\"Generating design documents...\")\n        logger.info(\"Generating design documents...\")\n        await generate_all_docs("
+      "usage_context": "    )\n\n    # == Step 3: Generate design documents in topological order ================\n    if ENABLE_LLM_DOC:\n        changed_files = _detect_changed_files(all_file_list, project_dir, base_output_dir)\n        print(f\"Change detection: {len(changed_files)} changed / {len(all_file_list)} total\")\n        logger.info(f\"Change detection: {len(changed_files)} changed / {len(all_file_list)} total\")"
     },
     {
       "lines": [
@@ -593,7 +593,7 @@
     {
       "lines": [
         59,
-        80
+        83
       ],
       "name": "MAX_RETRIES",
       "file": "codetwine/codetwine/llm/client_py/client.py",
@@ -601,8 +601,8 @@
     },
     {
       "lines": [
-        81,
-        82
+        84,
+        85
       ],
       "name": "RETRY_WAIT",
       "file": "codetwine/codetwine/llm/client_py/client.py",
@@ -610,7 +610,7 @@
     },
     {
       "lines": [
-        97
+        100
       ],
       "name": "DOC_MAX_TOKENS",
       "file": "codetwine/codetwine/llm/client_py/client.py",

@@ -13,13 +13,13 @@ from codetwine.output import (
     to_output_path,
     build_summary_map,
 )
-from codetwine.doc_creator import generate_all_docs
+from codetwine.doc_creator import generate_all_docs, load_doc
 from codetwine.import_to_path import detect_source_roots
 from codetwine.knowledge_db import save_consolidated_sqlite
 from codetwine.llm.client import LLMClient
 from codetwine.utils.file_utils import (
+    compute_file_hash,
     copy_path_to_rel,
-    is_file_unchanged,
     resolve_file_output_dir,
 )
 from codetwine.config.settings import (
@@ -70,12 +70,11 @@ def _detect_changed_files(
     project_dir: str,
     base_output_dir: str,
 ) -> set[str]:
-    """Detect changed files by comparing source file hashes with output copies.
+    """Detect changed files by comparing source file hashes with the ones recorded in doc.json.
 
     The following files are returned as "changed":
-    - Files whose source hash differs from the output copy.
-    - Files without a file_dependencies.json in the output
-      (to recover from an incomplete state where previous processing failed midway).
+    - Files whose output has no readable doc.json.
+    - Files whose source hash differs from the source_hash recorded in doc.json.
 
     Args:
         all_file_list: List of all file relative paths within the project.
@@ -88,11 +87,9 @@ def _detect_changed_files(
     changed: set[str] = set()
     for file_rel in all_file_list:
         file_abs = os.path.join(project_dir, file_rel)
-        output_file_dir = resolve_file_output_dir(base_output_dir, file_rel)
-        copied_path = os.path.join(output_file_dir, os.path.basename(file_rel))
-        deps_json_path = os.path.join(output_file_dir, "file_dependencies.json")
+        doc = load_doc(resolve_file_output_dir(base_output_dir, file_rel))
 
-        if not is_file_unchanged(file_abs, copied_path) or not os.path.exists(deps_json_path):
+        if doc is None or doc.get("source_hash") != compute_file_hash(file_abs):
             changed.add(file_rel)
     return changed
 
@@ -163,9 +160,9 @@ async def process_all_files(
 
     Processing flow:
     1. Build the project-wide dependency graph.
-    1.5. Detect changed files (for Stage 4 impact range identification).
     2. Extract dependency info for all files (always process all for consistency).
-    3. Generate design documents in topological order (regenerate only the impact range of changes).
+    3. Detect changed files and generate design documents in topological order
+       (regenerate only the impact range of changes).
     3.5. Generate dependency graph + summary consolidated JSON.
     4. Generate Mermaid dependency graph diagram.
     5. Generate the consolidated result in the form KNOWLEDGE_FORMAT selects.
@@ -218,11 +215,6 @@ async def process_all_files(
     print(f"Files to analyze: {len(all_file_list)}")
     logger.info(f"Files to analyze: {len(all_file_list)}")
 
-    # == Step 1.5: Detect changed files ==============================
-    changed_files = _detect_changed_files(all_file_list, project_dir, base_output_dir)
-    print(f"Change detection: {len(changed_files)} changed / {len(all_file_list)} total")
-    logger.info(f"Change detection: {len(changed_files)} changed / {len(all_file_list)} total")
-
     # == Step 2: Extract dependency info for all files ========================
     _process_file_dependencies(
         all_file_list, project_dir, base_output_dir,
@@ -231,6 +223,10 @@ async def process_all_files(
 
     # == Step 3: Generate design documents in topological order ================
     if ENABLE_LLM_DOC:
+        changed_files = _detect_changed_files(all_file_list, project_dir, base_output_dir)
+        print(f"Change detection: {len(changed_files)} changed / {len(all_file_list)} total")
+        logger.info(f"Change detection: {len(changed_files)} changed / {len(all_file_list)} total")
+
         print("Generating design documents...")
         logger.info("Generating design documents...")
         await generate_all_docs(
