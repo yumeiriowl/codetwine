@@ -12,6 +12,10 @@
 - `examples/rlm_qa`: `get_file_detail()` and `search_text()` tools
 - `knowledge_db.find_definitions()`: `partial` argument for a case-insensitive contains match
 - `doc_template.json`: heading format instruction for the `definitions` section (`` ## `<name>` ``)
+- `doc.json`: `source_hash`, the SHA256 of the source file the document was generated from
+- `doc_creator.load_doc()`: read one file's `doc.json`
+- `LLMClient`: a warning when the LLM output was cut at `DOC_MAX_TOKENS`
+- `examples/doc_template_search.json`: search-oriented design document template for any language (one section: overview and one prose entry per definition). The sample output is generated with it
 
 ### Changed
 - `examples/rlm_qa`: the agent now receives only the file graph and per-file summaries; definitions, source code and design documents are fetched per file through the tools instead of being sent into the sandbox
@@ -19,8 +23,15 @@
 - `save_consolidated_json()` / `save_dependency_summary()`: entries are written one at a time instead of being assembled in a list first
 - `generate_all_docs()`: only each design document's summary is carried forward between levels, not its full section text
 - `get_file_dependencies()`: takes the project file set, source roots and caller map from the caller instead of rebuilding them per file
+- `examples/doc_template_python.json`: the five sections are merged into one `design` section, so a design document takes one LLM call plus the summary
+- `process_all_files()`: change detection runs only when design documents are generated
+- `DOC_MAX_TOKENS` default raised from `8192` to `16384`
+
+### Removed
+- `is_file_unchanged()`
 
 ### Fixed
+- Change detection compares the source with the `source_hash` recorded in `doc.json` instead of with the source copy in the output directory. The copy is refreshed by every run, so a change made between runs with `ENABLE_LLM_DOC=False` was never regenerated. A design document without `source_hash` is regenerated once
 - `KNOWLEDGE_FORMAT`: an unusable value no longer stops `import codetwine`. It is checked at the start of `process_all_files()` instead, before anything is analysed, so a caller that replaces the setting in the pipeline's namespace is not stopped by what the environment holds
 - `generate_candidate_path_list()`: resolve an import whose specifier already carries a known extension (JS/TS `import "./helpers.js"`). Such a path is now tried as it is instead of only as a directory index
 - `extract_definitions()`: extract methods, constructors and fields declared inside a class, struct, interface, enum or object

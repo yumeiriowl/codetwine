@@ -59,7 +59,7 @@ LLM_API_KEY = get_config_value("LLM_API_KEY", default="")
 LLM_MODEL = get_config_value("LLM_MODEL", default="")
 LLM_API_BASE = get_config_value("LLM_API_BASE", default="")
 OUTPUT_LANGUAGE = get_config_value("OUTPUT_LANGUAGE", default="English")
-DOC_MAX_TOKENS = get_config_value("DOC_MAX_TOKENS", default=8192, var_type=int)
+DOC_MAX_TOKENS = get_config_value("DOC_MAX_TOKENS", default=16384, var_type=int)
 
 # == Path settings =============================================
 REPO_ROOT = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", ".."))

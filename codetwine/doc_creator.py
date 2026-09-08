@@ -6,7 +6,11 @@ import asyncio
 import logging
 from codetwine.llm import ContextWindowExceededError
 from codetwine.llm.client import LLMClient
-from codetwine.utils.file_utils import output_path_to_rel, resolve_file_output_dir
+from codetwine.utils.file_utils import (
+    compute_file_hash,
+    output_path_to_rel,
+    resolve_file_output_dir,
+)
 from codetwine.config.settings import (
     MAX_WORKERS,
     DOC_TEMPLATE_PATH,
@@ -707,7 +711,9 @@ async def _generate_file_doc(
         summary_cache: Shared cache mapping code-hash -> summary text (context-overflow fallback).
 
     Returns:
-        Design document dict ({file, sections, summary}), or None if generation completely fails.
+        Design document dict ({file, sections, summary, source_hash}), or None if
+        generation completely fails. source_hash is the SHA256 of the source the
+        document was generated from.
     """
     # Read the source code
     source_file = _find_source_file(file_output_dir, file_rel)
@@ -768,6 +774,7 @@ async def _generate_file_doc(
         "file": file_rel,
         "sections": section_list,
         "summary": summary or "",
+        "source_hash": compute_file_hash(source_file),
     }
 
 
@@ -817,11 +824,28 @@ def _find_source_file(output_dir: str, file_rel: str) -> str | None:
     return None
 
 
+def load_doc(output_dir: str) -> dict | None:
+    """Read the design document (doc.json) saved in a file's output directory.
+
+    Args:
+        output_dir: Output directory of the file.
+
+    Returns:
+        The design document dict, or None if doc.json does not exist or cannot be read.
+    """
+    json_path = os.path.join(output_dir, "doc.json")
+    try:
+        with open(json_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
 def _save_doc(doc: dict, output_dir: str) -> None:
     """Save a design document to file in both JSON and Markdown formats.
 
     Args:
-        doc: Design document dict ({file, sections, summary}).
+        doc: Design document dict ({file, sections, summary, source_hash}).
         output_dir: Output directory.
     """
     # Markdown output (write first)
@@ -914,10 +938,8 @@ def _sync_md_to_json(output_dir: str) -> None:
         return
 
     # Load existing JSON
-    try:
-        with open(json_path, "r", encoding="utf-8") as f:
-            doc = json.load(f)
-    except (json.JSONDecodeError, OSError):
+    doc = load_doc(output_dir)
+    if doc is None:
         return
 
     # Read full text of the MD file
@@ -988,9 +1010,9 @@ async def generate_all_docs(
     4. Hold generated document summaries in doc_summary_map for use as context in subsequent levels.
     5. Save each file's document in JSON + Markdown format.
 
-    When changed_files is specified, if a file itself has not changed and none of its
-    callees (dependencies) have changed either, the existing doc.json is reused
-    and the LLM call is skipped.
+    When changed_files is specified, if a file's existing document was generated from
+    the current source and none of its callees (dependencies) are in changed_files
+    either, the existing doc.json is reused and the LLM call is skipped.
 
     Args:
         base_output_dir: Base output directory for file_dependencies.
@@ -1088,19 +1110,15 @@ async def generate_all_docs(
         if not _needs_regeneration(file_rel):
             # Sync manual edits from doc.md to JSON if user edited it
             _sync_md_to_json(output_dir)
-            existing_doc_path = os.path.join(output_dir, "doc.json")
-            if os.path.exists(existing_doc_path):
-                try:
-                    with open(existing_doc_path, "r", encoding="utf-8") as f:
-                        existing_doc = json.load(f)
-                    if _is_doc_complete(existing_doc):
-                        print(f"  REUSE: {file_rel}")
-                        logger.info(f"  REUSE: {file_rel}")
-                        return file_rel, existing_doc
-                    print(f"  INCOMPLETE: {file_rel}")
-                    logger.info(f"  INCOMPLETE: {file_rel} — regenerating")
-                except (json.JSONDecodeError, OSError):
-                    pass  # Fall back to regeneration on read failure
+            existing_doc = load_doc(output_dir)
+            # Regenerate when doc.json is missing or unreadable
+            if existing_doc is not None:
+                if _is_doc_complete(existing_doc):
+                    print(f"  REUSE: {file_rel}")
+                    logger.info(f"  REUSE: {file_rel}")
+                    return file_rel, existing_doc
+                print(f"  INCOMPLETE: {file_rel}")
+                logger.info(f"  INCOMPLETE: {file_rel} — regenerating")
 
         doc = await _generate_file_doc(
             file_rel, output_dir, doc_summary_map, template, llm_client, summary_cache,
