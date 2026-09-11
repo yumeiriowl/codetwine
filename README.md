@@ -53,6 +53,9 @@ The knowledge file can be used as input material for LLM-powered code search and
 
 ## 🧬 Supported Languages
 
+Definitions, dependencies and design documents are extracted for the following languages
+(extensions `py`, `java`, `kt`, `kts`, `js`, `jsx`, `ts`, `tsx`, `c`, `cpp`, `h`):
+
 - Python
 - Java
 - JavaScript
@@ -60,6 +63,11 @@ The knowledge file can be used as input material for LLM-powered code search and
 - C
 - C++
 - Kotlin
+
+Every other non-empty text file (`.md`, `.yaml`, `.toml`, `Makefile`, ...) is also listed in the
+outputs and copied to the output directory, with empty `definitions`, `callee_usages` and
+`caller_usages`, a `null` summary and no design document. Empty files and binary files (a NUL
+byte in the first 8 KiB) are skipped.
 
 ## 🚀 Quick Start
 
@@ -176,17 +184,18 @@ The RLM QA agent example reads either form.
 | `ENABLE_CODE_SUMMARY` | Enable LLM summarization of large code when a prompt exceeds the model context window (`True` / `False`). When `False`, an oversized prompt is only reduced by dropping caller/callee context | `True` |
 | `CODE_SUMMARY_TRIGGER_LINES` | Line span above which a definition or dependency symbol is summarized during context-overflow fallback | `40` |
 | `CODE_SUMMARY_MAX_CHARS` | Character limit for a single code behavior summary | `400` |
-| `EXCLUDE_PATTERNS` | Patterns to exclude during file traversal (comma-separated, fnmatch format) | `__pycache__,.git,.github,.venv,node_modules` |
+| `EXCLUDE_PATTERNS` | Patterns to exclude during file traversal (comma-separated, fnmatch format). Every text file is collected, so use it to keep out secrets, data and lock files, and an output directory inside the project | `__pycache__,.git,.github,.venv,node_modules` |
 
 ## 🔄 High-Level Processing Flow
 
 1. **Build the project-wide dependency graph**
-   - Collects source files with supported extensions from the target directory
-   - Analyzes import statements in each file and identifies inter-file dependencies
+   - Collects every non-empty text file from the target directory
+   - Analyzes import statements in each file of a supported language and identifies inter-file dependencies
 2. **Extract dependency information for each file**
    - Generates a syntax tree with tree-sitter and extracts definitions (functions, classes, etc.)
    - Based on the dependency graph built in step 1, extracts callee and caller file paths, line numbers, and source code
-3. **Generate design documents via LLM**
+   - A file whose extension has no tree-sitter language gets empty definitions and usages
+3. **Generate design documents via LLM** (files of a supported language only)
    - Compares each source file's hash with the one recorded in its previous design document (`doc.json`) to identify the files whose documents must be regenerated
    - Sorts files in topological order, processing from files with no dependencies toward dependent files
    - Passes each file's source code, dependency information, and callee document summaries to the LLM, generating a design document section by section according to the template (`doc_template.json`)
@@ -213,7 +222,7 @@ Running the tool generates the following files in `<output directory>/<project n
 | `<filename>/file_dependencies.json` | Per-file definition and dependency information |
 | `<filename>/doc.json` | Per-file design document (JSON format) |
 | `<filename>/doc.md` | Per-file design document (Markdown format) |
-| `<filename>/<original filename>` | Copy of the original source code |
+| `<filename>/<original filename>` | Copy of the original file |
 
 ## ⚠️ Dependency Analysis Limitations
 
@@ -317,7 +326,7 @@ Consolidated JSON integrating all file dependencies and design documents.
 |-----------|-----|------|
 | `project_name` | string | Project name |
 | `project_dependencies[].file` | string | Path of the source file copied to the output directory |
-| `project_dependencies[].summary` | string\|null | Summary of the file (null when design document is not generated) |
+| `project_dependencies[].summary` | string\|null | Summary of the file (null when the design document is not generated, and always for a file whose extension has no tree-sitter language) |
 | `project_dependencies[].callers` | string[] | Paths of dependent files copied to the output directory |
 | `project_dependencies[].callees` | string[] | Paths of dependency files copied to the output directory |
 | `files[].file` | string | Path of the source file copied to the output directory |
@@ -481,7 +490,7 @@ To output only dependency information without generating LLM design documents, s
 ENABLE_LLM_DOC=False
 ```
 
-The design document generation step is skipped. Dependency information (`file_dependencies.json` and source file copies) is still generated for each file, along with `project_knowledge.json`, `project_dependency_summary.json`, and `dependency_graph.md`. Since no LLM is used, it can run without API keys or model configuration. Such a run does not affect change detection: the next run with `ENABLE_LLM_DOC=True` regenerates the design documents of every file changed since they were generated.
+The design document generation step is skipped. Dependency information (`file_dependencies.json` and file copies) is still generated for each file, along with `project_knowledge.json`, `project_dependency_summary.json`, and `dependency_graph.md`. Since no LLM is used, it can run without API keys or model configuration. Such a run does not affect change detection: the next run with `ENABLE_LLM_DOC=True` regenerates the design documents of every file changed since they were generated.
 
 ## 💡 Usage Example: RLM QA Agent
 

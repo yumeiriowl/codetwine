@@ -2,6 +2,7 @@ import os
 import json
 import shutil
 import logging
+from collections import Counter
 from codetwine.parsers.ts_parser import parse_cache
 from codetwine.extractors.dependency_graph import build_project_dependencies
 from codetwine.file_analyzer import get_file_dependencies
@@ -27,6 +28,7 @@ from codetwine.config.settings import (
     ENABLE_LLM_DOC,
     KNOWLEDGE_FORMAT,
     KNOWLEDGE_FORMATS,
+    has_language,
 )
 
 logger = logging.getLogger(__name__)
@@ -94,11 +96,27 @@ def _detect_changed_files(
     return changed
 
 
+def _ext_count_line(file_list: list[str]) -> str:
+    """Count the files per extension and return it as one line, most common first.
+
+    Examples:
+        ["a.py", "b.py", "c.md", "Makefile"] -> "py 2, md 1, (none) 1"
+
+    Args:
+        file_list: File paths; only their extensions are looked at.
+
+    Returns:
+        "<ext> <count>" pairs joined by ", ". A file without an extension is "(none)".
+    """
+    ext_count = Counter(os.path.splitext(f)[1].lstrip(".") or "(none)" for f in file_list)
+    return ", ".join(f"{ext} {count}" for ext, count in ext_count.most_common())
+
+
 def _process_file_dependencies(
     files_to_process: list[str],
     project_dir: str,
     base_output_dir: str,
-    project_dep_list: list[dict],
+    language_dep_list: list[dict],
 ) -> None:
     """Analyze dependency info for each file and save file_dependencies.json
     and a copy of the original file to the output directory.
@@ -107,15 +125,16 @@ def _process_file_dependencies(
         files_to_process: List of relative paths of files to process.
         project_dir: Absolute path to the project root.
         base_output_dir: Absolute path to the output root directory.
-        project_dep_list: Project-wide dependency list (internal path format).
+        language_dep_list: Dependency list (internal path format) of the files that have
+            a language. Import resolution looks up dependency targets in these only.
     """
     print(f"Extracting dependencies for {len(files_to_process)} files...")
     logger.info(f"Extracting dependencies for {len(files_to_process)} files...")
 
     # Lookups that are the same for every file, built once and passed to each call
-    project_file_set = {info["file"] for info in project_dep_list}
+    project_file_set = {info["file"] for info in language_dep_list}
     source_root_set = detect_source_roots(project_file_set)
-    caller_map = {info["file"]: info.get("callers", []) for info in project_dep_list}
+    caller_map = {info["file"]: info.get("callers", []) for info in language_dep_list}
 
     for file_rel in files_to_process:
         try:
@@ -159,10 +178,12 @@ async def process_all_files(
     and consolidated JSON.
 
     Processing flow:
-    1. Build the project-wide dependency graph.
+    1. Build the project-wide dependency graph over every non-empty text file.
     2. Extract dependency info for all files (always process all for consistency).
+       A file whose extension has no tree-sitter language gets empty lists.
     3. Detect changed files and generate design documents in topological order
-       (regenerate only the impact range of changes).
+       (regenerate only the impact range of changes). Only files with a language
+       get a design document.
     3.5. Generate dependency graph + summary consolidated JSON.
     4. Generate Mermaid dependency graph diagram.
     5. Generate the consolidated result in the form KNOWLEDGE_FORMAT selects.
@@ -196,41 +217,31 @@ async def process_all_files(
 
     all_file_list = [info["file"] for info in project_dep_list]
 
-    # Exclude empty files from processing
-    empty_files = set()
-    for file_rel in all_file_list:
-        file_abs = os.path.join(project_dir, file_rel)
-        try:
-            with open(file_abs, "r", encoding="utf-8") as f:
-                if not f.read().strip():
-                    empty_files.add(file_rel)
-        except (OSError, UnicodeDecodeError):
-            pass
-    if empty_files:
-        project_dep_list = [info for info in project_dep_list if info["file"] not in empty_files]
-        all_file_list = [f for f in all_file_list if f not in empty_files]
-        print(f"Excluded {len(empty_files)} empty files: {sorted(empty_files)}")
-        logger.info(f"Excluded {len(empty_files)} empty files: {sorted(empty_files)}")
+    # The files with a tree-sitter language: the only ones with definitions,
+    # dependency targets and design documents
+    language_dep_list = [info for info in project_dep_list if has_language(info["file"])]
+    language_file_list = [info["file"] for info in language_dep_list]
 
-    print(f"Files to analyze: {len(all_file_list)}")
-    logger.info(f"Files to analyze: {len(all_file_list)}")
+    files_msg = f"Files to analyze: {len(all_file_list)} ({_ext_count_line(all_file_list)})"
+    print(files_msg)
+    logger.info(files_msg)
 
     # == Step 2: Extract dependency info for all files ========================
     _process_file_dependencies(
         all_file_list, project_dir, base_output_dir,
-        project_dep_list,
+        language_dep_list,
     )
 
     # == Step 3: Generate design documents in topological order ================
     if ENABLE_LLM_DOC:
-        changed_files = _detect_changed_files(all_file_list, project_dir, base_output_dir)
-        print(f"Change detection: {len(changed_files)} changed / {len(all_file_list)} total")
-        logger.info(f"Change detection: {len(changed_files)} changed / {len(all_file_list)} total")
+        changed_files = _detect_changed_files(language_file_list, project_dir, base_output_dir)
+        print(f"Change detection: {len(changed_files)} changed / {len(language_file_list)} total")
+        logger.info(f"Change detection: {len(changed_files)} changed / {len(language_file_list)} total")
 
         print("Generating design documents...")
         logger.info("Generating design documents...")
         await generate_all_docs(
-            base_output_dir, project_dep_list, llm_client, max_workers,
+            base_output_dir, language_dep_list, llm_client, max_workers,
             changed_files,
         )
     else:

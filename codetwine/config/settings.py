@@ -558,6 +558,27 @@ DEFINITION_DICTS: dict[str, dict[str, str]] = _expand_ext_aliases(
     {ext: cfg.definition_dict for ext, cfg in _LANG_REGISTRY.items()}
 )
 
+
+def has_language(path: str) -> bool:
+    """Return whether a file's extension has a tree-sitter language in the registry.
+
+    Only such files get definitions, dependencies and design documents; every other
+    text file is carried through the analysis with those left empty.
+
+    Examples:
+        "src/app.py"    -> True
+        "config.yaml"   -> False
+        "Makefile"      -> False
+
+    Args:
+        path: A file path (absolute or relative); only its extension is looked at.
+
+    Returns:
+        True when the extension (without the dot) is a key of DEFINITION_DICTS.
+    """
+    return os.path.splitext(path)[1].lstrip(".") in DEFINITION_DICTS
+
+
 # Extension -> import extraction query
 IMPORT_QUERIES: dict[str, str | None] = _expand_ext_aliases(
     {ext: cfg.import_query for ext, cfg in _LANG_REGISTRY.items()}

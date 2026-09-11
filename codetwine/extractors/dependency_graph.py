@@ -10,11 +10,11 @@ from codetwine.import_to_path import (
     resolve_module_to_project_path,
     get_import_params,
 )
-from codetwine.utils.file_utils import rel_to_copy_path
+from codetwine.utils.file_utils import is_text_file, rel_to_copy_path
 from codetwine.config.settings import (
-    DEFINITION_DICTS,
     EXCLUDE_PATTERNS,
     SAME_PACKAGE_VISIBLE,
+    has_language,
 )
 
 logger = logging.getLogger(__name__)
@@ -116,6 +116,37 @@ def extract_callee_source(
     return None
 
 
+def _collect_text_file_list(project_dir: str) -> list[str]:
+    """Walk the project and return the absolute paths of its non-empty text files.
+
+    Directories and files matching EXCLUDE_PATTERNS are left out, and so are empty,
+    binary and unreadable files (is_text_file). The number of skipped files is logged.
+
+    Args:
+        project_dir: Root directory of the project to analyze.
+
+    Returns:
+        Absolute file paths in os.walk order.
+    """
+    text_file_list: list[str] = []
+    skip_count = 0
+    for dir_path, dir_names, file_name_list in os.walk(project_dir):
+        # Remove directories matching exclude patterns from the traversal targets
+        # Modifying dir_names in-place causes os.walk to skip those subtrees
+        dir_names[:] = [d for d in dir_names if not any(fnmatch.fnmatch(d, p) for p in EXCLUDE_PATTERNS)]
+        for file_name in file_name_list:
+            if any(fnmatch.fnmatch(file_name, p) for p in EXCLUDE_PATTERNS):
+                continue
+            file_path = os.path.join(dir_path, file_name)
+            if is_text_file(file_path):
+                text_file_list.append(file_path)
+            else:
+                skip_count += 1
+    if skip_count:
+        logger.info(f"Skipped {skip_count} empty, binary or unreadable files")
+    return text_file_list
+
+
 def build_project_dependencies(project_dir: str) -> list[dict]:
     """Analyze inter-file dependencies within the project and build a dependency graph in memory.
 
@@ -130,7 +161,9 @@ def build_project_dependencies(project_dir: str) -> list[dict]:
         ]
 
     Paths use the "project_name/copy_path" format.
-    Import analysis is performed on all supported language files to build the dependency graph.
+    Every non-empty text file that passes EXCLUDE_PATTERNS is listed. Import analysis
+    runs on the files whose extension has a tree-sitter language; every other file is
+    listed with empty callers and callees.
 
     Args:
         project_dir: Root directory of the project to analyze.
@@ -138,24 +171,16 @@ def build_project_dependencies(project_dir: str) -> list[dict]:
     Returns:
         A list of file dependency information dicts.
     """
-    supported_ext_set = set(DEFINITION_DICTS.keys())
+    # == Step 1: Collect every non-empty text file ==============================
+    all_file_list = _collect_text_file_list(project_dir)
 
-    # == Step 1: Collect all files with supported extensions ======================
-    all_file_list: list[str] = []
-    for dir_path, dir_names, file_name_list in os.walk(project_dir):
-        # Remove directories matching exclude patterns from the traversal targets
-        # Modifying dir_names in-place causes os.walk to skip those subtrees
-        dir_names[:] = [d for d in dir_names if not any(fnmatch.fnmatch(d, p) for p in EXCLUDE_PATTERNS)]
-        for file_name in file_name_list:
-            if any(fnmatch.fnmatch(file_name, p) for p in EXCLUDE_PATTERNS):
-                continue
-            if os.path.splitext(file_name)[1].lstrip(".") in supported_ext_set:
-                all_file_list.append(os.path.join(dir_path, file_name))
+    # Only the files with a language take part in import resolution and dependency edges
+    language_file_list = [f for f in all_file_list if has_language(f)]
 
     # == Step 2: Build the set of relative paths for project files ============
     # A lookup set used to determine whether a module is within the project during import resolution
     project_file_set: set[str] = set()
-    for file_path in all_file_list:
+    for file_path in language_file_list:
         project_file_set.add(os.path.relpath(file_path, project_dir).replace("\\", "/"))
 
     # Detect source root prefixes (e.g. "src/main/java/") present in the project
@@ -163,7 +188,7 @@ def build_project_dependencies(project_dir: str) -> list[dict]:
 
     # == Step 3: Collect files imported by each file (callees) ======
     file_callee_map: dict[str, set[str]] = {}
-    for file_path in all_file_list:
+    for file_path in language_file_list:
         callee_set: set[str] = set()
         file_ext = os.path.splitext(file_path)[1].lstrip(".")
         language, import_query_str = get_import_params(file_ext)
@@ -190,7 +215,7 @@ def build_project_dependencies(project_dir: str) -> list[dict]:
     # Add as a unidirectional dependency only when the class name (= filename without extension)
     # appears in the source code.
     dir_ext_groups: dict[tuple[str, str], list[str]] = {}
-    for file_path in all_file_list:
+    for file_path in language_file_list:
         file_ext = os.path.splitext(file_path)[1].lstrip(".")
         if not SAME_PACKAGE_VISIBLE.get(file_ext):
             continue
@@ -221,7 +246,7 @@ def build_project_dependencies(project_dir: str) -> list[dict]:
                     file_callee_map[abs_path].add(other_path)
 
     # == Step 4: Build the callers (reverse lookup) index ==================
-    file_caller_map: dict[str, list[str]] = {os.path.abspath(f): [] for f in all_file_list}
+    file_caller_map: dict[str, list[str]] = {os.path.abspath(f): [] for f in language_file_list}
     for caller_path, callee_set in file_callee_map.items():
         for callee_path in callee_set:
             if callee_path in file_caller_map:
@@ -232,13 +257,14 @@ def build_project_dependencies(project_dir: str) -> list[dict]:
     # copy_path = {parent_dir}/{file_stem}/{filename} structure.
     # This matches the actual file paths within the output folder,
     # keeping all paths valid even when the folder is moved to another environment.
+    # A file without a language has no entry in the two maps and gets empty lists.
     project_name = os.path.basename(project_dir)
     file_info_list = []
     for file_path in all_file_list:
         abs_path = os.path.abspath(file_path)
         rel = os.path.relpath(abs_path, project_dir).replace("\\", "/")
-        caller_rels = [os.path.relpath(p, project_dir).replace("\\", "/") for p in file_caller_map[abs_path]]
-        callee_rels = [os.path.relpath(p, project_dir).replace("\\", "/") for p in file_callee_map[abs_path]]
+        caller_rels = [os.path.relpath(p, project_dir).replace("\\", "/") for p in file_caller_map.get(abs_path, [])]
+        callee_rels = [os.path.relpath(p, project_dir).replace("\\", "/") for p in file_callee_map.get(abs_path, ())]
         file_info_list.append({
             "file":    f"{project_name}/{rel_to_copy_path(rel)}",
             "callers": [f"{project_name}/{rel_to_copy_path(r)}" for r in caller_rels],

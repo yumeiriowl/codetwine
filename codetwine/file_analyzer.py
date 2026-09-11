@@ -29,10 +29,13 @@ def get_file_dependencies(
     project_file_set, source_root_set and caller_map are the same for every file of one
     project; the caller builds them once and passes the same values to every call.
 
+    A file whose extension has no tree-sitter language is not parsed: its three lists
+    come back empty.
+
     Args:
         target_file: Absolute path of the target file to analyze.
         project_dir: Absolute path to the project root.
-        project_file_set: Set of relative paths of all files within the project.
+        project_file_set: Set of relative paths of the project files that have a language.
         source_root_set: Source root prefixes present in the project (e.g. "src/main/java/").
         caller_map: A {file relative path: list of files depending on it} dict.
 
@@ -41,8 +44,15 @@ def get_file_dependencies(
     """
     target_file_rel = os.path.relpath(target_file, project_dir).replace("\\", "/")
     file_ext = os.path.splitext(target_file)[1].lstrip(".")
-    # Per-language definition extraction settings (None for unsupported languages)
+    # Per-language definition extraction settings (None for a file without a language)
     definition_dict = DEFINITION_DICTS.get(file_ext)
+    if definition_dict is None:
+        return {
+            "file":          target_file_rel,
+            "definitions":   [],
+            "callee_usages": [],
+            "caller_usages": [],
+        }
 
     root_node, content = parse_file(target_file)
 

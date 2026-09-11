@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Added
+- Every non-empty text file is analysed: a file whose extension has no tree-sitter language is listed with empty `definitions`, `callee_usages` and `caller_usages`, a `null` summary and no design document, and copied to the output directory (`settings.has_language()`, `file_utils.is_text_file()`)
 - `KNOWLEDGE_FORMAT` setting (`json` / `sqlite` / `both`) selecting the form of the whole-project result
 - `codetwine/knowledge_db.py`: SQLite output (`project_knowledge.sqlite`) built from the per-file JSON files, with a read API (`open_knowledge`, `iter_files`, `get_file`, `callers_of`, `callees_of`, `find_definitions`)
 - `PARSE_CACHE_MAX_FILES` setting capping how many files' parse results are kept in memory
@@ -18,6 +19,7 @@
 - `examples/doc_template_search.json`: search-oriented design document template for any language (one section: overview and one prose entry per definition). The sample output is generated with it
 
 ### Changed
+- `build_project_dependencies()`: collects every text file instead of only the supported extensions, and skips empty and binary files there; import resolution, dependency edges, change detection and design documents cover the files with a language only
 - `examples/rlm_qa`: the agent now receives only the file graph and per-file summaries; definitions, source code and design documents are fetched per file through the tools instead of being sent into the sandbox
 - `parse_file()`: the parse cache is now a bounded LRU, so the syntax trees of a whole project are no longer held at once
 - `save_consolidated_json()` / `save_dependency_summary()`: entries are written one at a time instead of being assembled in a list first

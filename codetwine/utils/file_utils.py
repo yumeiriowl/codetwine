@@ -1,6 +1,29 @@
 import os
 import hashlib
 
+# How many leading bytes is_text_file reads to decide whether a file is text
+TEXT_PROBE_BYTES = 8192
+
+
+def is_text_file(file_path: str) -> bool:
+    """Return whether a file is non-empty text, judged from its first TEXT_PROBE_BYTES bytes.
+
+    A file is text when the probe holds no NUL byte and is not all whitespace. A file
+    that cannot be read counts as not text.
+
+    Args:
+        file_path: Absolute path of the file to probe.
+
+    Returns:
+        True for a non-empty text file, False for an empty, binary or unreadable one.
+    """
+    try:
+        with open(file_path, "rb") as f:
+            head = f.read(TEXT_PROBE_BYTES)
+    except OSError:
+        return False
+    return b"\0" not in head and bool(head.strip())
+
 
 def _to_dir_name(filename: str) -> str:
     """Generate an output directory name from a filename.
