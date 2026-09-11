@@ -11,6 +11,7 @@ from codetwine.utils.file_utils import (
     output_path_to_rel,
     resolve_file_output_dir,
 )
+from codetwine.config.logger import log_progress
 from codetwine.config.settings import (
     MAX_WORKERS,
     DOC_TEMPLATE_PATH,
@@ -117,9 +118,9 @@ CODE_SUMMARY_MARKER = "# [summarized] {name}"
 CODE_SUMMARY_FAILED_NOTE = "# ...(body omitted; summary unavailable)"
 
 # C/C++ header extension set
-_HEADER_EXTENSIONS = {".h", ".hpp", ".hh", ".hxx"}
+_HEADER_EXT_SET = {".h", ".hpp", ".hh", ".hxx"}
 # Implementation file extensions paired with header extensions
-_IMPL_EXTENSIONS = ["cpp", "c", "cc", "cxx"]
+_IMPL_EXT_LIST = ["cpp", "c", "cc", "cxx"]
 
 
 def _topological_sort_by_level(project_dep_list: list[dict]) -> list[list[str]]:
@@ -140,53 +141,45 @@ def _topological_sort_by_level(project_dep_list: list[dict]) -> list[list[str]]:
         A file list grouped by level. The outer list index is the level number.
         Example: [["config.py", "utils.py"], ["parser.py"], ["main.py"]]
     """
-    # Build adjacency list (file -> files it depends on) and in-degree
+    # Build adjacency list (file -> files it depends on)
     adjacency: dict[str, set[str]] = {}
-    in_degree: dict[str, int] = {}
-    all_files: set[str] = set()
+    all_file_set: set[str] = set()
 
     # Build adjacency list from the dependency list
     for dep_info in project_dep_list:
         file_path = dep_info["file"]
-        all_files.add(file_path)
+        all_file_set.add(file_path)
         adjacency.setdefault(file_path, set())
 
         # Add callees (dependencies) to the adjacency list
         for callee in dep_info.get("callees", []):
-            all_files.add(callee)
+            all_file_set.add(callee)
             adjacency.setdefault(callee, set())
             adjacency[file_path].add(callee)
 
-    # Calculate in-degree (number of files depending on each file)
-    for file_path in all_files:
-        in_degree[file_path] = 0
-    for file_path, callees in adjacency.items():
-        for callee in callees:
-            in_degree[callee] = in_degree.get(callee, 0) + 1
-
     # Build reverse graph adjacency list and in-degree
-    reverse_adj: dict[str, set[str]] = {f: set() for f in all_files}
-    reverse_in_degree: dict[str, int] = {f: 0 for f in all_files}
+    dependent_map: dict[str, set[str]] = {f: set() for f in all_file_set}
+    reverse_in_degree: dict[str, int] = {f: 0 for f in all_file_set}
 
-    for file_path, callees in adjacency.items():
-        for callee in callees:
-            reverse_adj[callee].add(file_path)
+    for file_path, callee_set in adjacency.items():
+        for callee in callee_set:
+            dependent_map[callee].add(file_path)
             reverse_in_degree[file_path] += 1
 
     # Execute BFS level by level
     level_list: list[list[str]] = []
     # First level: files with in-degree 0 in reverse graph (= files with empty callees in original graph)
-    current_level = [f for f in all_files if reverse_in_degree[f] == 0]
-    processed: set[str] = set()
+    current_level = [f for f in all_file_set if reverse_in_degree[f] == 0]
+    level_file_set: set[str] = set()
 
     while current_level:
         current_level.sort()
         level_list.append(current_level)
-        processed.update(current_level)
+        level_file_set.update(current_level)
 
         next_level: list[str] = []
         for file_path in current_level:
-            for dependent in reverse_adj[file_path]:
+            for dependent in dependent_map[file_path]:
                 reverse_in_degree[dependent] -= 1
                 if reverse_in_degree[dependent] == 0:
                     next_level.append(dependent)
@@ -194,13 +187,13 @@ def _topological_sort_by_level(project_dep_list: list[dict]) -> list[list[str]]:
         current_level = next_level
 
     # Add files not processed due to circular dependencies to the last level
-    remaining = all_files - processed
-    if remaining:
+    cycle_file_set = all_file_set - level_file_set
+    if cycle_file_set:
         logger.warning(
             f"Circular dependencies detected. The following files will be processed at the last level: "
-            f"{sorted(remaining)}"
+            f"{sorted(cycle_file_set)}"
         )
-        level_list.append(sorted(remaining))
+        level_list.append(sorted(cycle_file_set))
 
     return level_list
 
@@ -225,7 +218,7 @@ def _build_section_prompt(
         The completed prompt string to send to the LLM.
     """
     # Basic prompt structure: target file name + source code
-    parts = [
+    part_list = [
         HEADER_TARGET_FILE.format(file=output_path_to_rel(file_deps.get('file', 'unknown'))),
         "",
         HEADER_SOURCE_CODE,
@@ -237,68 +230,68 @@ def _build_section_prompt(
 
     # For header files, include the corresponding implementation file's source code
     if implementation_context:
-        parts.append(HEADER_IMPL_CONTEXT)
-        parts.append(IMPL_CONTEXT_NOTE)
-        parts.append("```")
-        parts.append(implementation_context)
-        parts.append("```")
-        parts.append("")
+        part_list.append(HEADER_IMPL_CONTEXT)
+        part_list.append(IMPL_CONTEXT_NOTE)
+        part_list.append("```")
+        part_list.append(implementation_context)
+        part_list.append("```")
+        part_list.append("")
 
     # Include callee_usages (provide dependency source code via target_context)
     callee_usages = file_deps.get("callee_usages", [])
     if callee_usages:
         # List each callee_usage's symbol name and definition file
-        parts.append(HEADER_CALLEE_USAGES)
-        parts.append(CALLEE_USAGES_SCHEMA_NOTE)
-        for u in callee_usages:
-            parts.append(f"- {u['name']} (from {output_path_to_rel(u['from'])})")
+        part_list.append(HEADER_CALLEE_USAGES)
+        part_list.append(CALLEE_USAGES_SCHEMA_NOTE)
+        for usage in callee_usages:
+            part_list.append(f"- {usage['name']} (from {output_path_to_rel(usage['from'])})")
             # Attach the full dependency source code if available
-            target_context = u.get("target_context")
+            target_context = usage.get("target_context")
             if target_context:
-                parts.append(CALLEE_SOURCE_CODE_LABEL)
-                parts.append(f"  ```")
-                parts.append(f"  {target_context}")
-                parts.append(f"  ```")
-        parts.append("")
+                part_list.append(CALLEE_SOURCE_CODE_LABEL)
+                part_list.append("  ```")
+                part_list.append(f"  {target_context}")
+                part_list.append("  ```")
+        part_list.append("")
 
     # Include caller_usages (information about external files using this file)
     caller_usages = file_deps.get("caller_usages", [])
     if caller_usages:
         # List each caller_usage's symbol name and referencing file
-        parts.append(HEADER_CALLER_USAGES)
-        parts.append(CALLER_USAGES_SCHEMA_NOTE)
-        for u in caller_usages:
-            parts.append(f"- {u['name']} (from {output_path_to_rel(u['file'])})")
-            usage_context = u.get("usage_context")
+        part_list.append(HEADER_CALLER_USAGES)
+        part_list.append(CALLER_USAGES_SCHEMA_NOTE)
+        for usage in caller_usages:
+            part_list.append(f"- {usage['name']} (from {output_path_to_rel(usage['file'])})")
+            usage_context = usage.get("usage_context")
             if usage_context:
-                parts.append(CALLER_SOURCE_CODE_LABEL)
-                parts.append(f"  ```")
-                parts.append(f"  {usage_context}")
-                parts.append(f"  ```")
-        parts.append("")
+                part_list.append(CALLER_SOURCE_CODE_LABEL)
+                part_list.append("  ```")
+                part_list.append(f"  {usage_context}")
+                part_list.append("  ```")
+        part_list.append("")
 
     # Add dependency file design document summaries as context
     if callee_context:
-        parts.append(HEADER_CALLEE_CONTEXT)
-        parts.append(CALLEE_CONTEXT_NOTE)
-        parts.append(callee_context)
-        parts.append("")
+        part_list.append(HEADER_CALLEE_CONTEXT)
+        part_list.append(CALLEE_CONTEXT_NOTE)
+        part_list.append(callee_context)
+        part_list.append("")
 
     # Add section-specific instructions
-    parts.append(HEADER_REQUEST)
-    parts.append(SECTION_REQUEST_TEMPLATE.format(title=section['title']))
-    parts.append(section["prompt"])
+    part_list.append(HEADER_REQUEST)
+    part_list.append(SECTION_REQUEST_TEMPLATE.format(title=section['title']))
+    part_list.append(section["prompt"])
     # Append output language specification at the end
-    parts.append("\n" + OUTPUT_LANGUAGE_INSTRUCTION.format(language=OUTPUT_LANGUAGE))
+    part_list.append("\n" + OUTPUT_LANGUAGE_INSTRUCTION.format(language=OUTPUT_LANGUAGE))
     # Append source code consistency instruction at the end
-    parts.append(FACTUAL_ACCURACY_INSTRUCTION)
+    part_list.append(FACTUAL_ACCURACY_INSTRUCTION)
 
-    return "\n".join(parts)
+    return "\n".join(part_list)
 
 
 def _build_summary_prompt(
     file_path: str,
-    section_contents: list[dict],
+    section_list: list[dict],
     summary_prompt: str,
     summary_max_chars: int,
 ) -> str:
@@ -306,7 +299,7 @@ def _build_summary_prompt(
 
     Args:
         file_path: Relative path of the target file.
-        section_contents: List of generated sections (each element is {id, title, content}).
+        section_list: List of generated sections (each element is {id, title, content}).
         summary_prompt: Summary instruction text defined in the template.
         summary_max_chars: Maximum character count for the summary.
 
@@ -314,25 +307,25 @@ def _build_summary_prompt(
         The completed prompt string to send to the LLM.
     """
     # Basic prompt structure: target file name + all section contents of the design document
-    parts = [
+    part_list = [
         HEADER_TARGET_FILE.format(file=file_path),
         "",
         HEADER_DOC_CONTENT,
     ]
 
     # Add each section's heading and content to the prompt
-    for sec in section_contents:
-        parts.append(f"### {sec['title']}")
-        parts.append(sec["content"])
-        parts.append("")
+    for section in section_list:
+        part_list.append(f"### {section['title']}")
+        part_list.append(section["content"])
+        part_list.append("")
 
     # Add summary instructions and character limit
-    parts.append(HEADER_REQUEST)
-    parts.append(f"{summary_prompt}")
-    parts.append(SUMMARY_CHAR_LIMIT.format(max_chars=summary_max_chars))
-    parts.append(OUTPUT_LANGUAGE_INSTRUCTION.format(language=OUTPUT_LANGUAGE))
+    part_list.append(HEADER_REQUEST)
+    part_list.append(summary_prompt)
+    part_list.append(SUMMARY_CHAR_LIMIT.format(max_chars=summary_max_chars))
+    part_list.append(OUTPUT_LANGUAGE_INSTRUCTION.format(language=OUTPUT_LANGUAGE))
 
-    return "\n".join(parts)
+    return "\n".join(part_list)
 
 
 def _build_callee_context_summary(
@@ -354,16 +347,16 @@ def _build_callee_context_summary(
         from_file = usage.get("from")
         if from_file:
             callee_set.add(from_file)
-    callee_files = sorted(callee_set)
+    callee_file_list = sorted(callee_set)
 
     # Retrieve and concatenate summaries for each dependency file
     # callee_usages' from is in output format; doc_summary_map keys are source relative paths, so reverse-convert
-    parts = []
-    for callee_file in callee_files:
+    part_list = []
+    for callee_file in callee_file_list:
         summary = doc_summary_map.get(output_path_to_rel(callee_file))
         if summary:
-            parts.append(f"- **{output_path_to_rel(callee_file)}**: {summary}")
-    return "\n".join(parts)
+            part_list.append(f"- **{output_path_to_rel(callee_file)}**: {summary}")
+    return "\n".join(part_list)
 
 
 def _line_count(text: str) -> int:
@@ -433,12 +426,12 @@ def _reduce_caller_usages(file_deps: dict) -> dict:
     if not caller_usages:
         return file_deps
 
-    reduced = dict(file_deps)
-    reduced["caller_usages"] = [
+    deps_copy = dict(file_deps)
+    deps_copy["caller_usages"] = [
         {key: value for key, value in usage.items() if key != "usage_context"}
         for usage in caller_usages
     ]
-    return reduced
+    return deps_copy
 
 
 async def _summarize_callee_usages(
@@ -463,7 +456,7 @@ async def _summarize_callee_usages(
     if not callee_usages:
         return file_deps
 
-    new_usages = []
+    usage_list = []
     for usage in callee_usages:
         target_context = usage.get("target_context")
         if target_context and _line_count(target_context) > CODE_SUMMARY_TRIGGER_LINES:
@@ -471,54 +464,54 @@ async def _summarize_callee_usages(
                 target_context, usage.get("name", "symbol"), llm_client, summary_cache
             )
             usage = {**usage, "target_context": summary}
-        new_usages.append(usage)
+        usage_list.append(usage)
 
-    reduced = dict(file_deps)
-    reduced["callee_usages"] = new_usages
-    return reduced
+    deps_copy = dict(file_deps)
+    deps_copy["callee_usages"] = usage_list
+    return deps_copy
 
 
 def _select_outermost_large_definitions(
-    definitions: list[dict],
-    trigger_lines: int,
+    definition_list: list[dict],
+    trigger_line_count: int,
 ) -> list[dict]:
     """Select large definitions, excluding ones nested inside a larger selection.
 
-    Definitions spanning more than trigger_lines lines are candidates. When a
+    Definitions spanning more than trigger_line_count lines are candidates. When a
     class and its methods are both large, only the outermost (the class) is kept
     so a range is never summarized twice.
 
     Args:
-        definitions: definitions[] from file_dependencies.json (with start_line/end_line).
-        trigger_lines: Minimum line span for a definition to be summarized.
+        definition_list: definitions[] from file_dependencies.json (with start_line/end_line).
+        trigger_line_count: Minimum line span for a definition to be summarized.
 
     Returns:
         Outermost large definitions, sorted by start_line.
     """
-    large = [
-        d
-        for d in definitions
-        if d.get("start_line")
-        and d.get("end_line")
-        and (d["end_line"] - d["start_line"] + 1) > trigger_lines
+    large_list = [
+        definition
+        for definition in definition_list
+        if definition.get("start_line")
+        and definition.get("end_line")
+        and (definition["end_line"] - definition["start_line"] + 1) > trigger_line_count
     ]
     # Outer-first ordering: earliest start, and on ties the wider range first
-    large.sort(key=lambda d: (d["start_line"], -d["end_line"]))
+    large_list.sort(key=lambda definition: (definition["start_line"], -definition["end_line"]))
 
-    selected: list[dict] = []
+    outer_list: list[dict] = []
     covered_end = 0
-    for definition in large:
+    for definition in large_list:
         # Skip definitions that start within an already-selected outer range
         if definition["start_line"] <= covered_end:
             continue
-        selected.append(definition)
+        outer_list.append(definition)
         covered_end = definition["end_line"]
-    return selected
+    return outer_list
 
 
 async def _splice_large_definitions(
     source_code: str,
-    definitions: list[dict],
+    definition_list: list[dict],
     llm_client: LLMClient,
     summary_cache: dict[str, str],
 ) -> str:
@@ -532,7 +525,7 @@ async def _splice_large_definitions(
 
     Args:
         source_code: Full source of the target file (as read from its copy).
-        definitions: definitions[] from file_dependencies.json.
+        definition_list: definitions[] from file_dependencies.json.
         llm_client: LLM client used for summarization.
         summary_cache: Shared cache mapping code-hash -> summary text.
 
@@ -540,33 +533,33 @@ async def _splice_large_definitions(
         The source with large definitions replaced by summary blocks. Returns the
         original source unchanged when no definition exceeds the threshold.
     """
-    selected = _select_outermost_large_definitions(definitions, CODE_SUMMARY_TRIGGER_LINES)
-    if not selected:
+    outer_list = _select_outermost_large_definitions(definition_list, CODE_SUMMARY_TRIGGER_LINES)
+    if not outer_list:
         return source_code
 
     # split("\n") keeps 1-based mapping: source line N -> lines[N-1] (tree-sitter rows are \n-based)
-    lines = source_code.split("\n")
-    total_lines = len(lines)
-    definition_by_start = {d["start_line"]: d for d in selected}
+    line_list = source_code.split("\n")
+    line_count = len(line_list)
+    definition_by_start_dict = {definition["start_line"]: definition for definition in outer_list}
 
-    out_lines: list[str] = []
+    out_line_list: list[str] = []
     line_no = 1
-    while line_no <= total_lines:
-        definition = definition_by_start.get(line_no)
+    while line_no <= line_count:
+        definition = definition_by_start_dict.get(line_no)
         if definition:
             name = definition.get("name", "symbol")
             code = definition.get("context") or "\n".join(
-                lines[definition["start_line"] - 1 : definition["end_line"]]
+                line_list[definition["start_line"] - 1 : definition["end_line"]]
             )
             summary = await _summarize_code(code, name, llm_client, summary_cache)
-            out_lines.append(CODE_SUMMARY_MARKER.format(name=name))
-            out_lines.append(summary)
+            out_line_list.append(CODE_SUMMARY_MARKER.format(name=name))
+            out_line_list.append(summary)
             line_no = definition["end_line"] + 1
         else:
-            out_lines.append(lines[line_no - 1])
+            out_line_list.append(line_list[line_no - 1])
             line_no += 1
 
-    return "\n".join(out_lines)
+    return "\n".join(out_line_list)
 
 
 def _build_implementation_context(
@@ -587,13 +580,13 @@ def _build_implementation_context(
         Source code text of the implementation file. Empty string if not found or non-header file.
     """
     _, ext = os.path.splitext(file_rel)
-    if ext not in _HEADER_EXTENSIONS:
+    if ext not in _HEADER_EXT_SET:
         return ""
 
     stem = os.path.splitext(os.path.basename(file_rel))[0]
     base_dir = os.path.dirname(file_output_dir)
 
-    for impl_ext in _IMPL_EXTENSIONS:
+    for impl_ext in _IMPL_EXT_LIST:
         impl_dir = os.path.join(base_dir, f"{stem}_{impl_ext}")
         impl_file = os.path.join(impl_dir, f"{stem}.{impl_ext}")
         if os.path.isfile(impl_file):
@@ -637,9 +630,9 @@ async def _generate_section_with_fallback(
     Returns:
         Generated section text, or None if all stages fail.
     """
-    async def _try(src: str, deps: dict, ctx: str, label: str) -> str | None:
+    async def _try(source: str, deps_dict: dict, context: str, label: str) -> str | None:
         """Build the prompt for one reduction stage and try generating the section."""
-        prompt = _build_section_prompt(section, src, deps, ctx, implementation_context)
+        prompt = _build_section_prompt(section, source, deps_dict, context, implementation_context)
         try:
             return await llm_client.generate(prompt)
         except ContextWindowExceededError:
@@ -655,13 +648,13 @@ async def _generate_section_with_fallback(
         return result
 
     # Stage 1: drop caller usage_context bodies
-    deps_no_caller = _reduce_caller_usages(file_deps)
-    result = await _try(source_code, deps_no_caller, callee_context, "drop caller bodies")
+    deps_without_caller = _reduce_caller_usages(file_deps)
+    result = await _try(source_code, deps_without_caller, callee_context, "drop caller bodies")
     if result is not None:
         return result
 
     # Stage 2: drop dependency doc summaries
-    result = await _try(source_code, deps_no_caller, "", "drop callee context")
+    result = await _try(source_code, deps_without_caller, "", "drop callee context")
     if result is not None:
         return result
 
@@ -669,18 +662,18 @@ async def _generate_section_with_fallback(
         return None
 
     # Stage 3: summarize large dependency symbols
-    deps_summarized = await _summarize_callee_usages(
-        deps_no_caller, llm_client, summary_cache
+    deps_with_summary = await _summarize_callee_usages(
+        deps_without_caller, llm_client, summary_cache
     )
-    result = await _try(source_code, deps_summarized, "", "summarize callee usages")
+    result = await _try(source_code, deps_with_summary, "", "summarize callee usages")
     if result is not None:
         return result
 
     # Stage 4: summarize large definitions in the source itself
-    source_summarized = await _splice_large_definitions(
-        source_code, deps_summarized.get("definitions", []), llm_client, summary_cache
+    source_with_summary = await _splice_large_definitions(
+        source_code, deps_with_summary.get("definitions", []), llm_client, summary_cache
     )
-    result = await _try(source_summarized, deps_summarized, "", "summarize source defs")
+    result = await _try(source_with_summary, deps_with_summary, "", "summarize source defs")
     if result is not None:
         return result
 
@@ -743,7 +736,7 @@ async def _generate_file_doc(
     section_list: list[dict] = []
 
     for section in template["sections"]:
-        result = await _generate_section_with_fallback(
+        section_text = await _generate_section_with_fallback(
             section, source_code, file_deps,
             callee_context,
             file_rel, llm_client,
@@ -751,14 +744,14 @@ async def _generate_file_doc(
             implementation_context,
         )
 
-        if result is None:
+        if section_text is None:
             logger.warning(f"Failed to generate section '{section['title']}': {file_rel}")
             continue
 
         section_list.append({
             "id": section["id"],
             "title": section["title"],
-            "content": result,
+            "content": section_text,
         })
 
     if not section_list:
@@ -859,25 +852,25 @@ def _save_doc(doc: dict, output_dir: str) -> None:
             section["content"],
         )
 
-    md_lines = [f"# Design Document: {doc['file']}", ""]
+    md_line_list = [f"# Design Document: {doc['file']}", ""]
 
     # Add heading and content for each section in Markdown format
     for section in doc["sections"]:
-        md_lines.append(f"# {section['title']}")
-        md_lines.append("")
-        md_lines.append(section["content"])
-        md_lines.append("")
+        md_line_list.append(f"# {section['title']}")
+        md_line_list.append("")
+        md_line_list.append(section["content"])
+        md_line_list.append("")
 
     # Append summary as a section at the end if present
     if doc.get("summary"):
-        md_lines.append("# Summary")
-        md_lines.append("")
-        md_lines.append(doc["summary"])
-        md_lines.append("")
+        md_line_list.append("# Summary")
+        md_line_list.append("")
+        md_line_list.append(doc["summary"])
+        md_line_list.append("")
 
     # Write to Markdown file
     with open(md_path, "w", encoding="utf-8") as f:
-        f.write("\n".join(md_lines))
+        f.write("\n".join(md_line_list))
 
     # JSON output (written after MD so that mtime >= MD)
     json_path = os.path.join(output_dir, "doc.json")
@@ -885,36 +878,36 @@ def _save_doc(doc: dict, output_dir: str) -> None:
         json.dump(doc, f, indent=2, ensure_ascii=False)
 
 
-def _parse_md_sections(md_text: str, section_titles: list[str]) -> dict[str, str]:
+def _parse_md_sections(md_text: str, section_title_list: list[str]) -> dict[str, str]:
     """Split markdown text by known section titles and return the content of each section.
 
     Use ``# {title}`` lines matching known section titles as delimiters.
 
     Args:
         md_text: Full text of doc.md.
-        section_titles: List of section titles used as split keys (including "Summary").
+        section_title_list: List of section titles used as split keys (including "Summary").
 
     Returns:
         Dict mapping title to content text. Sections not found are omitted.
     """
-    escaped_titles = [re.escape(t) for t in section_titles]
-    titles_alternation = "|".join(escaped_titles)
+    title_pattern_list = [re.escape(title) for title in section_title_list]
+    title_alternation = "|".join(title_pattern_list)
     pattern = re.compile(
-        r"^# (" + titles_alternation + r")\s*$",
+        r"^# (" + title_alternation + r")\s*$",
         re.MULTILINE,
     )
 
-    matches = list(pattern.finditer(md_text))
-    result: dict[str, str] = {}
+    match_list = list(pattern.finditer(md_text))
+    content_by_title_dict: dict[str, str] = {}
 
     # Extract text between matches as section content
-    for i, match in enumerate(matches):
+    for i, match in enumerate(match_list):
         title = match.group(1)
         content_start = match.end()
-        content_end = matches[i + 1].start() if i + 1 < len(matches) else len(md_text)
-        result[title] = md_text[content_start:content_end].strip()
+        content_end = match_list[i + 1].start() if i + 1 < len(match_list) else len(md_text)
+        content_by_title_dict[title] = md_text[content_start:content_end].strip()
 
-    return result
+    return content_by_title_dict
 
 
 def _sync_md_to_json(output_dir: str) -> None:
@@ -947,20 +940,20 @@ def _sync_md_to_json(output_dir: str) -> None:
         md_text = f.read()
 
     # Get list of known section titles from JSON (append Summary at the end)
-    section_titles = [s["title"] for s in doc["sections"]] + ["Summary"]
+    section_title_list = [section["title"] for section in doc["sections"]] + ["Summary"]
     # Parse MD into sections
-    parsed = _parse_md_sections(md_text, section_titles)
+    md_section_dict = _parse_md_sections(md_text, section_title_list)
 
-    if not parsed:
+    if not md_section_dict:
         return
 
     # Compare MD and JSON section content, and apply diffs to JSON.
     # Skip if the next section heading (in JSON order) is missing from MD, as boundaries would be inaccurate.
-    parsed_titles = set(parsed.keys())
-    changed = False
+    md_title_set = set(md_section_dict.keys())
+    has_diff = False
     for idx, section in enumerate(doc["sections"]):
         title = section["title"]
-        if title not in parsed_titles:
+        if title not in md_title_set:
             continue
 
         # Check if the next section (in JSON order) exists in MD
@@ -969,19 +962,19 @@ def _sync_md_to_json(output_dir: str) -> None:
             if idx + 1 < len(doc["sections"])
             else "Summary"
         )
-        if next_title not in parsed_titles:
+        if next_title not in md_title_set:
             continue
 
-        if parsed[title] != section["content"]:
-            section["content"] = parsed[title]
-            changed = True
+        if md_section_dict[title] != section["content"]:
+            section["content"] = md_section_dict[title]
+            has_diff = True
 
     # Also apply summary section diffs
-    if "Summary" in parsed_titles and parsed["Summary"] != doc.get("summary", ""):
-        doc["summary"] = parsed["Summary"]
-        changed = True
+    if "Summary" in md_title_set and md_section_dict["Summary"] != doc.get("summary", ""):
+        doc["summary"] = md_section_dict["Summary"]
+        has_diff = True
 
-    if not changed:
+    if not has_diff:
         return
 
     # Save updated JSON
@@ -996,7 +989,7 @@ def _sync_md_to_json(output_dir: str) -> None:
 
 async def generate_all_docs(
     base_output_dir: str,
-    project_dep_list: list,
+    project_dep_list: list[dict],
     llm_client: LLMClient,
     max_workers: int = MAX_WORKERS,
     changed_files: set[str] | None = None,
@@ -1026,15 +1019,15 @@ async def generate_all_docs(
 
     # Get level-ordered file list via topological sort
     level_list = _topological_sort_by_level(project_dep_list)
-    total_levels = len(level_list)
+    level_count = len(level_list)
 
-    start_msg = (
+    log_progress(
+
+        logger,
         f"Starting design document generation. "
-        f"Dependency depth levels: {total_levels}, "
+        f"Dependency depth levels: {level_count}, "
         f"Total files: {sum(len(level) for level in level_list)}"
     )
-    print(start_msg)
-    logger.info(start_msg)
 
     # Dict holding the summaries of processed files. Only the summary is carried
     # forward between levels; the section text is not kept after a document is saved.
@@ -1047,13 +1040,13 @@ async def generate_all_docs(
     summary_cache: dict[str, str] = {}
 
     # Per-file callee (dependency) list
-    file_callees: dict[str, set[str]] = {}
+    callee_set_by_file: dict[str, set[str]] = {}
     for info in project_dep_list:
-        file_callees[info["file"]] = set(info.get("callees", []))
+        callee_set_by_file[info["file"]] = set(info.get("callees", []))
 
     # Track files whose documents were regenerated in this run.
     # Caller-side files that reference a regenerated file as a callee also become regeneration targets.
-    regenerated_files: set[str] = set()
+    new_doc_file_set: set[str] = set()
 
     def _needs_regeneration(file_rel: str) -> bool:
         """Determine whether the design document needs regeneration.
@@ -1074,8 +1067,8 @@ async def generate_all_docs(
         if file_rel in changed_files:
             return True
         # Regenerate if any callee was changed or regenerated
-        for callee in file_callees.get(file_rel, set()):
-            if callee in changed_files or callee in regenerated_files:
+        for callee in callee_set_by_file.get(file_rel, set()):
+            if callee in changed_files or callee in new_doc_file_set:
                 return True
         return False
 
@@ -1084,9 +1077,9 @@ async def generate_all_docs(
 
         Returns False if any template section is missing/extra or if the summary is empty.
         """
-        expected_ids = {s["id"] for s in template["sections"]}
-        actual_ids = {s["id"] for s in doc.get("sections", [])}
-        if expected_ids != actual_ids:
+        expected_id_set = {section["id"] for section in template["sections"]}
+        actual_id_set = {section["id"] for section in doc.get("sections", [])}
+        if expected_id_set != actual_id_set:
             return False
         if "summary_prompt" in template and not doc.get("summary"):
             return False
@@ -1114,20 +1107,17 @@ async def generate_all_docs(
             # Regenerate when doc.json is missing or unreadable
             if existing_doc is not None:
                 if _is_doc_complete(existing_doc):
-                    print(f"  REUSE: {file_rel}")
-                    logger.info(f"  REUSE: {file_rel}")
+                    log_progress(logger, f"  REUSE: {file_rel}")
                     return file_rel, existing_doc
-                print(f"  INCOMPLETE: {file_rel}")
-                logger.info(f"  INCOMPLETE: {file_rel} — regenerating")
+                log_progress(logger, f"  INCOMPLETE: {file_rel}")
 
         doc = await _generate_file_doc(
             file_rel, output_dir, doc_summary_map, template, llm_client, summary_cache,
         )
         if doc:
             _save_doc(doc, output_dir)
-            regenerated_files.add(file_rel)
-            print(f"  OK: {file_rel}")
-            logger.info(f"  OK: {file_rel}")
+            new_doc_file_set.add(file_rel)
+            log_progress(logger, f"  OK: {file_rel}")
         else:
             print(f"  SKIP: {file_rel}")
             logger.warning(f"  SKIP: {file_rel}")
@@ -1135,21 +1125,20 @@ async def generate_all_docs(
         return file_rel, doc
 
     for level_index, file_list in enumerate(level_list):
-        level_msg = (
-            f"{level_index + 1}/{total_levels}: "
+        log_progress(
+            logger,
+            f"{level_index + 1}/{level_count}: "
             f"Generating documents for {len(file_list)} files"
         )
-        print(level_msg)
-        logger.info(level_msg)
 
         # Process files in the level in batches of max_workers
         for batch_start in range(0, len(file_list), max_workers):
             batch = file_list[batch_start:batch_start + max_workers]
 
-            tasks = [asyncio.create_task(process_one(f)) for f in batch]
-            results = await asyncio.gather(*tasks, return_exceptions=True)
+            task_list = [asyncio.create_task(process_one(f)) for f in batch]
+            result_list = await asyncio.gather(*task_list, return_exceptions=True)
 
-            for result in results:
+            for result in result_list:
                 if isinstance(result, Exception):
                     logger.error(f"Error during document generation: {result}")
                     continue
@@ -1157,10 +1146,10 @@ async def generate_all_docs(
                 if doc:
                     doc_summary_map[file_rel] = doc.get("summary", "")
 
-    done_msg = (
+    log_progress(
+
+        logger,
         f"Design document generation completed. "
         f"Generated: {len(doc_summary_map)} / "
         f"Total: {sum(len(level) for level in level_list)}"
     )
-    print(done_msg)
-    logger.info(done_msg)

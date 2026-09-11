@@ -6,6 +6,20 @@ from tree_sitter import Node
 # Regex pattern for filtering out #include guard #define directives
 _INCLUDE_GUARD_RE = re.compile(r"^_*[A-Z][A-Z0-9_]*_H(?:PP|XX)?_*(?:INCLUDED)?_*$")
 
+# AST node types for which child node traversal continues even after being recorded as a definition.
+# e.g. namespace_definition contains class and function definitions inside,
+# and class bodies contain methods, constructors and fields.
+CONTAINER_DEFINITION_TYPE_SET = {
+    "namespace_definition",   # C++
+    "class_definition",       # Python
+    "class_declaration",      # Java / Kotlin / JS / TS
+    "class_specifier",        # C++
+    "struct_specifier",       # C / C++
+    "interface_declaration",  # Java / TS
+    "enum_declaration",       # Java / TS
+    "object_declaration",     # Kotlin
+}
+
 
 @dataclass
 class DefinitionInfo:
@@ -46,20 +60,6 @@ def extract_definitions(
 
     definition_list: list[DefinitionInfo] = []
 
-    # AST node types for which child node traversal continues even after being recorded as a definition.
-    # e.g. namespace_definition contains class and function definitions inside,
-    # and class bodies contain methods, constructors and fields.
-    _CONTAINER_DEFINITION_TYPES = {
-        "namespace_definition",   # C++
-        "class_definition",       # Python
-        "class_declaration",      # Java / Kotlin / JS / TS
-        "class_specifier",        # C++
-        "struct_specifier",       # C / C++
-        "interface_declaration",  # Java / TS
-        "enum_declaration",       # Java / TS
-        "object_declaration",     # Kotlin
-    }
-
     # BFS traversal of the AST using a deque
     node_queue = deque([root_node])
 
@@ -85,13 +85,13 @@ def extract_definitions(
                 definition_list.append(definition)
 
                 # Continue traversal inside container-type definitions (e.g. namespace)
-                if node.type in _CONTAINER_DEFINITION_TYPES:
+                if node.type in CONTAINER_DEFINITION_TYPE_SET:
                     node_queue.extend(node.children)
             else:
                 # For destructuring (destructured assignment), extract multiple names
-                names = _extract_destructured_names(node, name_node_type)
-                if names:
-                    for name in names:
+                name_list = _extract_destructured_names(node, name_node_type)
+                if name_list:
+                    for name in name_list:
                         definition_list.append(DefinitionInfo(
                             name=name,
                             type=node.type,
@@ -106,7 +106,7 @@ def extract_definitions(
             # If not a definition node, add children to the queue to dig deeper
             node_queue.extend(node.children)
 
-    return sorted(definition_list, key=lambda d: d.start_line)
+    return sorted(definition_list, key=lambda definition: definition.start_line)
 
 
 def _parse_decorated_definition(
@@ -193,7 +193,8 @@ def _extract_name(node: Node, name_type: str) -> str | None:
                    Standard pattern: "identifier", "type_identifier", etc.
                    Special pattern: "__assignment__", "__variable_declarator__",
                                     "__function_declarator__", "__init_declarator__",
-                                    "__declarator_name__", "__kotlin_property__"
+                                    "__declarator_name__", "__kotlin_property__",
+                                    "__object_reference__"
 
     Returns:
         The definition name string, or None if extraction fails.
@@ -224,6 +225,10 @@ def _extract_name(node: Node, name_type: str) -> str | None:
     # Kotlin: property_declaration > variable_declaration > identifier
     if name_type == "__kotlin_property__":
         return _extract_kotlin_property_name(node)
+
+    # SQL: create_table / create_view / create_function, etc. > object_reference > name: identifier
+    if name_type == "__object_reference__":
+        return _extract_object_reference_name(node)
 
     # Standard pattern: search direct children for one matching name_type
     for child in node.children:
@@ -399,6 +404,34 @@ def _extract_kotlin_property_name(node: Node) -> str | None:
     return None
 
 
+def _extract_object_reference_name(node: Node) -> str | None:
+    """Extract the object name from a SQL CREATE statement.
+
+    Target AST structure:
+        create_table                     <- this node is passed as the argument
+          +-- object_reference
+          |    +-- schema: identifier "app"   (optional)
+          |    +-- name: identifier "items"   <- extract this
+          +-- column_definitions
+
+    The same structure applies to create_view, create_materialized_view, create_function,
+    create_procedure, create_type, create_sequence and create_trigger.
+
+    Args:
+        node: A CREATE statement node.
+
+    Returns:
+        The object name string, or None if no object_reference is found.
+    """
+    for child in node.children:
+        if child.type == "object_reference":
+            name_node = child.child_by_field_name("name")
+            if name_node:
+                return name_node.text.decode("utf-8")
+            return None
+    return None
+
+
 def _extract_init_declarator_name(node: Node) -> str | None:
     """Extract the variable name from a C/C++ variable/constant declaration.
 
@@ -490,21 +523,21 @@ def _collect_identifiers_from_pattern(pattern_node: Node) -> list[str]:
     Returns:
         A list of variable names found in the pattern.
     """
-    names: list[str] = []
+    name_list: list[str] = []
     for child in pattern_node.children:
         if child.type == "identifier":
-            names.append(child.text.decode("utf-8"))
+            name_list.append(child.text.decode("utf-8"))
         elif child.type == "shorthand_property_identifier_pattern":
             # a, b in { a, b }
-            names.append(child.text.decode("utf-8"))
+            name_list.append(child.text.decode("utf-8"))
         elif child.type in ("object_pattern", "array_pattern"):
-            names.extend(_collect_identifiers_from_pattern(child))
+            name_list.extend(_collect_identifiers_from_pattern(child))
         elif child.type == "pair_pattern":
             # { key: localName } -> localName (local variable name) is defined
             value = child.child_by_field_name("value")
             if value and value.type == "identifier":
-                names.append(value.text.decode("utf-8"))
+                name_list.append(value.text.decode("utf-8"))
             elif value and value.type in ("object_pattern", "array_pattern"):
-                names.extend(_collect_identifiers_from_pattern(value))
-    return names
+                name_list.extend(_collect_identifiers_from_pattern(value))
+    return name_list
 

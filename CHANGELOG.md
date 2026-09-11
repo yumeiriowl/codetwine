@@ -3,6 +3,8 @@
 ## Unreleased
 
 ### Added
+- SQL (`sql`, `tree-sitter-sql`): tables, views, materialized views, functions, procedures, types, sequences, triggers, indexes and schemas are extracted as definitions, and a reference to an object created in another `.sql` file of the project is a dependency
+- `LangConfig.implicit_visibility` (`package` / `project`): the files whose definitions can be referenced without an import statement (Java / Kotlin: same directory, SQL: whole project), replacing `same_package_visible`
 - Every non-empty text file is analysed: a file whose extension has no tree-sitter language is listed with empty `definitions`, `callee_usages` and `caller_usages`, a `null` summary and no design document, and copied to the output directory (`settings.has_language()`, `file_utils.is_text_file()`)
 - `KNOWLEDGE_FORMAT` setting (`json` / `sqlite` / `both`) selecting the form of the whole-project result
 - `codetwine/knowledge_db.py`: SQLite output (`project_knowledge.sqlite`) built from the per-file JSON files, with a read API (`open_knowledge`, `iter_files`, `get_file`, `callers_of`, `callees_of`, `find_definitions`)
@@ -19,6 +21,8 @@
 - `examples/doc_template_search.json`: search-oriented design document template for any language (one section: overview and one prose entry per definition). The sample output is generated with it
 
 ### Changed
+- Public settings renamed after their type: `TREE_SITTER_LANGUAGES` -> `EXT_TO_LANGUAGE_DICT`, `DEFINITION_DICTS` -> `EXT_TO_DEFINITION_DICT`, `IMPORT_QUERIES` -> `EXT_TO_IMPORT_QUERY_DICT`, `USAGE_NODE_TYPES` -> `EXT_TO_USAGE_NODE_TYPE_DICT`, `IMPORT_RESOLVE_CONFIG` -> `EXT_TO_IMPORT_RESOLVE_DICT`, `KNOWLEDGE_FORMATS` -> `KNOWLEDGE_FORMAT_TUPLE`, `SOURCE_ROOT_PATTERNS` -> `SOURCE_ROOT_PATTERN_LIST`
+- `build_project_dependencies()`: an implicit dependency (Java / Kotlin same package, SQL) is added when a top-level definition name of the other file is used in the syntax tree, instead of when the file name appears in the source text
 - `build_project_dependencies()`: collects every text file instead of only the supported extensions, and skips empty and binary files there; import resolution, dependency edges, change detection and design documents cover the files with a language only
 - `examples/rlm_qa`: the agent now receives only the file graph and per-file summaries; definitions, source code and design documents are fetched per file through the tools instead of being sent into the sandbox
 - `parse_file()`: the parse cache is now a bounded LRU, so the syntax trees of a whole project are no longer held at once
@@ -33,6 +37,7 @@
 - `is_file_unchanged()`
 
 ### Fixed
+- `extract_callee_source()`: returns the definition node the name belongs to instead of the parent of the name node. A C/C++ function definition now comes with its body, and a SQL object with its whole `CREATE` statement
 - Change detection compares the source with the `source_hash` recorded in `doc.json` instead of with the source copy in the output directory. The copy is refreshed by every run, so a change made between runs with `ENABLE_LLM_DOC=False` was never regenerated. A design document without `source_hash` is regenerated once
 - `KNOWLEDGE_FORMAT`: an unusable value no longer stops `import codetwine`. It is checked at the start of `process_all_files()` instead, before anything is analysed, so a caller that replaces the setting in the pipeline's namespace is not stopped by what the environment holds
 - `generate_candidate_path_list()`: resolve an import whose specifier already carries a known extension (JS/TS `import "./helpers.js"`). Such a path is now tried as it is instead of only as a directory index

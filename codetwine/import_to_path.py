@@ -3,13 +3,14 @@ import logging
 from tree_sitter import Language
 from codetwine.parsers.ts_parser import parse_file
 from codetwine.extractors.definitions import DefinitionInfo, extract_definitions
+from codetwine.extractors.imports import ImportInfo
 from codetwine.config.settings import (
-    DEFINITION_DICTS,
-    IMPORT_RESOLVE_CONFIG,
-    IMPORT_QUERIES,
-    SAME_PACKAGE_VISIBLE,
-    SOURCE_ROOT_PATTERNS,
-    TREE_SITTER_LANGUAGES,
+    EXT_TO_DEFINITION_DICT,
+    EXT_TO_IMPORT_RESOLVE_DICT,
+    EXT_TO_IMPORT_QUERY_DICT,
+    SOURCE_ROOT_PATTERN_LIST,
+    EXT_TO_LANGUAGE_DICT,
+    implicit_scope_key,
 )
 
 logger = logging.getLogger(__name__)
@@ -30,7 +31,7 @@ def detect_source_roots(project_file_set: set[str]) -> set[str]:
         Empty set if no known source root patterns are found.
     """
     source_root_set: set[str] = set()
-    for pattern in SOURCE_ROOT_PATTERNS:
+    for pattern in SOURCE_ROOT_PATTERN_LIST:
         for file_path in project_file_set:
             if file_path.startswith(pattern):
                 source_root_set.add(pattern)
@@ -87,11 +88,11 @@ def resolve_relative_import(
         # JS/TS-style relative import
         # Normalize with os.path.normpath: "src/utils/../lib" -> "src/lib"
         if current_dir_part_list:
-            combined = "/".join(current_dir_part_list) + "/" + module
+            joined_path = "/".join(current_dir_part_list) + "/" + module
         else:
-            combined = module
-        normalized = os.path.normpath(combined).replace("\\", "/")
-        return normalized.split("/")
+            joined_path = module
+        clean_path = os.path.normpath(joined_path).replace("\\", "/")
+        return clean_path.split("/")
 
     # Absolute import: split by separator to convert to path
     return module.split(separator)
@@ -103,7 +104,7 @@ def generate_candidate_path_list(
     resolve_config: dict,
     current_dir_part_list: list[str],
 ) -> list[str]:
-    """Generate a list of file path candidates from base_path based on IMPORT_RESOLVE_CONFIG settings.
+    """Generate a list of file path candidates from base_path based on EXT_TO_IMPORT_RESOLVE_DICT settings.
 
     Language-specific candidate generation rules (index files, alternative extensions,
     current-directory relative paths, etc.) are declaratively defined via config fields,
@@ -116,7 +117,7 @@ def generate_candidate_path_list(
     Args:
         base_path: The base path converted from the module name (e.g. "src/utils", "stdio.h").
         src_ext_with_dot: Extension of the current file (with leading ".", e.g. ".py", ".c").
-        resolve_config: An IMPORT_RESOLVE_CONFIG entry (per-language settings dict).
+        resolve_config: An EXT_TO_IMPORT_RESOLVE_DICT entry (per-language settings dict).
         current_dir_part_list: Path components of the directory containing the current file.
 
     Returns:
@@ -212,7 +213,7 @@ def resolve_module_to_project_path(
     src_ext = src_ext_with_dot.lstrip(".")
 
     # Get the module resolve config for this extension
-    resolve_config = IMPORT_RESOLVE_CONFIG.get(src_ext)
+    resolve_config = EXT_TO_IMPORT_RESOLVE_DICT.get(src_ext)
     if not resolve_config:
         return None
 
@@ -242,9 +243,9 @@ def resolve_module_to_project_path(
     if source_root_set:
         for candidate_path in candidate_path_list:
             for source_root in source_root_set:
-                prefixed = source_root + candidate_path
-                if prefixed in project_file_set:
-                    return prefixed
+                path_with_root = source_root + candidate_path
+                if path_with_root in project_file_set:
+                    return path_with_root
 
     return None
 
@@ -259,17 +260,17 @@ def _put_symbol(
         name: The symbol name to register.
         path: The file path where the symbol is defined.
     """
-    existing = symbol_map.get(name)
-    if existing and existing != path:
+    current_path = symbol_map.get(name)
+    if current_path and current_path != path:
         logger.warning(
             "Symbol '%s' definition source is being overwritten: '%s' -> '%s'",
-            name, existing, path,
+            name, current_path, path,
         )
     symbol_map[name] = path
 
 
 def build_symbol_to_file_map(
-    import_info_list,
+    import_info_list: list[ImportInfo],
     current_file_rel: str,
     project_file_set: set[str],
     file_ext: str,
@@ -307,7 +308,7 @@ def build_symbol_to_file_map(
     alias_to_original: dict[str, str] = {}
 
     # Get the resolve config for the current file's extension
-    resolve_config = IMPORT_RESOLVE_CONFIG.get(file_ext, {})
+    resolve_config = EXT_TO_IMPORT_RESOLVE_DICT.get(file_ext, {})
     separator = resolve_config.get("separator", ".")
 
     for import_info in import_info_list:
@@ -354,17 +355,17 @@ def build_symbol_to_file_map(
                 else:
                     # Python: "import os.path" -> register "os" (for access like os.path.join())
                     # Java:   "import com.foo.Bar" -> register "Bar" (Java references by class name directly)
-                    module_parts = import_info.module.split(".")
+                    module_part_list = import_info.module.split(".")
                     # Register the root part (for Python package access: X.Y.func())
                     # Java/Kotlin don't reference package roots (com, org, etc.) alone, so skip
                     if file_ext not in ("java", "kt"):
-                        module_root = module_parts[0].lstrip(".")
+                        module_root = module_part_list[0].lstrip(".")
                         if module_root:
                             _put_symbol(symbol_to_file_map, module_root, resolved_path)
                     # Register the trailing part (for Java direct class reference: User user = new User())
                     # Registering the trailing part for Python is harmless (if unused, it won't match)
-                    module_leaf = module_parts[-1]
-                    if module_leaf and module_leaf != module_parts[0]:
+                    module_leaf = module_part_list[-1]
+                    if module_leaf and module_leaf != module_part_list[0]:
                         _put_symbol(symbol_to_file_map, module_leaf, resolved_path)
             elif separator == "/":
                 # C/C++: #include incorporates the entire file. Register all definitions from the file
@@ -380,16 +381,14 @@ def build_symbol_to_file_map(
                 if module_root:
                     symbol_to_file_map.setdefault(module_root, resolved_path)
 
-    # Register definition names from same-package files (Java/Kotlin)
-    # Add classes referenceable without import statements to symbol_to_file_map
-    if SAME_PACKAGE_VISIBLE.get(file_ext):
-        current_dir = os.path.dirname(current_file_rel)
+    # Register definition names from the files visible without an import statement
+    # (Java/Kotlin: same package, SQL: whole project)
+    scope_key = implicit_scope_key(current_file_rel)
+    if scope_key is not None:
         for project_file in project_file_set:
             if project_file == current_file_rel:
                 continue
-            if os.path.dirname(project_file) != current_dir:
-                continue
-            if os.path.splitext(project_file)[1].lstrip(".") != file_ext:
+            if implicit_scope_key(project_file) != scope_key:
                 continue
             _register_definitions_from_file(
                 project_file, project_dir, symbol_to_file_map,
@@ -398,12 +397,36 @@ def build_symbol_to_file_map(
     return symbol_to_file_map, alias_to_original
 
 
+def top_level_definition_names(file_rel: str, project_dir: str) -> list[str]:
+    """Return the names of the definitions of a file that are not nested inside another definition.
+
+    Args:
+        file_rel: Relative path from the project root (e.g. "c_app/utils.h").
+        project_dir: Absolute path to the project root.
+
+    Returns:
+        The outermost definition names in line order. Empty when the file does not
+        exist or its extension has no definition settings.
+    """
+    abs_path = os.path.join(project_dir, file_rel)
+    if not os.path.isfile(abs_path):
+        return []
+
+    definition_dict = EXT_TO_DEFINITION_DICT.get(os.path.splitext(file_rel)[1].lstrip("."))
+    if not definition_dict:
+        return []
+
+    root_node = parse_file(abs_path)[0]
+    definition_list = extract_definitions(root_node, definition_dict)
+    return [d.name for d in _select_top_level_definitions(definition_list) if d.name]
+
+
 def _register_definitions_from_file(
     file_rel: str,
     project_dir: str,
     symbol_to_file_map: dict[str, str],
 ) -> None:
-    """Register all definition names from the specified file into symbol_to_file_map.
+    """Register all top-level definition names from the specified file into symbol_to_file_map.
 
     Since C/C++ #include incorporates the entire file, all names defined in the
     included file (functions, structs, classes, etc.) are registered.
@@ -414,23 +437,8 @@ def _register_definitions_from_file(
         project_dir: Absolute path to the project root.
         symbol_to_file_map: The target dict (name -> file path). Modified directly by this function.
     """
-    # Build the absolute path of the file and verify it exists
-    abs_path = os.path.join(project_dir, file_rel)
-    if not os.path.isfile(abs_path):
-        return
-
-    # Get the definition dict for this extension
-    resolved_ext = os.path.splitext(file_rel)[1].lstrip(".")
-    definition_dict = DEFINITION_DICTS.get(resolved_ext)
-    if not definition_dict:
-        return
-
-    # Parse the file, extract definitions, and register each definition name in symbol_to_file_map
-    root_node = parse_file(abs_path)[0]
-    definition_list = extract_definitions(root_node, definition_dict)
-    for defn in _select_top_level_definitions(definition_list):
-        if defn.name:
-            _put_symbol(symbol_to_file_map, defn.name, file_rel)
+    for name in top_level_definition_names(file_rel, project_dir):
+        _put_symbol(symbol_to_file_map, name, file_rel)
 
 
 def _select_top_level_definitions(
@@ -447,15 +455,15 @@ def _select_top_level_definitions(
     Returns:
         The outermost definitions, sorted by start_line.
     """
-    selected: list[DefinitionInfo] = []
+    outer_list: list[DefinitionInfo] = []
     covered_end = 0
     for definition in definition_list:
         # Skip definitions that start within an already-selected outer range
         if definition.start_line <= covered_end:
             continue
-        selected.append(definition)
+        outer_list.append(definition)
         covered_end = definition.end_line
-    return selected
+    return outer_list
 
 
 def _register_definitions_from_package(
@@ -500,11 +508,12 @@ def _register_definitions_from_package(
                 )
 
 
-def get_import_params(file_ext: str) -> tuple[Language, str] | tuple[None, None]:
+def get_import_params(file_ext: str) -> tuple[Language, str | None] | tuple[None, None]:
     """Retrieve the Language object and query string needed for import analysis from a file extension.
 
-    For unsupported languages (extensions not defined in IMPORT_QUERIES), returns (None, None)
-    to let the caller skip import analysis.
+    For an extension without a tree-sitter language, returns (None, None) to let the
+    caller skip the analysis. For a language without import statements (SQL), the query
+    string is None and extract_imports returns no imports.
 
     Args:
         file_ext: File extension (without ".", e.g. "py", "java").
@@ -512,14 +521,7 @@ def get_import_params(file_ext: str) -> tuple[Language, str] | tuple[None, None]
     Returns:
         A (Language, import_query_str) tuple. (None, None) if unsupported.
     """
-    # Get the import query string for this extension
-    import_query_str = IMPORT_QUERIES.get(file_ext)
-    if not import_query_str:
+    language = EXT_TO_LANGUAGE_DICT.get(file_ext)
+    if language is None:
         return None, None
-
-    # Get the tree-sitter Language object for this extension
-    try:
-        language = TREE_SITTER_LANGUAGES[file_ext]
-    except KeyError:
-        return None, None
-    return language, import_query_str
+    return language, EXT_TO_IMPORT_QUERY_DICT.get(file_ext)

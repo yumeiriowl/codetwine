@@ -98,12 +98,12 @@ def copy_path_to_rel(copy_path: str) -> str:
         The relative path from the project root.
     """
     # Split the path by separator
-    parts = copy_path.replace("\\", "/").split("/")
-    if len(parts) >= 2:
-        filename = parts[-1]
+    part_list = copy_path.replace("\\", "/").split("/")
+    if len(part_list) >= 2:
+        filename = part_list[-1]
         # If the second-to-last directory name matches _to_dir_name(filename), it was inserted
-        if parts[-2] == _to_dir_name(filename):
-            return "/".join(parts[:-2] + [filename])
+        if part_list[-2] == _to_dir_name(filename):
+            return "/".join(part_list[:-2] + [filename])
     return copy_path
 
 
@@ -124,9 +124,9 @@ def output_path_to_rel(output_path: str) -> str:
     Returns:
         The relative path from the project root.
     """
-    parts = output_path.split("/", 1)
-    if len(parts) == 2:
-        return copy_path_to_rel(parts[1])
+    part_list = output_path.split("/", 1)
+    if len(part_list) == 2:
+        return copy_path_to_rel(part_list[1])
     return output_path
 
 
@@ -160,10 +160,10 @@ def compute_file_hash(file_path: str) -> str:
         SHA256 hash as a hex string.
     """
     # Initialize a SHA256 hash object
-    h = hashlib.sha256()
+    sha256 = hashlib.sha256()
     # Read and hash in 8KB chunks
     with open(file_path, "rb") as f:
         for chunk in iter(lambda: f.read(8192), b""):
-            h.update(chunk)
-    return h.hexdigest()
+            sha256.update(chunk)
+    return sha256.hexdigest()
 

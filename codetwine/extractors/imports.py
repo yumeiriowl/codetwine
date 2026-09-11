@@ -34,7 +34,7 @@ def extract_imports(
     Args:
         root_node: The AST root node covering the entire file.
         language: tree-sitter Language object (required for Query creation).
-        import_query_str: tree-sitter query string (obtained from IMPORT_QUERIES in config.py).
+        import_query_str: tree-sitter query string (obtained from EXT_TO_IMPORT_QUERY_DICT in config.py).
                           Returns an empty list when None (for languages with no import query defined).
 
     Returns:
@@ -49,72 +49,72 @@ def extract_imports(
 
     # Key: (module string, line number) -> ImportInfo
     # Groups multiple @name captures from the same import statement into one entry
-    grouped: dict[tuple[str, int], ImportInfo] = {}
+    import_by_key_dict: dict[tuple[str, int], ImportInfo] = {}
 
     # Retrieve query match results
     for _, captures in cursor.matches(root_node):
         # CommonJS require() pattern filtering:
         # If a @_require_func capture exists and the function name is not "require", skip it
-        require_func_nodes = captures.get("_require_func", [])
-        if require_func_nodes:
-            if require_func_nodes[0].text.decode("utf-8") != "require":
+        require_func_node_list = captures.get("_require_func", [])
+        if require_func_node_list:
+            if require_func_node_list[0].text.decode("utf-8") != "require":
                 continue
 
         # Retrieve @module, @name, and @import_node captures
-        module_nodes = captures.get("module", [])
-        name_nodes = captures.get("name", [])
-        import_nodes = captures.get("import_node", [])
+        module_node_list = captures.get("module", [])
+        name_node_list = captures.get("name", [])
+        import_node_list = captures.get("import_node", [])
 
-        if not module_nodes:
+        if not module_node_list:
             continue
 
         # Get the module name from the @module capture and strip quotes
-        raw_module = module_nodes[0].text.decode("utf-8")
+        raw_module = module_node_list[0].text.decode("utf-8")
         module = _strip_quotes(raw_module)
 
         # Get line number from the entire import statement node (fallback to module node)
-        if import_nodes:
-            line = import_nodes[0].start_point[0] + 1
+        if import_node_list:
+            line = import_node_list[0].start_point[0] + 1
         else:
-            line = module_nodes[0].start_point[0] + 1
+            line = module_node_list[0].start_point[0] + 1
 
         # Create the grouping key
         group_key = (module, line)
 
         # Create a new entry if the group does not exist yet
-        if group_key not in grouped:
-            grouped[group_key] = ImportInfo(module=module, names=[], line=line)
+        if group_key not in import_by_key_dict:
+            import_by_key_dict[group_key] = ImportInfo(module=module, names=[], line=line)
 
         # Detect import X as Y alias
-        module_alias = _detect_module_alias(module_nodes[0], import_nodes)
+        module_alias = _detect_module_alias(module_node_list[0], import_node_list)
         if module_alias:
-            grouped[group_key].module_alias = module_alias
+            import_by_key_dict[group_key].module_alias = module_alias
 
         # If @name captures exist, add them to the names list (excluding duplicates)
         # When an alias is present, register the alias name and record the mapping to the original name in alias_map
-        for name_node in name_nodes:
+        for name_node in name_node_list:
             alias_name = _resolve_imported_name(name_node)
             original_name = _get_original_name(name_node)
-            if alias_name and alias_name not in grouped[group_key].names:
-                grouped[group_key].names.append(alias_name)
+            if alias_name and alias_name not in import_by_key_dict[group_key].names:
+                import_by_key_dict[group_key].names.append(alias_name)
                 if original_name and original_name != alias_name:
-                    if grouped[group_key].alias_map is None:
-                        grouped[group_key].alias_map = {}
-                    grouped[group_key].alias_map[alias_name] = original_name
+                    if import_by_key_dict[group_key].alias_map is None:
+                        import_by_key_dict[group_key].alias_map = {}
+                    import_by_key_dict[group_key].alias_map[alias_name] = original_name
 
         # Java/Kotlin wildcard import detection:
         # If an import_node's child contains asterisk (Java) or * (Kotlin), add "*" to names
-        if import_nodes and "*" not in grouped[group_key].names:
-            for child in import_nodes[0].children:
+        if import_node_list and "*" not in import_by_key_dict[group_key].names:
+            for child in import_node_list[0].children:
                 if child.type in ("asterisk", "*"):
-                    grouped[group_key].names.append("*")
+                    import_by_key_dict[group_key].names.append("*")
                     break
 
-    return list(grouped.values())
+    return list(import_by_key_dict.values())
 
 
 def _detect_module_alias(
-    module_node: Node, import_nodes: list[Node],
+    module_node: Node, import_node_list: list[Node],
 ) -> str | None:
     """Detect the alias name (Y) from import X as Y.
 
@@ -123,7 +123,7 @@ def _detect_module_alias(
 
     Args:
         module_node: The node captured by @module.
-        import_nodes: List of nodes captured by @import_node.
+        import_node_list: List of nodes captured by @import_node.
 
     Returns:
         The alias name, or None if no alias exists.
@@ -136,8 +136,8 @@ def _detect_module_alias(
             return alias.text.decode("utf-8")
 
     # Kotlin: get the alias from import_alias directly under the import node
-    if import_nodes:
-        alias_child = import_nodes[0].child_by_field_name("alias")
+    if import_node_list:
+        alias_child = import_node_list[0].child_by_field_name("alias")
         if alias_child:
             for child in alias_child.children:
                 if child.type in ("simple_identifier", "identifier"):

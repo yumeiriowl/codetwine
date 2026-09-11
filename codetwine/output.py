@@ -6,7 +6,6 @@ from collections.abc import Iterator
 from typing import TextIO
 from codetwine.utils.file_utils import (
     rel_to_copy_path,
-    copy_path_to_rel,
     output_path_to_rel,
     resolve_file_output_dir,
 )
@@ -15,6 +14,21 @@ logger = logging.getLogger(__name__)
 
 # Indentation applied to each element written into a top-level JSON array
 _ARRAY_ITEM_INDENT = "    "
+
+
+def _to_mermaid_node_id(path: str) -> str:
+    """Convert a path string into a string usable as a Mermaid node ID.
+
+    Examples:
+        "proj/src/app_py/app.py" -> "proj_src_app_py_app_py"
+
+    Args:
+        path: The source path string.
+
+    Returns:
+        A string with slashes and dots replaced by "_".
+    """
+    return path.replace("/", "_").replace(".", "_")
 
 
 def to_output_path(base_output_dir: str, rel_path: str) -> str:
@@ -79,12 +93,12 @@ def iter_dependency_entries(
         A dict with {"file", "summary", "callers", "callees"} keys.
     """
     for file_rel in all_file_list:
-        deps = symbol_deps[file_rel]
+        dep = symbol_deps[file_rel]
         yield {
             "file": to_output_path(base_output_dir, file_rel),
             "summary": summary_map.get(file_rel),
-            "callers": sorted(to_output_path(base_output_dir, c) for c in deps["callers"]),
-            "callees": sorted(to_output_path(base_output_dir, c) for c in deps["callees"]),
+            "callers": sorted(to_output_path(base_output_dir, other) for other in dep["callers"]),
+            "callees": sorted(to_output_path(base_output_dir, other) for other in dep["callees"]),
         }
 
 
@@ -183,10 +197,10 @@ def save_consolidated_json(
 
         # project_dependencies: the dependency graph with each file's summary
         f.write('  "project_dependencies": [\n')
-        dep_entries = iter_dependency_entries(
+        dep_entry_iter = iter_dependency_entries(
             base_output_dir, all_file_list, symbol_deps, summary_map
         )
-        for index, dep_entry in enumerate(dep_entries):
+        for index, dep_entry in enumerate(dep_entry_iter):
             _write_array_item(f, dep_entry, index == 0)
 
         # files: each file's dependency info and design document
@@ -281,15 +295,15 @@ def save_dependency_summary(
         f.write("{\n")
         f.write(f'  "project_name": {json.dumps(project_name, ensure_ascii=False)},\n')
         f.write('  "files": [\n')
-        dep_entries = iter_dependency_entries(
+        dep_entry_iter = iter_dependency_entries(
             base_output_dir, all_file_list, symbol_deps, summary_map
         )
-        for dep_entry in dep_entries:
+        for dep_entry in dep_entry_iter:
             _write_array_item(f, dep_entry, written_count == 0)
             written_count += 1
         f.write("\n  ]\n}")
 
-    summary_count = sum(1 for s in summary_map.values() if s is not None)
+    summary_count = sum(1 for summary in summary_map.values() if summary is not None)
     logger.info(
         f"Dependency graph + summary JSON output: {output_path} "
         f"(files: {written_count}, with summary: {summary_count})"
@@ -314,51 +328,22 @@ def save_dependency_graph_as_mermaid(
     node_set: set[str] = set()
     edge_set: set[tuple] = set()
 
-    for file_rel, deps in symbol_deps.items():
+    for file_rel, dep in symbol_deps.items():
         output_path_file = to_output_path(base_output_dir, file_rel)
         node_set.add(output_path_file)
-        for callee in deps["callees"]:
+        for callee in dep["callees"]:
             callee_output = to_output_path(base_output_dir, callee)
             node_set.add(callee_output)
             edge_set.add((output_path_file, callee_output))
 
-    def to_mermaid_node_id(path: str) -> str:
-        """Convert a path string into a string usable as a Mermaid node ID.
-
-        Args:
-            path: The source path string.
-
-        Returns:
-            str: A string with slashes and dots replaced by "_".
-        """
-        return path.replace("/", "_").replace(".", "_")
-
-    def to_display_label(path: str) -> str:
-        """Convert a path in "project_name/copy_path" format to a source relative path.
-
-        Example: "qt_project/MainWindow_cpp/MainWindow.cpp" -> "MainWindow.cpp"
-
-        Args:
-            path: A path string in "project_name/copy_path" format.
-
-        Returns:
-            str: A string with the project name removed and copy_path restored to the original relative path.
-        """
-        parts = path.split("/", 1)
-        if len(parts) == 2:
-            return copy_path_to_rel(parts[1])
-        return path
-
-    # Build the Mermaid text
+    # Build the Mermaid text: one node per file labelled with its source relative path
     line_list = ["```mermaid", "graph LR"]
 
     for node_path in sorted(node_set):
-        node_id = to_mermaid_node_id(node_path)
-        label = to_display_label(node_path)
-        line_list.append(f'    {node_id}["{label}"]')
+        line_list.append(f'    {_to_mermaid_node_id(node_path)}["{output_path_to_rel(node_path)}"]')
 
     for src_path, dst_path in sorted(edge_set):
-        line_list.append(f"    {to_mermaid_node_id(src_path)} --> {to_mermaid_node_id(dst_path)}")
+        line_list.append(f"    {_to_mermaid_node_id(src_path)} --> {_to_mermaid_node_id(dst_path)}")
 
     line_list.append("```")
 

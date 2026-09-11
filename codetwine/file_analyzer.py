@@ -11,7 +11,7 @@ from codetwine.import_to_path import (
     get_import_params,
 )
 from codetwine.extractors.imports import extract_imports
-from codetwine.config.settings import DEFINITION_DICTS
+from codetwine.config.settings import EXT_TO_DEFINITION_DICT
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +45,7 @@ def get_file_dependencies(
     target_file_rel = os.path.relpath(target_file, project_dir).replace("\\", "/")
     file_ext = os.path.splitext(target_file)[1].lstrip(".")
     # Per-language definition extraction settings (None for a file without a language)
-    definition_dict = DEFINITION_DICTS.get(file_ext)
+    definition_dict = EXT_TO_DEFINITION_DICT.get(file_ext)
     if definition_dict is None:
         return {
             "file":          target_file_rel,
@@ -57,16 +57,16 @@ def get_file_dependencies(
     root_node, content = parse_file(target_file)
 
     # Convert content to text lines and extract source code from each definition's line range
-    content_lines = content.decode("utf-8").splitlines()
+    content_line_list = content.decode("utf-8").splitlines()
     definition_list = [
         {
-            "name":       d.name,
-            "type":       d.type,
-            "start_line": d.start_line,
-            "end_line":   d.end_line,
-            "context":    "\n".join(content_lines[d.start_line - 1 : d.end_line]),
+            "name":       definition.name,
+            "type":       definition.type,
+            "start_line": definition.start_line,
+            "end_line":   definition.end_line,
+            "context":    "\n".join(content_line_list[definition.start_line - 1 : definition.end_line]),
         }
-        for d in extract_definitions(root_node, definition_dict)
+        for definition in extract_definitions(root_node, definition_dict)
     ]
 
     # import / usage analysis
@@ -75,7 +75,7 @@ def get_file_dependencies(
 
     language, import_query_str = get_import_params(file_ext)
 
-    if language and import_query_str:
+    if language:
         # Parse import statements and create an "imported name -> dependency file" dict
         symbol_to_file_map, alias_to_original = build_symbol_to_file_map(
             extract_imports(root_node, language, import_query_str),

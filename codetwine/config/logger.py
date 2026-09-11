@@ -73,3 +73,14 @@ def setup_logging(level: int = logging.INFO) -> None:
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
     logging.getLogger("LiteLLM").setLevel(logging.WARNING)
+
+
+def log_progress(logger: logging.Logger, message: str) -> None:
+    """Print a progress message to the console and record it in the log file at INFO level.
+
+    Args:
+        logger: The calling module's logger.
+        message: The progress message.
+    """
+    print(message)
+    logger.info(message)

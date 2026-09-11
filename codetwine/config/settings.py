@@ -8,6 +8,7 @@ import tree_sitter_java as tsjava
 import tree_sitter_javascript as tsjavascript
 import tree_sitter_kotlin as tskotlin
 import tree_sitter_python as tspython
+import tree_sitter_sql as tssql
 import tree_sitter_typescript as tstypescript
 
 
@@ -89,7 +90,7 @@ PARSE_CACHE_MAX_FILES = get_config_value(
 # The accepted values of KNOWLEDGE_FORMAT. process_all_files() checks the setting
 # against this before it analyses anything; what it checks is the value the pipeline
 # module holds at that point, not what the environment held at import time
-KNOWLEDGE_FORMATS = ("json", "sqlite", "both")
+KNOWLEDGE_FORMAT_TUPLE = ("json", "sqlite", "both")
 
 # Which form the whole-project analysis result is written in.
 #   json   ... project_knowledge.json only
@@ -212,6 +213,19 @@ TS_DEFINITION_DICT = {
     "enum_declaration": "identifier",
 }
 
+SQL_DEFINITION_DICT = {
+    "create_table": "__object_reference__",
+    "create_view": "__object_reference__",
+    "create_materialized_view": "__object_reference__",
+    "create_function": "__object_reference__",
+    "create_procedure": "__object_reference__",
+    "create_type": "__object_reference__",
+    "create_sequence": "__object_reference__",
+    "create_trigger": "__object_reference__",
+    "create_index": "identifier",
+    "create_schema": "identifier",
+}
+
 
 # Per-language import extraction queries (for tree-sitter Query)
 #
@@ -311,7 +325,8 @@ _KOTLIN_IMPORT_QUERY = """
 #     Skip only when the parent of a type_identifier / namespace_identifier is one of these types.
 #     Almost all occurrences of type references indicate dependencies.
 #     Only import statements and scope resolution are skipped.
-_PYTHON_USAGE_NODE_TYPES = {
+# identifier_parent_types: When set, treat an identifier as a usage only when its parent is one of these types
+_PYTHON_USAGE_NODE_TYPE_DICT = {
     "call_types": {"call"},
     "attribute_types": {"attribute"},
     "skip_parent_types": {
@@ -328,7 +343,7 @@ _PYTHON_USAGE_NODE_TYPES = {
     "skip_parent_types_for_type_ref": set(),
 }
 
-_JAVA_USAGE_NODE_TYPES = {
+_JAVA_USAGE_NODE_TYPE_DICT = {
     "call_types": {"method_invocation"},
     "attribute_types": {"field_access"},
     "skip_parent_types": {
@@ -346,7 +361,7 @@ _JAVA_USAGE_NODE_TYPES = {
     },
 }
 
-_JS_USAGE_NODE_TYPES = {
+_JS_USAGE_NODE_TYPE_DICT = {
     "call_types": {"call_expression"},
     "attribute_types": {"member_expression"},
     "skip_parent_types": {
@@ -360,7 +375,7 @@ _JS_USAGE_NODE_TYPES = {
     },
 }
 
-_C_USAGE_NODE_TYPES = {
+_C_USAGE_NODE_TYPE_DICT = {
     "call_types": {"call_expression"},
     "attribute_types": {"field_expression"},
     "skip_parent_types": {
@@ -378,7 +393,7 @@ _C_USAGE_NODE_TYPES = {
     },
 }
 
-_KOTLIN_USAGE_NODE_TYPES = {
+_KOTLIN_USAGE_NODE_TYPE_DICT = {
     "call_types": {"call_expression"},
     "attribute_types": {"navigation_expression"},
     "skip_parent_types": {
@@ -396,6 +411,13 @@ _KOTLIN_USAGE_NODE_TYPES = {
     },
 }
 
+_SQL_USAGE_NODE_TYPE_DICT = {
+    "call_types": set(),
+    "attribute_types": set(),
+    "skip_parent_types": set(),
+    "identifier_parent_types": {"object_reference"},
+}
+
 
 # Language registry
 #
@@ -403,8 +425,8 @@ _KOTLIN_USAGE_NODE_TYPES = {
 # and _LANG_REGISTRY manages them centrally.
 # To add a new language, simply add one entry to _LANG_REGISTRY.
 #
-# Public mapping dictionaries (TREE_SITTER_LANGUAGES, DEFINITION_DICTS, IMPORT_QUERIES,
-# USAGE_NODE_TYPES, IMPORT_RESOLVE_CONFIG) are auto-generated from the registry.
+# Public mapping dictionaries (EXT_TO_LANGUAGE_DICT, EXT_TO_DEFINITION_DICT, EXT_TO_IMPORT_QUERY_DICT,
+# EXT_TO_USAGE_NODE_TYPE_DICT, EXT_TO_IMPORT_RESOLVE_DICT, EXT_TO_IMPLICIT_VISIBILITY_DICT) are auto-generated from the registry.
 _JS_TS_EXT_LIST = [".ts", ".tsx", ".js", ".jsx"]
 _C_CPP_EXT_LIST = [".h", ".c", ".cpp"]
 
@@ -424,13 +446,17 @@ class LangConfig:
                         alt_ext_list   - List of alternative extensions
                         try_bare_path  - Whether to try paths without extensions (C/C++)
                         try_current_dir - Whether to also try relative paths from the current directory (C/C++)
+    implicit_visibility: Which files' definitions can be referenced without an import statement:
+                        "package" - files of the same extension in the same directory (Java / Kotlin)
+                        "project" - every file of the same extension (SQL)
+                        None      - none
     """
     language: Language
     definition_dict: dict[str, str]
     import_query: str | None = None
     usage_node_types: dict | None = None
     import_resolve: dict | None = None
-    same_package_visible: bool = False
+    implicit_visibility: str | None = None
 
 
 _LANG_REGISTRY: dict[str, LangConfig] = {
@@ -438,22 +464,22 @@ _LANG_REGISTRY: dict[str, LangConfig] = {
         language=Language(tspython.language()),
         definition_dict=PYTHON_DEFINITION_DICT,
         import_query=_PYTHON_IMPORT_QUERY,
-        usage_node_types=_PYTHON_USAGE_NODE_TYPES,
+        usage_node_types=_PYTHON_USAGE_NODE_TYPE_DICT,
         import_resolve={"separator": ".", "try_init": True, "try_current_dir": True},
     ),
     "java": LangConfig(
         language=Language(tsjava.language()),
         definition_dict=JAVA_DEFINITION_DICT,
         import_query=_JAVA_IMPORT_QUERY,
-        usage_node_types=_JAVA_USAGE_NODE_TYPES,
+        usage_node_types=_JAVA_USAGE_NODE_TYPE_DICT,
         import_resolve={"separator": "."},
-        same_package_visible=True,
+        implicit_visibility="package",
     ),
     "cpp": LangConfig(
         language=Language(tscpp.language()),
         definition_dict=CPP_DEFINITION_DICT,
         import_query=_C_IMPORT_QUERY,
-        usage_node_types=_C_USAGE_NODE_TYPES,
+        usage_node_types=_C_USAGE_NODE_TYPE_DICT,
         import_resolve={
             "separator": "/",
             "alt_ext_list": _C_CPP_EXT_LIST,
@@ -465,7 +491,7 @@ _LANG_REGISTRY: dict[str, LangConfig] = {
         language=Language(tsc.language()),
         definition_dict=C_DEFINITION_DICT,
         import_query=_C_IMPORT_QUERY,
-        usage_node_types=_C_USAGE_NODE_TYPES,
+        usage_node_types=_C_USAGE_NODE_TYPE_DICT,
         import_resolve={
             "separator": "/",
             "alt_ext_list": _C_CPP_EXT_LIST,
@@ -477,15 +503,15 @@ _LANG_REGISTRY: dict[str, LangConfig] = {
         language=Language(tskotlin.language()),
         definition_dict=KOTLIN_DEFINITION_DICT,
         import_query=_KOTLIN_IMPORT_QUERY,
-        usage_node_types=_KOTLIN_USAGE_NODE_TYPES,
+        usage_node_types=_KOTLIN_USAGE_NODE_TYPE_DICT,
         import_resolve={"separator": "."},
-        same_package_visible=True,
+        implicit_visibility="package",
     ),
     "js": LangConfig(
         language=Language(tsjavascript.language()),
         definition_dict=JS_DEFINITION_DICT,
         import_query=_JS_IMPORT_QUERY,
-        usage_node_types=_JS_USAGE_NODE_TYPES,
+        usage_node_types=_JS_USAGE_NODE_TYPE_DICT,
         import_resolve={
             "separator": "/",
             "index_ext_list": _JS_TS_EXT_LIST,
@@ -496,7 +522,7 @@ _LANG_REGISTRY: dict[str, LangConfig] = {
         language=Language(tstypescript.language_typescript()),
         definition_dict=TS_DEFINITION_DICT,
         import_query=_JS_IMPORT_QUERY,
-        usage_node_types=_JS_USAGE_NODE_TYPES,
+        usage_node_types=_JS_USAGE_NODE_TYPE_DICT,
         import_resolve={
             "separator": "/",
             "index_ext_list": _JS_TS_EXT_LIST,
@@ -507,22 +533,28 @@ _LANG_REGISTRY: dict[str, LangConfig] = {
         language=Language(tstypescript.language_tsx()),
         definition_dict=TS_DEFINITION_DICT,
         import_query=_JS_IMPORT_QUERY,
-        usage_node_types=_JS_USAGE_NODE_TYPES,
+        usage_node_types=_JS_USAGE_NODE_TYPE_DICT,
         import_resolve={
             "separator": "/",
             "index_ext_list": _JS_TS_EXT_LIST,
             "alt_ext_list": _JS_TS_EXT_LIST,
         },
     ),
+    "sql": LangConfig(
+        language=Language(tssql.language()),
+        definition_dict=SQL_DEFINITION_DICT,
+        usage_node_types=_SQL_USAGE_NODE_TYPE_DICT,
+        implicit_visibility="project",
+    ),
 }
 
 
 # Extension aliases and auto-generation of public mapping dictionaries
 #
-# _EXT_ALIASES defines a mapping of extensions that share the same language settings.
+# _EXT_ALIAS_DICT defines a mapping of extensions that share the same language settings.
 # When generating public dictionaries from _LANG_REGISTRY, _expand_ext_aliases()
 # automatically adds alias extensions (h, kts, jsx).
-_EXT_ALIASES: dict[str, str] = {
+_EXT_ALIAS_DICT: dict[str, str] = {
     "h":   "cpp",
     "kts": "kt",
     "jsx": "js",
@@ -530,9 +562,9 @@ _EXT_ALIASES: dict[str, str] = {
 
 
 def _expand_ext_aliases(base_dict: dict) -> dict:
-    """Return a new dictionary with alias extension entries added based on _EXT_ALIASES.
+    """Return a new dictionary with alias extension entries added based on _EXT_ALIAS_DICT.
 
-    For example, if _EXT_ALIASES = {"h": "cpp"} and base_dict contains "cpp",
+    For example, if _EXT_ALIAS_DICT = {"h": "cpp"} and base_dict contains "cpp",
     the "h" key is also set to the same value.
 
     Args:
@@ -541,20 +573,20 @@ def _expand_ext_aliases(base_dict: dict) -> dict:
     Returns:
         A new dictionary with alias extensions added.
     """
-    expanded = dict(base_dict)
-    for alias, canonical in _EXT_ALIASES.items():
-        if alias not in expanded and canonical in expanded:
-            expanded[alias] = expanded[canonical]
-    return expanded
+    expanded_dict = dict(base_dict)
+    for alias, canonical in _EXT_ALIAS_DICT.items():
+        if alias not in expanded_dict and canonical in expanded_dict:
+            expanded_dict[alias] = expanded_dict[canonical]
+    return expanded_dict
 
 
 # Extension -> tree-sitter Language object
-TREE_SITTER_LANGUAGES: dict[str, Language] = _expand_ext_aliases(
+EXT_TO_LANGUAGE_DICT: dict[str, Language] = _expand_ext_aliases(
     {ext: cfg.language for ext, cfg in _LANG_REGISTRY.items()}
 )
 
 # Extension -> definition node mapping dictionary
-DEFINITION_DICTS: dict[str, dict[str, str]] = _expand_ext_aliases(
+EXT_TO_DEFINITION_DICT: dict[str, dict[str, str]] = _expand_ext_aliases(
     {ext: cfg.definition_dict for ext, cfg in _LANG_REGISTRY.items()}
 )
 
@@ -574,36 +606,60 @@ def has_language(path: str) -> bool:
         path: A file path (absolute or relative); only its extension is looked at.
 
     Returns:
-        True when the extension (without the dot) is a key of DEFINITION_DICTS.
+        True when the extension (without the dot) is a key of EXT_TO_DEFINITION_DICT.
     """
-    return os.path.splitext(path)[1].lstrip(".") in DEFINITION_DICTS
+    return os.path.splitext(path)[1].lstrip(".") in EXT_TO_DEFINITION_DICT
 
 
 # Extension -> import extraction query
-IMPORT_QUERIES: dict[str, str | None] = _expand_ext_aliases(
+EXT_TO_IMPORT_QUERY_DICT: dict[str, str | None] = _expand_ext_aliases(
     {ext: cfg.import_query for ext, cfg in _LANG_REGISTRY.items()}
 )
 
 # Extension -> AST node type settings for usage tracking
-USAGE_NODE_TYPES: dict[str, dict | None] = _expand_ext_aliases(
+EXT_TO_USAGE_NODE_TYPE_DICT: dict[str, dict | None] = _expand_ext_aliases(
     {ext: cfg.usage_node_types for ext, cfg in _LANG_REGISTRY.items()}
 )
 
 # Extension -> import path resolution settings
-IMPORT_RESOLVE_CONFIG: dict[str, dict] = _expand_ext_aliases(
+EXT_TO_IMPORT_RESOLVE_DICT: dict[str, dict] = _expand_ext_aliases(
     {ext: cfg.import_resolve for ext, cfg in _LANG_REGISTRY.items()
      if cfg.import_resolve is not None}
 )
 
-# Extension -> whether implicit same-package references are enabled (Java / Kotlin)
-SAME_PACKAGE_VISIBLE: dict[str, bool] = _expand_ext_aliases(
-    {ext: cfg.same_package_visible for ext, cfg in _LANG_REGISTRY.items()
-     if cfg.same_package_visible}
+# Extension -> scope of the files whose definitions can be referenced without an import ("package" / "project")
+EXT_TO_IMPLICIT_VISIBILITY_DICT: dict[str, str] = _expand_ext_aliases(
+    {ext: cfg.implicit_visibility for ext, cfg in _LANG_REGISTRY.items()
+     if cfg.implicit_visibility}
 )
+
+
+def implicit_scope_key(file_rel: str) -> tuple[str, str] | None:
+    """Return the key of the group of files whose definitions the file can reference without an import.
+
+    Two files see each other's definitions when their keys are equal and not None.
+
+    Examples:
+        "com/example/Foo.java" -> ("java", "com/example")
+        "db/views.sql"         -> ("sql", "")
+        "src/app.py"           -> None
+
+    Args:
+        file_rel: Relative path of the file from the project root.
+
+    Returns:
+        (extension, directory) for "package" scope, (extension, "") for "project" scope,
+        None when the language has no implicit visibility.
+    """
+    ext = os.path.splitext(file_rel)[1].lstrip(".")
+    scope = EXT_TO_IMPLICIT_VISIBILITY_DICT.get(ext)
+    if scope is None:
+        return None
+    return ext, os.path.dirname(file_rel) if scope == "package" else ""
 
 # Source root prefixes for Maven/Gradle standard layouts and Python src-layout.
 # Used to resolve import statements when source files are nested under these directories.
-SOURCE_ROOT_PATTERNS: list[str] = [
+SOURCE_ROOT_PATTERN_LIST: list[str] = [
     "src/main/java/",
     "src/test/java/",
     "src/main/kotlin/",

@@ -20,14 +20,15 @@ from codetwine.knowledge_db import save_consolidated_sqlite
 from codetwine.llm.client import LLMClient
 from codetwine.utils.file_utils import (
     compute_file_hash,
-    copy_path_to_rel,
+    output_path_to_rel,
     resolve_file_output_dir,
 )
+from codetwine.config.logger import log_progress
 from codetwine.config.settings import (
     MAX_WORKERS,
     ENABLE_LLM_DOC,
     KNOWLEDGE_FORMAT,
-    KNOWLEDGE_FORMATS,
+    KNOWLEDGE_FORMAT_TUPLE,
     has_language,
 )
 
@@ -36,7 +37,6 @@ logger = logging.getLogger(__name__)
 
 def _convert_dep_list_to_internal_paths(
     project_dep_list_raw: list[dict],
-    project_name: str,
 ) -> list[dict]:
     """Convert paths from project_dependencies.json to relative paths for internal pipeline use.
 
@@ -45,23 +45,16 @@ def _convert_dep_list_to_internal_paths(
     this performs project name prefix removal + copy_path to original relative path restoration.
 
     Args:
-        project_dep_list_raw: Return value of save_project_dependencies.
-        project_name: The project name (e.g. "my-project").
+        project_dep_list_raw: Return value of build_project_dependencies.
 
     Returns:
         A dependency list converted to internal path format.
     """
-    prefix = f"{project_name}/"
-
-    def to_internal(path: str) -> str:
-        stripped = path[len(prefix):] if path.startswith(prefix) else path
-        return copy_path_to_rel(stripped)
-
     return [
         {
-            "file": to_internal(dep["file"]),
-            "callers": [to_internal(c) for c in dep.get("callers", [])],
-            "callees": [to_internal(c) for c in dep.get("callees", [])],
+            "file": output_path_to_rel(dep["file"]),
+            "callers": [output_path_to_rel(caller) for caller in dep.get("callers", [])],
+            "callees": [output_path_to_rel(callee) for callee in dep.get("callees", [])],
         }
         for dep in project_dep_list_raw
     ]
@@ -86,14 +79,14 @@ def _detect_changed_files(
     Returns:
         A set of relative paths of files where changes were detected.
     """
-    changed: set[str] = set()
+    changed_file_set: set[str] = set()
     for file_rel in all_file_list:
         file_abs = os.path.join(project_dir, file_rel)
         doc = load_doc(resolve_file_output_dir(base_output_dir, file_rel))
 
         if doc is None or doc.get("source_hash") != compute_file_hash(file_abs):
-            changed.add(file_rel)
-    return changed
+            changed_file_set.add(file_rel)
+    return changed_file_set
 
 
 def _ext_count_line(file_list: list[str]) -> str:
@@ -113,7 +106,7 @@ def _ext_count_line(file_list: list[str]) -> str:
 
 
 def _process_file_dependencies(
-    files_to_process: list[str],
+    file_rel_list: list[str],
     project_dir: str,
     base_output_dir: str,
     language_dep_list: list[dict],
@@ -122,21 +115,20 @@ def _process_file_dependencies(
     and a copy of the original file to the output directory.
 
     Args:
-        files_to_process: List of relative paths of files to process.
+        file_rel_list: List of relative paths of files to process.
         project_dir: Absolute path to the project root.
         base_output_dir: Absolute path to the output root directory.
         language_dep_list: Dependency list (internal path format) of the files that have
             a language. Import resolution looks up dependency targets in these only.
     """
-    print(f"Extracting dependencies for {len(files_to_process)} files...")
-    logger.info(f"Extracting dependencies for {len(files_to_process)} files...")
+    log_progress(logger, f"Extracting dependencies for {len(file_rel_list)} files...")
 
     # Lookups that are the same for every file, built once and passed to each call
     project_file_set = {info["file"] for info in language_dep_list}
     source_root_set = detect_source_roots(project_file_set)
     caller_map = {info["file"]: info.get("callers", []) for info in language_dep_list}
 
-    for file_rel in files_to_process:
+    for file_rel in file_rel_list:
         try:
             file_abs = os.path.join(project_dir, file_rel)
             output_file_dir = resolve_file_output_dir(base_output_dir, file_rel)
@@ -195,13 +187,13 @@ async def process_all_files(
         max_workers: Maximum number of files to process concurrently.
 
     Raises:
-        ValueError: When KNOWLEDGE_FORMAT is not one of KNOWLEDGE_FORMATS.
+        ValueError: When KNOWLEDGE_FORMAT is not one of KNOWLEDGE_FORMAT_TUPLE.
     """
     # Checked before any analysis runs
-    if KNOWLEDGE_FORMAT not in KNOWLEDGE_FORMATS:
+    if KNOWLEDGE_FORMAT not in KNOWLEDGE_FORMAT_TUPLE:
         raise ValueError(
             f"KNOWLEDGE_FORMAT must be one of "
-            f"{' / '.join(KNOWLEDGE_FORMATS)}, but got '{KNOWLEDGE_FORMAT}'. "
+            f"{' / '.join(KNOWLEDGE_FORMAT_TUPLE)}, but got '{KNOWLEDGE_FORMAT}'. "
             f"Set it in the .env file or your shell."
         )
 
@@ -210,10 +202,9 @@ async def process_all_files(
     os.makedirs(base_output_dir, exist_ok=True)
 
     # == Step 1: Build the project-wide dependency graph ====================
-    print("Analyzing project dependencies...")
-    logger.info("Analyzing project dependencies...")
+    log_progress(logger, "Analyzing project dependencies...")
     project_dep_list_raw = build_project_dependencies(project_dir)
-    project_dep_list = _convert_dep_list_to_internal_paths(project_dep_list_raw, project_name)
+    project_dep_list = _convert_dep_list_to_internal_paths(project_dep_list_raw)
 
     all_file_list = [info["file"] for info in project_dep_list]
 
@@ -222,9 +213,7 @@ async def process_all_files(
     language_dep_list = [info for info in project_dep_list if has_language(info["file"])]
     language_file_list = [info["file"] for info in language_dep_list]
 
-    files_msg = f"Files to analyze: {len(all_file_list)} ({_ext_count_line(all_file_list)})"
-    print(files_msg)
-    logger.info(files_msg)
+    log_progress(logger, f"Files to analyze: {len(all_file_list)} ({_ext_count_line(all_file_list)})")
 
     # == Step 2: Extract dependency info for all files ========================
     _process_file_dependencies(
@@ -234,23 +223,19 @@ async def process_all_files(
 
     # == Step 3: Generate design documents in topological order ================
     if ENABLE_LLM_DOC:
-        changed_files = _detect_changed_files(language_file_list, project_dir, base_output_dir)
-        print(f"Change detection: {len(changed_files)} changed / {len(language_file_list)} total")
-        logger.info(f"Change detection: {len(changed_files)} changed / {len(language_file_list)} total")
+        changed_file_set = _detect_changed_files(language_file_list, project_dir, base_output_dir)
+        log_progress(logger, f"Change detection: {len(changed_file_set)} changed / {len(language_file_list)} total")
 
-        print("Generating design documents...")
-        logger.info("Generating design documents...")
+        log_progress(logger, "Generating design documents...")
         await generate_all_docs(
             base_output_dir, language_dep_list, llm_client, max_workers,
-            changed_files,
+            changed_file_set,
         )
     else:
-        print("ENABLE_LLM_DOC=False: skipping design document generation")
-        logger.info("ENABLE_LLM_DOC=False: skipping design document generation")
+        log_progress(logger, "ENABLE_LLM_DOC=False: skipping design document generation")
 
     # == Step 3.5: Generate dependency graph + summary consolidated JSON ==========
-    print("Generating dependency graph + summary JSON...")
-    logger.info("Generating dependency graph + summary JSON...")
+    log_progress(logger, "Generating dependency graph + summary JSON...")
 
     # Build symbol-level dependencies once and share across the 3 subsequent functions
     symbol_deps = build_symbol_level_deps(base_output_dir, all_file_list)
@@ -266,16 +251,14 @@ async def process_all_files(
 
     # == Step 5: Generate the consolidated result ============================
     if KNOWLEDGE_FORMAT in ("json", "both"):
-        print("Generating consolidated JSON...")
-        logger.info("Generating consolidated JSON...")
+        log_progress(logger, "Generating consolidated JSON...")
         knowledge_path = os.path.join(base_output_dir, "project_knowledge.json")
         save_consolidated_json(
             base_output_dir, all_file_list, knowledge_path, symbol_deps, summary_map,
         )
 
     if KNOWLEDGE_FORMAT in ("sqlite", "both"):
-        print("Generating consolidated SQLite database...")
-        logger.info("Generating consolidated SQLite database...")
+        log_progress(logger, "Generating consolidated SQLite database...")
         knowledge_db_path = os.path.join(base_output_dir, "project_knowledge.sqlite")
         save_consolidated_sqlite(
             base_output_dir, all_file_list, knowledge_db_path, symbol_deps, summary_map,
@@ -284,5 +267,4 @@ async def process_all_files(
     # Clear parse result cache to free memory
     parse_cache.clear()
 
-    print("Analysis complete.")
-    logger.info("Analysis complete.")
+    log_progress(logger, "Analysis complete.")

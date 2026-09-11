@@ -1,7 +1,8 @@
 import os
 import logging
+from tree_sitter import Node
 from codetwine.parsers.ts_parser import parse_file
-from codetwine.extractors.imports import extract_imports
+from codetwine.extractors.imports import ImportInfo, extract_imports
 from codetwine.extractors.usages import extract_usages, extract_typed_aliases
 from codetwine.extractors.definitions import extract_definitions
 from codetwine.extractors.dependency_graph import extract_callee_source
@@ -10,17 +11,17 @@ from codetwine.import_to_path import (
     get_import_params,
 )
 from codetwine.config.settings import (
-    DEFINITION_DICTS,
-    USAGE_NODE_TYPES,
-    IMPORT_RESOLVE_CONFIG,
-    SAME_PACKAGE_VISIBLE,
+    EXT_TO_DEFINITION_DICT,
+    EXT_TO_USAGE_NODE_TYPE_DICT,
+    EXT_TO_IMPORT_RESOLVE_DICT,
+    implicit_scope_key,
 )
 
 logger = logging.getLogger(__name__)
 
 
 def build_usage_info_list(
-    root_node,
+    root_node: Node,
     symbol_to_file_map: dict[str, str],
     project_dir: str,
     file_ext: str,
@@ -42,18 +43,18 @@ def build_usage_info_list(
     Returns:
         A list of dicts containing usage location information.
     """
-    usage_node_types = USAGE_NODE_TYPES.get(file_ext)
+    usage_node_types = EXT_TO_USAGE_NODE_TYPE_DICT.get(file_ext)
 
     # Build a variable-name -> type-name mapping from typed variable declarations
     typed_alias_parent_types = (
         usage_node_types.get("typed_alias_parent_types", set())
         if usage_node_types else set()
     )
-    typed_aliases = extract_typed_aliases(
+    typed_alias_dict = extract_typed_aliases(
         root_node, set(symbol_to_file_map.keys()), typed_alias_parent_types
     )
     # Add alias variable names to the tracking set (map genre -> same file as Genre)
-    for var_name, type_name in typed_aliases.items():
+    for var_name, type_name in typed_alias_dict.items():
         if var_name not in symbol_to_file_map:
             symbol_to_file_map[var_name] = symbol_to_file_map[type_name]
 
@@ -69,8 +70,8 @@ def build_usage_info_list(
         root_symbol = usage.name.split(".")[0]
 
         # Remap alias variable names back to original type names (genre -> Genre)
-        if root_symbol in typed_aliases:
-            original_type = typed_aliases[root_symbol]
+        if root_symbol in typed_alias_dict:
+            original_type = typed_alias_dict[root_symbol]
             remapped_name = original_type + usage.name[len(root_symbol):]
             root_symbol = original_type
         else:
@@ -109,13 +110,13 @@ def build_usage_info_list(
 
 
 def _collect_names_from_target(
-    caller_import_list: list,
+    caller_import_list: list[ImportInfo],
     target_file_rel: str,
     caller_ext: str,
     caller_rel: str,
     project_file_set: set[str],
     project_dir: str,
-    target_definition_names: list[str] | None,
+    target_definition_name_list: list[str] | None,
 ) -> tuple[list[str], list[str] | None]:
     """Collect names originating from the target file based on the caller's import statements.
 
@@ -132,15 +133,15 @@ def _collect_names_from_target(
         caller_rel: Relative path of the caller file (used for module resolution).
         project_file_set: Set of file paths within the project.
         project_dir: Absolute path to the project root.
-        target_definition_names: Cached target definition names for C/C++.
+        target_definition_name_list: Cached target definition names for C/C++.
                                  Pass None on the first call.
 
     Returns:
-        A (names_from_target, target_definition_names) tuple.
-        For C/C++, target_definition_names is returned as a cache to the caller.
+        A (names_from_target, target_definition_name_list) tuple.
+        For C/C++, target_definition_name_list is returned as a cache to the caller.
     """
     names_from_target: list[str] = []
-    caller_resolve_config = IMPORT_RESOLVE_CONFIG.get(caller_ext, {})
+    caller_resolve_config = EXT_TO_IMPORT_RESOLVE_DICT.get(caller_ext, {})
     caller_separator = caller_resolve_config.get("separator", ".")
 
     for import_info in caller_import_list:
@@ -153,25 +154,25 @@ def _collect_names_from_target(
                 names_from_target.extend(n for n in import_info.names if n != "*")
                 # "from X import *" form: add all definition names from the target file
                 if "*" in import_info.names:
-                    if target_definition_names is None:
-                        target_definition_names = _load_target_definitions(
+                    if target_definition_name_list is None:
+                        target_definition_name_list = _load_target_definitions(
                             target_file_rel, project_dir,
                         )
-                    names_from_target.extend(target_definition_names)
+                    names_from_target.extend(target_definition_name_list)
             elif caller_separator == ".":
                 # Java/Kotlin: "import com.foo.Bar" -> add trailing "Bar"
-                module_parts = import_info.module.split(".")
-                leaf = module_parts[-1]
+                module_part_list = import_info.module.split(".")
+                leaf = module_part_list[-1]
                 if leaf:
                     names_from_target.append(leaf)
             elif caller_separator == "/":
                 # C/C++: #include incorporates the entire file.
                 # Add all definition names from the target file to names_from_target
-                if target_definition_names is None:
-                    target_definition_names = _load_target_definitions(
+                if target_definition_name_list is None:
+                    target_definition_name_list = _load_target_definitions(
                         target_file_rel, project_dir,
                     )
-                names_from_target.extend(target_definition_names)
+                names_from_target.extend(target_definition_name_list)
         elif (
             not resolved
             and "*" in import_info.names
@@ -180,23 +181,24 @@ def _collect_names_from_target(
             # Java/Kotlin wildcard import: check if target is a file within the package
             package_dir = import_info.module.replace(".", "/")
             if target_file_rel.startswith(package_dir + "/"):
-                if target_definition_names is None:
-                    target_definition_names = _load_target_definitions(
+                if target_definition_name_list is None:
+                    target_definition_name_list = _load_target_definitions(
                         target_file_rel, project_dir,
                     )
-                names_from_target.extend(target_definition_names)
+                names_from_target.extend(target_definition_name_list)
 
-    # Same package (same directory): references are possible without import statements (Java/Kotlin)
+    # Target visible without an import statement (Java/Kotlin: same package, SQL: whole project)
     # Add target definition names even if there are no import matches
-    if not names_from_target and SAME_PACKAGE_VISIBLE.get(caller_ext):
-        if os.path.dirname(caller_rel) == os.path.dirname(target_file_rel):
-            if target_definition_names is None:
-                target_definition_names = _load_target_definitions(
+    if not names_from_target:
+        scope_key = implicit_scope_key(caller_rel)
+        if scope_key is not None and implicit_scope_key(target_file_rel) == scope_key:
+            if target_definition_name_list is None:
+                target_definition_name_list = _load_target_definitions(
                     target_file_rel, project_dir,
                 )
-            names_from_target.extend(target_definition_names)
+            names_from_target.extend(target_definition_name_list)
 
-    return names_from_target, target_definition_names
+    return names_from_target, target_definition_name_list
 
 
 def _load_target_definitions(
@@ -212,16 +214,16 @@ def _load_target_definitions(
     Returns:
         A list of definition name strings.
     """
-    names: list[str] = []
+    name_list: list[str] = []
     target_abs = os.path.join(project_dir, target_file_rel)
     target_ext = os.path.splitext(target_file_rel)[1].lstrip(".")
-    target_def_dict = DEFINITION_DICTS.get(target_ext)
+    target_def_dict = EXT_TO_DEFINITION_DICT.get(target_ext)
     if target_def_dict and os.path.isfile(target_abs):
         target_root = parse_file(target_abs)[0]
         for defn in extract_definitions(target_root, target_def_dict):
             if defn.name:
-                names.append(defn.name)
-    return names
+                name_list.append(defn.name)
+    return name_list
 
 
 def build_caller_usages(
@@ -245,7 +247,7 @@ def build_caller_usages(
     caller_usages: list[dict] = []
 
     # For C/C++, retrieve target definition names once outside the caller loop and cache them
-    target_definition_names: list[str] | None = None
+    target_definition_name_list: list[str] | None = None
 
     for caller_rel in caller_file_list:
         caller_abs = os.path.join(project_dir, caller_rel)
@@ -263,25 +265,25 @@ def build_caller_usages(
         )
 
         # Step 1: Collect names that the caller imports from the target
-        names_from_target, target_definition_names = _collect_names_from_target(
+        names_from_target, target_definition_name_list = _collect_names_from_target(
             caller_import_list, target_file_rel, caller_ext,
             caller_rel, project_file_set, project_dir,
-            target_definition_names,
+            target_definition_name_list,
         )
 
         # Step 2: Extract and aggregate lines where those names are used within the caller
         if names_from_target:
-            usage_node_types = USAGE_NODE_TYPES.get(caller_ext)
+            usage_node_types = EXT_TO_USAGE_NODE_TYPE_DICT.get(caller_ext)
 
             # Add typed variable aliases to the tracking set
             typed_alias_parent_types = (
                 usage_node_types.get("typed_alias_parent_types", set())
                 if usage_node_types else set()
             )
-            typed_aliases = extract_typed_aliases(
+            typed_alias_dict = extract_typed_aliases(
                 caller_root, set(names_from_target), typed_alias_parent_types
             )
-            for var_name in typed_aliases:
+            for var_name in typed_alias_dict:
                 if var_name not in names_from_target:
                     names_from_target.append(var_name)
 
@@ -290,49 +292,49 @@ def build_caller_usages(
             )
 
             # Hold the caller's source code line by line (for usage_context extraction)
-            caller_source_lines: list[str] | None = None
+            caller_source_line_list: list[str] | None = None
             if usage_list:
                 try:
                     with open(caller_abs, "r", encoding="utf-8") as f:
-                        caller_source_lines = f.read().splitlines()
+                        caller_source_line_list = f.read().splitlines()
                 except (OSError, UnicodeDecodeError):
                     pass
 
             # Step 3: Group by (name, file) and accumulate into lines list
             # Remap alias variable names to original type names for grouping
-            groups: dict[str, dict] = {}
+            group_dict: dict[str, dict] = {}
             for usage in usage_list:
                 name = usage.name
                 root_symbol = name.split(".")[0]
-                if root_symbol in typed_aliases:
-                    name = typed_aliases[root_symbol] + name[len(root_symbol):]
+                if root_symbol in typed_alias_dict:
+                    name = typed_alias_dict[root_symbol] + name[len(root_symbol):]
 
-                if name not in groups:
-                    groups[name] = {
+                if name not in group_dict:
+                    group_dict[name] = {
                         "lines": [usage.line],
                         "name":  name,
                         "file":  caller_rel,
                     }
                 else:
-                    groups[name]["lines"].append(usage.line)
+                    group_dict[name]["lines"].append(usage.line)
 
             # Step 4: Extract usage_context from the usage locations of each group
             # Remove duplicate lines before extracting context
-            for group in groups.values():
+            for group in group_dict.values():
                 group["lines"] = sorted(set(group["lines"]))
-            _max_context_locations = 2
+            _max_context_location_count = 2
             _context_radius = 3
-            if caller_source_lines:
-                total_lines = len(caller_source_lines)
-                for group in groups.values():
-                    context_parts = []
-                    for line_no in group["lines"][:_max_context_locations]:
+            if caller_source_line_list:
+                line_count = len(caller_source_line_list)
+                for group in group_dict.values():
+                    context_part_list = []
+                    for line_no in group["lines"][:_max_context_location_count]:
                         start = max(0, line_no - 1 - _context_radius)
-                        end = min(total_lines, line_no - 1 + _context_radius + 1)
-                        snippet = "\n".join(caller_source_lines[start:end])
-                        context_parts.append(snippet)
-                    group["usage_context"] = "\n...\n".join(context_parts)
+                        end = min(line_count, line_no - 1 + _context_radius + 1)
+                        snippet = "\n".join(caller_source_line_list[start:end])
+                        context_part_list.append(snippet)
+                    group["usage_context"] = "\n...\n".join(context_part_list)
 
-            caller_usages.extend(groups.values())
+            caller_usages.extend(group_dict.values())
 
     return caller_usages

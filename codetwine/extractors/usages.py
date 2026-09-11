@@ -32,12 +32,14 @@ def extract_usages(
     Args:
         root_node: The AST root node covering the entire file.
         imported_names: Set of names whose usage is to be tracked.
-        usage_node_types: Per-language node type settings dict, obtained from USAGE_NODE_TYPES in config.py.
+        usage_node_types: Per-language node type settings dict, obtained from EXT_TO_USAGE_NODE_TYPE_DICT in config.py.
                           Returns an empty list when None (for languages with no usage tracking defined).
                           Required keys: "call_types", "attribute_types", "skip_parent_types"
                           Optional key: "skip_parent_types_for_type_ref" (uses skip_parent_types if absent)
                           Optional key: "skip_name_field_types" (when the parent is this type,
                             only the name-field child is skipped; the value side is detected as a usage)
+                          Optional key: "identifier_parent_types" (when set, an identifier is a usage
+                            only when its parent is one of these types)
 
     Returns:
         A list of UsageInfo (deduplicated).
@@ -55,9 +57,12 @@ def extract_usages(
     skip_parent_types_for_type_ref: set[str] = usage_node_types.get(
         "skip_parent_types_for_type_ref", skip_parent_types
     )
+    identifier_parent_types: set[str] = usage_node_types.get(
+        "identifier_parent_types", set()
+    )
 
     # Type reference / namespace reference node types (skip_parent_types check not needed)
-    _TYPE_REFERENCE_NODE_TYPES = {"type_identifier", "namespace_identifier"}
+    _TYPE_REFERENCE_NODE_TYPE_SET = {"type_identifier", "namespace_identifier"}
 
     usage_list: list[UsageInfo] = []
     # DFS traversal of the AST using a stack
@@ -96,7 +101,7 @@ def extract_usages(
                         usage_list.append(UsageInfo(name=name, line=child.start_point[0] + 1))
                     break
 
-        elif node.type in _TYPE_REFERENCE_NODE_TYPES:
+        elif node.type in _TYPE_REFERENCE_NODE_TYPE_SET:
             # Process type reference nodes.
             # Use the type-reference skip list for checking (only import statements and scope resolution are skipped).
             # Unlike the identifier skip_parent_types, type references in parameters and method declarations
@@ -112,7 +117,8 @@ def extract_usages(
         elif node.type == "identifier":
             # Process simple identifier nodes
             usage = _parse_identifier_node(
-                node, imported_names, skip_parent_types, skip_name_field_types
+                node, imported_names, skip_parent_types, skip_name_field_types,
+                identifier_parent_types,
             )
             if usage:
                 usage_list.append(usage)
@@ -138,30 +144,30 @@ def _deduplicate(usage_list: list[UsageInfo]) -> list[UsageInfo]:
         A deduplicated UsageInfo list (sorted by line number in ascending order).
     """
     # Group by line number
-    by_line: dict[int, list[UsageInfo]] = {}
+    by_line_dict: dict[int, list[UsageInfo]] = {}
     for usage in usage_list:
-        by_line.setdefault(usage.line, []).append(usage)
+        by_line_dict.setdefault(usage.line, []).append(usage)
 
-    seen_keys: set[tuple] = set()
-    result: list[UsageInfo] = []
+    seen_key_set: set[tuple] = set()
+    unique_list: list[UsageInfo] = []
 
     # Process each group in ascending line-number order
-    for line in sorted(by_line):
-        line_usages = by_line[line]
-        line_names = [u.name for u in line_usages]
+    for line in sorted(by_line_dict):
+        line_usage_list = by_line_dict[line]
+        line_name_list = [usage.name for usage in line_usage_list]
 
-        for usage in line_usages:
+        for usage in line_usage_list:
             # Exclude the shorter name if a more detailed name (usage.name.xxx) exists on the same line
-            if any(other.startswith(usage.name + ".") for other in line_names):
+            if any(other.startswith(usage.name + ".") for other in line_name_list):
                 continue
 
             # Also remove entries with duplicate (name, line) pairs
             entry_key = (usage.name, usage.line)
-            if entry_key not in seen_keys:
-                seen_keys.add(entry_key)
-                result.append(usage)
+            if entry_key not in seen_key_set:
+                seen_key_set.add(entry_key)
+                unique_list.append(usage)
 
-    return result
+    return unique_list
 
 
 def _is_function_part_of_call(node: Node, call_types: set[str]) -> bool:
@@ -264,6 +270,7 @@ def _parse_identifier_node(
     imported_names: set[str],
     skip_parent_types: set[str],
     skip_name_field_types: set[str],
+    identifier_parent_types: set[str],
 ) -> UsageInfo | None:
     """Extract symbol usage information from a simple identifier node.
 
@@ -271,6 +278,8 @@ def _parse_identifier_node(
     or argument declarations (i.e., part of syntax).
     For node types in skip_name_field_types, only the "name"-field child is
     skipped while the "value" side is detected as a usage.
+    When identifier_parent_types is not empty, only an identifier whose parent
+    is one of those types is detected (SQL: object_reference).
 
     Example: in def func(x=some_var), for default_parameter:
         identifier "x" (name field) -> skipped
@@ -281,11 +290,15 @@ def _parse_identifier_node(
         imported_names: Set of names to track.
         skip_parent_types: Set of node types whose children should be skipped.
         skip_name_field_types: Set of node types where only the name-field child is skipped.
+        identifier_parent_types: Set of node types whose identifier children alone are detected.
+                                 Empty to detect an identifier under any parent.
 
     Returns:
         UsageInfo, or None if not applicable.
     """
     parent = node.parent
+    if identifier_parent_types and (not parent or parent.type not in identifier_parent_types):
+        return None
     if parent:
         if parent.type in skip_name_field_types:
             # Skip only the "name" field child; treat the "value" side as a usage
@@ -330,7 +343,7 @@ def extract_typed_aliases(
     if not typed_alias_parent_types:
         return {}
 
-    aliases: dict[str, str] = {}
+    alias_dict: dict[str, str] = {}
     stack = [root_node]
 
     while stack:
@@ -341,11 +354,11 @@ def extract_typed_aliases(
             if type_name and type_name in imported_names:
                 for var_name in var_names:
                     if var_name != type_name:
-                        aliases[var_name] = type_name
+                        alias_dict[var_name] = type_name
 
         stack.extend(node.children)
 
-    return aliases
+    return alias_dict
 
 
 def _extract_type_and_var(node: Node) -> tuple[str | None, list[str]]:
@@ -363,7 +376,7 @@ def _extract_type_and_var(node: Node) -> tuple[str | None, list[str]]:
         A (type_name, [list of variable names]) tuple. Returns (None, []) if not found.
     """
     type_name: str | None = None
-    var_names: list[str] = []
+    var_name_list: list[str] = []
 
     for child in node.children:
         if child.type == "type_identifier":
@@ -375,13 +388,13 @@ def _extract_type_and_var(node: Node) -> tuple[str | None, list[str]]:
                     type_name = sub.text.decode("utf-8")
                     break
         elif child.type in ("identifier", "simple_identifier"):
-            var_names.append(child.text.decode("utf-8"))
+            var_name_list.append(child.text.decode("utf-8"))
         elif child.type in ("variable_declarator", "init_declarator"):
             # Java: variable_declarator > identifier
             # C/C++: init_declarator > identifier
             for sub in child.children:
                 if sub.type == "identifier":
-                    var_names.append(sub.text.decode("utf-8"))
+                    var_name_list.append(sub.text.decode("utf-8"))
                     break
 
-    return type_name, var_names
+    return type_name, var_name_list

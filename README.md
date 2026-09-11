@@ -33,6 +33,7 @@ The knowledge file can be used as input material for LLM-powered code search and
     - [JavaScript / TypeScript](#javascript--typescript)
     - [Java / Kotlin](#java--kotlin)
     - [C / C++](#c--c)
+    - [SQL](#sql)
   - [♻️ Incremental Processing](#️-incremental-processing)
   - [🗄️ SQLite Output](#️-sqlite-output)
   - [📋 Output JSON Schema](#-output-json-schema)
@@ -54,7 +55,7 @@ The knowledge file can be used as input material for LLM-powered code search and
 ## 🧬 Supported Languages
 
 Definitions, dependencies and design documents are extracted for the following languages
-(extensions `py`, `java`, `kt`, `kts`, `js`, `jsx`, `ts`, `tsx`, `c`, `cpp`, `h`):
+(extensions `py`, `java`, `kt`, `kts`, `js`, `jsx`, `ts`, `tsx`, `c`, `cpp`, `h`, `sql`):
 
 - Python
 - Java
@@ -63,6 +64,7 @@ Definitions, dependencies and design documents are extracted for the following l
 - C
 - C++
 - Kotlin
+- SQL
 
 Every other non-empty text file (`.md`, `.yaml`, `.toml`, `Makefile`, ...) is also listed in the
 outputs and copied to the output directory, with empty `definitions`, `callee_usages` and
@@ -242,11 +244,16 @@ Dependency extraction is performed through static syntax analysis with tree-sitt
 ### Java / Kotlin
 
 - **Wildcard imports**: `import com.example.*` is detected as an import statement, but individual class files cannot be resolved, so they are not recognized as dependencies
-- **Implicit same-package references**: In Java/Kotlin, classes in the same package can be referenced without imports. Detection uses regex matching with the assumption that file names match class names, so cases with multiple classes in one file may be missed
+- **Implicit same-package references**: In Java/Kotlin, classes in the same package can be referenced without imports. A dependency is added when a top-level definition name of another file in the same directory is used in the source code
 
 ### C / C++
 
 - **Build system include paths**: Include paths added via CMake or Makefile `-I` options are not considered. Headers that cannot be resolved from the project root or current directory as relative paths are not detected as dependencies
+
+### SQL
+
+- **Object references**: A dependency is added when a table, view, function, type or sequence created in another `.sql` file of the project is referenced. Names are compared as written, so a reference that differs in case or quoting from the `CREATE` statement is not detected
+- **Unsupported syntax**: PostgreSQL-style `CREATE PROCEDURE`, `CALL`, `GRANT` and psql `\i` are not parsed by the grammar. Surrounding statements are still analyzed
 
 ## ♻️ Incremental Processing
 
@@ -398,7 +405,7 @@ Per-file definition and dependency information.
 |-----------|-----|------|
 | `file` | string | Path of the source file copied to the output directory |
 | `definitions[].name` | string | Function/class name |
-| `definitions[].type` | string | Definition type (tree-sitter node type, varies by language. Python: `function_definition`, `class_definition` / Java: `class_declaration`, `method_declaration` / JS/TS: `function_declaration`, `class_declaration`, etc.) |
+| `definitions[].type` | string | Definition type (tree-sitter node type, varies by language. Python: `function_definition`, `class_definition` / Java: `class_declaration`, `method_declaration` / JS/TS: `function_declaration`, `class_declaration` / SQL: `create_table`, `create_view`, etc.) |
 | `definitions[].start_line` | int | Start line number |
 | `definitions[].end_line` | int | End line number |
 | `definitions[].context` | string | Full source code of the definition |
@@ -500,7 +507,7 @@ The agent receives only the file graph and one summary per file. Definitions, so
 
 ### Sample Output
 
-`examples/sample_output/` contains sample output produced by analyzing the codetwine repository itself. This output was generated using the search-oriented template `examples/doc_template_search.json`: one section, in prose, with an overview of the file and one entry per definition written in the words a reader would search for. It is not tied to any language. `examples/doc_template_python.json` is a Python-specific template that writes a fuller specification in one section. `rlm_qa_agent.py` references this output by default, so you can try out RLM QA immediately without running any analysis.
+`examples/sample_output/` contains sample output produced by analyzing the codetwine repository itself, as of commit `9e7ac1a` (2026-09-09) with `claude-sonnet-5`. It is a snapshot for trying out RLM QA and is not regenerated when the code changes, so it does not reflect the current source. This output was generated using the search-oriented template `examples/doc_template_search.json`: one section, in prose, with an overview of the file and one entry per definition written in the words a reader would search for. It is not tied to any language. `examples/doc_template_python.json` is a Python-specific template that writes a fuller specification in one section. `rlm_qa_agent.py` references this output by default, so you can try out RLM QA immediately without running any analysis.
 
 > **Note:** The `file` field paths in `project_knowledge.json` refer to sources copied into the output directory and differ from the original source tree paths (e.g. `codetwine/import_to_path.py` → `codetwine/import_to_path_py/import_to_path.py`).
 
@@ -539,7 +546,7 @@ codetwine/
 │   ├── knowledge_db.py         # SQLite output and read API
 │   ├── config/
 │   │   ├── settings.py         # Environment variables and per-language settings management
-│   │   └── logger.py           # Logging configuration
+│   │   └── logger.py           # Logging configuration and progress output
 │   ├── extractors/
 │   │   ├── definitions.py      # Definition extraction (functions, classes, etc.)
 │   │   ├── imports.py          # Import statement extraction

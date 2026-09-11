@@ -279,12 +279,12 @@ def callees_of(connection: sqlite3.Connection, file: str) -> list[str]:
     Returns:
         The dependency target file paths.
     """
-    rows = connection.execute(
+    cursor = connection.execute(
         "SELECT other FROM file_edges WHERE file = ? AND direction = 'callee' "
         "ORDER BY other",
         (file,),
     )
-    return [row["other"] for row in rows]
+    return [row["other"] for row in cursor]
 
 
 def callers_of(connection: sqlite3.Connection, file: str) -> list[str]:
@@ -297,12 +297,12 @@ def callers_of(connection: sqlite3.Connection, file: str) -> list[str]:
     Returns:
         The dependent file paths.
     """
-    rows = connection.execute(
+    cursor = connection.execute(
         "SELECT other FROM file_edges WHERE file = ? AND direction = 'caller' "
         "ORDER BY other",
         (file,),
     )
-    return [row["other"] for row in rows]
+    return [row["other"] for row in cursor]
 
 
 def find_definitions(connection: sqlite3.Connection, name: str,
@@ -318,15 +318,15 @@ def find_definitions(connection: sqlite3.Connection, name: str,
     Returns:
         A list of {"file", "name", "type", "start_line", "end_line"} dicts.
     """
-    columns = "SELECT file, name, type, start_line, end_line FROM definitions "
-    order = " ORDER BY file, start_line"
+    select_sql = "SELECT file, name, type, start_line, end_line FROM definitions "
+    order_sql = " ORDER BY file, start_line"
     if partial:
         # ESCAPE keeps a name containing % or _ from being read as a wildcard
         pattern = name.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-        rows = connection.execute(
-            columns + "WHERE name LIKE ? ESCAPE '\\'" + order,
+        cursor = connection.execute(
+            select_sql + "WHERE name LIKE ? ESCAPE '\\'" + order_sql,
             (f"%{pattern}%",),
         )
     else:
-        rows = connection.execute(columns + "WHERE name = ?" + order, (name,))
-    return [dict(row) for row in rows]
+        cursor = connection.execute(select_sql + "WHERE name = ?" + order_sql, (name,))
+    return [dict(row) for row in cursor]
