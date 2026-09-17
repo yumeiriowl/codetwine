@@ -87,8 +87,10 @@ def save_consolidated_sqlite(
 ) -> None:
     """Write the entire project's analysis results to a SQLite database.
 
-    Any existing database at output_path is replaced. The per-file JSON files are the
-    source of truth and the database is rebuilt from them on every run.
+    The database is written to output_path + ".tmp" and moved to output_path once it is
+    complete, replacing any existing database there. When writing fails, the existing
+    database is left as it was. The per-file JSON files are the source of truth and the
+    database is rebuilt from them on every run.
 
     Each file's analysis results are read, inserted and released before the next file is
     read, so only one file is held in memory at a time.
@@ -102,11 +104,13 @@ def save_consolidated_sqlite(
     """
     project_name = os.path.basename(base_output_dir)
 
-    if os.path.exists(output_path):
-        os.remove(output_path)
+    # A file that a stopped run left at the temporary path is removed first
+    tmp_path = output_path + ".tmp"
+    if os.path.exists(tmp_path):
+        os.remove(tmp_path)
 
     written_count = 0
-    connection = sqlite3.connect(output_path)
+    connection = sqlite3.connect(tmp_path)
     try:
         connection.executescript(_SCHEMA)
         connection.executemany(
@@ -157,6 +161,8 @@ def save_consolidated_sqlite(
         connection.commit()
     finally:
         connection.close()
+
+    os.replace(tmp_path, output_path)
 
     logger.info(
         f"Consolidated SQLite output: {output_path} "

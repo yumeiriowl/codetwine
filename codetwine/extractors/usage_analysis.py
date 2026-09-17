@@ -109,6 +109,59 @@ def build_usage_info_list(
     return list(usage_group_map.values())
 
 
+def build_same_file_usages(
+    root_node: Node,
+    definition_list: list[dict],
+    file_ext: str,
+    import_name_set: set[str],
+) -> list[dict]:
+    """Collect the lines where names defined in this file are used within the same
+    file, producing data for the same_file_usages JSON output.
+
+    A definition name that is also in import_name_set is not tracked. A usage inside
+    the line range of a definition with the same name (the definition's own name, a
+    recursive call) is left out. When the same name appears on multiple lines, entries
+    are merged into a single record with all line numbers accumulated in the lines list.
+
+    Args:
+        root_node: The AST root node of the file.
+        definition_list: The file's definitions (dicts with name, start_line, end_line).
+        file_ext: File extension (without leading ".").
+        import_name_set: Names tracked as imports from other project files.
+
+    Returns:
+        A list of {"lines", "name"} dicts.
+    """
+    # Definition name -> line ranges of the definitions with that name
+    line_range_dict: dict[str, list[tuple[int, int]]] = {}
+    for definition in definition_list:
+        name = definition["name"]
+        if name and name not in import_name_set:
+            line_range_dict.setdefault(name, []).append(
+                (definition["start_line"], definition["end_line"])
+            )
+
+    usage_info_list = extract_usages(
+        root_node, set(line_range_dict), EXT_TO_USAGE_NODE_TYPE_DICT.get(file_ext)
+    )
+
+    # Key: used name -> merged entry
+    usage_group_map: dict[str, dict] = {}
+    for usage in usage_info_list:
+        # For attribute access like "logger.info", the leading "logger" is the definition name
+        root_symbol = usage.name.split(".")[0]
+        if any(start <= usage.line <= end for start, end in line_range_dict[root_symbol]):
+            continue
+        entry = usage_group_map.setdefault(usage.name, {"lines": [], "name": usage.name})
+        entry["lines"].append(usage.line)
+
+    # Remove duplicates from the lines list of each group
+    for entry in usage_group_map.values():
+        entry["lines"] = sorted(set(entry["lines"]))
+
+    return list(usage_group_map.values())
+
+
 def _collect_names_from_target(
     caller_import_list: list[ImportInfo],
     target_file_rel: str,

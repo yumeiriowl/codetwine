@@ -166,7 +166,45 @@ def _collect_text_file_list(project_dir: str) -> list[str]:
     return text_file_list
 
 
-def build_project_dependencies(project_dir: str) -> list[dict]:
+def _filter_text_file_list(project_dir: str, file_list: list[str]) -> list[str]:
+    """Return the absolute paths of the non-empty text files among the given files.
+
+    The same files are left out as in _collect_text_file_list: a path with a directory
+    or file name matching EXCLUDE_PATTERNS, and empty, binary and unreadable files
+    (is_text_file). A path outside project_dir is left out too. The number of skipped
+    files is logged.
+
+    Args:
+        project_dir: Root directory of the project to analyze.
+        file_list: File paths relative to project_dir.
+
+    Returns:
+        Absolute file paths in the order given, without duplicates.
+    """
+    text_file_list: list[str] = []
+    known_path_set: set[str] = set()
+    skip_count = 0
+    for file_rel in file_list:
+        file_path = os.path.normpath(os.path.join(project_dir, file_rel))
+        part_list = os.path.relpath(file_path, project_dir).replace("\\", "/").split("/")
+        if part_list[0] == ".." or file_path in known_path_set:
+            continue
+        known_path_set.add(file_path)
+        if any(fnmatch.fnmatch(part, p) for part in part_list for p in EXCLUDE_PATTERNS):
+            continue
+        if is_text_file(file_path):
+            text_file_list.append(file_path)
+        else:
+            skip_count += 1
+    if skip_count:
+        logger.info(f"Skipped {skip_count} empty, binary or unreadable files")
+    return text_file_list
+
+
+def build_project_dependencies(
+    project_dir: str,
+    file_list: list[str] | None = None,
+) -> list[dict]:
     """Analyze inter-file dependencies within the project and build a dependency graph in memory.
 
     Return value structure (array):
@@ -186,12 +224,17 @@ def build_project_dependencies(project_dir: str) -> list[dict]:
 
     Args:
         project_dir: Root directory of the project to analyze.
+        file_list: File paths relative to project_dir. When given, only these files
+            are analyzed instead of walking project_dir.
 
     Returns:
         A list of file dependency information dicts.
     """
     # == Step 1: Collect every non-empty text file ==============================
-    all_file_list = _collect_text_file_list(project_dir)
+    if file_list is None:
+        all_file_list = _collect_text_file_list(project_dir)
+    else:
+        all_file_list = _filter_text_file_list(project_dir, file_list)
 
     # Only the files with a language take part in import resolution and dependency edges
     language_file_list = [f for f in all_file_list if has_language(f)]

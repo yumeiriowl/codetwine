@@ -181,6 +181,9 @@ def save_consolidated_json(
     Each entry is written to the output file as soon as it is read, so only one file's
     analysis results are held in memory at a time.
 
+    The JSON is written to output_path + ".tmp" and moved to output_path once it is
+    complete. When writing fails, the existing file at output_path is left as it was.
+
     Args:
         base_output_dir: Base output directory for file_dependencies.
         all_file_list: List of relative paths of files to analyze.
@@ -191,7 +194,8 @@ def save_consolidated_json(
     project_name = os.path.basename(base_output_dir)
     written_count = 0
 
-    with open(output_path, "w", encoding="utf-8") as f:
+    tmp_path = output_path + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
         f.write("{\n")
         f.write(f'  "project_name": {json.dumps(project_name, ensure_ascii=False)},\n')
 
@@ -213,6 +217,8 @@ def save_consolidated_json(
             written_count += 1
 
         f.write("\n  ]\n}")
+
+    os.replace(tmp_path, output_path)
 
     logger.info(
         f"Consolidated JSON output: {output_path} "

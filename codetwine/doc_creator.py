@@ -993,7 +993,7 @@ async def generate_all_docs(
     llm_client: LLMClient,
     max_workers: int = MAX_WORKERS,
     changed_files: set[str] | None = None,
-) -> None:
+) -> list[str]:
     """Main function to generate design documents for all files in topological sort order.
 
     Processing flow:
@@ -1013,6 +1013,10 @@ async def generate_all_docs(
         llm_client: LLM client.
         max_workers: Number of parallel workers within each level.
         changed_files: Set of relative paths of changed files. If None, all files are processed.
+
+    Returns:
+        Relative paths of the files left without a complete design document
+        (generation failed, or a section or the summary is missing).
     """
     with open(DOC_TEMPLATE_PATH, "r", encoding="utf-8") as f:
         template = json.load(f)
@@ -1047,6 +1051,9 @@ async def generate_all_docs(
     # Track files whose documents were regenerated in this run.
     # Caller-side files that reference a regenerated file as a callee also become regeneration targets.
     new_doc_file_set: set[str] = set()
+
+    # Files left without a complete design document in this run
+    doc_fail_list: list[str] = []
 
     def _needs_regeneration(file_rel: str) -> bool:
         """Determine whether the design document needs regeneration.
@@ -1138,13 +1145,16 @@ async def generate_all_docs(
             task_list = [asyncio.create_task(process_one(f)) for f in batch]
             result_list = await asyncio.gather(*task_list, return_exceptions=True)
 
-            for result in result_list:
+            for file_rel, result in zip(batch, result_list):
                 if isinstance(result, Exception):
                     logger.error(f"Error during document generation: {result}")
+                    doc_fail_list.append(file_rel)
                     continue
-                file_rel, doc = result
+                doc = result[1]
                 if doc:
                     doc_summary_map[file_rel] = doc.get("summary", "")
+                if not doc or not _is_doc_complete(doc):
+                    doc_fail_list.append(file_rel)
 
     log_progress(
 
@@ -1153,3 +1163,5 @@ async def generate_all_docs(
         f"Generated: {len(doc_summary_map)} / "
         f"Total: {sum(len(level) for level in level_list)}"
     )
+
+    return doc_fail_list

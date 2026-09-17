@@ -1,5 +1,6 @@
 import os
 import json
+import contextlib
 import shutil
 import logging
 from collections import Counter
@@ -110,9 +111,12 @@ def _process_file_dependencies(
     project_dir: str,
     base_output_dir: str,
     language_dep_list: list[dict],
-) -> None:
+) -> list[str]:
     """Analyze dependency info for each file and save file_dependencies.json
     and a copy of the original file to the output directory.
+
+    When the analysis of a file fails, the file_dependencies.json and the copy that a
+    previous run left in its output directory are removed.
 
     Args:
         file_rel_list: List of relative paths of files to process.
@@ -120,6 +124,9 @@ def _process_file_dependencies(
         base_output_dir: Absolute path to the output root directory.
         language_dep_list: Dependency list (internal path format) of the files that have
             a language. Import resolution looks up dependency targets in these only.
+
+    Returns:
+        Relative paths of the files whose analysis failed.
     """
     log_progress(logger, f"Extracting dependencies for {len(file_rel_list)} files...")
 
@@ -128,11 +135,11 @@ def _process_file_dependencies(
     source_root_set = detect_source_roots(project_file_set)
     caller_map = {info["file"]: info.get("callers", []) for info in language_dep_list}
 
+    fail_file_list: list[str] = []
     for file_rel in file_rel_list:
+        file_abs = os.path.join(project_dir, file_rel)
+        output_file_dir = resolve_file_output_dir(base_output_dir, file_rel)
         try:
-            file_abs = os.path.join(project_dir, file_rel)
-            output_file_dir = resolve_file_output_dir(base_output_dir, file_rel)
-
             os.makedirs(output_file_dir, exist_ok=True)
 
             dep_result = get_file_dependencies(
@@ -158,6 +165,13 @@ def _process_file_dependencies(
             logger.info(f"  OK: {file_rel}")
         except Exception as e:
             logger.error(f"  FAIL: {file_rel}: {e}")
+            fail_file_list.append(file_rel)
+            # Remove what a previous run left for this file
+            for output_name in ("file_dependencies.json", os.path.basename(file_rel)):
+                with contextlib.suppress(OSError):
+                    os.remove(os.path.join(output_file_dir, output_name))
+
+    return fail_file_list
 
 
 async def process_all_files(
@@ -165,7 +179,8 @@ async def process_all_files(
     output_dir: str,
     llm_client: LLMClient | None,
     max_workers: int = MAX_WORKERS,
-) -> None:
+    file_list: list[str] | None = None,
+) -> dict:
     """Analyze the entire project and output per-file dependency JSON, design documents,
     and consolidated JSON.
 
@@ -185,6 +200,19 @@ async def process_all_files(
         output_dir: Output directory for analysis results.
         llm_client: LLM summary generation client.
         max_workers: Maximum number of files to process concurrently.
+        file_list: File paths relative to project_dir. When given, only these files
+            are analyzed instead of walking project_dir. EXCLUDE_PATTERNS and the
+            text file check apply to them as well.
+
+    Returns:
+        A dict with the following keys.
+            "file_count": Number of files analyzed.
+            "dependency_fail_list": Relative paths of the files whose dependency
+                extraction failed.
+            "doc_count": Number of files that have a complete design document
+                (0 when ENABLE_LLM_DOC is False).
+            "doc_fail_list": Relative paths of the files left without a complete
+                design document (empty when ENABLE_LLM_DOC is False).
 
     Raises:
         ValueError: When KNOWLEDGE_FORMAT is not one of KNOWLEDGE_FORMAT_TUPLE.
@@ -203,7 +231,7 @@ async def process_all_files(
 
     # == Step 1: Build the project-wide dependency graph ====================
     log_progress(logger, "Analyzing project dependencies...")
-    project_dep_list_raw = build_project_dependencies(project_dir)
+    project_dep_list_raw = build_project_dependencies(project_dir, file_list)
     project_dep_list = _convert_dep_list_to_internal_paths(project_dep_list_raw)
 
     all_file_list = [info["file"] for info in project_dep_list]
@@ -216,18 +244,19 @@ async def process_all_files(
     log_progress(logger, f"Files to analyze: {len(all_file_list)} ({_ext_count_line(all_file_list)})")
 
     # == Step 2: Extract dependency info for all files ========================
-    _process_file_dependencies(
+    dependency_fail_list = _process_file_dependencies(
         all_file_list, project_dir, base_output_dir,
         language_dep_list,
     )
 
     # == Step 3: Generate design documents in topological order ================
+    doc_fail_list: list[str] = []
     if ENABLE_LLM_DOC:
         changed_file_set = _detect_changed_files(language_file_list, project_dir, base_output_dir)
         log_progress(logger, f"Change detection: {len(changed_file_set)} changed / {len(language_file_list)} total")
 
         log_progress(logger, "Generating design documents...")
-        await generate_all_docs(
+        doc_fail_list = await generate_all_docs(
             base_output_dir, language_dep_list, llm_client, max_workers,
             changed_file_set,
         )
@@ -268,3 +297,11 @@ async def process_all_files(
     parse_cache.clear()
 
     log_progress(logger, "Analysis complete.")
+
+    doc_count = len(language_file_list) - len(doc_fail_list) if ENABLE_LLM_DOC else 0
+    return {
+        "file_count":           len(all_file_list),
+        "dependency_fail_list": dependency_fail_list,
+        "doc_count":            doc_count,
+        "doc_fail_list":        doc_fail_list,
+    }

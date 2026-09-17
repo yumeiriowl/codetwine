@@ -19,6 +19,10 @@
 - `doc_creator.load_doc()`: read one file's `doc.json`
 - `LLMClient`: a warning when the LLM output was cut at `DOC_MAX_TOKENS`
 - `examples/doc_template_search.json`: search-oriented design document template for any language (one section: overview and one prose entry per definition). The sample output is generated with it
+- `process_all_files()` / `build_project_dependencies()`: `file_list` argument (paths relative to the project root). When given, only these files are analyzed instead of walking the project directory; `EXCLUDE_PATTERNS` and the text file check apply to them as well
+- `process_all_files()`: returns `file_count`, `dependency_fail_list`, `doc_count` and `doc_fail_list` instead of `None`
+- `generate_all_docs()`: returns the files left without a complete design document
+- `file_dependencies.json`: `same_file_usages`, the lines where a file uses the names it defines itself (`usage_analysis.build_same_file_usages()`). `callee_usages` and the file-level dependency graph still hold other files only
 
 ### Changed
 - Public settings renamed after their type: `TREE_SITTER_LANGUAGES` -> `EXT_TO_LANGUAGE_DICT`, `DEFINITION_DICTS` -> `EXT_TO_DEFINITION_DICT`, `IMPORT_QUERIES` -> `EXT_TO_IMPORT_QUERY_DICT`, `USAGE_NODE_TYPES` -> `EXT_TO_USAGE_NODE_TYPE_DICT`, `IMPORT_RESOLVE_CONFIG` -> `EXT_TO_IMPORT_RESOLVE_DICT`, `KNOWLEDGE_FORMATS` -> `KNOWLEDGE_FORMAT_TUPLE`, `SOURCE_ROOT_PATTERNS` -> `SOURCE_ROOT_PATTERN_LIST`
@@ -43,6 +47,8 @@
 - `generate_candidate_path_list()`: resolve an import whose specifier already carries a known extension (JS/TS `import "./helpers.js"`). Such a path is now tried as it is instead of only as a directory index
 - `extract_definitions()`: extract methods, constructors and fields declared inside a class, struct, interface, enum or object
 - `extract_definitions()`: extract Kotlin `val` / `var` / `const val`
+- `process_all_files()`: when the dependency extraction of a file fails, the `file_dependencies.json` and the source copy of a previous run are removed. The consolidated result no longer carries the previous analysis of that file
+- `save_consolidated_sqlite()` / `save_consolidated_json()`: the result is written to `<output path>.tmp` and moved into place once complete. A run stopped part way no longer leaves a database with tables but no `meta` rows, or a truncated JSON, in place of the previous result
 - Updated sample output
 
 ## 0.3.0 - 2026-07-25

@@ -20,6 +20,7 @@ The knowledge file can be used as input material for LLM-powered code search and
     - [3. Usage](#3-usage)
       - [Basic Execution](#basic-execution)
       - [Specifying Project and Output Directories](#specifying-project-and-output-directories)
+      - [Calling from Python](#calling-from-python)
   - [⚙️ Configuration Options](#️-configuration-options)
     - [LLM Settings](#llm-settings)
     - [Path Settings](#path-settings)
@@ -67,8 +68,8 @@ Definitions, dependencies and design documents are extracted for the following l
 - SQL
 
 Every other non-empty text file (`.md`, `.yaml`, `.toml`, `Makefile`, ...) is also listed in the
-outputs and copied to the output directory, with empty `definitions`, `callee_usages` and
-`caller_usages`, a `null` summary and no design document. Empty files and binary files (a NUL
+outputs and copied to the output directory, with empty `definitions`, `callee_usages`,
+`same_file_usages` and `caller_usages`, a `null` summary and no design document. Empty files and binary files (a NUL
 byte in the first 8 KiB) are skipped.
 
 ## 🚀 Quick Start
@@ -133,6 +134,27 @@ uv run main.py --project-dir /path/to/your/project --output-dir /path/to/output
 |------|------|------------|
 | `--project-dir` | Root directory of the project to analyze | `DEFAULT_PROJECT_DIR` from `.env` |
 | `--output-dir` | Output directory for analysis results | `DEFAULT_OUTPUT_DIR` from `.env` (defaults to `output/` if not set). When only `--project-dir` is specified, `DEFAULT_OUTPUT_DIR` is ignored and `output/` is used |
+
+#### Calling from Python
+
+```python
+import asyncio
+from codetwine.pipeline import process_all_files
+
+run_result = asyncio.run(process_all_files(
+    "/path/to/your/project", "/path/to/output", llm_client=None,
+    file_list=["src/main.py", "src/utils.py"],
+))
+```
+
+`file_list` (optional) holds file paths relative to the project root. When given, only these files are analyzed instead of walking the project directory; `EXCLUDE_PATTERNS` and the empty / binary file check still apply. `llm_client` is an `LLMClient()` when `ENABLE_LLM_DOC=True`.
+
+| Return key | Type | Description |
+|-----------|-----|------|
+| `file_count` | int | Number of files analyzed |
+| `dependency_fail_list` | string[] | Files whose dependency extraction failed. Their `file_dependencies.json` and copy are removed from the output directory |
+| `doc_count` | int | Files with a complete design document (`0` when `ENABLE_LLM_DOC=False`) |
+| `doc_fail_list` | string[] | Files left without a complete design document |
 
 ## ⚙️ Configuration Options
 
@@ -390,6 +412,12 @@ Per-file definition and dependency information.
       "lines": [0]
     }
   ],
+  "same_file_usages": [
+    {
+      "name": "string",
+      "lines": [0]
+    }
+  ],
   "caller_usages": [
     {
       "name": "string",
@@ -413,6 +441,8 @@ Per-file definition and dependency information.
 | `callee_usages[].from` | string | Path of the dependency file copied to the output directory |
 | `callee_usages[].target_context` | string | Full source code of the dependency symbol |
 | `callee_usages[].lines` | int[] | Line numbers of usage within this file |
+| `same_file_usages[].name` | string | Name of a symbol defined in this file and used in it |
+| `same_file_usages[].lines` | int[] | Line numbers of usage within this file, outside the definition of the same name |
 | `caller_usages[].name` | string | Name of the symbol being used |
 | `caller_usages[].file` | string | Path of the dependent file copied to the output directory |
 | `caller_usages[].usage_context` | string | Source code of the usage location in the dependent |

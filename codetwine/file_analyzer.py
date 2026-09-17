@@ -4,6 +4,7 @@ from codetwine.parsers.ts_parser import parse_file
 from codetwine.extractors.definitions import extract_definitions
 from codetwine.extractors.usage_analysis import (
     build_usage_info_list,
+    build_same_file_usages,
     build_caller_usages,
 )
 from codetwine.import_to_path import (
@@ -24,12 +25,13 @@ def get_file_dependencies(
     caller_map: dict[str, list[str]],
 ) -> dict:
     """Called for each file from process_all_files, returns a dict containing definition info,
-    callee_usages, and caller_usages that serves as the source data for file_dependencies.json.
+    callee_usages, same_file_usages, and caller_usages that serves as the source data for
+    file_dependencies.json.
 
     project_file_set, source_root_set and caller_map are the same for every file of one
     project; the caller builds them once and passes the same values to every call.
 
-    A file whose extension has no tree-sitter language is not parsed: its three lists
+    A file whose extension has no tree-sitter language is not parsed: its lists
     come back empty.
 
     Args:
@@ -40,7 +42,8 @@ def get_file_dependencies(
         caller_map: A {file relative path: list of files depending on it} dict.
 
     Returns:
-        A dict with {"file", "definitions", "callee_usages", "caller_usages"} keys.
+        A dict with {"file", "definitions", "callee_usages", "same_file_usages",
+        "caller_usages"} keys.
     """
     target_file_rel = os.path.relpath(target_file, project_dir).replace("\\", "/")
     file_ext = os.path.splitext(target_file)[1].lstrip(".")
@@ -51,6 +54,7 @@ def get_file_dependencies(
             "file":          target_file_rel,
             "definitions":   [],
             "callee_usages": [],
+            "same_file_usages": [],
             "caller_usages": [],
         }
 
@@ -71,6 +75,7 @@ def get_file_dependencies(
 
     # import / usage analysis
     usage_list: list = []
+    same_file_usages: list = []
     caller_usages: list = []
 
     language, import_query_str = get_import_params(file_ext)
@@ -95,6 +100,11 @@ def get_file_dependencies(
             alias_to_original,
         )
 
+        # Collect locations where names defined in this file are used within this file
+        same_file_usages = build_same_file_usages(
+            root_node, definition_list, file_ext, set(symbol_to_file_map),
+        )
+
         # Collect locations where functions/classes/variables defined in this file are used in other project files
         caller_usages = build_caller_usages(
             target_file_rel, caller_map.get(target_file_rel, []),
@@ -105,5 +115,6 @@ def get_file_dependencies(
         "file":          target_file_rel,
         "definitions":   definition_list,
         "callee_usages": usage_list,
+        "same_file_usages": same_file_usages,
         "caller_usages": caller_usages,
     }
