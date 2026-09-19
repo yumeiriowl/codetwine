@@ -36,6 +36,7 @@
 - `examples/doc_template_python.json`: the five sections are merged into one `design` section, so a design document takes one LLM call plus the summary
 - `process_all_files()`: change detection runs only when design documents are generated
 - `DOC_MAX_TOKENS` default raised from `8192` to `16384`
+- `litellm` dependency no longer capped at `1.82.6` (`litellm>=1.64.0`)
 
 ### Removed
 - `is_file_unchanged()`
