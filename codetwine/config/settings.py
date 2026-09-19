@@ -76,6 +76,7 @@ DOC_TEMPLATE_PATH = get_config_value(
 
 # == Performance settings ===================================
 MAX_WORKERS = get_config_value("MAX_WORKERS", default=4, var_type=int)
+# Retries of an LLM call after a rate limit error (0: call once, no retry)
 MAX_RETRIES = get_config_value("MAX_RETRIES", default=3, var_type=int)
 RETRY_WAIT = get_config_value("RETRY_WAIT", default=2, var_type=int)
 

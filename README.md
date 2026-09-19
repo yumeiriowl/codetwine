@@ -183,7 +183,7 @@ The following options can be configured in the `.env` file.
 | Variable | Description | Default |
 |--------|------|------------|
 | `MAX_WORKERS` | Number of parallel workers for document generation | `4` |
-| `MAX_RETRIES` | Number of retries for LLM API calls | `3` |
+| `MAX_RETRIES` | Number of retries of an LLM API call after a rate limit error (`0`: one call, no retry) | `3` |
 | `RETRY_WAIT` | Wait time in seconds between retries | `2` |
 | `PARSE_CACHE_MAX_FILES` | Number of files whose parse results are kept in memory at once. Lowering it reduces peak memory on large repositories at the cost of re-parsing; `0` keeps every parse result until the run ends | `200` |
 

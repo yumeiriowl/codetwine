@@ -37,6 +37,7 @@
 - `process_all_files()`: change detection runs only when design documents are generated
 - `DOC_MAX_TOKENS` default raised from `8192` to `16384`
 - `litellm` dependency no longer capped at `1.82.6` (`litellm>=1.64.0`)
+- `MAX_RETRIES`: the number of retries after the first LLM call instead of the number of calls. `0` makes one call without retrying, and a negative value stops `LLMClient()` with a `ValueError`
 
 ### Removed
 - `is_file_unchanged()`

@@ -33,11 +33,19 @@ class LLMClient:
             model: Model name in litellm format.
             api_key: Provider's API key.
             api_base: Base URL of the API (for custom endpoints).
+
+        Raises:
+            ValueError: When model is empty, or MAX_RETRIES is negative.
         """
         if not model:
             raise ValueError(
                 "LLM_MODEL is not set. "
                 "Please set LLM_MODEL in the .env file or your shell."
+            )
+        if MAX_RETRIES < 0:
+            raise ValueError(
+                f"MAX_RETRIES must be 0 or more, but got {MAX_RETRIES}. "
+                "Set it in the .env file or your shell."
             )
         self.model = model
         self.api_key = api_key
@@ -46,8 +54,9 @@ class LLMClient:
     async def _call_with_retry(self, prompt: str, max_tokens: int) -> str | None:
         """Call the LLM API with retry logic and return the generated text.
 
-        On 429 (rate limit exceeded) errors, waits RETRY_WAIT seconds before retrying.
-        Returns None if all MAX_RETRIES attempts fail.
+        Makes one call, and on 429 (rate limit exceeded) errors waits RETRY_WAIT
+        seconds and retries up to MAX_RETRIES times. Returns None when every attempt
+        fails.
 
         Args:
             prompt: The prompt string to send to the LLM.
@@ -56,7 +65,7 @@ class LLMClient:
         Returns:
             The generated text, or None on failure.
         """
-        for attempt in range(MAX_RETRIES):
+        for attempt in range(MAX_RETRIES + 1):
             try:
                 # litellm.acompletion: OpenAI-compatible async API
                 # The model name prefix is used to auto-detect the provider
@@ -80,7 +89,7 @@ class LLMClient:
 
             except litellm.RateLimitError:
                 # Wait and retry on rate limit exceeded
-                if attempt < MAX_RETRIES - 1:
+                if attempt < MAX_RETRIES:
                     logger.warning(f"Rate limit exceeded. Retrying in {RETRY_WAIT} seconds")
                     await asyncio.sleep(RETRY_WAIT)
                 else:
