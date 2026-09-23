@@ -51,6 +51,7 @@
 - `extract_definitions()`: extract Kotlin `val` / `var` / `const val`
 - `process_all_files()`: when the dependency extraction of a file fails, the `file_dependencies.json` and the source copy of a previous run are removed. The consolidated result no longer carries the previous analysis of that file
 - `save_consolidated_sqlite()` / `save_consolidated_json()`: the result is written to `<output path>.tmp` and moved into place once complete. A run stopped part way no longer leaves a database with tables but no `meta` rows, or a truncated JSON, in place of the previous result
+- `build_caller_usages()`: resolve the caller's imports with the source roots (`src/main/java/` etc.). A Java / Kotlin file imported from another package now has the importing file in `caller_usages` and `callers`
 - Updated sample output
 
 ## 0.3.0 - 2026-07-25

@@ -108,7 +108,7 @@ def get_file_dependencies(
         # Collect locations where functions/classes/variables defined in this file are used in other project files
         caller_usages = build_caller_usages(
             target_file_rel, caller_map.get(target_file_rel, []),
-            project_dir, project_file_set,
+            project_dir, project_file_set, source_root_set,
         )
 
     return {

@@ -170,6 +170,7 @@ def _collect_names_from_target(
     project_file_set: set[str],
     project_dir: str,
     target_definition_name_list: list[str] | None,
+    source_root_set: set[str] | None = None,
 ) -> tuple[list[str], list[str] | None]:
     """Collect names originating from the target file based on the caller's import statements.
 
@@ -188,6 +189,7 @@ def _collect_names_from_target(
         project_dir: Absolute path to the project root.
         target_definition_name_list: Cached target definition names for C/C++.
                                  Pass None on the first call.
+        source_root_set: Set of source root prefixes (e.g. {"src/main/java/"}).
 
     Returns:
         A (names_from_target, target_definition_name_list) tuple.
@@ -199,7 +201,7 @@ def _collect_names_from_target(
 
     for import_info in caller_import_list:
         resolved = resolve_module_to_project_path(
-            import_info.module, caller_rel, project_file_set
+            import_info.module, caller_rel, project_file_set, source_root_set
         )
         if resolved == target_file_rel:
             if import_info.names:
@@ -284,6 +286,7 @@ def build_caller_usages(
     caller_file_list: list[str],
     project_dir: str,
     project_file_set: set[str],
+    source_root_set: set[str] | None = None,
 ) -> list[dict]:
     """Collect the lines where names defined in this file are used in other project
     files, producing data for the caller_usages JSON output.
@@ -293,6 +296,7 @@ def build_caller_usages(
         caller_file_list: Relative paths of the files depending on this file.
         project_dir: Absolute path to the project root.
         project_file_set: Set of file paths within the project.
+        source_root_set: Set of source root prefixes (e.g. {"src/main/java/"}).
 
     Returns:
         A list of dicts containing usage location information.
@@ -321,7 +325,7 @@ def build_caller_usages(
         names_from_target, target_definition_name_list = _collect_names_from_target(
             caller_import_list, target_file_rel, caller_ext,
             caller_rel, project_file_set, project_dir,
-            target_definition_name_list,
+            target_definition_name_list, source_root_set,
         )
 
         # Step 2: Extract and aggregate lines where those names are used within the caller
