@@ -4,6 +4,7 @@ import logging
 from collections import deque
 from tree_sitter import Node
 from codetwine.parsers.ts_parser import parse_file
+from codetwine.extractors.cobol_source import CobolSource
 from codetwine.extractors.definitions import (
     ATTACHED_DEFINITION_TYPE_SET,
     CONTAINER_DEFINITION_TYPE_SET,
@@ -151,6 +152,9 @@ def extract_callee_source(
         3. The definition that contains a name node equal to the last part, the part
            before it, then the first part
 
+    For a COBOL file the lines of the first definition with the name are returned;
+    names are compared without regard to upper and lower case.
+
     Parse results are reused via the module-level cache in ts_parser.py.
 
     Args:
@@ -169,6 +173,8 @@ def extract_callee_source(
     absolute_path = os.path.join(project_dir, callee_file_path)
 
     callee_root = parse_file(absolute_path)[0]
+    if isinstance(callee_root, CobolSource):
+        return callee_root.definition_source(callee_name)
 
     # For attribute access like "helper.process", the trailing "process" is the actual definition name.
     # For cases like "TEMPLATE.format" where the trailing part is a built-in method,
@@ -283,6 +289,7 @@ def _collect_import_callee_dict(
 
     Returns:
         A {file absolute path: set of callee absolute paths} dict, one entry per file.
+        A file whose analysis raises an exception has no callees; the exception is logged.
     """
     file_callee_dict: dict[str, set[str]] = {}
     for file_path in language_file_list:
@@ -293,20 +300,32 @@ def _collect_import_callee_dict(
 
         # Parse import statements and add those resolvable to project files as callees
         if language:
-            root_node = parse_file(file_path)[0]
-            for import_info in extract_imports(root_node, language, import_query_str):
-                resolved = resolve_module_to_project_path(
-                    import_info.module,
-                    file_rel,
-                    project_file_set,
-                    source_root_set,
-                    project_dir,
-                )
-                if resolved:
-                    callee_set.add(os.path.abspath(os.path.join(project_dir, resolved)))
+            try:
+                root_node = parse_file(file_path)[0]
+                for import_info in extract_imports(root_node, language, import_query_str):
+                    resolved = resolve_module_to_project_path(
+                        import_info.module,
+                        file_rel,
+                        project_file_set,
+                        source_root_set,
+                        project_dir,
+                    )
+                    if resolved:
+                        callee_set.add(os.path.abspath(os.path.join(project_dir, resolved)))
+            except Exception as e:
+                _log_graph_failure(file_rel, e)
+                callee_set = set()
 
         file_callee_dict[os.path.abspath(file_path)] = callee_set
     return file_callee_dict
+
+
+def _log_graph_failure(file_rel: str, error: Exception) -> None:
+    """Log that a file is analyzed without its dependencies in the dependency graph."""
+    logger.warning(
+        f"{file_rel} has no dependencies in the dependency graph: "
+        f"{type(error).__name__}: {error}"
+    )
 
 
 def _add_implicit_callee(
@@ -319,7 +338,8 @@ def _add_implicit_callee(
     Java/Kotlin: classes in the same package (same directory).
     SQL: tables, views and functions created in any .sql file of the project.
     An edge is added in one direction, only when a top-level definition name of the other
-    file is used in the source code.
+    file is used in the source code. A file whose analysis raises an exception adds no
+    names and no edges; the exception is logged.
 
     Args:
         file_callee_dict: Return value of _collect_import_callee_dict; modified in place.
@@ -336,13 +356,20 @@ def _add_implicit_callee(
     for group in scope_group_dict.values():
         # Definition name -> file that defines it, for every file in the group
         name_file_dict: dict[str, str] = {}
+        fail_file_set: set[str] = set()
         for file_rel in group:
-            for name in top_level_definition_names(file_rel, project_dir):
+            try:
+                name_list = top_level_definition_names(file_rel, project_dir)
+            except Exception as e:
+                _log_graph_failure(file_rel, e)
+                fail_file_set.add(file_rel)
+                continue
+            for name in name_list:
                 name_file_dict[name] = file_rel
 
         for file_rel in group:
             other_name_set = {name for name, other_rel in name_file_dict.items() if other_rel != file_rel}
-            if not other_name_set:
+            if not other_name_set or file_rel in fail_file_set:
                 continue
             abs_path = os.path.abspath(os.path.join(project_dir, file_rel))
             root_node = parse_file(abs_path)[0]

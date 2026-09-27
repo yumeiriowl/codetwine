@@ -7,6 +7,7 @@ import tree_sitter_cpp as tscpp
 import tree_sitter_java as tsjava
 import tree_sitter_javascript as tsjavascript
 import tree_sitter_kotlin as tskotlin
+import tree_sitter_language_pack as tspack
 import tree_sitter_python as tspython
 import tree_sitter_rust as tsrust
 import tree_sitter_sql as tssql
@@ -239,6 +240,17 @@ RUST_DEFINITION_DICT = {
     "static_item": "identifier",
     "mod_item": "__inline_module__",
     "macro_definition": "identifier",
+}
+
+# Definition types of COBOL -> the node of a unit that holds the name.
+# The definitions are read by cobol_source.read_cobol_source(); the values are not read
+COBOL_DEFINITION_DICT = {
+    "program_definition": "program_name",
+    "entry_statement": "string",
+    "section_header": "WORD",
+    "paragraph_header": "WORD",
+    "data_description": "entry_name",
+    "file_description_entry": "WORD",
 }
 
 SQL_DEFINITION_DICT = {
@@ -518,6 +530,8 @@ class LangConfig:
                         try_bare_path  - Whether to try paths without extensions (C/C++)
                         try_current_dir - Whether to also try relative paths from the current directory (C/C++)
                         module_tree    - Whether to resolve paths through the tree of mod declarations (Rust)
+                        name_index     - Whether to resolve names through the file names and
+                                         program names of the project (COBOL)
     implicit_visibility: Which files' definitions can be referenced without an import statement:
                         "package" - files of the same extension in the same directory (Java / Kotlin)
                         "project" - every file of the same extension (SQL)
@@ -530,6 +544,12 @@ class LangConfig:
     import_resolve_dict: dict | None = None
     implicit_visibility: str | None = None
 
+
+_COBOL_LANG_CONFIG = LangConfig(
+    language=tspack.get_language("cobol"),
+    definition_dict=COBOL_DEFINITION_DICT,
+    import_resolve_dict={"separator": " ", "name_index": True},
+)
 
 _LANG_REGISTRY: dict[str, LangConfig] = {
     "py": LangConfig(
@@ -625,6 +645,9 @@ _LANG_REGISTRY: dict[str, LangConfig] = {
         usage_node_type_dict=_SQL_USAGE_NODE_TYPE_DICT,
         implicit_visibility="project",
     ),
+    "cbl": _COBOL_LANG_CONFIG,
+    "cob": _COBOL_LANG_CONFIG,
+    "cpy": _COBOL_LANG_CONFIG,
 }
 
 
@@ -632,11 +655,14 @@ _LANG_REGISTRY: dict[str, LangConfig] = {
 #
 # _EXT_ALIAS_DICT defines a mapping of extensions that share the same language settings.
 # When generating public dictionaries from _LANG_REGISTRY, _expand_ext_aliases()
-# automatically adds alias extensions (h, kts, jsx).
+# automatically adds alias extensions (h, kts, jsx, CBL, COB, CPY).
 _EXT_ALIAS_DICT: dict[str, str] = {
     "h":   "cpp",
     "kts": "kt",
     "jsx": "js",
+    "CBL": "cbl",
+    "COB": "cob",
+    "CPY": "cpy",
 }
 
 
@@ -668,6 +694,13 @@ EXT_TO_LANGUAGE_DICT: dict[str, Language] = _expand_ext_aliases(
 EXT_TO_DEFINITION_DICT: dict[str, dict[str, str]] = _expand_ext_aliases(
     {ext: lang_config.definition_dict for ext, lang_config in _LANG_REGISTRY.items()}
 )
+
+
+# Extensions of the COBOL files
+COBOL_EXT_SET: set[str] = {
+    ext for ext, definition_dict in EXT_TO_DEFINITION_DICT.items()
+    if definition_dict is COBOL_DEFINITION_DICT
+}
 
 
 def has_language(path: str) -> bool:

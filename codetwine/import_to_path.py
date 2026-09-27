@@ -8,6 +8,7 @@ from codetwine.extractors.definitions import (
     select_top_level_definitions,
 )
 from codetwine.extractors.imports import ImportInfo
+from codetwine.cobol_file_index import cobol_import_name_dict, resolve_cobol_module_path
 from codetwine.rust_module_tree import resolve_rust_module_path, rust_import_name_dict
 from codetwine.config.settings import (
     EXT_TO_DEFINITION_DICT,
@@ -206,6 +207,8 @@ def resolve_module_to_project_path(
 
     A language whose resolve config has module_tree (Rust) is resolved by
     resolve_rust_module_path instead, which reads the project files under project_dir.
+    A language whose resolve config has name_index (COBOL) is resolved by
+    resolve_cobol_module_path, which reads them as well.
 
     Args:
         module: The module name from the import statement. Both project-internal and external
@@ -215,8 +218,8 @@ def resolve_module_to_project_path(
         project_file_set: Set of file paths within the project ("path/to/file.ext" format).
         source_root_set: Set of source root prefixes detected in the project
                          (e.g. {"src/main/java/", "src/test/java/"}). None or empty to skip.
-        project_dir: Absolute path to the project root. Required for module_tree
-                     languages; None makes them unresolvable.
+        project_dir: Absolute path to the project root. Required for module_tree and
+                     name_index languages; None makes them unresolvable.
 
     Returns:
         A project-internal file path ("path/to/file.ext" format).
@@ -235,6 +238,11 @@ def resolve_module_to_project_path(
         if project_dir is None:
             return None
         return resolve_rust_module_path(module, current_file_rel, project_file_set, project_dir)
+
+    if resolve_config.get("name_index"):
+        if project_dir is None:
+            return None
+        return resolve_cobol_module_path(module, current_file_rel, project_file_set, project_dir)
 
     separator = resolve_config["separator"]
     # Split the current file's directory path into components
@@ -280,6 +288,9 @@ def import_name_list(
     For a language whose resolve config has module_tree (Rust), the names are decided from
     the resolved path (rust_import_name_dict): a name that refers to a module is left out,
     and a name that differs from the definition's name in the resolved file is renamed.
+    For a language whose resolve config has name_index (COBOL), the names of a COPY
+    statement with REPLACING are the names of the copybook as the statement writes them
+    (cobol_import_name_dict).
     For every other language, ImportInfo.names and ImportInfo.alias_map are returned.
 
     Args:
@@ -292,12 +303,19 @@ def import_name_list(
         A (bound names, {alias name: original name}) tuple.
     """
     ext = os.path.splitext(current_file_rel)[1].lstrip(".")
-    if not EXT_TO_IMPORT_RESOLVE_DICT.get(ext, {}).get("module_tree"):
+    resolve_config = EXT_TO_IMPORT_RESOLVE_DICT.get(ext, {})
+    if resolve_config.get("name_index"):
+        name_dict = cobol_import_name_dict(
+            import_info, current_file_rel, project_file_set, project_dir,
+        )
+    elif resolve_config.get("module_tree"):
+        name_dict = rust_import_name_dict(
+            import_info.module, import_info.names, current_file_rel, project_file_set,
+            project_dir,
+        )
+    else:
         return list(import_info.names), dict(import_info.alias_map or {})
 
-    name_dict = rust_import_name_dict(
-        import_info.module, import_info.names, current_file_rel, project_file_set, project_dir,
-    )
     alias_dict = {
         name: original for name, original in name_dict.items()
         if original is not None and original != name

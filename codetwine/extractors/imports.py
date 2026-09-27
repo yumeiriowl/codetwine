@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from tree_sitter import Language, Query, QueryCursor, Node
+from codetwine.extractors.cobol_source import CALL_KIND, COPY_KIND, CobolSource
 from codetwine.extractors.rust_path import rust_import_list
 
 
@@ -12,10 +13,69 @@ class ImportInfo:
     line: int           # Line number of the import statement (1-based)
     module_alias: str | None = None  # "Y" in import X as Y (alias name)
     alias_map: dict[str, str] | None = None  # {alias name -> original name} (for from X import a as b: {"b": "a"})
+    # COBOL COPY ... REPLACING: (position, replaced text, replacement text) of each operand;
+    # position is "" / "LEADING" / "TRAILING"
+    replacing_list: list[tuple[str, str, str]] | None = None
+
+
+def cobol_module(kind: str, name: str, library: str = "") -> str:
+    """Return the module string of a COBOL COPY or CALL statement.
+
+    Inverse of cobol_module_part.
+
+    Examples:
+        ("COPY", "CUSTREC")             -> "COPY CUSTREC"
+        ("COPY", "CUSTREC", "COPYLIB")  -> "COPY CUSTREC OF COPYLIB"
+        ("CALL", "TAXCALC")             -> "CALL TAXCALC"
+    """
+    return f"{kind} {name} OF {library}" if library else f"{kind} {name}"
+
+
+def cobol_module_part(module: str) -> tuple[str, str, str]:
+    """Split the module string of a COBOL statement into (kind, name, library).
+
+    Inverse of cobol_module.
+
+    Examples:
+        "COPY CUSTREC OF COPYLIB"  -> ("COPY", "CUSTREC", "COPYLIB")
+        "CALL TAXCALC"             -> ("CALL", "TAXCALC", "")
+        "CALL LIST OF ITEMS"       -> ("CALL", "LIST OF ITEMS", "")
+    """
+    kind, _, operand = module.partition(" ")
+    if kind != COPY_KIND:
+        return kind, operand, ""
+    name, _, library = operand.partition(" OF ")
+    return kind, name, library
+
+
+def _cobol_import_list(cobol_source: CobolSource) -> list[ImportInfo]:
+    """Return the COPY and CALL statements of a COBOL file as ImportInfo.
+
+    COPY name        -> module "COPY name", names ["*"]
+    CALL name        -> module "CALL name", names [name]
+    The same statement on the same line is returned once.
+
+    Args:
+        cobol_source: The CobolSource of the file.
+
+    Returns:
+        A list of ImportInfo in line order.
+    """
+    import_by_key_dict: dict[tuple[str, int], ImportInfo] = {}
+    for cobol_import in cobol_source.import_list:
+        module = cobol_module(cobol_import.kind, cobol_import.name, cobol_import.library)
+        is_call = cobol_import.kind == CALL_KIND
+        import_by_key_dict.setdefault((module, cobol_import.line), ImportInfo(
+            module=module,
+            names=[cobol_import.name] if is_call else ["*"],
+            line=cobol_import.line,
+            replacing_list=cobol_import.replacing_list or None,
+        ))
+    return list(import_by_key_dict.values())
 
 
 def extract_imports(
-    root_node: Node,
+    root_node: Node | CobolSource,
     language: Language,
     import_query_str: str | None,
 ) -> list[ImportInfo]:
@@ -34,8 +94,10 @@ def extract_imports(
     When the same import statement has multiple @name captures (from X import Y, Z),
     they are consolidated into a single ImportInfo.
 
+    For a CobolSource its COPY and CALL statements are returned, without a query.
+
     Args:
-        root_node: The AST root node covering the entire file.
+        root_node: The AST root node covering the entire file, or the CobolSource of a COBOL file.
         language: tree-sitter Language object (required for Query creation).
         import_query_str: tree-sitter query string (obtained from EXT_TO_IMPORT_QUERY_DICT in config.py).
                           Returns an empty list when None (for languages with no import query defined).
@@ -43,6 +105,8 @@ def extract_imports(
     Returns:
         A list of ImportInfo.
     """
+    if isinstance(root_node, CobolSource):
+        return _cobol_import_list(root_node)
     if not import_query_str:
         return []
 

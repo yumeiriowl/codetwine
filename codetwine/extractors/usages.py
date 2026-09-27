@@ -2,6 +2,7 @@ import re
 from collections.abc import Container
 from dataclasses import dataclass
 from tree_sitter import Node
+from codetwine.extractors.cobol_source import CobolSource
 from codetwine.extractors.rust_path import path_segment_list
 
 # Separators between the parts of a usage name: "." (attribute access) and "::" (Rust path)
@@ -61,7 +62,7 @@ def usage_root_name(name: str, tracked_name_set: Container[str]) -> str:
 
 
 def extract_usages(
-    root_node: Node,
+    root_node: Node | CobolSource,
     imported_names: set[str],
     usage_node_types: dict | None = None,
 ) -> list[UsageInfo]:
@@ -80,8 +81,11 @@ def extract_usages(
 
     Duplicate and redundant entries are removed at the end by _deduplicate.
 
+    For a CobolSource the places the file refers to the names are returned; names are
+    compared without regard to upper and lower case, and usage_node_types is not read.
+
     Args:
-        root_node: The AST root node covering the entire file.
+        root_node: The AST root node covering the entire file, or the CobolSource of a COBOL file.
         imported_names: Set of names whose usage is to be tracked.
         usage_node_types: Per-language node type settings dict, obtained from EXT_TO_USAGE_NODE_TYPE_DICT in config.py.
                           Returns an empty list when None (for languages with no usage tracking defined).
@@ -96,6 +100,11 @@ def extract_usages(
     Returns:
         A list of UsageInfo (deduplicated).
     """
+    if isinstance(root_node, CobolSource):
+        return [
+            UsageInfo(name=name, line=line)
+            for name, line in root_node.usage_line_list(imported_names)
+        ]
     if not usage_node_types:
         return []
 

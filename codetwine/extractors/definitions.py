@@ -2,6 +2,8 @@ import re
 from collections import deque
 from dataclasses import dataclass
 from tree_sitter import Node
+from codetwine.extractors.cobol_source import CobolSource
+from codetwine.config.settings import COBOL_DEFINITION_DICT
 
 # Regex pattern for filtering out #include guard #define directives
 _INCLUDE_GUARD_RE = re.compile(r"^_*[A-Z][A-Z0-9_]*_H(?:PP|XX)?_*(?:INCLUDED)?_*$")
@@ -24,6 +26,10 @@ CONTAINER_DEFINITION_TYPE_SET = {
 }
 
 
+# Definition types referenced by their own name from anywhere in the file, also when
+# they are nested inside another definition (COBOL)
+BARE_NAME_DEFINITION_TYPE_SET = set(COBOL_DEFINITION_DICT)
+
 # Definition node types named after a definition written elsewhere (Rust: impl Type, impl Trait for Type).
 # They are listed as definitions but do not define the name they carry.
 ATTACHED_DEFINITION_TYPE_SET = {"impl_item"}
@@ -40,10 +46,13 @@ class DefinitionInfo:
 
 
 def extract_definitions(
-    root_node: Node,
+    root_node: Node | CobolSource,
     definition_dict: dict[str, str],
 ) -> list[DefinitionInfo]:
     """Extract definitions (functions, classes, variables, types, etc.) from the AST and return them in line-number order.
+
+    For a CobolSource its definitions are returned: programs, ENTRY names, sections,
+    paragraphs, data items and descriptions of files.
 
     definition_dict structure:
         key = AST node type (e.g. "function_definition")
@@ -59,12 +68,19 @@ def extract_definitions(
     definitions like function_declarator nested inside.
 
     Args:
-        root_node: The AST root node covering the entire file.
+        root_node: The AST root node covering the entire file, or the CobolSource of a COBOL file.
         definition_dict: Per-language definition node settings.
 
     Returns:
         A list of DefinitionInfo sorted by line number in ascending order.
     """
+    if isinstance(root_node, CobolSource):
+        return [
+            DefinitionInfo(
+                definition.name, definition.type, definition.start_line, definition.end_line,
+            )
+            for definition in root_node.definition_list
+        ]
 
     definition_list: list[DefinitionInfo] = []
 
@@ -123,6 +139,7 @@ def select_top_level_definitions(
     """Keep only definitions that are not nested inside another definition.
 
     Members of a class, an impl block or a trait (methods, constructors, fields) are left out.
+    A definition of a type in BARE_NAME_DEFINITION_TYPE_SET is kept wherever it is.
 
     Args:
         definition_list: Definitions of a single file, sorted by start_line.
@@ -133,6 +150,9 @@ def select_top_level_definitions(
     outer_list: list[DefinitionInfo] = []
     covered_end = 0
     for definition in definition_list:
+        if definition.type in BARE_NAME_DEFINITION_TYPE_SET:
+            outer_list.append(definition)
+            continue
         # Skip definitions that start within an already-selected outer range
         if definition.start_line <= covered_end:
             continue

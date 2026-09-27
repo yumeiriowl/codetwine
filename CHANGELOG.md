@@ -3,6 +3,12 @@
 ## Unreleased
 
 ### Added
+- COBOL (`cbl`, `cob`, `cpy`, also in upper case; grammar from `tree-sitter-language-pack`): programs, `ENTRY` names, sections, paragraphs, data items and file descriptions are extracted as definitions. `COPY` (with `OF` library and `REPLACING`), `EXEC SQL INCLUDE`, `CALL` of a literal or of a data item given a literal, and `EXEC CICS ... PROGRAM(...)` are resolved to files by file name and program name. Fixed-format and free-format source, names outside ASCII and names with `_` are read; each data item and each sentence is parsed by itself (`codetwine/parsers/cobol_format.py`, `codetwine/extractors/cobol_source.py`, `codetwine/cobol_file_index.py`)
+- `parse_file()`: returns a `CobolSource` in place of the root node for a COBOL file; `extract_definitions()`, `extract_imports()`, `extract_usages()` and `extract_callee_source()` take it
+- `settings.COBOL_EXT_SET`: the extensions of the COBOL files
+- `ImportInfo.replacing_list`: the `REPLACING` operands of a COBOL `COPY` statement
+- `definitions.BARE_NAME_DEFINITION_TYPE_SET`: definition types `select_top_level_definitions()` keeps wherever they are nested
+- `tree-sitter-language-pack` dependency (0.13.0, the release with the grammars inside the wheel)
 - Rust (`rs`, `tree-sitter-rust`): functions, structs, enums, unions, traits, impl blocks (named after their type), type aliases, constants, statics, inline modules and `macro_rules!` are extracted as definitions. `use` declarations, `mod` declarations (including `#[path]`), `extern crate` and paths written without `use` are resolved to files through the tree of `mod` declarations, through re-exports, and through the crates whose `Cargo.toml` is in the project (`codetwine/rust_module_tree.py`, `codetwine/extractors/rust_path.py`)
 - `resolve_module_to_project_path()`: `project_dir` argument, required for a language whose resolve config has `module_tree` (Rust)
 - `import_to_path.import_name_list()`: the names an import binds and the original names of the renamed ones
@@ -33,6 +39,7 @@
 - `charset-normalizer` dependency
 
 ### Changed
+- `build_project_dependencies()`: a file whose analysis raises an exception is logged and left without dependencies in the graph instead of stopping the run; `process_all_files()` reports it in `dependency_fail_list`
 - `LangConfig` fields renamed after their type: `usage_node_types` -> `usage_node_type_dict`, `import_resolve` -> `import_resolve_dict`
 - `extract_callee_source()`: for a name with two or more parts, the last part is first looked up inside the container definitions named by the part before it (`Settings::new`, `Config.load`), and a definition whose own name matches is preferred over a definition that only contains the name
 - `same_file_usages`: a name bound by an import statement that the file defines only inside another definition (a method named like an imported module, e.g. Rust `use std::fmt;` and `fn fmt`) is not tracked, even when the import leads outside the project

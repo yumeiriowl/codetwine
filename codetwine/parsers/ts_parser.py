@@ -2,7 +2,12 @@ import os
 import logging
 from collections import OrderedDict
 from tree_sitter import Node, Parser
-from codetwine.config.settings import PARSE_CACHE_MAX_FILES, EXT_TO_LANGUAGE_DICT
+from codetwine.config.settings import (
+    COBOL_EXT_SET,
+    EXT_TO_LANGUAGE_DICT,
+    PARSE_CACHE_MAX_FILES,
+)
+from codetwine.extractors.cobol_source import CobolSource, read_cobol_source
 from codetwine.utils.file_utils import read_source
 
 logger = logging.getLogger(__name__)
@@ -10,8 +15,9 @@ logger = logging.getLogger(__name__)
 
 # Module-level cache for parse results, ordered from least to most recently used.
 # One entry holds one file's whole syntax tree: a tree-sitter Node keeps its tree alive.
+# The entry of a COBOL file holds its CobolSource.
 # The number of entries is capped by PARSE_CACHE_MAX_FILES.
-parse_cache: OrderedDict[str, tuple[Node, bytes]] = OrderedDict()
+parse_cache: OrderedDict[str, tuple[Node | CobolSource, bytes]] = OrderedDict()
 
 
 def _read_utf8_content(file_path: str) -> bytes:
@@ -37,12 +43,16 @@ def _read_utf8_content(file_path: str) -> bytes:
     return text.encode("utf-8")
 
 
-def parse_file(file_path: str) -> tuple[Node, bytes]:
+def parse_file(file_path: str) -> tuple[Node | CobolSource, bytes]:
     """Read a file, parse it with tree-sitter, and return (AST root node, byte content).
 
     The file is decoded by read_source() and parsed as UTF-8, whatever encoding it is
     stored in; the byte content is that UTF-8 text, and the text of every node decodes
     as UTF-8. Line numbers match the file.
+
+    For a COBOL file the first element is a CobolSource (read_cobol_source) in place of
+    the root node; extract_definitions(), extract_imports() and extract_usages() take it
+    as they take a root node.
 
     Parse results are cached at module level; a file found in the cache is not parsed again.
     The cache holds at most PARSE_CACHE_MAX_FILES entries; when it is full, the least
@@ -64,15 +74,17 @@ def parse_file(file_path: str) -> tuple[Node, bytes]:
     # Get the corresponding language from the file extension
     ext = os.path.splitext(file_path)[1].lstrip(".")
 
-    # Initialize the Parser with the Language object for this extension
-    parser = Parser(EXT_TO_LANGUAGE_DICT[ext])
-
     # Read the file as UTF-8 bytes
     content = _read_utf8_content(file_path)
 
-    # Parse with tree-sitter to generate the AST
-    tree = parser.parse(content)
-    parse_result = (tree.root_node, content)
+    if ext in COBOL_EXT_SET:
+        # Split the COBOL text into statements and parse each of them
+        cobol_source = read_cobol_source(content.decode("utf-8"), EXT_TO_LANGUAGE_DICT[ext])
+        parse_result = (cobol_source, content)
+    else:
+        # Parse with tree-sitter to generate the AST
+        tree = Parser(EXT_TO_LANGUAGE_DICT[ext]).parse(content)
+        parse_result = (tree.root_node, content)
 
     # Store in cache and drop the oldest entries once the limit is exceeded
     parse_cache[file_path] = parse_result
