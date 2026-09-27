@@ -125,6 +125,15 @@ CODE_SUMMARY_MAX_CHARS = get_config_value(
     "CODE_SUMMARY_MAX_CHARS", default=400, var_type=int
 )
 
+# Encodings tried, in order, on a source file that has no BOM and is not valid UTF-8
+# (comma-separated Python codec names, e.g. "euc_jp,cp932"). Empty: none. A file that
+# none of them decodes is decoded with the encoding charset-normalizer detects.
+# process_all_files() checks each name before it analyses anything.
+_SOURCE_ENCODING_ENV = get_config_value("SOURCE_ENCODING", default="", var_type=str)
+SOURCE_ENCODING: list[str] = [
+    e.strip() for e in _SOURCE_ENCODING_ENV.split(",") if e.strip()
+]
+
 _EXCLUDE_PATTERNS_ENV = get_config_value("EXCLUDE_PATTERNS", default="", var_type=str)
 EXCLUDE_PATTERNS: list[str] = (
     [p.strip() for p in _EXCLUDE_PATTERNS_ENV.split(",") if p.strip()]

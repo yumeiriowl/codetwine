@@ -1,6 +1,8 @@
 import os
 from collections import deque
 
+from codetwine.utils.file_utils import read_source_text
+
 # Module variable set by load_project() (referenced by tool functions).
 # A KnowledgeStore reading either project_knowledge.json or project_knowledge.sqlite.
 # The tools query it per file; the sandbox never holds the whole analysis.
@@ -41,8 +43,7 @@ def read_source_file(path: str) -> str:
     full_path = os.path.join(store.base_dir, path)
 
     try:
-        with open(full_path, "r", encoding="utf-8") as f:
-            return f.read()
+        return read_source_text(full_path)
     except OSError as e:
         return f"Error reading {path}: {e}"
 

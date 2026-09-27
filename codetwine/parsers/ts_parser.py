@@ -1,7 +1,11 @@
 import os
+import logging
 from collections import OrderedDict
 from tree_sitter import Node, Parser
 from codetwine.config.settings import PARSE_CACHE_MAX_FILES, EXT_TO_LANGUAGE_DICT
+from codetwine.utils.file_utils import read_source
+
+logger = logging.getLogger(__name__)
 
 
 # Module-level cache for parse results, ordered from least to most recently used.
@@ -10,8 +14,35 @@ from codetwine.config.settings import PARSE_CACHE_MAX_FILES, EXT_TO_LANGUAGE_DIC
 parse_cache: OrderedDict[str, tuple[Node, bytes]] = OrderedDict()
 
 
+def _read_utf8_content(file_path: str) -> bytes:
+    """Read a file with read_source() and return its text encoded as UTF-8.
+
+    A warning is logged when the file is read with invalid bytes replaced, and a debug
+    line when it is read in an encoding other than UTF-8.
+
+    Args:
+        file_path: Absolute path of the file to read.
+
+    Returns:
+        The file's text as UTF-8 bytes.
+    """
+    text, encoding = read_source(file_path)
+    if encoding == "":
+        logger.warning(
+            f"No encoding decodes {file_path}; it is read as UTF-8 with invalid bytes "
+            f"replaced. Set SOURCE_ENCODING to the encoding it is stored in."
+        )
+    elif encoding != "utf-8":
+        logger.debug(f"{file_path} is read as {encoding}")
+    return text.encode("utf-8")
+
+
 def parse_file(file_path: str) -> tuple[Node, bytes]:
     """Read a file, parse it with tree-sitter, and return (AST root node, byte content).
+
+    The file is decoded by read_source() and parsed as UTF-8, whatever encoding it is
+    stored in; the byte content is that UTF-8 text, and the text of every node decodes
+    as UTF-8. Line numbers match the file.
 
     Parse results are cached at module level; a file found in the cache is not parsed again.
     The cache holds at most PARSE_CACHE_MAX_FILES entries; when it is full, the least
@@ -36,9 +67,8 @@ def parse_file(file_path: str) -> tuple[Node, bytes]:
     # Initialize the Parser with the Language object for this extension
     parser = Parser(EXT_TO_LANGUAGE_DICT[ext])
 
-    # Read the file content in binary mode
-    with open(file_path, "rb") as f:
-        content = f.read()
+    # Read the file as UTF-8 bytes
+    content = _read_utf8_content(file_path)
 
     # Parse with tree-sitter to generate the AST
     tree = parser.parse(content)

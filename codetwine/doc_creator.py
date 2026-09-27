@@ -9,6 +9,7 @@ from codetwine.llm.client import LLMClient
 from codetwine.utils.file_utils import (
     compute_file_hash,
     output_path_to_rel,
+    read_source_text,
     resolve_file_output_dir,
 )
 from codetwine.config.logger import log_progress
@@ -605,8 +606,7 @@ def _build_implementation_context(
         impl_dir = os.path.join(base_dir, f"{stem}_{impl_ext}")
         impl_file = os.path.join(impl_dir, f"{stem}.{impl_ext}")
         if os.path.isfile(impl_file):
-            with open(impl_file, "r", encoding="utf-8") as f:
-                return f.read()
+            return read_source_text(impl_file)
 
     return ""
 
@@ -725,8 +725,7 @@ async def _generate_file_doc(
         logger.warning(f"Source file not found: {file_output_dir}")
         return None
 
-    with open(source_file, "r", encoding="utf-8") as f:
-        source_code = f.read()
+    source_code = read_source_text(source_file)
 
     # Read file_dependencies.json
     deps_path = os.path.join(file_output_dir, "file_dependencies.json")

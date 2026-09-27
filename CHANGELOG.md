@@ -28,6 +28,9 @@
 - `process_all_files()`: returns `file_count`, `dependency_fail_list`, `doc_count` and `doc_fail_list` instead of `None`
 - `generate_all_docs()`: returns the files left without a complete design document
 - `file_dependencies.json`: `same_file_usages`, the lines where a file uses the names it defines itself (`usage_analysis.build_same_file_usages()`). `callee_usages` and the file-level dependency graph still hold other files only
+- `SOURCE_ENCODING` setting: encodings tried, in order, on a source file that has no BOM and is not valid UTF-8. `process_all_files()` checks each name before it analyses anything (`file_utils.check_source_encoding()`)
+- `file_utils.read_source()`: decode a source file with the codec its BOM names, UTF-8, `SOURCE_ENCODING`, the encoding charset-normalizer detects, or UTF-8 with invalid bytes replaced, and return the encoding used. `file_utils.read_source_text()` returns the same text with line breaks turned into `\n`
+- `charset-normalizer` dependency
 
 ### Changed
 - `LangConfig` fields renamed after their type: `usage_node_types` -> `usage_node_type_dict`, `import_resolve` -> `import_resolve_dict`
@@ -48,6 +51,8 @@
 - `DOC_MAX_TOKENS` default raised from `8192` to `16384`
 - `litellm` dependency no longer capped at `1.82.6` (`litellm>=1.64.0`)
 - `MAX_RETRIES`: the number of retries after the first LLM call instead of the number of calls. `0` makes one call without retrying, and a negative value stops `LLMClient()` with a `ValueError`
+- `parse_file()`: the file is decoded by `read_source()` and parsed as UTF-8; the returned byte content is that UTF-8 text instead of the file's bytes. A UTF-8 BOM is no longer part of the content
+- `is_text_file()`: a file that starts with a UTF-16 or UTF-32 BOM is text
 
 ### Removed
 - `is_file_unchanged()`
@@ -62,6 +67,9 @@
 - `process_all_files()`: when the dependency extraction of a file fails, the `file_dependencies.json` and the source copy of a previous run are removed. The consolidated result no longer carries the previous analysis of that file
 - `save_consolidated_sqlite()` / `save_consolidated_json()`: the result is written to `<output path>.tmp` and moved into place once complete. A run stopped part way no longer leaves a database with tables but no `meta` rows, or a truncated JSON, in place of the previous result
 - `build_caller_usages()`: resolve the caller's imports with the source roots (`src/main/java/` etc.). A Java / Kotlin file imported from another package now has the importing file in `caller_usages` and `callers`
+- A source file that is not UTF-8 (Shift_JIS, EUC-JP, Latin-1 etc.) is analysed instead of failing with `UnicodeDecodeError`, and so are the files that import it. Its design document is generated from the decoded text, `usage_context` is filled for it as a caller, and its copy in the output directory keeps the original bytes. A Shift_JIS file is no longer parsed from its raw bytes, where a second byte equal to `\` broke the syntax tree and dropped definitions
+- A UTF-16 or UTF-32 file with a BOM is analysed instead of being skipped as binary
+- `examples/rlm_qa`: `read_source_file()` reads a source copy that is not UTF-8
 - Updated sample output
 
 ## 0.3.0 - 2026-07-25

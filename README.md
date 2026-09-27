@@ -211,6 +211,7 @@ The RLM QA agent example reads either form.
 | `CODE_SUMMARY_TRIGGER_LINES` | Line span above which a definition or dependency symbol is summarized during context-overflow fallback | `40` |
 | `CODE_SUMMARY_MAX_CHARS` | Character limit for a single code behavior summary | `400` |
 | `EXCLUDE_PATTERNS` | Patterns to exclude during file traversal (comma-separated, fnmatch format). Every text file is collected, so use it to keep out secrets, data and lock files, and an output directory inside the project | `__pycache__,.git,.github,.venv,node_modules` |
+| `SOURCE_ENCODING` | Encodings tried, in order, on a source file that has no BOM and is not valid UTF-8 (comma-separated Python codec names, e.g. `euc_jp,cp932`). List an encoding that rejects more byte sequences first: `euc_jp` rejects Shift_JIS files, while `cp932` accepts many EUC-JP files. A file none of them decodes is decoded with the encoding charset-normalizer detects | None |
 
 ## 🔄 High-Level Processing Flow
 
@@ -218,6 +219,7 @@ The RLM QA agent example reads either form.
    - Collects every non-empty text file from the target directory
    - Analyzes import statements in each file of a supported language and identifies inter-file dependencies
 2. **Extract dependency information for each file**
+   - Decodes each file with, in order: the codec its BOM names, UTF-8, the encodings of `SOURCE_ENCODING`, the encoding charset-normalizer detects, and finally UTF-8 with invalid bytes replaced. All JSON output is UTF-8
    - Generates a syntax tree with tree-sitter and extracts definitions (functions, classes, etc.)
    - Based on the dependency graph built in step 1, extracts callee and caller file paths, line numbers, and source code
    - A file whose extension has no tree-sitter language gets empty definitions and usages
@@ -248,7 +250,7 @@ Running the tool generates the following files in `<output directory>/<project n
 | `<filename>/file_dependencies.json` | Per-file definition and dependency information |
 | `<filename>/doc.json` | Per-file design document (JSON format) |
 | `<filename>/doc.md` | Per-file design document (Markdown format) |
-| `<filename>/<original filename>` | Copy of the original file |
+| `<filename>/<original filename>` | Copy of the original file, byte for byte in its own encoding |
 
 ## ⚠️ Dependency Analysis Limitations
 
@@ -260,6 +262,7 @@ Dependency extraction is performed through static syntax analysis with tree-sitt
   - Python: `importlib.import_module(name)`, `__import__(name)`
   - JavaScript/TypeScript: `import(variable)`
   - Java: `Class.forName("com.example.Foo")`
+- **Detected encodings**: A file that has no BOM, is not valid UTF-8 and is not decoded by `SOURCE_ENCODING` is decoded with a detected encoding, which can be wrong. Its comments and strings may then be garbled, and a multi-byte encoding (e.g. Shift_JIS) taken for a single-byte one may lose definitions. Set `SOURCE_ENCODING` for such files
 
 ### JavaScript / TypeScript
 

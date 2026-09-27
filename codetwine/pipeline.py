@@ -21,6 +21,7 @@ from codetwine.import_to_path import detect_source_roots
 from codetwine.knowledge_db import save_consolidated_sqlite
 from codetwine.llm.client import LLMClient
 from codetwine.utils.file_utils import (
+    check_source_encoding,
     compute_file_hash,
     output_path_to_rel,
     resolve_file_output_dir,
@@ -226,7 +227,8 @@ async def process_all_files(
                 design document (empty when ENABLE_LLM_DOC is False).
 
     Raises:
-        ValueError: When KNOWLEDGE_FORMAT is not one of KNOWLEDGE_FORMAT_TUPLE.
+        ValueError: When KNOWLEDGE_FORMAT is not one of KNOWLEDGE_FORMAT_TUPLE, or
+            SOURCE_ENCODING names an unknown codec.
     """
     # Checked before any analysis runs
     if KNOWLEDGE_FORMAT not in KNOWLEDGE_FORMAT_TUPLE:
@@ -235,6 +237,7 @@ async def process_all_files(
             f"{' / '.join(KNOWLEDGE_FORMAT_TUPLE)}, but got '{KNOWLEDGE_FORMAT}'. "
             f"Set it in the .env file or your shell."
         )
+    check_source_encoding()
 
     project_name = os.path.basename(project_dir)
     base_output_dir = os.path.join(output_dir, project_name)

@@ -1,5 +1,8 @@
 import os
+import codecs
 import hashlib
+from charset_normalizer import from_bytes
+from codetwine.config.settings import SOURCE_ENCODING
 
 # How many leading bytes is_text_file reads to decide whether a file is text
 _TEXT_PROBE_SIZE = 8192
@@ -7,12 +10,32 @@ _TEXT_PROBE_SIZE = 8192
 # Size of one read (bytes) when compute_file_hash hashes a file
 _HASH_CHUNK_SIZE = 8192
 
+# (BOM, codec that decodes the file and drops the BOM), checked in this order.
+# The first BOM a file starts with decides its codec.
+_BOM_CODEC_TUPLE = (
+    (codecs.BOM_UTF32_LE, "utf-32"),
+    (codecs.BOM_UTF32_BE, "utf-32"),
+    (codecs.BOM_UTF8, "utf-8-sig"),
+    (codecs.BOM_UTF16_LE, "utf-16"),
+    (codecs.BOM_UTF16_BE, "utf-16"),
+)
+
+
+def _bom_codec(head: bytes) -> str | None:
+    """Return the codec named by the BOM at the start of head, or None when it has none."""
+    for bom, codec in _BOM_CODEC_TUPLE:
+        if head.startswith(bom):
+            return codec
+    return None
+
 
 def is_text_file(file_path: str) -> bool:
     """Return whether a file is non-empty text, judged from its first _TEXT_PROBE_SIZE bytes.
 
-    A file is text when the probe holds no NUL byte and is not all whitespace. A file
-    that cannot be read counts as not text.
+    A file that starts with a UTF-8, UTF-16 or UTF-32 BOM is text when the probe,
+    decoded with that codec, is not all whitespace. Any other file is text when the
+    probe holds no NUL byte and is not all whitespace. A file that cannot be read
+    counts as not text.
 
     Args:
         file_path: Absolute path of the file to probe.
@@ -25,7 +48,88 @@ def is_text_file(file_path: str) -> bool:
             head = f.read(_TEXT_PROBE_SIZE)
     except OSError:
         return False
+    bom_codec = _bom_codec(head)
+    if bom_codec is not None:
+        return bool(head.decode(bom_codec, errors="ignore").strip())
     return b"\0" not in head and bool(head.strip())
+
+
+def check_source_encoding() -> None:
+    """Check that every name in SOURCE_ENCODING is a codec Python knows.
+
+    What is checked is the value this module holds when it is called.
+
+    Raises:
+        ValueError: When a name is not a known codec.
+    """
+    for encoding in SOURCE_ENCODING:
+        try:
+            codecs.lookup(encoding)
+        except LookupError:
+            raise ValueError(
+                f"SOURCE_ENCODING names an unknown encoding '{encoding}'. "
+                f"Use Python codec names such as cp932, euc_jp or cp1252, "
+                f"in the .env file or your shell."
+            ) from None
+
+
+def read_source(file_path: str) -> tuple[str, str]:
+    """Read a text file and return its contents decoded, with the encoding used.
+
+    The encoding is chosen in this order:
+    1. The codec named by a BOM at the start of the file (the BOM is dropped)
+    2. UTF-8
+    3. The encodings of SOURCE_ENCODING, in order
+    4. The encoding charset-normalizer detects
+    5. UTF-8 with each invalid byte replaced by U+FFFD
+    Steps 1 to 3 take the first codec that decodes the whole file without error.
+    Line breaks are kept as they are; line numbers match the file.
+
+    Args:
+        file_path: Absolute path of the file to read.
+
+    Returns:
+        A (text, encoding) tuple. encoding is the codec name that decoded the file,
+        or "" when step 5 decoded it.
+
+    Raises:
+        OSError: When the file cannot be read.
+    """
+    with open(file_path, "rb") as f:
+        file_content = f.read()
+
+    # BOM, UTF-8 and the configured encodings: the first that decodes without error
+    bom_codec = _bom_codec(file_content)
+    codec_list = ([bom_codec] if bom_codec else []) + ["utf-8", *SOURCE_ENCODING]
+    for codec in codec_list:
+        try:
+            return file_content.decode(codec), codec
+        except UnicodeDecodeError:
+            continue
+
+    # Detected encoding, then UTF-8 with replacement
+    best_match = from_bytes(file_content).best()
+    if best_match is not None:
+        return str(best_match), best_match.encoding
+    return file_content.decode("utf-8", errors="replace"), ""
+
+
+def read_source_text(file_path: str) -> str:
+    """Read a text file decoded by read_source(), with every line break turned into "\\n".
+
+    "\\r\\n" and a lone "\\r" become "\\n", as in a file opened in text mode.
+
+    Args:
+        file_path: Absolute path of the file to read.
+
+    Returns:
+        The file's text.
+
+    Raises:
+        OSError: When the file cannot be read.
+    """
+    text = read_source(file_path)[0]
+    return text.replace("\r\n", "\n").replace("\r", "\n")
 
 
 def _to_dir_name(filename: str) -> str:

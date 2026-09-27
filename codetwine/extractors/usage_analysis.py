@@ -2,6 +2,7 @@ import os
 import logging
 from tree_sitter import Node
 from codetwine.parsers.ts_parser import parse_file
+from codetwine.utils.file_utils import read_source
 from codetwine.extractors.imports import ImportInfo, extract_imports
 from codetwine.extractors.usages import UsageInfo, extract_usages, extract_typed_aliases, usage_root_name
 from codetwine.extractors.definitions import ATTACHED_DEFINITION_TYPE_SET, extract_definitions
@@ -364,17 +365,16 @@ def _attach_usage_context(group_dict: dict[str, dict], caller_abs: str) -> None:
     """Add usage_context, the code around the first usage lines, to each group.
 
     Up to _MAX_CONTEXT_LOCATION lines of each group are taken, each with
-    _CONTEXT_RADIUS lines before and after, joined by "\n...\n". Nothing is added
-    when the caller file cannot be read as UTF-8 text.
+    _CONTEXT_RADIUS lines before and after, joined by "\n...\n". The file is decoded
+    by read_source(). Nothing is added when the caller file cannot be read.
 
     Args:
         group_dict: Return value of _group_caller_usage_list; modified in place.
         caller_abs: Absolute path of the caller file.
     """
     try:
-        with open(caller_abs, "r", encoding="utf-8") as f:
-            caller_source_line_list = f.read().splitlines()
-    except (OSError, UnicodeDecodeError):
+        caller_source_line_list = read_source(caller_abs)[0].splitlines()
+    except OSError:
         return
     if not caller_source_line_list:
         return

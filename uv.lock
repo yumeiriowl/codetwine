@@ -353,6 +353,7 @@ name = "codetwine"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "charset-normalizer" },
     { name = "litellm" },
     { name = "python-dotenv" },
     { name = "tree-sitter" },
@@ -374,6 +375,7 @@ examples = [
 
 [package.metadata]
 requires-dist = [
+    { name = "charset-normalizer", specifier = ">=3.4.5" },
     { name = "dspy", marker = "extra == 'examples'", specifier = "==3.1.3" },
     { name = "litellm", specifier = ">=1.64.0" },
     { name = "python-dotenv", specifier = ">=1.2.2" },
