@@ -1,6 +1,14 @@
+import re
+from collections.abc import Container
 from dataclasses import dataclass
 from tree_sitter import Node
+from codetwine.extractors.rust_path import path_segment_list
 
+# Separators between the parts of a usage name: "." (attribute access) and "::" (Rust path)
+_SYMBOL_SEPARATOR_RE = re.compile(r"\.|::")
+
+# Type reference / namespace reference node types (skip_parent_types check not needed)
+_TYPE_REFERENCE_NODE_TYPE_SET = {"type_identifier", "namespace_identifier"}
 
 
 @dataclass
@@ -9,6 +17,47 @@ class UsageInfo:
 
     name: str    # The symbol name being used
     line: int    # Line number of the usage location (1-based)
+
+
+def symbol_part_list(name: str) -> list[str]:
+    """Split a usage name into its parts.
+
+    Examples:
+        "helper.process"      -> ["helper", "process"]
+        "config::Settings"    -> ["config", "Settings"]
+
+    Args:
+        name: A usage name (UsageInfo.name).
+
+    Returns:
+        The parts separated by "." or "::".
+    """
+    return _SYMBOL_SEPARATOR_RE.split(name)
+
+
+def usage_root_name(name: str, tracked_name_set: Container[str]) -> str:
+    """Return the tracked name a usage name starts from.
+
+    Examples (tracked names {"helper", "super::ENCODINGS"}):
+        "helper.process"               -> "helper"
+        "super::ENCODINGS"             -> "super::ENCODINGS"
+        "super::ENCODINGS.trim_end"    -> "super::ENCODINGS"
+
+    Args:
+        name: A usage name (UsageInfo.name).
+        tracked_name_set: The names whose usages were tracked (a set or a dict keyed by name).
+
+    Returns:
+        The longest leading part of name (cut at "." or "::") that is tracked,
+        or the first part when none is.
+    """
+    if name in tracked_name_set:
+        return name
+    for separator_match in reversed(list(_SYMBOL_SEPARATOR_RE.finditer(name))):
+        prefix = name[:separator_match.start()]
+        if prefix in tracked_name_set:
+            return prefix
+    return symbol_part_list(name)[0]
 
 
 def extract_usages(
@@ -26,6 +75,8 @@ def extract_usages(
       Java: "User" in User user = new User() is a type_identifier
       C/C++: "Point" in struct Point p is a type_identifier
       C++: "geometry" in geometry::Rectangle is a namespace_identifier
+    - Nodes in path_types (Rust paths such as config::Settings::new), recorded
+      with the whole path as the name
 
     Duplicate and redundant entries are removed at the end by _deduplicate.
 
@@ -40,6 +91,7 @@ def extract_usages(
                             only the name-field child is skipped; the value side is detected as a usage)
                           Optional key: "identifier_parent_types" (when set, an identifier is a usage
                             only when its parent is one of these types)
+                          Optional key: "path_types" (node types of a path written with "::")
 
     Returns:
         A list of UsageInfo (deduplicated).
@@ -60,9 +112,7 @@ def extract_usages(
     identifier_parent_types: set[str] = usage_node_types.get(
         "identifier_parent_types", set()
     )
-
-    # Type reference / namespace reference node types (skip_parent_types check not needed)
-    _TYPE_REFERENCE_NODE_TYPE_SET = {"type_identifier", "namespace_identifier"}
+    path_types: set[str] = usage_node_types.get("path_types", set())
 
     usage_list: list[UsageInfo] = []
     # DFS traversal of the AST using a stack
@@ -101,6 +151,16 @@ def extract_usages(
                         usage_list.append(UsageInfo(name=name, line=child.start_point[0] + 1))
                     break
 
+        elif node.type in path_types:
+            # Process only the outermost path outside import statements (Rust: a::b::c)
+            parent = node.parent
+            if not parent or (
+                parent.type not in path_types and parent.type not in skip_parent_types_for_type_ref
+            ):
+                usage = _parse_path_node(node, imported_names)
+                if usage:
+                    usage_list.append(usage)
+
         elif node.type in _TYPE_REFERENCE_NODE_TYPE_SET:
             # Process type reference nodes.
             # Use the type-reference skip list for checking (only import statements and scope resolution are skipped).
@@ -130,11 +190,31 @@ def extract_usages(
     return _deduplicate(usage_list)
 
 
+def _leading_part_set(name_set: set[str]) -> set[str]:
+    """Return every leading part of the names that ends right before a "." or "::".
+
+    Examples:
+        {"a.b.c", "x::y"} -> {"a", "a.b", "x"}
+
+    Args:
+        name_set: Usage names.
+
+    Returns:
+        The text of each name up to (not including) each separator in it.
+    """
+    part_set: set[str] = set()
+    for name in name_set:
+        for index, char in enumerate(name):
+            if char == "." or name.startswith("::", index):
+                part_set.add(name[:index])
+    return part_set
+
+
 def _deduplicate(usage_list: list[UsageInfo]) -> list[UsageInfo]:
     """Remove redundant entries within the same line and eliminate duplicates.
 
-    When both "module" and "module.attr" exist on the same line,
-    the more detailed "module.attr" is kept and "module" is removed.
+    When both "module" and "module.attr" (or "module::item") exist on the same line,
+    the more detailed name is kept and "module" is removed.
     Entries with duplicate (name, line) pairs are also removed.
 
     Args:
@@ -154,11 +234,11 @@ def _deduplicate(usage_list: list[UsageInfo]) -> list[UsageInfo]:
     # Process each group in ascending line-number order
     for line in sorted(by_line_dict):
         line_usage_list = by_line_dict[line]
-        line_name_list = [usage.name for usage in line_usage_list]
+        shorter_name_set = _leading_part_set({usage.name for usage in line_usage_list})
 
         for usage in line_usage_list:
             # Exclude the shorter name if a more detailed name (usage.name.xxx) exists on the same line
-            if any(other.startswith(usage.name + ".") for other in line_name_list):
+            if usage.name in shorter_name_set:
                 continue
 
             # Also remove entries with duplicate (name, line) pairs
@@ -261,6 +341,33 @@ def _parse_attribute_node(
     name = node.text.decode("utf-8")
     # Check if the leading name (the "module" part) is imported
     if name.split(".")[0] in imported_names:
+        return UsageInfo(name=name, line=node.start_point[0] + 1)
+    return None
+
+
+def _parse_path_node(
+    node: Node,
+    imported_names: set[str],
+) -> UsageInfo | None:
+    """Extract symbol usage information from a Rust path node.
+
+    Returns a UsageInfo named with the whole path when the whole path or its first
+    segment is an imported name.
+    e.g. Settings::new() with "Settings" imported -> "Settings::new"
+    e.g. crate::util::log() with "crate::util::log" imported -> "crate::util::log"
+
+    Args:
+        node: A path node (scoped_identifier / scoped_type_identifier).
+        imported_names: Set of names to track.
+
+    Returns:
+        UsageInfo, or None if not applicable.
+    """
+    segment_list = path_segment_list(node)
+    if not segment_list:
+        return None
+    name = "::".join(segment_list)
+    if name in imported_names or segment_list[0] in imported_names:
         return UsageInfo(name=name, line=node.start_point[0] + 1)
     return None
 

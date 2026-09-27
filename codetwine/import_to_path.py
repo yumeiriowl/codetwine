@@ -2,8 +2,13 @@ import os
 import logging
 from tree_sitter import Language
 from codetwine.parsers.ts_parser import parse_file
-from codetwine.extractors.definitions import DefinitionInfo, extract_definitions
+from codetwine.extractors.definitions import (
+    ATTACHED_DEFINITION_TYPE_SET,
+    extract_definitions,
+    select_top_level_definitions,
+)
 from codetwine.extractors.imports import ImportInfo
+from codetwine.rust_module_tree import resolve_rust_module_path, rust_import_name_dict
 from codetwine.config.settings import (
     EXT_TO_DEFINITION_DICT,
     EXT_TO_IMPORT_RESOLVE_DICT,
@@ -14,6 +19,9 @@ from codetwine.config.settings import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Extensions of the languages whose package root (com, org, ...) is not registered as a symbol
+_NO_PACKAGE_ROOT_EXT_TUPLE = ("java", "kt")
 
 
 def detect_source_roots(project_file_set: set[str]) -> set[str]:
@@ -178,6 +186,7 @@ def resolve_module_to_project_path(
     current_file_rel: str,
     project_file_set: set[str],
     source_root_set: set[str] | None = None,
+    project_dir: str | None = None,
 ) -> str | None:
     """Resolve an import statement's module name to a file path within the project.
 
@@ -195,6 +204,9 @@ def resolve_module_to_project_path(
        each source root prefix prepended to the candidate path.
        (e.g. "com/example/Foo.java" -> "src/main/java/com/example/Foo.java")
 
+    A language whose resolve config has module_tree (Rust) is resolved by
+    resolve_rust_module_path instead, which reads the project files under project_dir.
+
     Args:
         module: The module name from the import statement. Both project-internal and external
                 modules are passed (e.g. "..utils", "os", "requests", "com.example.Foo",
@@ -203,6 +215,8 @@ def resolve_module_to_project_path(
         project_file_set: Set of file paths within the project ("path/to/file.ext" format).
         source_root_set: Set of source root prefixes detected in the project
                          (e.g. {"src/main/java/", "src/test/java/"}). None or empty to skip.
+        project_dir: Absolute path to the project root. Required for module_tree
+                     languages; None makes them unresolvable.
 
     Returns:
         A project-internal file path ("path/to/file.ext" format).
@@ -216,6 +230,11 @@ def resolve_module_to_project_path(
     resolve_config = EXT_TO_IMPORT_RESOLVE_DICT.get(src_ext)
     if not resolve_config:
         return None
+
+    if resolve_config.get("module_tree"):
+        if project_dir is None:
+            return None
+        return resolve_rust_module_path(module, current_file_rel, project_file_set, project_dir)
 
     separator = resolve_config["separator"]
     # Split the current file's directory path into components
@@ -250,6 +269,42 @@ def resolve_module_to_project_path(
     return None
 
 
+def import_name_list(
+    import_info: ImportInfo,
+    current_file_rel: str,
+    project_file_set: set[str],
+    project_dir: str,
+) -> tuple[list[str], dict[str, str]]:
+    """Return the names an import binds in the file and the original names of the renamed ones.
+
+    For a language whose resolve config has module_tree (Rust), the names are decided from
+    the resolved path (rust_import_name_dict): a name that refers to a module is left out,
+    and a name that differs from the definition's name in the resolved file is renamed.
+    For every other language, ImportInfo.names and ImportInfo.alias_map are returned.
+
+    Args:
+        import_info: An ImportInfo whose module resolves to a project file.
+        current_file_rel: Relative path of the file the import is written in.
+        project_file_set: Set of file paths within the project.
+        project_dir: Absolute path to the project root.
+
+    Returns:
+        A (bound names, {alias name: original name}) tuple.
+    """
+    ext = os.path.splitext(current_file_rel)[1].lstrip(".")
+    if not EXT_TO_IMPORT_RESOLVE_DICT.get(ext, {}).get("module_tree"):
+        return list(import_info.names), dict(import_info.alias_map or {})
+
+    name_dict = rust_import_name_dict(
+        import_info.module, import_info.names, current_file_rel, project_file_set, project_dir,
+    )
+    alias_dict = {
+        name: original for name, original in name_dict.items()
+        if original is not None and original != name
+    }
+    return list(name_dict), alias_dict
+
+
 def _put_symbol(
     symbol_map: dict[str, str], name: str, path: str,
 ) -> None:
@@ -267,6 +322,48 @@ def _put_symbol(
             name, current_path, path,
         )
     symbol_map[name] = path
+
+
+def _register_module_symbol(
+    import_info: ImportInfo,
+    resolved_path: str,
+    separator: str,
+    file_ext: str,
+    project_dir: str,
+    symbol_to_file_map: dict[str, str],
+) -> None:
+    """Register the symbols of an import that names no individual names.
+
+    separator ".":
+        import X as Y       -> "Y"
+        import X.Y.Z        -> "X" (not for Java / Kotlin) and "Z"
+    separator "/":
+        #include "header.h" -> every top-level definition of the included file
+
+    Args:
+        import_info: An ImportInfo with an empty names list.
+        resolved_path: The project file the import resolves to.
+        separator: Module name delimiter of the language.
+        file_ext: Extension of the current file (without ".").
+        project_dir: Absolute path to the project root.
+        symbol_to_file_map: The target dict (name -> file path). Modified directly by this function.
+    """
+    if separator == ".":
+        if import_info.module_alias:
+            _put_symbol(symbol_to_file_map, import_info.module_alias, resolved_path)
+            return
+        module_part_list = import_info.module.split(".")
+        # The root part: Python package access (X.Y.func())
+        if file_ext not in _NO_PACKAGE_ROOT_EXT_TUPLE:
+            module_root = module_part_list[0].lstrip(".")
+            if module_root:
+                _put_symbol(symbol_to_file_map, module_root, resolved_path)
+        # The trailing part: a Java class referenced by name (User user = new User())
+        module_leaf = module_part_list[-1]
+        if module_leaf and module_leaf != module_part_list[0]:
+            _put_symbol(symbol_to_file_map, module_leaf, resolved_path)
+    elif separator == "/":
+        _register_definitions_from_file(resolved_path, project_dir, symbol_to_file_map)
 
 
 def build_symbol_to_file_map(
@@ -289,7 +386,7 @@ def build_symbol_to_file_map(
                  "from X import a, b" -> Register "a", "b" individually
         Java:    "import com.foo.Bar" -> Register the trailing "Bar" (Java references by class name)
         C/C++:   "#include <header.h>" -> Register all definition names from the header file
-                 (#include incorporates the entire file, so no individual name specification exists)
+                 (#include names no individual names)
 
     Args:
         import_info_list: List of ImportInfo returned by extract_imports.
@@ -311,11 +408,14 @@ def build_symbol_to_file_map(
     resolve_config = EXT_TO_IMPORT_RESOLVE_DICT.get(file_ext, {})
     separator = resolve_config.get("separator", ".")
 
+    # Names the current file defines; a wildcard import does not register them
+    own_name_set = set(top_level_definition_names(current_file_rel, project_dir))
+
     for import_info in import_info_list:
         # Resolve the module name to a file path (returns None for non-project modules)
         resolved_path = resolve_module_to_project_path(
             import_info.module, current_file_rel, project_file_set,
-            source_root_set,
+            source_root_set, project_dir,
         )
 
         # Java/Kotlin wildcard import: if not resolvable to a single file,
@@ -325,61 +425,42 @@ def build_symbol_to_file_map(
             _register_definitions_from_package(
                 package_dir, file_ext, project_dir,
                 project_file_set, symbol_to_file_map,
-                source_root_set,
+                source_root_set, own_name_set,
             )
             continue
 
         if not resolved_path:
             continue
 
+        name_list, alias_dict = import_name_list(
+            import_info, current_file_rel, project_file_set, project_dir,
+        )
+
         # "from X import a, b" form: register individual names in the dict
-        for name in import_info.names:
+        for name in name_list:
             if name == "*":
-                # from X import * -> register all definitions from the file
+                # from X import * -> register all definitions from the file,
+                # except the names the current file defines itself
                 _register_definitions_from_file(
-                    resolved_path, project_dir, symbol_to_file_map
+                    resolved_path, project_dir, symbol_to_file_map, own_name_set,
                 )
             else:
                 _put_symbol(symbol_to_file_map, name, resolved_path)
 
         # Transfer alias mappings to alias_to_original
-        if import_info.alias_map:
-            alias_to_original.update(import_info.alias_map)
+        alias_to_original.update(alias_dict)
 
-        # When names is empty: derive symbols using a language-specific method
         if not import_info.names:
-            if separator == ".":
-                if import_info.module_alias:
-                    # import X as Y -> register alias name "Y"
-                    _put_symbol(symbol_to_file_map, import_info.module_alias, resolved_path)
-                else:
-                    # Python: "import os.path" -> register "os" (for access like os.path.join())
-                    # Java:   "import com.foo.Bar" -> register "Bar" (Java references by class name directly)
-                    module_part_list = import_info.module.split(".")
-                    # Register the root part (for Python package access: X.Y.func())
-                    # Java/Kotlin don't reference package roots (com, org, etc.) alone, so skip
-                    if file_ext not in ("java", "kt"):
-                        module_root = module_part_list[0].lstrip(".")
-                        if module_root:
-                            _put_symbol(symbol_to_file_map, module_root, resolved_path)
-                    # Register the trailing part (for Java direct class reference: User user = new User())
-                    # Registering the trailing part for Python is harmless (if unused, it won't match)
-                    module_leaf = module_part_list[-1]
-                    if module_leaf and module_leaf != module_part_list[0]:
-                        _put_symbol(symbol_to_file_map, module_leaf, resolved_path)
-            elif separator == "/":
-                # C/C++: #include incorporates the entire file. Register all definitions from the file
-                _register_definitions_from_file(
-                    resolved_path, project_dir, symbol_to_file_map
-                )
-        else:
-            # Even when names exist, register the module root for attribute access.
-            # Use setdefault to avoid overwriting if already registered by direct import (import mylib).
-            # Java/Kotlin don't reference package roots alone, so skip.
-            if file_ext not in ("java", "kt"):
-                module_root = import_info.module.split(".")[0].lstrip(".")
-                if module_root:
-                    symbol_to_file_map.setdefault(module_root, resolved_path)
+            # No individual names: derive the symbols from the module itself
+            _register_module_symbol(
+                import_info, resolved_path, separator, file_ext, project_dir, symbol_to_file_map,
+            )
+        elif separator == "." and file_ext not in _NO_PACKAGE_ROOT_EXT_TUPLE:
+            # Also register the module root for attribute access, unless a direct import
+            # (import mylib) already registered it
+            module_root = import_info.module.split(".")[0].lstrip(".")
+            if module_root:
+                symbol_to_file_map.setdefault(module_root, resolved_path)
 
     # Register definition names from the files visible without an import statement
     # (Java/Kotlin: same package, SQL: whole project)
@@ -405,7 +486,8 @@ def top_level_definition_names(file_rel: str, project_dir: str) -> list[str]:
         project_dir: Absolute path to the project root.
 
     Returns:
-        The outermost definition names in line order. Empty when the file does not
+        The outermost definition names in line order, without the ones in
+        ATTACHED_DEFINITION_TYPE_SET (Rust impl blocks). Empty when the file does not
         exist or its extension has no definition settings.
     """
     abs_path = os.path.join(project_dir, file_rel)
@@ -418,52 +500,33 @@ def top_level_definition_names(file_rel: str, project_dir: str) -> list[str]:
 
     root_node = parse_file(abs_path)[0]
     definition_list = extract_definitions(root_node, definition_dict)
-    return [d.name for d in _select_top_level_definitions(definition_list) if d.name]
+    return [
+        d.name for d in select_top_level_definitions(definition_list)
+        if d.name and d.type not in ATTACHED_DEFINITION_TYPE_SET
+    ]
 
 
 def _register_definitions_from_file(
     file_rel: str,
     project_dir: str,
     symbol_to_file_map: dict[str, str],
+    skip_name_set: set[str] | None = None,
 ) -> None:
     """Register all top-level definition names from the specified file into symbol_to_file_map.
 
-    Since C/C++ #include incorporates the entire file, all names defined in the
-    included file (functions, structs, classes, etc.) are registered.
-    This enables symbols from #include targets to be detected as usage locations.
+    Used for an import that brings in a whole file: C/C++ #include, Python
+    from X import *, Rust use X::*, and files visible without an import statement.
 
     Args:
         file_rel: Relative path from the project root (e.g. "c_app/utils.h").
         project_dir: Absolute path to the project root.
         symbol_to_file_map: The target dict (name -> file path). Modified directly by this function.
+        skip_name_set: Names not registered (the importing file's own definitions for a
+                       wildcard import). None registers every name.
     """
     for name in top_level_definition_names(file_rel, project_dir):
-        _put_symbol(symbol_to_file_map, name, file_rel)
-
-
-def _select_top_level_definitions(
-    definition_list: list[DefinitionInfo],
-) -> list[DefinitionInfo]:
-    """Keep only definitions that are not nested inside another definition.
-
-    Class members (methods, constructors, fields) are not importable on their own,
-    so registering them would map a member name to the file of an unrelated class.
-
-    Args:
-        definition_list: Definitions of a single file, sorted by start_line.
-
-    Returns:
-        The outermost definitions, sorted by start_line.
-    """
-    outer_list: list[DefinitionInfo] = []
-    covered_end = 0
-    for definition in definition_list:
-        # Skip definitions that start within an already-selected outer range
-        if definition.start_line <= covered_end:
-            continue
-        outer_list.append(definition)
-        covered_end = definition.end_line
-    return outer_list
+        if skip_name_set is None or name not in skip_name_set:
+            _put_symbol(symbol_to_file_map, name, file_rel)
 
 
 def _register_definitions_from_package(
@@ -473,6 +536,7 @@ def _register_definitions_from_package(
     project_file_set: set[str],
     symbol_to_file_map: dict[str, str],
     source_root_set: set[str] | None = None,
+    skip_name_set: set[str] | None = None,
 ) -> None:
     """For Java/Kotlin wildcard imports: register definition names from all files
     within the package directory into symbol_to_file_map.
@@ -487,6 +551,7 @@ def _register_definitions_from_package(
         project_file_set: Set of file paths within the project.
         symbol_to_file_map: The target dict (name -> file path). Modified directly by this function.
         source_root_set: Set of source root prefixes (e.g. {"src/main/java/"}).
+        skip_name_set: Names not registered (the importing file's own definitions).
     """
     # Build the list of prefixes to try: bare prefix + source-root-prefixed variants
     prefix_list = [package_dir + "/"]
@@ -504,7 +569,7 @@ def _register_definitions_from_package(
                 continue
             if os.path.splitext(project_file)[1].lstrip(".") == file_ext:
                 _register_definitions_from_file(
-                    project_file, project_dir, symbol_to_file_map,
+                    project_file, project_dir, symbol_to_file_map, skip_name_set,
                 )
 
 

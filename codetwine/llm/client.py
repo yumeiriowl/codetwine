@@ -69,22 +69,20 @@ class LLMClient:
             try:
                 # litellm.acompletion: OpenAI-compatible async API
                 # The model name prefix is used to auto-detect the provider
-                kwargs = {
+                request_dict = {
                     "model": self.model,
                     "max_tokens": max_tokens,
                     "messages": [{"role": "user", "content": prompt}],
                 }
-                # Add optional parameters
                 if self.api_key:
-                    kwargs["api_key"] = self.api_key
+                    request_dict["api_key"] = self.api_key
                 if self.api_base:
-                    kwargs["api_base"] = self.api_base
+                    request_dict["api_base"] = self.api_base
 
-                response = await litellm.acompletion(**kwargs)
+                response = await litellm.acompletion(**request_dict)
                 # The text is returned as it is when the output was cut at max_tokens
                 if response.choices[0].finish_reason == "length":
                     logger.warning(f"LLM output was cut at {max_tokens} tokens (DOC_MAX_TOKENS)")
-                # Extract and return the generated text from the response
                 return response.choices[0].message.content.strip()
 
             except litellm.RateLimitError:
@@ -93,7 +91,6 @@ class LLMClient:
                     logger.warning(f"Rate limit exceeded. Retrying in {RETRY_WAIT} seconds")
                     await asyncio.sleep(RETRY_WAIT)
                 else:
-                    # Log error and return None when max retries reached
                     logger.error("Rate limit exceeded: max retries reached")
                     return None
 
@@ -119,6 +116,4 @@ class LLMClient:
         """
         if not prompt:
             return None
-
-        # Delegate to the API call with retry logic
         return await self._call_with_retry(prompt, max_tokens)

@@ -13,7 +13,7 @@ parse_cache: OrderedDict[str, tuple[Node, bytes]] = OrderedDict()
 def parse_file(file_path: str) -> tuple[Node, bytes]:
     """Read a file, parse it with tree-sitter, and return (AST root node, byte content).
 
-    Parse results are cached at module level to avoid re-parsing the same file.
+    Parse results are cached at module level; a file found in the cache is not parsed again.
     The cache holds at most PARSE_CACHE_MAX_FILES entries; when it is full, the least
     recently used entry is discarded and that file is parsed again the next time it is
     requested. PARSE_CACHE_MAX_FILES = 0 disables the limit.

@@ -5,6 +5,7 @@ import shutil
 import logging
 from collections import Counter
 from codetwine.parsers.ts_parser import parse_cache
+from codetwine.rust_module_tree import module_tree_cache
 from codetwine.extractors.dependency_graph import build_project_dependencies
 from codetwine.file_analyzer import get_file_dependencies
 from codetwine.output import (
@@ -36,14 +37,13 @@ from codetwine.config.settings import (
 logger = logging.getLogger(__name__)
 
 
-def _convert_dep_list_to_internal_paths(
+def _to_internal_dep_list(
     project_dep_list_raw: list[dict],
 ) -> list[dict]:
-    """Convert paths from project_dependencies.json to relative paths for internal pipeline use.
+    """Convert the paths of build_project_dependencies' result to relative paths from the project root.
 
-    project_dependencies.json stores paths in "project_name/copy_path" format.
-    Since the pipeline internally processes using only relative paths from the project root,
-    this performs project name prefix removal + copy_path to original relative path restoration.
+    The result holds paths in "project_name/copy_path" format; the project name prefix is
+    removed and copy_path is restored to the original relative path.
 
     Args:
         project_dep_list_raw: Return value of build_project_dependencies.
@@ -61,7 +61,7 @@ def _convert_dep_list_to_internal_paths(
     ]
 
 
-def _detect_changed_files(
+def _detect_change_file_set(
     all_file_list: list[str],
     project_dir: str,
     base_output_dir: str,
@@ -106,6 +106,24 @@ def _ext_count_line(file_list: list[str]) -> str:
     return ", ".join(f"{ext} {count}" for ext, count in ext_count.most_common())
 
 
+def _to_output_format(dep_result: dict, base_output_dir: str) -> None:
+    """Convert the paths of a get_file_dependencies result to "project_name/copy_path" format.
+
+    The file field, callee_usages[].from and caller_usages[].file are rewritten in place.
+
+    Args:
+        dep_result: Return value of get_file_dependencies.
+        base_output_dir: Absolute path to the output root directory.
+    """
+    dep_result["file"] = to_output_path(base_output_dir, dep_result["file"])
+    for usage in dep_result.get("callee_usages", []):
+        if "from" in usage:
+            usage["from"] = to_output_path(base_output_dir, usage["from"])
+    for usage in dep_result.get("caller_usages", []):
+        if "file" in usage:
+            usage["file"] = to_output_path(base_output_dir, usage["file"])
+
+
 def _process_file_dependencies(
     file_rel_list: list[str],
     project_dir: str,
@@ -147,14 +165,7 @@ def _process_file_dependencies(
                 project_file_set, source_root_set, caller_map,
             )
 
-            # Convert paths to output format (project_name/copy_path)
-            dep_result["file"] = to_output_path(base_output_dir, dep_result["file"])
-            for usage in dep_result.get("callee_usages", []):
-                if "from" in usage:
-                    usage["from"] = to_output_path(base_output_dir, usage["from"])
-            for usage in dep_result.get("caller_usages", []):
-                if "file" in usage:
-                    usage["file"] = to_output_path(base_output_dir, usage["file"])
+            _to_output_format(dep_result, base_output_dir)
 
             with open(os.path.join(output_file_dir, "file_dependencies.json"), "w", encoding="utf-8") as f:
                 json.dump(dep_result, f, indent=2, ensure_ascii=False)
@@ -186,7 +197,7 @@ async def process_all_files(
 
     Processing flow:
     1. Build the project-wide dependency graph over every non-empty text file.
-    2. Extract dependency info for all files (always process all for consistency).
+    2. Extract dependency info for all files, changed or not.
        A file whose extension has no tree-sitter language gets empty lists.
     3. Detect changed files and generate design documents in topological order
        (regenerate only the impact range of changes). Only files with a language
@@ -232,7 +243,7 @@ async def process_all_files(
     # == Step 1: Build the project-wide dependency graph ====================
     log_progress(logger, "Analyzing project dependencies...")
     project_dep_list_raw = build_project_dependencies(project_dir, file_list)
-    project_dep_list = _convert_dep_list_to_internal_paths(project_dep_list_raw)
+    project_dep_list = _to_internal_dep_list(project_dep_list_raw)
 
     all_file_list = [info["file"] for info in project_dep_list]
 
@@ -252,7 +263,7 @@ async def process_all_files(
     # == Step 3: Generate design documents in topological order ================
     doc_fail_list: list[str] = []
     if ENABLE_LLM_DOC:
-        changed_file_set = _detect_changed_files(language_file_list, project_dir, base_output_dir)
+        changed_file_set = _detect_change_file_set(language_file_list, project_dir, base_output_dir)
         log_progress(logger, f"Change detection: {len(changed_file_set)} changed / {len(language_file_list)} total")
 
         log_progress(logger, "Generating design documents...")
@@ -293,8 +304,9 @@ async def process_all_files(
             base_output_dir, all_file_list, knowledge_db_path, symbol_deps, summary_map,
         )
 
-    # Clear parse result cache to free memory
+    # Clear parse result cache and Rust module tree cache to free memory
     parse_cache.clear()
+    module_tree_cache.clear()
 
     log_progress(logger, "Analysis complete.")
 

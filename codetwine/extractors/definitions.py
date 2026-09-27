@@ -18,7 +18,15 @@ CONTAINER_DEFINITION_TYPE_SET = {
     "interface_declaration",  # Java / TS
     "enum_declaration",       # Java / TS
     "object_declaration",     # Kotlin
+    "impl_item",              # Rust
+    "trait_item",             # Rust
+    "mod_item",               # Rust
 }
+
+
+# Definition node types named after a definition written elsewhere (Rust: impl Type, impl Trait for Type).
+# They are listed as definitions but do not define the name they carry.
+ATTACHED_DEFINITION_TYPE_SET = {"impl_item"}
 
 
 @dataclass
@@ -89,7 +97,7 @@ def extract_definitions(
                     node_queue.extend(node.children)
             else:
                 # For destructuring (destructured assignment), extract multiple names
-                name_list = _extract_destructured_names(node, name_node_type)
+                name_list = _extract_destructured_name_list(node, name_node_type)
                 if name_list:
                     for name in name_list:
                         definition_list.append(DefinitionInfo(
@@ -107,6 +115,50 @@ def extract_definitions(
             node_queue.extend(node.children)
 
     return sorted(definition_list, key=lambda definition: definition.start_line)
+
+
+def select_top_level_definitions(
+    definition_list: list[DefinitionInfo],
+) -> list[DefinitionInfo]:
+    """Keep only definitions that are not nested inside another definition.
+
+    Members of a class, an impl block or a trait (methods, constructors, fields) are left out.
+
+    Args:
+        definition_list: Definitions of a single file, sorted by start_line.
+
+    Returns:
+        The outermost definitions, sorted by start_line.
+    """
+    outer_list: list[DefinitionInfo] = []
+    covered_end = 0
+    for definition in definition_list:
+        # Skip definitions that start within an already-selected outer range
+        if definition.start_line <= covered_end:
+            continue
+        outer_list.append(definition)
+        covered_end = definition.end_line
+    return outer_list
+
+
+def definition_name(node: Node, definition_dict: dict[str, str]) -> str | None:
+    """Return the name of a definition node.
+
+    Args:
+        node: An AST node whose type is a key of definition_dict.
+        definition_dict: Per-language definition node settings.
+
+    Returns:
+        The definition name, or None when the node type is not a definition
+        or the name cannot be obtained.
+    """
+    if node.type == "decorated_definition" and node.type in definition_dict:
+        definition = _parse_decorated_definition(node, definition_dict)
+        return definition.name if definition else None
+    name_node_type = definition_dict.get(node.type)
+    if name_node_type is None:
+        return None
+    return _extract_name(node, name_node_type)
 
 
 def _parse_decorated_definition(
@@ -194,41 +246,16 @@ def _extract_name(node: Node, name_type: str) -> str | None:
                    Special pattern: "__assignment__", "__variable_declarator__",
                                     "__function_declarator__", "__init_declarator__",
                                     "__declarator_name__", "__kotlin_property__",
-                                    "__object_reference__"
+                                    "__object_reference__", "__impl_type__",
+                                    "__inline_module__"
 
     Returns:
         The definition name string, or None if extraction fails.
     """
-    # Dispatch to a dedicated extraction function for each sentinel value
-
-    # Python: expression_statement > assignment > left-hand identifier
-    if name_type == "__assignment__":
-        return _extract_assignment_name(node)
-
-    # JS/TS/Java: lexical_declaration / variable_declaration / field_declaration
-    #             > variable_declarator > identifier
-    if name_type == "__variable_declarator__":
-        return _extract_variable_declarator_name(node)
-
-    # C/C++: declaration > init_declarator > identifier
-    if name_type == "__init_declarator__":
-        return _extract_init_declarator_name(node)
-
-    # C/C++: function_definition > function_declarator > identifier
-    if name_type == "__function_declarator__":
-        return _extract_function_declarator_name(node)
-
-    # C/C++: function_declarator > identifier (free function) / field_identifier (class member)
-    if name_type == "__declarator_name__":
-        return _extract_declarator_name(node)
-
-    # Kotlin: property_declaration > variable_declaration > identifier
-    if name_type == "__kotlin_property__":
-        return _extract_kotlin_property_name(node)
-
-    # SQL: create_table / create_view / create_function, etc. > object_reference > name: identifier
-    if name_type == "__object_reference__":
-        return _extract_object_reference_name(node)
+    # Sentinel value: a dedicated extraction function
+    extract_function = _SENTINEL_EXTRACTOR_DICT.get(name_type)
+    if extract_function is not None:
+        return extract_function(node)
 
     # Standard pattern: search direct children for one matching name_type
     for child in node.children:
@@ -311,9 +338,8 @@ def _extract_function_declarator_name(node: Node) -> str | None:
           |    +-- parameters: parameter_list
           +-- body: compound_statement { ... }
 
-    function_definition does not have an identifier as a direct child;
-    it is inside function_declarator, so the standard pattern (direct child search)
-    cannot obtain the name.
+    The identifier is inside function_declarator, not a direct child of
+    function_definition.
 
     For C++ class method implementations, the function_declarator's declarator
     becomes a qualified_identifier (e.g. "Shape::get_name"). In that case,
@@ -432,6 +458,54 @@ def _extract_object_reference_name(node: Node) -> str | None:
     return None
 
 
+def _extract_impl_type_name(node: Node) -> str | None:
+    """Extract the name of the type an impl block is written for.
+
+    Target AST structure:
+        impl_item                        <- this node is passed as the argument
+          +-- (trait: type_identifier "Shape")   (impl Shape for Circle)
+          +-- type: type_identifier "Circle"      <- extract this
+          +-- body: declaration_list
+
+    Generic arguments, a path prefix and a reference are removed:
+    impl<T> Wrapper<T> -> "Wrapper", impl fmt::Display for x::Point -> "Point",
+    impl<'a> Trait for &'a Point -> "Point".
+
+    Args:
+        node: An impl_item node.
+
+    Returns:
+        The type name string, or None when the type is not a named type
+        (e.g. a tuple or a function pointer).
+    """
+    type_node = node.child_by_field_name("type")
+    while type_node is not None:
+        if type_node.type == "type_identifier":
+            return type_node.text.decode("utf-8")
+        if type_node.type == "scoped_type_identifier":
+            type_node = type_node.child_by_field_name("name")
+        elif type_node.type in ("generic_type", "reference_type"):
+            type_node = type_node.child_by_field_name("type")
+        else:
+            return None
+    return None
+
+
+def _extract_inline_module_name(node: Node) -> str | None:
+    """Extract the module name from a Rust inline module (mod name { ... }).
+
+    Args:
+        node: A mod_item node.
+
+    Returns:
+        The module name string, or None for a declaration without a body.
+    """
+    if node.child_by_field_name("body") is None:
+        return None
+    name_node = node.child_by_field_name("name")
+    return name_node.text.decode("utf-8") if name_node else None
+
+
 def _extract_init_declarator_name(node: Node) -> str | None:
     """Extract the variable name from a C/C++ variable/constant declaration.
 
@@ -465,7 +539,31 @@ def _extract_init_declarator_name(node: Node) -> str | None:
     return None
 
 
-def _extract_destructured_names(node: Node, name_type: str) -> list[str]:
+# Sentinel value in definition_dict -> function extracting the name from the definition node
+_SENTINEL_EXTRACTOR_DICT = {
+    # Python: expression_statement > assignment > left-hand identifier
+    "__assignment__": _extract_assignment_name,
+    # JS/TS/Java: lexical_declaration / variable_declaration / field_declaration
+    #             > variable_declarator > identifier
+    "__variable_declarator__": _extract_variable_declarator_name,
+    # C/C++: declaration > init_declarator > identifier
+    "__init_declarator__": _extract_init_declarator_name,
+    # C/C++: function_definition > function_declarator > identifier
+    "__function_declarator__": _extract_function_declarator_name,
+    # C/C++: function_declarator > identifier (free function) / field_identifier (class member)
+    "__declarator_name__": _extract_declarator_name,
+    # Kotlin: property_declaration > variable_declaration > identifier
+    "__kotlin_property__": _extract_kotlin_property_name,
+    # SQL: create_table / create_view / create_function, etc. > object_reference > name: identifier
+    "__object_reference__": _extract_object_reference_name,
+    # Rust: impl_item > type: type_identifier (generic_type / scoped_type_identifier / reference_type)
+    "__impl_type__": _extract_impl_type_name,
+    # Rust: mod_item with a body > name: identifier
+    "__inline_module__": _extract_inline_module_name,
+}
+
+
+def _extract_destructured_name_list(node: Node, name_type: str) -> list[str]:
     """Extract multiple variable names from a destructuring (destructured assignment).
 
     Called when standard name extraction fails; determines whether the node
@@ -505,13 +603,13 @@ def _extract_destructured_names(node: Node, name_type: str) -> list[str]:
             if child.type == "variable_declarator":
                 name_node = child.child_by_field_name("name")
                 if name_node and name_node.type in ("object_pattern", "array_pattern"):
-                    return _collect_identifiers_from_pattern(name_node)
+                    return _collect_pattern_identifier_list(name_node)
         return []
 
     return []
 
 
-def _collect_identifiers_from_pattern(pattern_node: Node) -> list[str]:
+def _collect_pattern_identifier_list(pattern_node: Node) -> list[str]:
     """Collect variable names from an object_pattern / array_pattern.
 
     Handles nested patterns recursively
@@ -531,13 +629,13 @@ def _collect_identifiers_from_pattern(pattern_node: Node) -> list[str]:
             # a, b in { a, b }
             name_list.append(child.text.decode("utf-8"))
         elif child.type in ("object_pattern", "array_pattern"):
-            name_list.extend(_collect_identifiers_from_pattern(child))
+            name_list.extend(_collect_pattern_identifier_list(child))
         elif child.type == "pair_pattern":
             # { key: localName } -> localName (local variable name) is defined
             value = child.child_by_field_name("value")
             if value and value.type == "identifier":
                 name_list.append(value.text.decode("utf-8"))
             elif value and value.type in ("object_pattern", "array_pattern"):
-                name_list.extend(_collect_identifiers_from_pattern(value))
+                name_list.extend(_collect_pattern_identifier_list(value))
     return name_list
 

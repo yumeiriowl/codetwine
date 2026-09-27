@@ -8,6 +8,7 @@ import tree_sitter_java as tsjava
 import tree_sitter_javascript as tsjavascript
 import tree_sitter_kotlin as tskotlin
 import tree_sitter_python as tspython
+import tree_sitter_rust as tsrust
 import tree_sitter_sql as tssql
 import tree_sitter_typescript as tstypescript
 
@@ -17,7 +18,9 @@ load_dotenv()
 _REQUIRED = object()
 
 
-def get_config_value(key: str, default=_REQUIRED, var_type: type = str):
+def get_config_value(
+    key: str, default: object = _REQUIRED, var_type: type = str,
+) -> str | int | float | bool | None:
     """Retrieve an environment variable and return it converted to the specified type.
 
     Args:
@@ -214,6 +217,21 @@ TS_DEFINITION_DICT = {
     "enum_declaration": "identifier",
 }
 
+RUST_DEFINITION_DICT = {
+    "function_item": "identifier",
+    "function_signature_item": "identifier",
+    "struct_item": "type_identifier",
+    "enum_item": "type_identifier",
+    "union_item": "type_identifier",
+    "trait_item": "type_identifier",
+    "impl_item": "__impl_type__",
+    "type_item": "type_identifier",
+    "const_item": "identifier",
+    "static_item": "identifier",
+    "mod_item": "__inline_module__",
+    "macro_definition": "identifier",
+}
+
 SQL_DEFINITION_DICT = {
     "create_table": "__object_reference__",
     "create_view": "__object_reference__",
@@ -315,6 +333,26 @@ _KOTLIN_IMPORT_QUERY = """
   (qualified_identifier) @module) @import_node
 """
 
+# Rust use / mod / extern crate / path queries
+# - use a::b::{C, D as E}: expanded into one import per name
+# - mod name; (without a body): the child module file
+# - extern crate name;
+# - a::b::c written in code without a use declaration
+# @path_item is handled by rust_import_list in rust_path.py
+_RUST_IMPORT_QUERY = """
+(use_declaration) @path_item
+
+(mod_item
+  name: (identifier)
+  !body) @path_item
+
+(extern_crate_declaration) @path_item
+
+(scoped_identifier) @path_item
+
+(scoped_type_identifier) @path_item
+"""
+
 
 # Per-language usage tracking settings (for extract_usages)
 #
@@ -327,6 +365,9 @@ _KOTLIN_IMPORT_QUERY = """
 #     Almost all occurrences of type references indicate dependencies.
 #     Only import statements and scope resolution are skipped.
 # identifier_parent_types: When set, treat an identifier as a usage only when its parent is one of these types
+# path_types:     AST node types of a path written with "::" (Rust). The outermost path is a usage
+#                 when the whole path or its first segment is a tracked name; a path whose parent
+#                 is in skip_parent_types_for_type_ref is skipped
 _PYTHON_USAGE_NODE_TYPE_DICT = {
     "call_types": {"call"},
     "attribute_types": {"attribute"},
@@ -412,6 +453,26 @@ _KOTLIN_USAGE_NODE_TYPE_DICT = {
     },
 }
 
+_RUST_USAGE_NODE_TYPE_DICT = {
+    "call_types": {"call_expression"},
+    "attribute_types": {"field_expression"},
+    "path_types": {"scoped_identifier", "scoped_type_identifier"},
+    "skip_parent_types": {
+        "call_expression", "field_expression",
+        "scoped_identifier", "scoped_type_identifier",
+        "use_declaration", "use_list", "scoped_use_list", "use_as_clause", "use_wildcard",
+        "extern_crate_declaration", "mod_item",
+        "function_item", "function_signature_item", "macro_definition",
+        "parameter", "enum_variant",
+    },
+    "skip_name_field_types": {"const_item", "static_item"},
+    "skip_parent_types_for_type_ref": {
+        "scoped_type_identifier",
+        "use_declaration", "use_list", "scoped_use_list", "use_as_clause", "use_wildcard",
+        "visibility_modifier",
+    },
+}
+
 _SQL_USAGE_NODE_TYPE_DICT = {
     "call_types": set(),
     "attribute_types": set(),
@@ -439,14 +500,15 @@ class LangConfig:
     language:         tree-sitter Language object
     definition_dict:  Mapping of AST node type -> name node type (for definition extraction)
     import_query:     tree-sitter import extraction query string (S-expression)
-    usage_node_types: AST node type settings for usage tracking
-    import_resolve:   Module resolution settings. A dict with the following keys:
+    usage_node_type_dict: AST node type settings for usage tracking
+    import_resolve_dict:  Module resolution settings. A dict with the following keys:
                         separator      - Module name delimiter ("." or "/")
                         try_init       - Whether to look for __init__.py as a package (Python)
                         index_ext_list - List of extensions to try as index files (JS/TS)
                         alt_ext_list   - List of alternative extensions
                         try_bare_path  - Whether to try paths without extensions (C/C++)
                         try_current_dir - Whether to also try relative paths from the current directory (C/C++)
+                        module_tree    - Whether to resolve paths through the tree of mod declarations (Rust)
     implicit_visibility: Which files' definitions can be referenced without an import statement:
                         "package" - files of the same extension in the same directory (Java / Kotlin)
                         "project" - every file of the same extension (SQL)
@@ -455,8 +517,8 @@ class LangConfig:
     language: Language
     definition_dict: dict[str, str]
     import_query: str | None = None
-    usage_node_types: dict | None = None
-    import_resolve: dict | None = None
+    usage_node_type_dict: dict | None = None
+    import_resolve_dict: dict | None = None
     implicit_visibility: str | None = None
 
 
@@ -465,23 +527,23 @@ _LANG_REGISTRY: dict[str, LangConfig] = {
         language=Language(tspython.language()),
         definition_dict=PYTHON_DEFINITION_DICT,
         import_query=_PYTHON_IMPORT_QUERY,
-        usage_node_types=_PYTHON_USAGE_NODE_TYPE_DICT,
-        import_resolve={"separator": ".", "try_init": True, "try_current_dir": True},
+        usage_node_type_dict=_PYTHON_USAGE_NODE_TYPE_DICT,
+        import_resolve_dict={"separator": ".", "try_init": True, "try_current_dir": True},
     ),
     "java": LangConfig(
         language=Language(tsjava.language()),
         definition_dict=JAVA_DEFINITION_DICT,
         import_query=_JAVA_IMPORT_QUERY,
-        usage_node_types=_JAVA_USAGE_NODE_TYPE_DICT,
-        import_resolve={"separator": "."},
+        usage_node_type_dict=_JAVA_USAGE_NODE_TYPE_DICT,
+        import_resolve_dict={"separator": "."},
         implicit_visibility="package",
     ),
     "cpp": LangConfig(
         language=Language(tscpp.language()),
         definition_dict=CPP_DEFINITION_DICT,
         import_query=_C_IMPORT_QUERY,
-        usage_node_types=_C_USAGE_NODE_TYPE_DICT,
-        import_resolve={
+        usage_node_type_dict=_C_USAGE_NODE_TYPE_DICT,
+        import_resolve_dict={
             "separator": "/",
             "alt_ext_list": _C_CPP_EXT_LIST,
             "try_bare_path": True,
@@ -492,8 +554,8 @@ _LANG_REGISTRY: dict[str, LangConfig] = {
         language=Language(tsc.language()),
         definition_dict=C_DEFINITION_DICT,
         import_query=_C_IMPORT_QUERY,
-        usage_node_types=_C_USAGE_NODE_TYPE_DICT,
-        import_resolve={
+        usage_node_type_dict=_C_USAGE_NODE_TYPE_DICT,
+        import_resolve_dict={
             "separator": "/",
             "alt_ext_list": _C_CPP_EXT_LIST,
             "try_bare_path": True,
@@ -504,16 +566,16 @@ _LANG_REGISTRY: dict[str, LangConfig] = {
         language=Language(tskotlin.language()),
         definition_dict=KOTLIN_DEFINITION_DICT,
         import_query=_KOTLIN_IMPORT_QUERY,
-        usage_node_types=_KOTLIN_USAGE_NODE_TYPE_DICT,
-        import_resolve={"separator": "."},
+        usage_node_type_dict=_KOTLIN_USAGE_NODE_TYPE_DICT,
+        import_resolve_dict={"separator": "."},
         implicit_visibility="package",
     ),
     "js": LangConfig(
         language=Language(tsjavascript.language()),
         definition_dict=JS_DEFINITION_DICT,
         import_query=_JS_IMPORT_QUERY,
-        usage_node_types=_JS_USAGE_NODE_TYPE_DICT,
-        import_resolve={
+        usage_node_type_dict=_JS_USAGE_NODE_TYPE_DICT,
+        import_resolve_dict={
             "separator": "/",
             "index_ext_list": _JS_TS_EXT_LIST,
             "alt_ext_list": _JS_TS_EXT_LIST,
@@ -523,8 +585,8 @@ _LANG_REGISTRY: dict[str, LangConfig] = {
         language=Language(tstypescript.language_typescript()),
         definition_dict=TS_DEFINITION_DICT,
         import_query=_JS_IMPORT_QUERY,
-        usage_node_types=_JS_USAGE_NODE_TYPE_DICT,
-        import_resolve={
+        usage_node_type_dict=_JS_USAGE_NODE_TYPE_DICT,
+        import_resolve_dict={
             "separator": "/",
             "index_ext_list": _JS_TS_EXT_LIST,
             "alt_ext_list": _JS_TS_EXT_LIST,
@@ -534,17 +596,24 @@ _LANG_REGISTRY: dict[str, LangConfig] = {
         language=Language(tstypescript.language_tsx()),
         definition_dict=TS_DEFINITION_DICT,
         import_query=_JS_IMPORT_QUERY,
-        usage_node_types=_JS_USAGE_NODE_TYPE_DICT,
-        import_resolve={
+        usage_node_type_dict=_JS_USAGE_NODE_TYPE_DICT,
+        import_resolve_dict={
             "separator": "/",
             "index_ext_list": _JS_TS_EXT_LIST,
             "alt_ext_list": _JS_TS_EXT_LIST,
         },
     ),
+    "rs": LangConfig(
+        language=Language(tsrust.language()),
+        definition_dict=RUST_DEFINITION_DICT,
+        import_query=_RUST_IMPORT_QUERY,
+        usage_node_type_dict=_RUST_USAGE_NODE_TYPE_DICT,
+        import_resolve_dict={"separator": "::", "module_tree": True},
+    ),
     "sql": LangConfig(
         language=Language(tssql.language()),
         definition_dict=SQL_DEFINITION_DICT,
-        usage_node_types=_SQL_USAGE_NODE_TYPE_DICT,
+        usage_node_type_dict=_SQL_USAGE_NODE_TYPE_DICT,
         implicit_visibility="project",
     ),
 }
@@ -583,12 +652,12 @@ def _expand_ext_aliases(base_dict: dict) -> dict:
 
 # Extension -> tree-sitter Language object
 EXT_TO_LANGUAGE_DICT: dict[str, Language] = _expand_ext_aliases(
-    {ext: cfg.language for ext, cfg in _LANG_REGISTRY.items()}
+    {ext: lang_config.language for ext, lang_config in _LANG_REGISTRY.items()}
 )
 
 # Extension -> definition node mapping dictionary
 EXT_TO_DEFINITION_DICT: dict[str, dict[str, str]] = _expand_ext_aliases(
-    {ext: cfg.definition_dict for ext, cfg in _LANG_REGISTRY.items()}
+    {ext: lang_config.definition_dict for ext, lang_config in _LANG_REGISTRY.items()}
 )
 
 
@@ -614,24 +683,24 @@ def has_language(path: str) -> bool:
 
 # Extension -> import extraction query
 EXT_TO_IMPORT_QUERY_DICT: dict[str, str | None] = _expand_ext_aliases(
-    {ext: cfg.import_query for ext, cfg in _LANG_REGISTRY.items()}
+    {ext: lang_config.import_query for ext, lang_config in _LANG_REGISTRY.items()}
 )
 
 # Extension -> AST node type settings for usage tracking
 EXT_TO_USAGE_NODE_TYPE_DICT: dict[str, dict | None] = _expand_ext_aliases(
-    {ext: cfg.usage_node_types for ext, cfg in _LANG_REGISTRY.items()}
+    {ext: lang_config.usage_node_type_dict for ext, lang_config in _LANG_REGISTRY.items()}
 )
 
 # Extension -> import path resolution settings
 EXT_TO_IMPORT_RESOLVE_DICT: dict[str, dict] = _expand_ext_aliases(
-    {ext: cfg.import_resolve for ext, cfg in _LANG_REGISTRY.items()
-     if cfg.import_resolve is not None}
+    {ext: lang_config.import_resolve_dict for ext, lang_config in _LANG_REGISTRY.items()
+     if lang_config.import_resolve_dict is not None}
 )
 
 # Extension -> scope of the files whose definitions can be referenced without an import ("package" / "project")
 EXT_TO_IMPLICIT_VISIBILITY_DICT: dict[str, str] = _expand_ext_aliases(
-    {ext: cfg.implicit_visibility for ext, cfg in _LANG_REGISTRY.items()
-     if cfg.implicit_visibility}
+    {ext: lang_config.implicit_visibility for ext, lang_config in _LANG_REGISTRY.items()
+     if lang_config.implicit_visibility}
 )
 
 

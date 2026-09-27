@@ -124,7 +124,7 @@ _IMPL_EXT_LIST = ["cpp", "c", "cc", "cxx"]
 
 
 def _topological_sort_by_level(project_dep_list: list[dict]) -> list[list[str]]:
-    """Topologically sort files from project_dependencies.json and return them
+    """Topologically sort the files of a dependency list and return them
     as a list grouped by level (dependency depth).
 
     Level 0 = files with no dependencies (processed first).
@@ -134,57 +134,56 @@ def _topological_sort_by_level(project_dep_list: list[dict]) -> list[list[str]]:
     are included in the last level, and a warning is logged.
 
     Args:
-        project_dep_list: Dependency list output by save_project_dependencies.
+        project_dep_list: Dependency list whose paths are relative to the project root.
                           Each element is {"file": str, "callers": list, "callees": list}.
 
     Returns:
         A file list grouped by level. The outer list index is the level number.
         Example: [["config.py", "utils.py"], ["parser.py"], ["main.py"]]
     """
-    # Build adjacency list (file -> files it depends on)
-    adjacency: dict[str, set[str]] = {}
+    # file -> files it depends on
+    callee_dict: dict[str, set[str]] = {}
     all_file_set: set[str] = set()
 
-    # Build adjacency list from the dependency list
     for dep_info in project_dep_list:
         file_path = dep_info["file"]
         all_file_set.add(file_path)
-        adjacency.setdefault(file_path, set())
+        callee_dict.setdefault(file_path, set())
 
         # Add callees (dependencies) to the adjacency list
         for callee in dep_info.get("callees", []):
             all_file_set.add(callee)
-            adjacency.setdefault(callee, set())
-            adjacency[file_path].add(callee)
+            callee_dict.setdefault(callee, set())
+            callee_dict[file_path].add(callee)
 
-    # Build reverse graph adjacency list and in-degree
-    dependent_map: dict[str, set[str]] = {f: set() for f in all_file_set}
-    reverse_in_degree: dict[str, int] = {f: 0 for f in all_file_set}
+    # file -> files depending on it, and the number of callees not yet placed in a level
+    dependent_dict: dict[str, set[str]] = {f: set() for f in all_file_set}
+    callee_count_dict: dict[str, int] = {f: 0 for f in all_file_set}
 
-    for file_path, callee_set in adjacency.items():
+    for file_path, callee_set in callee_dict.items():
         for callee in callee_set:
-            dependent_map[callee].add(file_path)
-            reverse_in_degree[file_path] += 1
+            dependent_dict[callee].add(file_path)
+            callee_count_dict[file_path] += 1
 
     # Execute BFS level by level
     level_list: list[list[str]] = []
-    # First level: files with in-degree 0 in reverse graph (= files with empty callees in original graph)
-    current_level = [f for f in all_file_set if reverse_in_degree[f] == 0]
+    # First level: files without callees
+    level_file_list = [f for f in all_file_set if callee_count_dict[f] == 0]
     level_file_set: set[str] = set()
 
-    while current_level:
-        current_level.sort()
-        level_list.append(current_level)
-        level_file_set.update(current_level)
+    while level_file_list:
+        level_file_list.sort()
+        level_list.append(level_file_list)
+        level_file_set.update(level_file_list)
 
-        next_level: list[str] = []
-        for file_path in current_level:
-            for dependent in dependent_map[file_path]:
-                reverse_in_degree[dependent] -= 1
-                if reverse_in_degree[dependent] == 0:
-                    next_level.append(dependent)
+        next_file_list: list[str] = []
+        for file_path in level_file_list:
+            for dependent in dependent_dict[file_path]:
+                callee_count_dict[dependent] -= 1
+                if callee_count_dict[dependent] == 0:
+                    next_file_list.append(dependent)
 
-        current_level = next_level
+        level_file_list = next_file_list
 
     # Add files not processed due to circular dependencies to the last level
     cycle_file_set = all_file_set - level_file_set
@@ -196,6 +195,43 @@ def _topological_sort_by_level(project_dep_list: list[dict]) -> list[list[str]]:
         level_list.append(sorted(cycle_file_set))
 
     return level_list
+
+
+def _usage_part_list(
+    usage_list: list[dict],
+    header: str,
+    schema_note: str,
+    path_key: str,
+    context_key: str,
+    context_label: str,
+) -> list[str]:
+    """Build the prompt lines listing callee_usages or caller_usages.
+
+    Each usage becomes "- name (from path)", followed by its source code in an indented
+    code block when the usage carries one. The block ends with an empty line.
+
+    Args:
+        usage_list: callee_usages or caller_usages of file_dependencies.json.
+        header: Section heading (HEADER_CALLEE_USAGES / HEADER_CALLER_USAGES).
+        schema_note: Schema explanation printed under the heading.
+        path_key: Key of the other file's path ("from" / "file").
+        context_key: Key of the source code ("target_context" / "usage_context").
+        context_label: Label printed before the source code.
+
+    Returns:
+        The prompt lines.
+    """
+    part_list = [header, schema_note]
+    for usage in usage_list:
+        part_list.append(f"- {usage['name']} (from {output_path_to_rel(usage[path_key])})")
+        context = usage.get(context_key)
+        if context:
+            part_list.append(context_label)
+            part_list.append("  ```")
+            part_list.append(f"  {context}")
+            part_list.append("  ```")
+    part_list.append("")
+    return part_list
 
 
 def _build_section_prompt(
@@ -237,38 +273,21 @@ def _build_section_prompt(
         part_list.append("```")
         part_list.append("")
 
-    # Include callee_usages (provide dependency source code via target_context)
+    # Dependencies with their source code (target_context)
     callee_usages = file_deps.get("callee_usages", [])
     if callee_usages:
-        # List each callee_usage's symbol name and definition file
-        part_list.append(HEADER_CALLEE_USAGES)
-        part_list.append(CALLEE_USAGES_SCHEMA_NOTE)
-        for usage in callee_usages:
-            part_list.append(f"- {usage['name']} (from {output_path_to_rel(usage['from'])})")
-            # Attach the full dependency source code if available
-            target_context = usage.get("target_context")
-            if target_context:
-                part_list.append(CALLEE_SOURCE_CODE_LABEL)
-                part_list.append("  ```")
-                part_list.append(f"  {target_context}")
-                part_list.append("  ```")
-        part_list.append("")
+        part_list.extend(_usage_part_list(
+            callee_usages, HEADER_CALLEE_USAGES, CALLEE_USAGES_SCHEMA_NOTE,
+            "from", "target_context", CALLEE_SOURCE_CODE_LABEL,
+        ))
 
-    # Include caller_usages (information about external files using this file)
+    # Dependents with the source code around each usage (usage_context)
     caller_usages = file_deps.get("caller_usages", [])
     if caller_usages:
-        # List each caller_usage's symbol name and referencing file
-        part_list.append(HEADER_CALLER_USAGES)
-        part_list.append(CALLER_USAGES_SCHEMA_NOTE)
-        for usage in caller_usages:
-            part_list.append(f"- {usage['name']} (from {output_path_to_rel(usage['file'])})")
-            usage_context = usage.get("usage_context")
-            if usage_context:
-                part_list.append(CALLER_SOURCE_CODE_LABEL)
-                part_list.append("  ```")
-                part_list.append(f"  {usage_context}")
-                part_list.append("  ```")
-        part_list.append("")
+        part_list.extend(_usage_part_list(
+            caller_usages, HEADER_CALLER_USAGES, CALLER_USAGES_SCHEMA_NOTE,
+            "file", "usage_context", CALLER_SOURCE_CODE_LABEL,
+        ))
 
     # Add dependency file design document summaries as context
     if callee_context:
@@ -372,10 +391,8 @@ async def _summarize_code(
 ) -> str:
     """Summarize a code block into a concise behavior description via the LLM.
 
-    Results are cached by the SHA256 of the code text, so the same symbol is
-    summarized only once across all files and sections in a single run. When
-    generation fails, a deterministic fallback (signature line + note) is used
-    so the caller always gets usable text.
+    Results are cached in summary_cache by the SHA256 of the code text. When generation
+    fails, the first line of the code followed by CODE_SUMMARY_FAILED_NOTE is returned.
 
     Args:
         code: Full source of the code symbol to summarize.
@@ -401,7 +418,7 @@ async def _summarize_code(
     except ContextWindowExceededError:
         summary = None
 
-    # Deterministic fallback keeps the signature so the block stays informative
+    # Fallback: the first line (signature) and a note
     if not summary:
         first_line = code.split("\n", 1)[0]
         summary = f"{first_line}\n{CODE_SUMMARY_FAILED_NOTE}"
@@ -413,8 +430,7 @@ async def _summarize_code(
 def _reduce_caller_usages(file_deps: dict) -> dict:
     """Return a shallow copy of file_deps with caller usage_context bodies removed.
 
-    Keeps name / file / lines so the dependent references stay listed, but drops
-    the source snippets to shrink the prompt (fallback stage 1).
+    Keeps name / file / lines and drops the source snippets (fallback stage 1).
 
     Args:
         file_deps: The target file's file_dependencies.json contents.
@@ -478,8 +494,7 @@ def _select_outermost_large_definitions(
     """Select large definitions, excluding ones nested inside a larger selection.
 
     Definitions spanning more than trigger_line_count lines are candidates. When a
-    class and its methods are both large, only the outermost (the class) is kept
-    so a range is never summarized twice.
+    class and its methods are both large, only the outermost (the class) is kept.
 
     Args:
         definition_list: definitions[] from file_dependencies.json (with start_line/end_line).
@@ -643,20 +658,20 @@ async def _generate_section_with_fallback(
             return None
 
     # Stage 0: full context
-    result = await _try(source_code, file_deps, callee_context, "full")
-    if result is not None:
-        return result
+    section_text = await _try(source_code, file_deps, callee_context, "full")
+    if section_text is not None:
+        return section_text
 
     # Stage 1: drop caller usage_context bodies
     deps_without_caller = _reduce_caller_usages(file_deps)
-    result = await _try(source_code, deps_without_caller, callee_context, "drop caller bodies")
-    if result is not None:
-        return result
+    section_text = await _try(source_code, deps_without_caller, callee_context, "drop caller bodies")
+    if section_text is not None:
+        return section_text
 
     # Stage 2: drop dependency doc summaries
-    result = await _try(source_code, deps_without_caller, "", "drop callee context")
-    if result is not None:
-        return result
+    section_text = await _try(source_code, deps_without_caller, "", "drop callee context")
+    if section_text is not None:
+        return section_text
 
     if not ENABLE_CODE_SUMMARY:
         return None
@@ -665,19 +680,15 @@ async def _generate_section_with_fallback(
     deps_with_summary = await _summarize_callee_usages(
         deps_without_caller, llm_client, summary_cache
     )
-    result = await _try(source_code, deps_with_summary, "", "summarize callee usages")
-    if result is not None:
-        return result
+    section_text = await _try(source_code, deps_with_summary, "", "summarize callee usages")
+    if section_text is not None:
+        return section_text
 
     # Stage 4: summarize large definitions in the source itself
     source_with_summary = await _splice_large_definitions(
         source_code, deps_with_summary.get("definitions", []), llm_client, summary_cache
     )
-    result = await _try(source_with_summary, deps_with_summary, "", "summarize source defs")
-    if result is not None:
-        return result
-
-    return None
+    return await _try(source_with_summary, deps_with_summary, "", "summarize source defs")
 
 
 async def _generate_file_doc(
@@ -718,12 +729,12 @@ async def _generate_file_doc(
         source_code = f.read()
 
     # Read file_dependencies.json
-    deps_file = os.path.join(file_output_dir, "file_dependencies.json")
-    if not os.path.exists(deps_file):
-        logger.warning(f"file_dependencies.json not found: {deps_file}")
+    deps_path = os.path.join(file_output_dir, "file_dependencies.json")
+    if not os.path.exists(deps_path):
+        logger.warning(f"file_dependencies.json not found: {deps_path}")
         return None
 
-    with open(deps_file, "r", encoding="utf-8") as f:
+    with open(deps_path, "r", encoding="utf-8") as f:
         file_deps = json.load(f)
 
     # Prepare callee context (dependency doc summaries only)
@@ -788,10 +799,9 @@ async def _generate_summary(
     Returns:
         Summary text, or None on failure.
     """
-    summary_prompt = template["summary_prompt"]
-    summary_max_chars = SUMMARY_MAX_CHARS
-
-    prompt = _build_summary_prompt(file_path, section_list, summary_prompt, summary_max_chars)
+    prompt = _build_summary_prompt(
+        file_path, section_list, template["summary_prompt"], SUMMARY_MAX_CHARS,
+    )
 
     try:
         return await llm_client.generate(prompt)
@@ -841,7 +851,7 @@ def _save_doc(doc: dict, output_dir: str) -> None:
         doc: Design document dict ({file, sections, summary, source_hash}).
         output_dir: Output directory.
     """
-    # Markdown output (write first)
+    # doc.md is written before doc.json, so doc.json is never older than doc.md
     md_path = os.path.join(output_dir, "doc.md")
 
     # Strip duplicate section title headers that the LLM may include in its response
@@ -872,7 +882,7 @@ def _save_doc(doc: dict, output_dir: str) -> None:
     with open(md_path, "w", encoding="utf-8") as f:
         f.write("\n".join(md_line_list))
 
-    # JSON output (written after MD so that mtime >= MD)
+    # JSON output
     json_path = os.path.join(output_dir, "doc.json")
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump(doc, f, indent=2, ensure_ascii=False)
@@ -951,15 +961,15 @@ def _sync_md_to_json(output_dir: str) -> None:
     # Skip if the next section heading (in JSON order) is missing from MD, as boundaries would be inaccurate.
     md_title_set = set(md_section_dict.keys())
     has_diff = False
-    for idx, section in enumerate(doc["sections"]):
+    for index, section in enumerate(doc["sections"]):
         title = section["title"]
         if title not in md_title_set:
             continue
 
         # Check if the next section (in JSON order) exists in MD
         next_title = (
-            doc["sections"][idx + 1]["title"]
-            if idx + 1 < len(doc["sections"])
+            doc["sections"][index + 1]["title"]
+            if index + 1 < len(doc["sections"])
             else "Summary"
         )
         if next_title not in md_title_set:
@@ -985,6 +995,59 @@ def _sync_md_to_json(output_dir: str) -> None:
     _save_doc(doc, output_dir)
 
     logger.info(f"  MD->JSON sync: {doc['file']}")
+
+
+def _is_doc_complete(doc: dict, template: dict) -> bool:
+    """Check whether a design document contains all expected sections and summary.
+
+    Args:
+        doc: A design document dict.
+        template: Template dict.
+
+    Returns:
+        False if any template section is missing/extra or if the summary is empty
+        (when the template has a summary_prompt), True otherwise.
+    """
+    expected_id_set = {section["id"] for section in template["sections"]}
+    actual_id_set = {section["id"] for section in doc.get("sections", [])}
+    if expected_id_set != actual_id_set:
+        return False
+    if "summary_prompt" in template and not doc.get("summary"):
+        return False
+    return True
+
+
+def _needs_regeneration(
+    file_rel: str,
+    changed_files: set[str] | None,
+    callee_set_dict: dict[str, set[str]],
+    new_doc_file_set: set[str],
+) -> bool:
+    """Determine whether the design document needs regeneration.
+
+    Regeneration is needed if any of the following conditions are met:
+    - changed_files is not specified (full regeneration mode).
+    - The file itself is in changed_files.
+    - Any of the file's callees (dependencies) is in changed_files or new_doc_file_set.
+
+    Args:
+        file_rel: Relative path of the file.
+        changed_files: Set of relative paths of changed files, or None.
+        callee_set_dict: File relative path -> relative paths of its callees.
+        new_doc_file_set: Files whose documents were regenerated so far in this run.
+
+    Returns:
+        True if regeneration is needed.
+    """
+    if changed_files is None:
+        return True
+    if file_rel in changed_files:
+        return True
+    # Regenerate if any callee was changed or regenerated
+    for callee in callee_set_dict.get(file_rel, set()):
+        if callee in changed_files or callee in new_doc_file_set:
+            return True
+    return False
 
 
 async def generate_all_docs(
@@ -1024,13 +1087,13 @@ async def generate_all_docs(
     # Get level-ordered file list via topological sort
     level_list = _topological_sort_by_level(project_dep_list)
     level_count = len(level_list)
+    total_file_count = sum(len(level) for level in level_list)
 
     log_progress(
-
         logger,
         f"Starting design document generation. "
         f"Dependency depth levels: {level_count}, "
-        f"Total files: {sum(len(level) for level in level_list)}"
+        f"Total files: {total_file_count}"
     )
 
     # Dict holding the summaries of processed files. Only the summary is carried
@@ -1040,13 +1103,13 @@ async def generate_all_docs(
 
     # Shared code-summary cache for the whole run (context-overflow fallback).
     # Key: SHA256 of a code block, Value: its behavior summary. Reused across
-    # files and sections so the same symbol is summarized only once.
+    # files and sections of the run.
     summary_cache: dict[str, str] = {}
 
     # Per-file callee (dependency) list
-    callee_set_by_file: dict[str, set[str]] = {}
+    callee_set_dict: dict[str, set[str]] = {}
     for info in project_dep_list:
-        callee_set_by_file[info["file"]] = set(info.get("callees", []))
+        callee_set_dict[info["file"]] = set(info.get("callees", []))
 
     # Track files whose documents were regenerated in this run.
     # Caller-side files that reference a regenerated file as a callee also become regeneration targets.
@@ -1054,43 +1117,6 @@ async def generate_all_docs(
 
     # Files left without a complete design document in this run
     doc_fail_list: list[str] = []
-
-    def _needs_regeneration(file_rel: str) -> bool:
-        """Determine whether the design document needs regeneration.
-
-        Regeneration is needed if any of the following conditions are met:
-        - changed_files is not specified (full regeneration mode).
-        - The file itself is in changed_files.
-        - Any of the file's callees (dependencies) is in changed_files or regenerated_files.
-
-        Args:
-            file_rel: Relative path of the file.
-
-        Returns:
-            True if regeneration is needed.
-        """
-        if changed_files is None:
-            return True
-        if file_rel in changed_files:
-            return True
-        # Regenerate if any callee was changed or regenerated
-        for callee in callee_set_by_file.get(file_rel, set()):
-            if callee in changed_files or callee in new_doc_file_set:
-                return True
-        return False
-
-    def _is_doc_complete(doc: dict) -> bool:
-        """Check whether a design document contains all expected sections and summary.
-
-        Returns False if any template section is missing/extra or if the summary is empty.
-        """
-        expected_id_set = {section["id"] for section in template["sections"]}
-        actual_id_set = {section["id"] for section in doc.get("sections", [])}
-        if expected_id_set != actual_id_set:
-            return False
-        if "summary_prompt" in template and not doc.get("summary"):
-            return False
-        return True
 
     async def process_one(file_rel: str) -> tuple[str, dict | None]:
         """Generate the design document for one file and return (file_rel, doc).
@@ -1107,13 +1133,13 @@ async def generate_all_docs(
             return file_rel, None
 
         # Reuse existing doc.json if no changes
-        if not _needs_regeneration(file_rel):
+        if not _needs_regeneration(file_rel, changed_files, callee_set_dict, new_doc_file_set):
             # Sync manual edits from doc.md to JSON if user edited it
             _sync_md_to_json(output_dir)
             existing_doc = load_doc(output_dir)
             # Regenerate when doc.json is missing or unreadable
             if existing_doc is not None:
-                if _is_doc_complete(existing_doc):
+                if _is_doc_complete(existing_doc, template):
                     log_progress(logger, f"  REUSE: {file_rel}")
                     return file_rel, existing_doc
                 log_progress(logger, f"  INCOMPLETE: {file_rel}")
@@ -1150,18 +1176,17 @@ async def generate_all_docs(
                     logger.error(f"Error during document generation: {result}")
                     doc_fail_list.append(file_rel)
                     continue
-                doc = result[1]
+                _, doc = result
                 if doc:
                     doc_summary_map[file_rel] = doc.get("summary", "")
-                if not doc or not _is_doc_complete(doc):
+                if not doc or not _is_doc_complete(doc, template):
                     doc_fail_list.append(file_rel)
 
     log_progress(
-
         logger,
         f"Design document generation completed. "
         f"Generated: {len(doc_summary_map)} / "
-        f"Total: {sum(len(level) for level in level_list)}"
+        f"Total: {total_file_count}"
     )
 
     return doc_fail_list

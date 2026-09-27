@@ -12,8 +12,8 @@ _LOG_DIR = os.path.join(
 # Log format
 _LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 
-# RotatingFileHandler settings
-_MAX_BYTES = 1_048_576
+# RotatingFileHandler settings: maximum size of one log file (bytes) and number of old files kept
+_MAX_BYTE = 1_048_576
 _BACKUP_COUNT = 5
 
 
@@ -38,8 +38,7 @@ class _SkipBlankFormatter(logging.Formatter):
 def setup_logging(level: int = logging.INFO) -> None:
     """Configure both console output and log file output.
 
-    Call this function once at the beginning of main() in entry points
-    (main.py, rlm_qa_agent.py).
+    Call this function once at the beginning of main() in the entry point (main.py).
 
     Args:
         level: Log level. Defaults to logging.INFO.
@@ -62,7 +61,7 @@ def setup_logging(level: int = logging.INFO) -> None:
     os.makedirs(_LOG_DIR, exist_ok=True)
     file_handler = RotatingFileHandler(
         os.path.join(_LOG_DIR, "codetwine.log"),
-        maxBytes=_MAX_BYTES,
+        maxBytes=_MAX_BYTE,
         backupCount=_BACKUP_COUNT,
         encoding="utf-8",
     )

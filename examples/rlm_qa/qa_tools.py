@@ -3,7 +3,7 @@ from collections import deque
 
 # Module variable set by load_project() (referenced by tool functions).
 # A KnowledgeStore reading either project_knowledge.json or project_knowledge.sqlite.
-# The tools query it per file, so the whole analysis is never held in the sandbox.
+# The tools query it per file; the sandbox never holds the whole analysis.
 store = None
 
 # How many hits search_text returns before it stops scanning
@@ -105,40 +105,40 @@ def search_text(keyword: str, limit: int = SEARCH_HIT_LIMIT) -> list:
     if store is None:
         return [{"error": "store not initialized. Call load_project() first."}]
 
-    kw = keyword.lower()
-    hits = []
+    keyword_lower = keyword.lower()
+    hit_list = []
 
-    def add(kind: str, file: str, name: str) -> bool:
+    def add_hit(kind: str, file: str, name: str) -> bool:
         """Record one hit and report whether the limit has been reached."""
-        hits.append({"kind": kind, "file": file, "name": name})
-        return len(hits) >= limit
+        hit_list.append({"kind": kind, "file": file, "name": name})
+        return len(hit_list) >= limit
 
     for entry in store.iter_entries():
         file_path = entry["file"]
         doc = entry.get("doc") or {}
         deps = entry.get("file_dependencies") or {}
 
-        if kw in (doc.get("summary") or "").lower():
-            if add("summary", file_path, ""):
-                return hits
+        if keyword_lower in (doc.get("summary") or "").lower():
+            if add_hit("summary", file_path, ""):
+                return hit_list
         for section in doc.get("sections", []):
-            if kw in section.get("content", "").lower():
-                if add("section", file_path, section.get("title", "")):
-                    return hits
-        for d in deps.get("definitions", []):
-            if kw in (d.get("context") or "").lower():
-                if add("definition", file_path, d["name"]):
-                    return hits
-        for u in deps.get("callee_usages", []):
-            if kw in (u.get("target_context") or "").lower():
-                if add("callee", file_path, f"{u['name']} from {u['from']}"):
-                    return hits
-        for c in deps.get("caller_usages", []):
-            if kw in (c.get("usage_context") or "").lower():
-                if add("caller", c["file"], f"{c['name']} in {file_path}"):
-                    return hits
+            if keyword_lower in section.get("content", "").lower():
+                if add_hit("section", file_path, section.get("title", "")):
+                    return hit_list
+        for definition in deps.get("definitions", []):
+            if keyword_lower in (definition.get("context") or "").lower():
+                if add_hit("definition", file_path, definition["name"]):
+                    return hit_list
+        for usage in deps.get("callee_usages", []):
+            if keyword_lower in (usage.get("target_context") or "").lower():
+                if add_hit("callee", file_path, f"{usage['name']} from {usage['from']}"):
+                    return hit_list
+        for caller_usage in deps.get("caller_usages", []):
+            if keyword_lower in (caller_usage.get("usage_context") or "").lower():
+                if add_hit("caller", caller_usage["file"], f"{caller_usage['name']} in {file_path}"):
+                    return hit_list
 
-    return hits
+    return hit_list
 
 
 def get_files_using(target_file: str) -> list:
@@ -161,15 +161,74 @@ def get_files_using(target_file: str) -> list:
         return [{"error": "store not initialized. Call load_project() first."}]
 
     # Traverse callee_usages across all files, collecting entries that partially match target_file
-    results = []
+    user_list = []
     for entry in store.iter_entries():
         for usage in (entry.get("file_dependencies") or {}).get("callee_usages", []):
             if target_file in usage.get("from", ""):
-                results.append({
+                user_list.append({
                     "file": entry["file"],
                     "usage": usage
                 })
-    return results
+    return user_list
+
+
+def _find_definition(definition_list: list[dict], name: str) -> dict | None:
+    """Return the first definition with the given name, or None."""
+    for definition in definition_list:
+        if definition["name"] == name:
+            return definition
+    return None
+
+
+def _is_usage_in(
+    usage: dict, current_definition: dict | None, current_name: str, definition_list: list[dict],
+) -> bool:
+    """Return whether a callee usage is written inside the current definition.
+
+    For the pseudo definition "__module__", a usage outside every definition counts.
+
+    Args:
+        usage: One callee_usages entry.
+        current_definition: The definition searched from, or None when it is not found.
+        current_name: Name of the definition searched from.
+        definition_list: Definitions of the file searched from.
+
+    Returns:
+        True when one of the usage lines is inside the definition's line range.
+    """
+    line_list = usage.get("lines", [])
+    if current_definition:
+        return any(
+            current_definition["start_line"] <= line <= current_definition["end_line"]
+            for line in line_list
+        )
+    if current_name == "__module__":
+        return any(
+            not any(
+                definition["start_line"] <= line <= definition["end_line"]
+                for definition in definition_list
+            )
+            for line in line_list
+        )
+    return False
+
+
+def _enclosing_definition(usage: dict, source_deps: dict) -> tuple[str, str]:
+    """Return the definition of the dependent file that contains a caller usage.
+
+    Args:
+        usage: One caller_usages entry.
+        source_deps: file_dependencies of the dependent file (may be empty).
+
+    Returns:
+        (definition name, definition type); ("__module__", "") when no definition
+        contains any of the usage lines.
+    """
+    for line in usage.get("lines", []):
+        for definition in source_deps.get("definitions", []):
+            if definition["start_line"] <= line <= definition["end_line"]:
+                return definition["name"], definition.get("type", "")
+    return "__module__", ""
 
 
 def graph_search(name: str, hops: int = 1, direction: str = "both") -> dict:
@@ -221,22 +280,49 @@ def graph_search(name: str, hops: int = 1, direction: str = "both") -> dict:
         return (entry or {}).get("file_dependencies", {})
 
     # Search for start definition (exact match -> partial match fallback)
-    candidates = store.find_definitions(name)
-    if not candidates:
-        candidates = store.find_definitions(name, partial=True)
-    if not candidates:
+    candidate_list = store.find_definitions(name)
+    if not candidate_list:
+        candidate_list = store.find_definitions(name, partial=True)
+    if not candidate_list:
         return {"error": f"Definition '{name}' not found"}
 
-    start_file = candidates[0]["file"]
-    start_name = candidates[0]["name"]
+    start_file = candidate_list[0]["file"]
+    start_name = candidate_list[0]["name"]
     start_key = f"{start_file}:{start_name}"
 
     # BFS search
-    visited = {start_key}
+    visit_set = {start_key}
     queue = deque([(start_key, start_file, start_name, 0)])
-    nodes = []
-    edges = []
-    seen_edges = set()
+    node_list = []
+    edge_list = []
+    edge_id_set = set()
+
+    def record(
+        source_key: str, target_key: str, via: str, hop: int,
+        node_file: str, node_name: str, node_type: str,
+    ) -> None:
+        """Record one edge, and the node at its far end when it has not been visited."""
+        edge_id = (source_key, target_key, via)
+        if edge_id not in edge_id_set:
+            edge_id_set.add(edge_id)
+            edge_list.append({
+                "source": source_key,
+                "target": target_key,
+                "hop": hop
+            })
+
+        node_key = f"{node_file}:{node_name}"
+        if node_key not in visit_set:
+            visit_set.add(node_key)
+            node_list.append({
+                "key": node_key,
+                "file": node_file,
+                "name": node_name,
+                "type": node_type,
+                "hop": hop,
+                "via": via
+            })
+            queue.append((node_key, node_file, node_name, hop))
 
     while queue:
         current_key, current_file, current_name, current_hop = queue.popleft()
@@ -247,117 +333,42 @@ def graph_search(name: str, hops: int = 1, direction: str = "both") -> dict:
         if not deps:
             continue
 
-        # Get line range of the current definition
-        current_def = None
-        for d in deps.get("definitions", []):
-            if d["name"] == current_name:
-                current_def = d
-                break
-
+        definition_list = deps.get("definitions", [])
+        current_definition = _find_definition(definition_list, current_name)
         next_hop = current_hop + 1
 
         # Outgoing: other definitions used by this definition (callee_usages)
         if direction in ("outgoing", "both"):
             for usage in deps.get("callee_usages", []):
-                # Check if usage lines are within the current definition's line range
-                if current_def:
-                    in_range = any(
-                        current_def["start_line"] <= line <= current_def["end_line"]
-                        for line in usage.get("lines", [])
-                    )
-                elif current_name == "__module__":
-                    all_defs = deps.get("definitions", [])
-                    in_range = any(
-                        not any(d["start_line"] <= line <= d["end_line"] for d in all_defs)
-                        for line in usage.get("lines", [])
-                    )
-                else:
-                    in_range = False
-
-                if not in_range:
+                if not _is_usage_in(usage, current_definition, current_name, definition_list):
                     continue
-
                 target_file = usage.get("from", "")
                 target_name = usage.get("name", "")
-                target_key = f"{target_file}:{target_name}"
-
-                # Get the type of the target definition
-                target_type = ""
-                for d in deps_of(target_file).get("definitions", []):
-                    if d["name"] == target_name:
-                        target_type = d.get("type", "")
-                        break
-
-                edge_id = (current_key, target_key, "outgoing")
-                if edge_id not in seen_edges:
-                    seen_edges.add(edge_id)
-                    edges.append({
-                        "source": current_key,
-                        "target": target_key,
-                        "hop": next_hop
-                    })
-
-                if target_key not in visited:
-                    visited.add(target_key)
-                    nodes.append({
-                        "key": target_key,
-                        "file": target_file,
-                        "name": target_name,
-                        "type": target_type,
-                        "hop": next_hop,
-                        "via": "outgoing"
-                    })
-                    queue.append((target_key, target_file, target_name, next_hop))
+                target_definition = _find_definition(
+                    deps_of(target_file).get("definitions", []), target_name
+                )
+                target_type = target_definition.get("type", "") if target_definition else ""
+                record(
+                    current_key, f"{target_file}:{target_name}", "outgoing", next_hop,
+                    target_file, target_name, target_type,
+                )
 
         # Incoming: other definitions that use this definition (caller_usages)
         if direction in ("incoming", "both"):
             for usage in deps.get("caller_usages", []):
                 if usage.get("name") != current_name:
                     continue
-
                 source_file = usage.get("file", "")
-                source_deps = deps_of(source_file)
-
-                # Identify which definition in the source file is using it
-                source_name = "__module__"
-                source_type = ""
-                if source_deps:
-                    for line in usage.get("lines", []):
-                        for d in source_deps.get("definitions", []):
-                            if d["start_line"] <= line <= d["end_line"]:
-                                source_name = d["name"]
-                                source_type = d.get("type", "")
-                                break
-                        if source_name != "__module__":
-                            break
-
-                source_key = f"{source_file}:{source_name}"
-
-                edge_id = (source_key, current_key, "incoming")
-                if edge_id not in seen_edges:
-                    seen_edges.add(edge_id)
-                    edges.append({
-                        "source": source_key,
-                        "target": current_key,
-                        "hop": next_hop
-                    })
-
-                if source_key not in visited:
-                    visited.add(source_key)
-                    nodes.append({
-                        "key": source_key,
-                        "file": source_file,
-                        "name": source_name,
-                        "type": source_type,
-                        "hop": next_hop,
-                        "via": "incoming"
-                    })
-                    queue.append((source_key, source_file, source_name, next_hop))
+                source_name, source_type = _enclosing_definition(usage, deps_of(source_file))
+                record(
+                    f"{source_file}:{source_name}", current_key, "incoming", next_hop,
+                    source_file, source_name, source_type,
+                )
 
     return {
         "start": start_key,
         "hops": hops,
         "direction": direction,
-        "nodes": nodes,
-        "edges": edges
+        "nodes": node_list,
+        "edges": edge_list
     }

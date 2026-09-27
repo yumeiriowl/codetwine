@@ -2,11 +2,14 @@ import os
 import hashlib
 
 # How many leading bytes is_text_file reads to decide whether a file is text
-TEXT_PROBE_BYTES = 8192
+_TEXT_PROBE_SIZE = 8192
+
+# Size of one read (bytes) when compute_file_hash hashes a file
+_HASH_CHUNK_SIZE = 8192
 
 
 def is_text_file(file_path: str) -> bool:
-    """Return whether a file is non-empty text, judged from its first TEXT_PROBE_BYTES bytes.
+    """Return whether a file is non-empty text, judged from its first _TEXT_PROBE_SIZE bytes.
 
     A file is text when the probe holds no NUL byte and is not all whitespace. A file
     that cannot be read counts as not text.
@@ -19,7 +22,7 @@ def is_text_file(file_path: str) -> bool:
     """
     try:
         with open(file_path, "rb") as f:
-            head = f.read(TEXT_PROBE_BYTES)
+            head = f.read(_TEXT_PROBE_SIZE)
     except OSError:
         return False
     return b"\0" not in head and bool(head.strip())
@@ -51,10 +54,9 @@ def _to_dir_name(filename: str) -> str:
 def rel_to_copy_path(rel_path: str) -> str:
     """Convert a project-relative path to a copy-destination directory structure path.
 
-    Matches the path structure used by process_single_file when copying source code.
-    The destination follows the format {parent_dir}/{stem}_{ext}/{filename}.
-    By appending the extension as a suffix, output destinations for files with the
-    same name but different extensions (e.g. utils.c and utils.h) do not collide.
+    The destination follows the format {parent_dir}/{stem}_{ext}/{filename}, the path at
+    which the pipeline copies each source file into the output directory. Files with the
+    same stem and different extensions (e.g. utils.c and utils.h) get different directories.
 
     Examples:
         "config.py"                    -> "config_py/config.py"
@@ -133,10 +135,8 @@ def output_path_to_rel(output_path: str) -> str:
 def resolve_file_output_dir(base_output_dir: str, file_rel: str) -> str:
     """Resolve the absolute output directory path from a file's relative path.
 
-    The output destination follows the structure {base_output_dir}/{parent_dir}/{stem}_{ext}/.
-    Shares the same path structure as rel_to_copy_path; by appending the extension
-    as a suffix, output destinations for files with the same name but different
-    extensions (e.g. utils.c and utils.h) do not collide.
+    The output destination follows the structure {base_output_dir}/{parent_dir}/{stem}_{ext}/,
+    the directory of rel_to_copy_path's result.
 
     Args:
         base_output_dir: Base output directory.
@@ -159,11 +159,9 @@ def compute_file_hash(file_path: str) -> str:
     Returns:
         SHA256 hash as a hex string.
     """
-    # Initialize a SHA256 hash object
     sha256 = hashlib.sha256()
-    # Read and hash in 8KB chunks
     with open(file_path, "rb") as f:
-        for chunk in iter(lambda: f.read(8192), b""):
+        for chunk in iter(lambda: f.read(_HASH_CHUNK_SIZE), b""):
             sha256.update(chunk)
     return sha256.hexdigest()
 

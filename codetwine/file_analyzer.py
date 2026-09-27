@@ -1,7 +1,7 @@
 import os
 import logging
 from codetwine.parsers.ts_parser import parse_file
-from codetwine.extractors.definitions import extract_definitions
+from codetwine.extractors.definitions import extract_definitions, select_top_level_definitions
 from codetwine.extractors.usage_analysis import (
     build_usage_info_list,
     build_same_file_usages,
@@ -62,6 +62,7 @@ def get_file_dependencies(
 
     # Convert content to text lines and extract source code from each definition's line range
     content_line_list = content.decode("utf-8").splitlines()
+    definition_info_list = extract_definitions(root_node, definition_dict)
     definition_list = [
         {
             "name":       definition.name,
@@ -70,20 +71,21 @@ def get_file_dependencies(
             "end_line":   definition.end_line,
             "context":    "\n".join(content_line_list[definition.start_line - 1 : definition.end_line]),
         }
-        for definition in extract_definitions(root_node, definition_dict)
+        for definition in definition_info_list
     ]
 
     # import / usage analysis
-    usage_list: list = []
-    same_file_usages: list = []
-    caller_usages: list = []
+    usage_list: list[dict] = []
+    same_file_usages: list[dict] = []
+    caller_usages: list[dict] = []
 
     language, import_query_str = get_import_params(file_ext)
 
     if language:
         # Parse import statements and create an "imported name -> dependency file" dict
+        import_info_list = extract_imports(root_node, language, import_query_str)
         symbol_to_file_map, alias_to_original = build_symbol_to_file_map(
-            extract_imports(root_node, language, import_query_str),
+            import_info_list,
             target_file_rel,
             project_file_set,
             file_ext,
@@ -100,9 +102,15 @@ def get_file_dependencies(
             alias_to_original,
         )
 
-        # Collect locations where names defined in this file are used within this file
+        # Collect locations where names defined in this file are used within this file.
+        # Not tracked: names imported from other project files, and names bound by any import
+        # statement that the file defines only inside another definition (a method)
+        top_level_name_set = {d.name for d in select_top_level_definitions(definition_info_list)}
+        import_name_set = set(symbol_to_file_map)
+        for import_info in import_info_list:
+            import_name_set.update(n for n in import_info.names if n not in top_level_name_set)
         same_file_usages = build_same_file_usages(
-            root_node, definition_list, file_ext, set(symbol_to_file_map),
+            root_node, definition_list, file_ext, import_name_set,
         )
 
         # Collect locations where functions/classes/variables defined in this file are used in other project files

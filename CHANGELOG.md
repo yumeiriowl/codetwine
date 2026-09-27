@@ -3,6 +3,11 @@
 ## Unreleased
 
 ### Added
+- Rust (`rs`, `tree-sitter-rust`): functions, structs, enums, unions, traits, impl blocks (named after their type), type aliases, constants, statics, inline modules and `macro_rules!` are extracted as definitions. `use` declarations, `mod` declarations (including `#[path]`), `extern crate` and paths written without `use` are resolved to files through the tree of `mod` declarations, through re-exports, and through the crates whose `Cargo.toml` is in the project (`codetwine/rust_module_tree.py`, `codetwine/extractors/rust_path.py`)
+- `resolve_module_to_project_path()`: `project_dir` argument, required for a language whose resolve config has `module_tree` (Rust)
+- `import_to_path.import_name_list()`: the names an import binds and the original names of the renamed ones
+- `definitions.definition_name()` and `definitions.select_top_level_definitions()` (moved from `import_to_path._select_top_level_definitions()`)
+- `usages.symbol_part_list()` / `usages.usage_root_name()`: split a usage name at `.` and `::`
 - SQL (`sql`, `tree-sitter-sql`): tables, views, materialized views, functions, procedures, types, sequences, triggers, indexes and schemas are extracted as definitions, and a reference to an object created in another `.sql` file of the project is a dependency
 - `LangConfig.implicit_visibility` (`package` / `project`): the files whose definitions can be referenced without an import statement (Java / Kotlin: same directory, SQL: whole project), replacing `same_package_visible`
 - Every non-empty text file is analysed: a file whose extension has no tree-sitter language is listed with empty `definitions`, `callee_usages` and `caller_usages`, a `null` summary and no design document, and copied to the output directory (`settings.has_language()`, `file_utils.is_text_file()`)
@@ -25,6 +30,11 @@
 - `file_dependencies.json`: `same_file_usages`, the lines where a file uses the names it defines itself (`usage_analysis.build_same_file_usages()`). `callee_usages` and the file-level dependency graph still hold other files only
 
 ### Changed
+- `LangConfig` fields renamed after their type: `usage_node_types` -> `usage_node_type_dict`, `import_resolve` -> `import_resolve_dict`
+- `extract_callee_source()`: for a name with two or more parts, the last part is first looked up inside the container definitions named by the part before it (`Settings::new`, `Config.load`), and a definition whose own name matches is preferred over a definition that only contains the name
+- `same_file_usages`: a name bound by an import statement that the file defines only inside another definition (a method named like an imported module, e.g. Rust `use std::fmt;` and `fn fmt`) is not tracked, even when the import leads outside the project
+- Wildcard imports (`from X import *`, `import pkg.*`, Rust `use X::*`) no longer register the names the importing file defines itself
+- `build_symbol_to_file_map()`: the module root of an import with names (`from x.y import a`) is registered only for languages whose module separator is `.`. A JS/TS named import from a bare specifier that resolves to a project file (`import { foo } from "utils"`) no longer registers `utils`, so a local variable of that name is no longer taken for a usage of the file
 - Public settings renamed after their type: `TREE_SITTER_LANGUAGES` -> `EXT_TO_LANGUAGE_DICT`, `DEFINITION_DICTS` -> `EXT_TO_DEFINITION_DICT`, `IMPORT_QUERIES` -> `EXT_TO_IMPORT_QUERY_DICT`, `USAGE_NODE_TYPES` -> `EXT_TO_USAGE_NODE_TYPE_DICT`, `IMPORT_RESOLVE_CONFIG` -> `EXT_TO_IMPORT_RESOLVE_DICT`, `KNOWLEDGE_FORMATS` -> `KNOWLEDGE_FORMAT_TUPLE`, `SOURCE_ROOT_PATTERNS` -> `SOURCE_ROOT_PATTERN_LIST`
 - `build_project_dependencies()`: an implicit dependency (Java / Kotlin same package, SQL) is added when a top-level definition name of the other file is used in the syntax tree, instead of when the file name appears in the source text
 - `build_project_dependencies()`: collects every text file instead of only the supported extensions, and skips empty and binary files there; import resolution, dependency edges, change detection and design documents cover the files with a language only

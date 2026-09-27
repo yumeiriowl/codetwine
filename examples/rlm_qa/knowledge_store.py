@@ -26,40 +26,40 @@ class JsonStore:
             path: File path to project_knowledge.json.
         """
         with open(path, "r", encoding="utf-8") as f:
-            self._data = json.load(f)
-        self.project_name = self._data.get("project_name", "")
+            self._knowledge_dict = json.load(f)
+        self.project_name = self._knowledge_dict.get("project_name", "")
         self.base_dir = os.path.dirname(path)
-        self._by_file = {e["file"]: e for e in self._data.get("files", [])}
+        self._entry_dict = {entry["file"]: entry for entry in self._knowledge_dict.get("files", [])}
 
     def dependencies(self) -> list[dict]:
         """Return one {"file", "summary", "callers", "callees"} entry per file."""
-        return self._data.get("project_dependencies", [])
+        return self._knowledge_dict.get("project_dependencies", [])
 
     def entry(self, file: str) -> dict | None:
         """Return one file's {"file", "file_dependencies", "doc"} entry, or None."""
-        return self._by_file.get(file)
+        return self._entry_dict.get(file)
 
     def iter_entries(self) -> Iterator[dict]:
         """Yield every file's entry, one at a time."""
-        return iter(self._data.get("files", []))
+        return iter(self._knowledge_dict.get("files", []))
 
     def find_definitions(self, name: str, partial: bool = False) -> list[dict]:
         """Return every definition matching a name, as {"file", "name", "type", lines}."""
-        found = []
+        definition_list = []
         for entry in self.iter_entries():
-            for d in entry.get("file_dependencies", {}).get("definitions", []):
-                hit = (name.lower() in d["name"].lower()) if partial else (d["name"] == name)
-                if hit:
-                    found.append({"file": entry["file"], "name": d["name"],
-                                  "type": d.get("type", ""),
-                                  "start_line": d["start_line"],
-                                  "end_line": d["end_line"]})
-        return found
+            for definition in entry.get("file_dependencies", {}).get("definitions", []):
+                is_match = (name.lower() in definition["name"].lower()) if partial else (definition["name"] == name)
+                if is_match:
+                    definition_list.append({"file": entry["file"], "name": definition["name"],
+                                  "type": definition.get("type", ""),
+                                  "start_line": definition["start_line"],
+                                  "end_line": definition["end_line"]})
+        return definition_list
 
     def close(self) -> None:
         """Release the data. Present so both stores are used the same way."""
-        self._data = {}
-        self._by_file = {}
+        self._knowledge_dict = {}
+        self._entry_dict = {}
 
 
 class SqliteStore:
@@ -96,8 +96,7 @@ class SqliteStore:
         self._conn.close()
 
 
-# Either store. The two carry the same methods, so a caller takes one without caring
-# which form the knowledge file is in
+# Either store. The two carry the same methods
 Store = JsonStore | SqliteStore
 
 

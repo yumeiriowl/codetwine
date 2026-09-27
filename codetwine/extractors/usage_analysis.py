@@ -3,12 +3,14 @@ import logging
 from tree_sitter import Node
 from codetwine.parsers.ts_parser import parse_file
 from codetwine.extractors.imports import ImportInfo, extract_imports
-from codetwine.extractors.usages import extract_usages, extract_typed_aliases
-from codetwine.extractors.definitions import extract_definitions
+from codetwine.extractors.usages import UsageInfo, extract_usages, extract_typed_aliases, usage_root_name
+from codetwine.extractors.definitions import ATTACHED_DEFINITION_TYPE_SET, extract_definitions
 from codetwine.extractors.dependency_graph import extract_callee_source
 from codetwine.import_to_path import (
     resolve_module_to_project_path,
     get_import_params,
+    import_name_list,
+    top_level_definition_names,
 )
 from codetwine.config.settings import (
     EXT_TO_DEFINITION_DICT,
@@ -18,6 +20,33 @@ from codetwine.config.settings import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Maximum number of usage lines of one name whose surrounding code becomes usage_context
+_MAX_CONTEXT_LOCATION = 2
+
+# Number of lines kept before and after a usage line in usage_context
+_CONTEXT_RADIUS = 3
+
+
+def _extract_typed_alias_dict(
+    root_node: Node, name_set: set[str], usage_node_types: dict | None,
+) -> dict[str, str]:
+    """Return the variables declared with one of the given type names.
+
+    Args:
+        root_node: The AST root node of the file.
+        name_set: Type names to track.
+        usage_node_types: The file's EXT_TO_USAGE_NODE_TYPE_DICT entry (may be None).
+
+    Returns:
+        A {variable name: type name} dict (extract_typed_aliases). Empty when the
+        language has no typed_alias_parent_types.
+    """
+    typed_alias_parent_types = (
+        usage_node_types.get("typed_alias_parent_types", set())
+        if usage_node_types else set()
+    )
+    return extract_typed_aliases(root_node, name_set, typed_alias_parent_types)
 
 
 def build_usage_info_list(
@@ -46,12 +75,8 @@ def build_usage_info_list(
     usage_node_types = EXT_TO_USAGE_NODE_TYPE_DICT.get(file_ext)
 
     # Build a variable-name -> type-name mapping from typed variable declarations
-    typed_alias_parent_types = (
-        usage_node_types.get("typed_alias_parent_types", set())
-        if usage_node_types else set()
-    )
-    typed_alias_dict = extract_typed_aliases(
-        root_node, set(symbol_to_file_map.keys()), typed_alias_parent_types
+    typed_alias_dict = _extract_typed_alias_dict(
+        root_node, set(symbol_to_file_map.keys()), usage_node_types
     )
     # Add alias variable names to the tracking set (map genre -> same file as Genre)
     for var_name, type_name in typed_alias_dict.items():
@@ -67,7 +92,7 @@ def build_usage_info_list(
 
     for usage in usage_info_list:
         # For attribute access like "helper.process", the leading "helper" is the name from the import statement
-        root_symbol = usage.name.split(".")[0]
+        root_symbol = usage_root_name(usage.name, symbol_to_file_map)
 
         # Remap alias variable names back to original type names (genre -> Genre)
         if root_symbol in typed_alias_dict:
@@ -127,12 +152,13 @@ def build_same_file_usages(
         root_node: The AST root node of the file.
         definition_list: The file's definitions (dicts with name, start_line, end_line).
         file_ext: File extension (without leading ".").
-        import_name_set: Names tracked as imports from other project files.
+        import_name_set: Names bound by the file's import statements.
 
     Returns:
         A list of {"lines", "name"} dicts.
     """
-    # Definition name -> line ranges of the definitions with that name
+    # Definition name -> line ranges of the definitions with that name.
+    # A name carried only by definitions in ATTACHED_DEFINITION_TYPE_SET (Rust impl blocks) is not tracked
     line_range_dict: dict[str, list[tuple[int, int]]] = {}
     for definition in definition_list:
         name = definition["name"]
@@ -140,6 +166,13 @@ def build_same_file_usages(
             line_range_dict.setdefault(name, []).append(
                 (definition["start_line"], definition["end_line"])
             )
+    own_name_set = {
+        definition["name"] for definition in definition_list
+        if definition.get("type") not in ATTACHED_DEFINITION_TYPE_SET
+    }
+    line_range_dict = {
+        name: range_list for name, range_list in line_range_dict.items() if name in own_name_set
+    }
 
     usage_info_list = extract_usages(
         root_node, set(line_range_dict), EXT_TO_USAGE_NODE_TYPE_DICT.get(file_ext)
@@ -149,7 +182,7 @@ def build_same_file_usages(
     usage_group_map: dict[str, dict] = {}
     for usage in usage_info_list:
         # For attribute access like "logger.info", the leading "logger" is the definition name
-        root_symbol = usage.name.split(".")[0]
+        root_symbol = usage_root_name(usage.name, line_range_dict)
         if any(start <= usage.line <= end for start, end in line_range_dict[root_symbol]):
             continue
         entry = usage_group_map.setdefault(usage.name, {"lines": [], "name": usage.name})
@@ -162,7 +195,7 @@ def build_same_file_usages(
     return list(usage_group_map.values())
 
 
-def _collect_names_from_target(
+def _collect_target_name_list(
     caller_import_list: list[ImportInfo],
     target_file_rel: str,
     caller_ext: str,
@@ -192,42 +225,49 @@ def _collect_names_from_target(
         source_root_set: Set of source root prefixes (e.g. {"src/main/java/"}).
 
     Returns:
-        A (names_from_target, target_definition_name_list) tuple.
+        A (target_name_list, target_definition_name_list) tuple.
         For C/C++, target_definition_name_list is returned as a cache to the caller.
     """
-    names_from_target: list[str] = []
+    target_name_list: list[str] = []
     caller_resolve_config = EXT_TO_IMPORT_RESOLVE_DICT.get(caller_ext, {})
     caller_separator = caller_resolve_config.get("separator", ".")
 
     for import_info in caller_import_list:
         resolved = resolve_module_to_project_path(
-            import_info.module, caller_rel, project_file_set, source_root_set
+            import_info.module, caller_rel, project_file_set, source_root_set, project_dir,
         )
         if resolved == target_file_rel:
             if import_info.names:
                 # "from X import a, b" form: add individual names
-                names_from_target.extend(n for n in import_info.names if n != "*")
-                # "from X import *" form: add all definition names from the target file
-                if "*" in import_info.names:
+                name_list, _ = import_name_list(
+                    import_info, caller_rel, project_file_set, project_dir,
+                )
+                target_name_list.extend(n for n in name_list if n != "*")
+                # "from X import *" form: add all definition names from the target file,
+                # except the names the caller defines itself
+                if "*" in name_list:
                     if target_definition_name_list is None:
                         target_definition_name_list = _load_target_definitions(
                             target_file_rel, project_dir,
                         )
-                    names_from_target.extend(target_definition_name_list)
+                    caller_own_name_set = set(top_level_definition_names(caller_rel, project_dir))
+                    target_name_list.extend(
+                        n for n in target_definition_name_list if n not in caller_own_name_set
+                    )
             elif caller_separator == ".":
                 # Java/Kotlin: "import com.foo.Bar" -> add trailing "Bar"
                 module_part_list = import_info.module.split(".")
                 leaf = module_part_list[-1]
                 if leaf:
-                    names_from_target.append(leaf)
+                    target_name_list.append(leaf)
             elif caller_separator == "/":
                 # C/C++: #include incorporates the entire file.
-                # Add all definition names from the target file to names_from_target
+                # Add all definition names from the target file to target_name_list
                 if target_definition_name_list is None:
                     target_definition_name_list = _load_target_definitions(
                         target_file_rel, project_dir,
                     )
-                names_from_target.extend(target_definition_name_list)
+                target_name_list.extend(target_definition_name_list)
         elif (
             not resolved
             and "*" in import_info.names
@@ -240,20 +280,23 @@ def _collect_names_from_target(
                     target_definition_name_list = _load_target_definitions(
                         target_file_rel, project_dir,
                     )
-                names_from_target.extend(target_definition_name_list)
+                caller_own_name_set = set(top_level_definition_names(caller_rel, project_dir))
+                target_name_list.extend(
+                    n for n in target_definition_name_list if n not in caller_own_name_set
+                )
 
     # Target visible without an import statement (Java/Kotlin: same package, SQL: whole project)
     # Add target definition names even if there are no import matches
-    if not names_from_target:
+    if not target_name_list:
         scope_key = implicit_scope_key(caller_rel)
         if scope_key is not None and implicit_scope_key(target_file_rel) == scope_key:
             if target_definition_name_list is None:
                 target_definition_name_list = _load_target_definitions(
                     target_file_rel, project_dir,
                 )
-            names_from_target.extend(target_definition_name_list)
+            target_name_list.extend(target_definition_name_list)
 
-    return names_from_target, target_definition_name_list
+    return target_name_list, target_definition_name_list
 
 
 def _load_target_definitions(
@@ -276,9 +319,74 @@ def _load_target_definitions(
     if target_def_dict and os.path.isfile(target_abs):
         target_root = parse_file(target_abs)[0]
         for defn in extract_definitions(target_root, target_def_dict):
-            if defn.name:
+            if defn.name and defn.type not in ATTACHED_DEFINITION_TYPE_SET:
                 name_list.append(defn.name)
     return name_list
+
+
+def _group_caller_usage_list(
+    usage_list: list[UsageInfo],
+    typed_alias_dict: dict[str, str],
+    caller_rel: str,
+) -> dict[str, dict]:
+    """Group a caller's usages by name, mapping typed variables back to their type names.
+
+    Args:
+        usage_list: UsageInfo list of the caller file.
+        typed_alias_dict: {variable name: type name} of the caller file.
+        caller_rel: Relative path of the caller file.
+
+    Returns:
+        A {name: {"lines", "name", "file"}} dict; lines are sorted without duplicates.
+    """
+    group_dict: dict[str, dict] = {}
+    for usage in usage_list:
+        name = usage.name
+        root_symbol = usage_root_name(name, typed_alias_dict)
+        if root_symbol in typed_alias_dict:
+            name = typed_alias_dict[root_symbol] + name[len(root_symbol):]
+
+        if name not in group_dict:
+            group_dict[name] = {
+                "lines": [usage.line],
+                "name":  name,
+                "file":  caller_rel,
+            }
+        else:
+            group_dict[name]["lines"].append(usage.line)
+
+    for group in group_dict.values():
+        group["lines"] = sorted(set(group["lines"]))
+    return group_dict
+
+
+def _attach_usage_context(group_dict: dict[str, dict], caller_abs: str) -> None:
+    """Add usage_context, the code around the first usage lines, to each group.
+
+    Up to _MAX_CONTEXT_LOCATION lines of each group are taken, each with
+    _CONTEXT_RADIUS lines before and after, joined by "\n...\n". Nothing is added
+    when the caller file cannot be read as UTF-8 text.
+
+    Args:
+        group_dict: Return value of _group_caller_usage_list; modified in place.
+        caller_abs: Absolute path of the caller file.
+    """
+    try:
+        with open(caller_abs, "r", encoding="utf-8") as f:
+            caller_source_line_list = f.read().splitlines()
+    except (OSError, UnicodeDecodeError):
+        return
+    if not caller_source_line_list:
+        return
+
+    line_count = len(caller_source_line_list)
+    for group in group_dict.values():
+        context_part_list = []
+        for line_no in group["lines"][:_MAX_CONTEXT_LOCATION]:
+            start = max(0, line_no - 1 - _CONTEXT_RADIUS)
+            end = min(line_count, line_no - 1 + _CONTEXT_RADIUS + 1)
+            context_part_list.append("\n".join(caller_source_line_list[start:end]))
+        group["usage_context"] = "\n...\n".join(context_part_list)
 
 
 def build_caller_usages(
@@ -322,76 +430,30 @@ def build_caller_usages(
         )
 
         # Step 1: Collect names that the caller imports from the target
-        names_from_target, target_definition_name_list = _collect_names_from_target(
+        target_name_list, target_definition_name_list = _collect_target_name_list(
             caller_import_list, target_file_rel, caller_ext,
             caller_rel, project_file_set, project_dir,
             target_definition_name_list, source_root_set,
         )
 
-        # Step 2: Extract and aggregate lines where those names are used within the caller
-        if names_from_target:
-            usage_node_types = EXT_TO_USAGE_NODE_TYPE_DICT.get(caller_ext)
+        # Step 2: Extract the lines where those names are used within the caller,
+        # including variables declared with an imported type
+        if not target_name_list:
+            continue
+        usage_node_types = EXT_TO_USAGE_NODE_TYPE_DICT.get(caller_ext)
+        typed_alias_dict = _extract_typed_alias_dict(
+            caller_root, set(target_name_list), usage_node_types
+        )
+        for var_name in typed_alias_dict:
+            if var_name not in target_name_list:
+                target_name_list.append(var_name)
+        usage_list = extract_usages(caller_root, set(target_name_list), usage_node_types)
+        if not usage_list:
+            continue
 
-            # Add typed variable aliases to the tracking set
-            typed_alias_parent_types = (
-                usage_node_types.get("typed_alias_parent_types", set())
-                if usage_node_types else set()
-            )
-            typed_alias_dict = extract_typed_aliases(
-                caller_root, set(names_from_target), typed_alias_parent_types
-            )
-            for var_name in typed_alias_dict:
-                if var_name not in names_from_target:
-                    names_from_target.append(var_name)
-
-            usage_list = extract_usages(
-                caller_root, set(names_from_target), usage_node_types
-            )
-
-            # Hold the caller's source code line by line (for usage_context extraction)
-            caller_source_line_list: list[str] | None = None
-            if usage_list:
-                try:
-                    with open(caller_abs, "r", encoding="utf-8") as f:
-                        caller_source_line_list = f.read().splitlines()
-                except (OSError, UnicodeDecodeError):
-                    pass
-
-            # Step 3: Group by (name, file) and accumulate into lines list
-            # Remap alias variable names to original type names for grouping
-            group_dict: dict[str, dict] = {}
-            for usage in usage_list:
-                name = usage.name
-                root_symbol = name.split(".")[0]
-                if root_symbol in typed_alias_dict:
-                    name = typed_alias_dict[root_symbol] + name[len(root_symbol):]
-
-                if name not in group_dict:
-                    group_dict[name] = {
-                        "lines": [usage.line],
-                        "name":  name,
-                        "file":  caller_rel,
-                    }
-                else:
-                    group_dict[name]["lines"].append(usage.line)
-
-            # Step 4: Extract usage_context from the usage locations of each group
-            # Remove duplicate lines before extracting context
-            for group in group_dict.values():
-                group["lines"] = sorted(set(group["lines"]))
-            _max_context_location_count = 2
-            _context_radius = 3
-            if caller_source_line_list:
-                line_count = len(caller_source_line_list)
-                for group in group_dict.values():
-                    context_part_list = []
-                    for line_no in group["lines"][:_max_context_location_count]:
-                        start = max(0, line_no - 1 - _context_radius)
-                        end = min(line_count, line_no - 1 + _context_radius + 1)
-                        snippet = "\n".join(caller_source_line_list[start:end])
-                        context_part_list.append(snippet)
-                    group["usage_context"] = "\n...\n".join(context_part_list)
-
-            caller_usages.extend(group_dict.values())
+        # Step 3: Group by name and attach the code around the usage lines
+        group_dict = _group_caller_usage_list(usage_list, typed_alias_dict, caller_rel)
+        _attach_usage_context(group_dict, caller_abs)
+        caller_usages.extend(group_dict.values())
 
     return caller_usages

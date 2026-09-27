@@ -31,6 +31,21 @@ def _to_mermaid_node_id(path: str) -> str:
     return path.replace("/", "_").replace(".", "_")
 
 
+def _load_json(path: str) -> dict | None:
+    """Read a JSON file when it exists.
+
+    Args:
+        path: Path of the JSON file.
+
+    Returns:
+        The parsed JSON, or None when the file does not exist.
+    """
+    if not os.path.exists(path):
+        return None
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
 def to_output_path(base_output_dir: str, rel_path: str) -> str:
     """Convert a file relative path to the "project_name/copy_path" format.
 
@@ -61,13 +76,8 @@ def build_summary_map(
     summary_map: dict[str, str | None] = {}
     for file_rel in all_file_list:
         output_file_dir = resolve_file_output_dir(base_output_dir, file_rel)
-        doc_path = os.path.join(output_file_dir, "doc.json")
-        summary = None
-        if os.path.exists(doc_path):
-            with open(doc_path, "r", encoding="utf-8") as f:
-                doc = json.load(f)
-            summary = doc.get("summary")
-        summary_map[file_rel] = summary
+        doc = _load_json(os.path.join(output_file_dir, "doc.json"))
+        summary_map[file_rel] = doc.get("summary") if doc is not None else None
     return summary_map
 
 
@@ -123,27 +133,28 @@ def build_file_entry(base_output_dir: str, file_rel: str) -> dict | None:
 
     entry: dict = {"file": to_output_path(base_output_dir, file_rel)}
 
-    # file_dependencies.json loading
-    # Paths were already converted to output format during individual JSON save, so use as-is
-    deps_path = os.path.join(output_file_dir, "file_dependencies.json")
-    if os.path.exists(deps_path):
-        with open(deps_path, "r", encoding="utf-8") as f:
-            file_deps = json.load(f)
-        file_deps.pop("file", None)
-        entry["file_dependencies"] = file_deps
-
-    # doc.json loading
-    doc_path = os.path.join(output_file_dir, "doc.json")
-    if os.path.exists(doc_path):
-        with open(doc_path, "r", encoding="utf-8") as f:
-            doc = json.load(f)
-        doc.pop("file", None)
-        entry["doc"] = doc
+    # file_dependencies.json already holds paths in output format
+    for key, file_name in (("file_dependencies", "file_dependencies.json"), ("doc", "doc.json")):
+        content = _load_json(os.path.join(output_file_dir, file_name))
+        if content is not None:
+            content.pop("file", None)
+            entry[key] = content
 
     if len(entry) == 1:
         logger.warning(f"Analysis results not found for {file_rel}")
         return None
     return entry
+
+
+def _write_object_start(f: TextIO, project_name: str) -> None:
+    """Write the opening of the top-level JSON object and its "project_name" member.
+
+    Args:
+        f: An open text file at its start.
+        project_name: The analyzed project's name.
+    """
+    f.write("{\n")
+    f.write(f'  "project_name": {json.dumps(project_name, ensure_ascii=False)},\n')
 
 
 def _write_array_item(f: TextIO, entry: dict, is_first: bool) -> None:
@@ -196,8 +207,7 @@ def save_consolidated_json(
 
     tmp_path = output_path + ".tmp"
     with open(tmp_path, "w", encoding="utf-8") as f:
-        f.write("{\n")
-        f.write(f'  "project_name": {json.dumps(project_name, ensure_ascii=False)},\n')
+        _write_object_start(f, project_name)
 
         # project_dependencies: the dependency graph with each file's summary
         f.write('  "project_dependencies": [\n')
@@ -244,32 +254,30 @@ def build_symbol_level_deps(
         A {file relative path: {"callers": set, "callees": set}} dict.
     """
     # Initialize empty dependency maps for all files
-    deps_map: dict[str, dict[str, set[str]]] = {
+    dep_dict: dict[str, dict[str, set[str]]] = {
         f: {"callers": set(), "callees": set()} for f in all_file_list
     }
 
     # Collect callee/caller from each file's file_dependencies.json
     for file_rel in all_file_list:
         output_file_dir = resolve_file_output_dir(base_output_dir, file_rel)
-        deps_path = os.path.join(output_file_dir, "file_dependencies.json")
-        if not os.path.exists(deps_path):
+        file_deps = _load_json(os.path.join(output_file_dir, "file_dependencies.json"))
+        if file_deps is None:
             continue
-        with open(deps_path, "r", encoding="utf-8") as f:
-            file_deps = json.load(f)
 
         # Add dependency target files from callee_usages' from field
         for usage in file_deps.get("callee_usages", []):
             callee_file = usage.get("from")
             if callee_file:
-                deps_map[file_rel]["callees"].add(output_path_to_rel(callee_file))
+                dep_dict[file_rel]["callees"].add(output_path_to_rel(callee_file))
 
         # Add dependency source files from caller_usages' file field
         for usage in file_deps.get("caller_usages", []):
             caller_file = usage.get("file")
             if caller_file:
-                deps_map[file_rel]["callers"].add(output_path_to_rel(caller_file))
+                dep_dict[file_rel]["callers"].add(output_path_to_rel(caller_file))
 
-    return deps_map
+    return dep_dict
 
 
 def save_dependency_summary(
@@ -298,8 +306,7 @@ def save_dependency_summary(
     written_count = 0
 
     with open(output_path, "w", encoding="utf-8") as f:
-        f.write("{\n")
-        f.write(f'  "project_name": {json.dumps(project_name, ensure_ascii=False)},\n')
+        _write_object_start(f, project_name)
         f.write('  "files": [\n')
         dep_entry_iter = iter_dependency_entries(
             base_output_dir, all_file_list, symbol_deps, summary_map
@@ -335,12 +342,12 @@ def save_dependency_graph_as_mermaid(
     edge_set: set[tuple] = set()
 
     for file_rel, dep in symbol_deps.items():
-        output_path_file = to_output_path(base_output_dir, file_rel)
-        node_set.add(output_path_file)
+        node_path = to_output_path(base_output_dir, file_rel)
+        node_set.add(node_path)
         for callee in dep["callees"]:
-            callee_output = to_output_path(base_output_dir, callee)
-            node_set.add(callee_output)
-            edge_set.add((output_path_file, callee_output))
+            callee_path = to_output_path(base_output_dir, callee)
+            node_set.add(callee_path)
+            edge_set.add((node_path, callee_path))
 
     # Build the Mermaid text: one node per file labelled with its source relative path
     line_list = ["```mermaid", "graph LR"]

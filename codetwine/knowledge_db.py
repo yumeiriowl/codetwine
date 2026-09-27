@@ -22,7 +22,7 @@ from codetwine.output import build_file_entry, to_output_path
 
 logger = logging.getLogger(__name__)
 
-# Bumped whenever the table layout below changes
+# Version of the table layout below, stored in the meta table
 SCHEMA_VERSION = "1"
 
 _SCHEMA = """
@@ -58,7 +58,7 @@ CREATE INDEX idx_definitions_file ON definitions(file);
 """
 
 
-def _definition_rows(file_path: str, file_deps: dict) -> Iterator[tuple]:
+def _iter_definition_row(file_path: str, file_deps: dict) -> Iterator[tuple]:
     """Yield the definitions table rows for one file.
 
     Args:
@@ -143,7 +143,7 @@ def save_consolidated_sqlite(
                 connection.executemany(
                     "INSERT INTO definitions "
                     "(file, name, type, start_line, end_line) VALUES (?, ?, ?, ?, ?)",
-                    _definition_rows(entry["file"], file_deps),
+                    _iter_definition_row(entry["file"], file_deps),
                 )
             written_count += 1
 
@@ -275,6 +275,24 @@ def get_file(connection: sqlite3.Connection, file: str) -> dict | None:
     return _row_to_entry(row) if row else None
 
 
+def _edge_list(connection: sqlite3.Connection, file: str, direction: str) -> list[str]:
+    """Return the other ends of a file's edges in one direction, sorted.
+
+    Args:
+        connection: An open knowledge database connection.
+        file: The file path in "project_name/copy_path" format.
+        direction: "caller" or "callee".
+
+    Returns:
+        The file paths at the other end.
+    """
+    cursor = connection.execute(
+        "SELECT other FROM file_edges WHERE file = ? AND direction = ? ORDER BY other",
+        (file, direction),
+    )
+    return [row["other"] for row in cursor]
+
+
 def callees_of(connection: sqlite3.Connection, file: str) -> list[str]:
     """Return the files that a file depends on, sorted.
 
@@ -285,12 +303,7 @@ def callees_of(connection: sqlite3.Connection, file: str) -> list[str]:
     Returns:
         The dependency target file paths.
     """
-    cursor = connection.execute(
-        "SELECT other FROM file_edges WHERE file = ? AND direction = 'callee' "
-        "ORDER BY other",
-        (file,),
-    )
-    return [row["other"] for row in cursor]
+    return _edge_list(connection, file, "callee")
 
 
 def callers_of(connection: sqlite3.Connection, file: str) -> list[str]:
@@ -303,12 +316,7 @@ def callers_of(connection: sqlite3.Connection, file: str) -> list[str]:
     Returns:
         The dependent file paths.
     """
-    cursor = connection.execute(
-        "SELECT other FROM file_edges WHERE file = ? AND direction = 'caller' "
-        "ORDER BY other",
-        (file,),
-    )
-    return [row["other"] for row in cursor]
+    return _edge_list(connection, file, "caller")
 
 
 def find_definitions(connection: sqlite3.Connection, name: str,
@@ -327,7 +335,7 @@ def find_definitions(connection: sqlite3.Connection, name: str,
     select_sql = "SELECT file, name, type, start_line, end_line FROM definitions "
     order_sql = " ORDER BY file, start_line"
     if partial:
-        # ESCAPE keeps a name containing % or _ from being read as a wildcard
+        # % and _ in the name are matched literally
         pattern = name.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         cursor = connection.execute(
             select_sql + "WHERE name LIKE ? ESCAPE '\\'" + order_sql,

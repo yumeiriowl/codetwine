@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from tree_sitter import Language, Query, QueryCursor, Node
+from codetwine.extractors.rust_path import rust_import_list
 
 
 @dataclass
@@ -27,6 +28,8 @@ def extract_imports(
         @module      -> Import source (module name, path, header name, etc.)
         @name        -> Individually imported name (the Y in "from X import Y")
         @import_node -> The entire import statement node (for line number retrieval)
+        @path_item   -> A Rust node naming a module path; expanded by rust_import_list
+                        into one import per name
 
     When the same import statement has multiple @name captures (from X import Y, Z),
     they are consolidated into a single ImportInfo.
@@ -59,6 +62,23 @@ def extract_imports(
         if require_func_node_list:
             if require_func_node_list[0].text.decode("utf-8") != "require":
                 continue
+
+        # Rust: one node can bring several paths into use (use a::{b, c as d})
+        path_item_node_list = captures.get("path_item", [])
+        if path_item_node_list:
+            path_item_node = path_item_node_list[0]
+            line = path_item_node.start_point[0] + 1
+            for module, name, original in rust_import_list(path_item_node):
+                import_info = import_by_key_dict.setdefault(
+                    (module, line), ImportInfo(module=module, names=[], line=line),
+                )
+                if name and name not in import_info.names:
+                    import_info.names.append(name)
+                    if original:
+                        if import_info.alias_map is None:
+                            import_info.alias_map = {}
+                        import_info.alias_map[name] = original
+            continue
 
         # Retrieve @module, @name, and @import_node captures
         module_node_list = captures.get("module", [])

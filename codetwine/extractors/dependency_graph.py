@@ -4,9 +4,13 @@ import logging
 from collections import deque
 from tree_sitter import Node
 from codetwine.parsers.ts_parser import parse_file
-from codetwine.extractors.definitions import CONTAINER_DEFINITION_TYPE_SET
+from codetwine.extractors.definitions import (
+    ATTACHED_DEFINITION_TYPE_SET,
+    CONTAINER_DEFINITION_TYPE_SET,
+    definition_name,
+)
 from codetwine.extractors.imports import extract_imports
-from codetwine.extractors.usages import extract_usages
+from codetwine.extractors.usages import extract_usages, symbol_part_list
 from codetwine.import_to_path import (
     detect_source_roots,
     resolve_module_to_project_path,
@@ -58,7 +62,7 @@ def _enclosing_definition(node: Node, definition_dict: dict[str, str]) -> Node |
 
 
 def _find_definition_node(
-    root_node: Node, definition_name: str, definition_dict: dict[str, str],
+    root_node: Node, search_name: str, definition_dict: dict[str, str], is_own_name: bool = False,
 ) -> Node | None:
     """Search the AST by breadth-first search (BFS) and return the definition node with the specified name.
 
@@ -72,8 +76,11 @@ def _find_definition_node(
 
     Args:
         root_node: The AST root node covering the entire file.
-        definition_name: The definition name to search for (e.g. "parse_file", "Point", "geometry").
+        search_name: The definition name to search for (e.g. "parse_file", "Point", "geometry").
         definition_dict: Per-language definition node settings.
+        is_own_name: When True, only a definition whose own name is search_name is returned;
+                     a definition that merely uses the name, and one in
+                     ATTACHED_DEFINITION_TYPE_SET (Rust impl blocks), are skipped.
 
     Returns:
         The definition node. None if not found.
@@ -81,10 +88,47 @@ def _find_definition_node(
     queue = deque(root_node.children)
     while queue:
         node = queue.popleft()
-        if node.type in _DEFINITION_NAME_NODE_TYPE_SET and node.text.decode("utf-8") == definition_name:
+        if node.type in _DEFINITION_NAME_NODE_TYPE_SET and node.text.decode("utf-8") == search_name:
             definition_node = _enclosing_definition(node, definition_dict)
-            if definition_node is not None:
+            if definition_node is not None and (
+                not is_own_name
+                or (
+                    definition_node.type not in ATTACHED_DEFINITION_TYPE_SET
+                    and definition_name(definition_node, definition_dict) == search_name
+                )
+            ):
                 return definition_node
+        queue.extend(node.children)
+    return None
+
+
+def _find_member_definition_node(
+    root_node: Node, owner_name: str, member_name: str, definition_dict: dict[str, str],
+) -> Node | None:
+    """Return the definition named member_name inside a container definition named owner_name.
+
+    Every container definition with that name is searched (Rust: a struct and each of
+    its impl blocks; Python: a class).
+
+    Args:
+        root_node: The AST root node covering the entire file.
+        owner_name: Name of the container definition (e.g. "Settings").
+        member_name: Name of the member definition (e.g. "new").
+        definition_dict: Per-language definition node settings.
+
+    Returns:
+        The member definition node. None if not found.
+    """
+    queue = deque(root_node.children)
+    while queue:
+        node = queue.popleft()
+        if (
+            node.type in CONTAINER_DEFINITION_TYPE_SET
+            and definition_name(node, definition_dict) == owner_name
+        ):
+            member_node = _find_definition_node(node, member_name, definition_dict, is_own_name=True)
+            if member_node is not None and member_node.id != node.id:
+                return member_node
         queue.extend(node.children)
     return None
 
@@ -99,12 +143,20 @@ def extract_callee_source(
     Search the AST by breadth-first search (BFS) to find an identifier matching callee_name,
     then return the entire source code of the definition node it belongs to
     (function_definition / class_definition / expression_statement / create_table, etc.).
+    The candidates are tried in this order:
+        1. For a name with two or more parts ("Settings::new", "Config.load"), the definition
+           of the last part inside the container definitions named by the part before it
+        2. The definition whose own name is the part before the last (the owner of an
+           enum variant or of an associated item), the last part, then the first part
+        3. The definition that contains a name node equal to the last part, the part
+           before it, then the first part
 
     Parse results are reused via the module-level cache in ts_parser.py.
 
     Args:
         callee_file_path: Path of the dependency target file (relative to project root, e.g. "src/foo.py").
-        callee_name: Name of the definition to retrieve (e.g. "parse_file", "helper.process").
+        callee_name: Name of the definition to retrieve (e.g. "parse_file", "helper.process",
+                     "config::Settings::new").
         project_dir: Absolute path to the project root.
 
     Returns:
@@ -121,16 +173,25 @@ def extract_callee_source(
     # For attribute access like "helper.process", the trailing "process" is the actual definition name.
     # For cases like "TEMPLATE.format" where the trailing part is a built-in method,
     # the leading "TEMPLATE" is the definition name.
-    # If not found by the trailing part, re-search by the leading part.
-    part_list = callee_name.split(".")
-    search_name_list = [part_list[-1]]
+    # If not found by the trailing part, re-search by the preceding and the leading parts.
+    part_list = symbol_part_list(callee_name)
     if len(part_list) > 1:
-        search_name_list.append(part_list[0])
-
-    for definition_name in search_name_list:
-        definition_node = _find_definition_node(callee_root, definition_name, definition_dict)
+        definition_node = _find_member_definition_node(
+            callee_root, part_list[-2], part_list[-1], definition_dict,
+        )
         if definition_node is not None:
             return definition_node.text.decode("utf-8")
+
+    own_name_list = list(dict.fromkeys([*part_list[-2:-1], part_list[-1], part_list[0]]))
+    contain_name_list = list(dict.fromkeys([part_list[-1], *part_list[-2:-1], part_list[0]]))
+
+    for is_own_name, search_name_list in ((True, own_name_list), (False, contain_name_list)):
+        for search_name in search_name_list:
+            definition_node = _find_definition_node(
+                callee_root, search_name, definition_dict, is_own_name,
+            )
+            if definition_node is not None:
+                return definition_node.text.decode("utf-8")
 
     return None
 
@@ -201,6 +262,133 @@ def _filter_text_file_list(project_dir: str, file_list: list[str]) -> list[str]:
     return text_file_list
 
 
+def _to_rel(path: str, project_dir: str) -> str:
+    """Return a path relative to project_dir with "/" separators."""
+    return os.path.relpath(path, project_dir).replace("\\", "/")
+
+
+def _collect_import_callee_dict(
+    language_file_list: list[str],
+    project_dir: str,
+    project_file_set: set[str],
+    source_root_set: set[str],
+) -> dict[str, set[str]]:
+    """Map each file to the project files its import statements resolve to.
+
+    Args:
+        language_file_list: Absolute paths of the files that have a language.
+        project_dir: Root directory of the project to analyze.
+        project_file_set: Relative paths of the files that have a language.
+        source_root_set: Source root prefixes present in the project.
+
+    Returns:
+        A {file absolute path: set of callee absolute paths} dict, one entry per file.
+    """
+    file_callee_dict: dict[str, set[str]] = {}
+    for file_path in language_file_list:
+        callee_set: set[str] = set()
+        file_ext = os.path.splitext(file_path)[1].lstrip(".")
+        language, import_query_str = get_import_params(file_ext)
+        file_rel = _to_rel(file_path, project_dir)
+
+        # Parse import statements and add those resolvable to project files as callees
+        if language:
+            root_node = parse_file(file_path)[0]
+            for import_info in extract_imports(root_node, language, import_query_str):
+                resolved = resolve_module_to_project_path(
+                    import_info.module,
+                    file_rel,
+                    project_file_set,
+                    source_root_set,
+                    project_dir,
+                )
+                if resolved:
+                    callee_set.add(os.path.abspath(os.path.join(project_dir, resolved)))
+
+        file_callee_dict[os.path.abspath(file_path)] = callee_set
+    return file_callee_dict
+
+
+def _add_implicit_callee(
+    file_callee_dict: dict[str, set[str]],
+    language_file_list: list[str],
+    project_dir: str,
+) -> None:
+    """Add the files whose definitions a file uses without an import statement as its callees.
+
+    Java/Kotlin: classes in the same package (same directory).
+    SQL: tables, views and functions created in any .sql file of the project.
+    An edge is added in one direction, only when a top-level definition name of the other
+    file is used in the source code.
+
+    Args:
+        file_callee_dict: Return value of _collect_import_callee_dict; modified in place.
+        language_file_list: Absolute paths of the files that have a language.
+        project_dir: Root directory of the project to analyze.
+    """
+    scope_group_dict: dict[tuple[str, str], list[str]] = {}
+    for file_path in language_file_list:
+        file_rel = _to_rel(file_path, project_dir)
+        scope_key = implicit_scope_key(file_rel)
+        if scope_key is not None:
+            scope_group_dict.setdefault(scope_key, []).append(file_rel)
+
+    for group in scope_group_dict.values():
+        # Definition name -> file that defines it, for every file in the group
+        name_file_dict: dict[str, str] = {}
+        for file_rel in group:
+            for name in top_level_definition_names(file_rel, project_dir):
+                name_file_dict[name] = file_rel
+
+        for file_rel in group:
+            other_name_set = {name for name, other_rel in name_file_dict.items() if other_rel != file_rel}
+            if not other_name_set:
+                continue
+            abs_path = os.path.abspath(os.path.join(project_dir, file_rel))
+            root_node = parse_file(abs_path)[0]
+            usage_node_types = EXT_TO_USAGE_NODE_TYPE_DICT.get(os.path.splitext(file_rel)[1].lstrip("."))
+            for usage in extract_usages(root_node, other_name_set, usage_node_types):
+                other_rel = name_file_dict[usage.name.split(".")[0]]
+                file_callee_dict[abs_path].add(os.path.abspath(os.path.join(project_dir, other_rel)))
+
+
+def _to_output_entry_list(
+    all_file_list: list[str],
+    project_dir: str,
+    file_caller_dict: dict[str, list[str]],
+    file_callee_dict: dict[str, set[str]],
+) -> list[dict]:
+    """Build one {"file", "callers", "callees"} entry per file with "project_name/copy_path" paths.
+
+    copy_path is the {parent_dir}/{stem}_{ext}/{filename} path of the file in the output
+    directory. A file without a language has no entry in the two dicts and gets empty lists.
+
+    Args:
+        all_file_list: Absolute paths of every analyzed file, in output order.
+        project_dir: Root directory of the project to analyze.
+        file_caller_dict: {file absolute path: caller absolute paths}.
+        file_callee_dict: {file absolute path: callee absolute paths}.
+
+    Returns:
+        The entries in the order of all_file_list.
+    """
+    project_name = os.path.basename(project_dir)
+
+    def to_output(path: str) -> str:
+        """Convert an absolute path to "project_name/copy_path"."""
+        return f"{project_name}/{rel_to_copy_path(_to_rel(path, project_dir))}"
+
+    file_info_list = []
+    for file_path in all_file_list:
+        abs_path = os.path.abspath(file_path)
+        file_info_list.append({
+            "file":    to_output(abs_path),
+            "callers": [to_output(caller) for caller in file_caller_dict.get(abs_path, [])],
+            "callees": [to_output(callee) for callee in file_callee_dict.get(abs_path, ())],
+        })
+    return file_info_list
+
+
 def build_project_dependencies(
     project_dir: str,
     file_list: list[str] | None = None,
@@ -241,91 +429,25 @@ def build_project_dependencies(
 
     # == Step 2: Build the set of relative paths for project files ============
     # A lookup set used to determine whether a module is within the project during import resolution
-    project_file_set: set[str] = set()
-    for file_path in language_file_list:
-        project_file_set.add(os.path.relpath(file_path, project_dir).replace("\\", "/"))
+    project_file_set = {_to_rel(file_path, project_dir) for file_path in language_file_list}
 
     # Detect source root prefixes (e.g. "src/main/java/") present in the project
     source_root_set = detect_source_roots(project_file_set)
 
     # == Step 3: Collect files imported by each file (callees) ======
-    file_callee_map: dict[str, set[str]] = {}
-    for file_path in language_file_list:
-        callee_set: set[str] = set()
-        file_ext = os.path.splitext(file_path)[1].lstrip(".")
-        language, import_query_str = get_import_params(file_ext)
-        file_rel = os.path.relpath(file_path, project_dir).replace("\\", "/")
-
-        # Parse import statements and add those resolvable to project files as callees
-        if language:
-            root_node = parse_file(file_path)[0]
-            for import_info in extract_imports(root_node, language, import_query_str):
-                resolved = resolve_module_to_project_path(
-                    import_info.module,
-                    file_rel,
-                    project_file_set,
-                    source_root_set,
-                )
-                if resolved:
-                    resolved_abs = os.path.abspath(os.path.join(project_dir, resolved))
-                    callee_set.add(resolved_abs)
-
-        file_callee_map[os.path.abspath(file_path)] = callee_set
+    file_callee_dict = _collect_import_callee_dict(
+        language_file_list, project_dir, project_file_set, source_root_set,
+    )
 
     # == Step 3.5: Add files visible without an import statement as implicit callees ==
-    # Java/Kotlin: classes in the same package (same directory) can be referenced without imports.
-    # SQL: tables, views and functions created in any file can be referenced from any other file.
-    # Add as a unidirectional dependency only when a top-level definition name of the other file
-    # is used in the source code.
-    scope_group_dict: dict[tuple[str, str], list[str]] = {}
-    for file_path in language_file_list:
-        file_rel = os.path.relpath(file_path, project_dir).replace("\\", "/")
-        scope_key = implicit_scope_key(file_rel)
-        if scope_key is not None:
-            scope_group_dict.setdefault(scope_key, []).append(file_rel)
-
-    for group in scope_group_dict.values():
-        # Definition name -> file that defines it, for every file in the group
-        name_to_file: dict[str, str] = {}
-        for file_rel in group:
-            for name in top_level_definition_names(file_rel, project_dir):
-                name_to_file[name] = file_rel
-
-        for file_rel in group:
-            other_name_set = {n for n, f in name_to_file.items() if f != file_rel}
-            if not other_name_set:
-                continue
-            abs_path = os.path.abspath(os.path.join(project_dir, file_rel))
-            root_node = parse_file(abs_path)[0]
-            usage_node_types = EXT_TO_USAGE_NODE_TYPE_DICT.get(os.path.splitext(file_rel)[1].lstrip("."))
-            for usage in extract_usages(root_node, other_name_set, usage_node_types):
-                other_rel = name_to_file[usage.name.split(".")[0]]
-                file_callee_map[abs_path].add(os.path.abspath(os.path.join(project_dir, other_rel)))
+    _add_implicit_callee(file_callee_dict, language_file_list, project_dir)
 
     # == Step 4: Build the callers (reverse lookup) index ==================
-    file_caller_map: dict[str, list[str]] = {os.path.abspath(f): [] for f in language_file_list}
-    for caller_path, callee_set in file_callee_map.items():
+    file_caller_dict: dict[str, list[str]] = {os.path.abspath(f): [] for f in language_file_list}
+    for caller_path, callee_set in file_callee_dict.items():
         for callee_path in callee_set:
-            if callee_path in file_caller_map:
-                file_caller_map[callee_path].append(caller_path)
+            if callee_path in file_caller_dict:
+                file_caller_dict[callee_path].append(caller_path)
 
-    # == Step 5: Convert to relative paths and write to JSON ====================
-    # Paths use the "project_name/copy_path" format.
-    # copy_path = {parent_dir}/{file_stem}/{filename} structure.
-    # This matches the actual file paths within the output folder,
-    # keeping all paths valid even when the folder is moved to another environment.
-    # A file without a language has no entry in the two maps and gets empty lists.
-    project_name = os.path.basename(project_dir)
-    file_info_list = []
-    for file_path in all_file_list:
-        abs_path = os.path.abspath(file_path)
-        rel = os.path.relpath(abs_path, project_dir).replace("\\", "/")
-        caller_rel_list = [os.path.relpath(p, project_dir).replace("\\", "/") for p in file_caller_map.get(abs_path, [])]
-        callee_rel_list = [os.path.relpath(p, project_dir).replace("\\", "/") for p in file_callee_map.get(abs_path, ())]
-        file_info_list.append({
-            "file":    f"{project_name}/{rel_to_copy_path(rel)}",
-            "callers": [f"{project_name}/{rel_to_copy_path(r)}" for r in caller_rel_list],
-            "callees": [f"{project_name}/{rel_to_copy_path(r)}" for r in callee_rel_list],
-        })
-
-    return file_info_list
+    # == Step 5: Convert to "project_name/copy_path" paths ====================
+    return _to_output_entry_list(all_file_list, project_dir, file_caller_dict, file_callee_dict)
