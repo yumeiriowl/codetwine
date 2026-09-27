@@ -340,6 +340,25 @@ def _code_text_list(line_list: list[str]) -> list[tuple[str, bool]]:
     return code_text_list
 
 
+def code_text_list(line_list: list[str]) -> list[str]:
+    """Return the code of each line of a COBOL source file, as the file is analyzed.
+
+    Examples:
+        ["000100 PROGRAM-ID. MAIN.", "000200* note"] -> ["PROGRAM-ID. MAIN.", ""]
+        ["MOVE A TO B.", "MAIN-PARA."]              -> ["MOVE A TO B.", "MAIN-PARA."]
+
+    Args:
+        line_list: Lines of the file, or a run of them, without line breaks. Tab
+            characters are expanded as split_cobol_source() expands them.
+
+    Returns:
+        One string per line: columns 8 to 72 of a fixed-format line (to its end where the
+        file has no right margin), the whole of a free-format line, "" for a line that
+        holds no code. The source format is decided from the lines given.
+    """
+    return [text for text, _ in _code_text_list([line.expandtabs(_TAB_SIZE) for line in line_list])]
+
+
 def _literal_end(code_text: str, start: int, quote: str) -> int | None:
     """Return the position after the quote that ends a literal, or None when the line ends first.
 
