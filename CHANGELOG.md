@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Added
+- `file_dependencies.json`: `language`, the extension whose language settings the file is analyzed with (`cpy` for a copybook of any extension that a `COPY` statement names, `""` for a file without a language)
 - `parsers.cobol_format.code_text_list()`: the code of each line of a COBOL source file, as the file is analyzed (columns 8 to 72 in fixed format, the whole line in free format, nothing for a comment or directive line)
 - COBOL fixed format: the code area ends at column 72 unless more lines have code past column 72 than an identification field in columns 73 to 80; one line past column 80 no longer makes the whole file read without the right margin
 - COBOL references: a name qualified with `OF` / `IN`, and a host variable written `:STRUCT.NAME` in `EXEC SQL`, is linked to the definition under the named groups in the file or in a copybook, a group around a `COPY` statement counting for the copybook's definitions; an unqualified name to the file's own definition, else to the first copybook that defines it; the program name of a `CALL` to the program only (`cobol_file_index.cobol_reference_target_list()`, `cobol_source.CobolReference`)

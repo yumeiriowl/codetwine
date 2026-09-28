@@ -64,7 +64,9 @@ def get_file_dependencies(
     project_file_set, source_root_set and caller_map are the same for every file of one
     project; the caller builds them once and passes the same values to every call.
 
-    A file without a language (language_ext) is not parsed: its lists come back empty.
+    "language" is the extension whose language settings the file is analyzed with
+    (language_ext), "" for a file without a language. Such a file is not parsed: its lists
+    come back empty.
     A definition of a COBOL file or a BMS source also has "name_line", and a data item
     "level" and "is_group". The references of a COBOL file are resolved with OF / IN
     qualification (cobol_reference_target_list).
@@ -77,8 +79,8 @@ def get_file_dependencies(
         caller_map: A {file relative path: list of files depending on it} dict.
 
     Returns:
-        A dict with {"file", "definitions", "callee_usages", "same_file_usages",
-        "caller_usages"} keys.
+        A dict with {"file", "language", "definitions", "callee_usages",
+        "same_file_usages", "caller_usages"} keys.
     """
     target_file_rel = os.path.relpath(target_file, project_dir).replace("\\", "/")
     file_ext = language_ext(target_file)
@@ -87,6 +89,7 @@ def get_file_dependencies(
     if definition_dict is None:
         return {
             "file":          target_file_rel,
+            "language":      file_ext,
             "definitions":   [],
             "callee_usages": [],
             "same_file_usages": [],
@@ -159,6 +162,7 @@ def get_file_dependencies(
 
     return {
         "file":          target_file_rel,
+        "language":      file_ext,
         "definitions":   definition_list,
         "callee_usages": usage_list,
         "same_file_usages": same_file_usages,

@@ -422,6 +422,7 @@ Per-file definition and dependency information.
 ```json
 {
   "file": "string",
+  "language": "string",
   "definitions": [
     {
       "name": "string",
@@ -462,6 +463,7 @@ Per-file definition and dependency information.
 | Field | Type | Description |
 |-----------|-----|------|
 | `file` | string | Path of the source file copied to the output directory |
+| `language` | string | Extension whose language settings the file is analyzed with, in lower case (`py`, `cbl`, ...; `cpy` for a copybook of another extension or without one that a `COPY` statement names). `""` for a file without a language |
 | `definitions[].name` | string | Function/class name |
 | `definitions[].type` | string | Definition type (tree-sitter node type, varies by language. Python: `function_definition`, `class_definition` / Java: `class_declaration`, `method_declaration` / JS/TS: `function_declaration`, `class_declaration` / SQL: `create_table`, `create_view` / Rust: `function_item`, `struct_item`, `impl_item`, etc.) |
 | `definitions[].start_line` | int | Start line number |
