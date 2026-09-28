@@ -405,12 +405,14 @@ class _ReferenceResolver:
 
         The name looked up is prefix_tuple followed by the parts of the reference
         without the first skip_count ones. A type is found with _find_type; the part
-        after the type is taken as a member of it.
+        after the type is taken as a member of it. The match is named with the parts
+        the reference writes, except that a name written with an alias of a type is
+        named with the type.
 
         Examples (reference -> prefix_tuple, skip_count -> name, definition_name):
             Models.Customer.Parse()                   -> Customer.Parse, Customer.Parse
             Json.Write() with using Json = App.Text.Serializer;
-                -> (App, Text, Serializer), 1         -> Json.Write, Serializer.Write
+                -> (App, Text, Serializer), 1         -> Serializer.Write, Serializer.Write
             Sq() with using static App.MathEx;
                 -> (App, MathEx), 0                   -> Sq, MathEx.Sq
 
@@ -466,9 +468,12 @@ class _ReferenceResolver:
                 return None
             entry_list = member_entry_list or entry_list
 
+        name_part_tuple = reference.part_tuple[write_start:write_end]
+        if write_start < skip_count:
+            name_part_tuple = part_tuple[type_start:name_end]
         return _Match(
             entry_list=self._select_entry_list(entry_list, is_own_first=True),
-            name=".".join(reference.part_tuple[write_start:write_end]),
+            name=".".join(name_part_tuple),
             definition_name=join_name(path, part_tuple[type_end] if is_member else ""),
             part_count=write_end,
         )
@@ -545,7 +550,8 @@ class _ReferenceResolver:
         Any other chain is looked up among the members of the types around it, then in
         the namespaces around it from the innermost (_step_list, _match_step). A chain
         after "this." is looked up among the members only. The name of an attribute is
-        looked up as written, then with the suffix "Attribute".
+        looked up as written, then with the suffix "Attribute"; the match of the second
+        lookup names the attribute with the suffix ([Audit] -> AuditAttribute).
 
         Args:
             reference: A reference whose kind is not MEMBER_REFERENCE.
@@ -563,8 +569,6 @@ class _ReferenceResolver:
             match = self._match_chain(
                 CsharpReference(reference.kind, part_tuple, reference.arity_tuple, line), line,
             )
-            if match is not None:
-                match.name = match.name.removesuffix(_ATTRIBUTE_SUFFIX)
         return match
 
     def _match_chain(self, reference: CsharpReference, line: int) -> _Match | None:
