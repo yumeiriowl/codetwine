@@ -13,6 +13,7 @@ from codetwine.extractors.definitions import (
 from codetwine.extractors.imports import extract_imports
 from codetwine.extractors.usages import extract_usages, symbol_part_list
 from codetwine.cobol_file_index import reference_target_cache, register_copy_target
+from codetwine.csharp_namespace_index import csharp_reference_target_list, csharp_target_cache
 from codetwine.import_to_path import (
     detect_source_roots,
     resolve_module_to_project_path,
@@ -21,6 +22,7 @@ from codetwine.import_to_path import (
 )
 from codetwine.utils.file_utils import is_text_file, rel_to_copy_path
 from codetwine.config.settings import (
+    CSHARP_EXT_SET,
     EXT_TO_DEFINITION_DICT,
     EXCLUDE_PATTERNS,
     EXT_TO_USAGE_NODE_TYPE_DICT,
@@ -380,6 +382,41 @@ def _add_implicit_callee(
                 file_callee_dict[abs_path].add(os.path.abspath(os.path.join(project_dir, other_rel)))
 
 
+def _add_reference_callee(
+    file_callee_dict: dict[str, set[str]],
+    language_file_list: list[str],
+    project_dir: str,
+    project_file_set: set[str],
+) -> None:
+    """Add the files the references of a C# file resolve to as its callees.
+
+    A file whose analysis raises an exception adds no edges; the exception is logged.
+
+    Args:
+        file_callee_dict: Return value of _collect_import_callee_dict; modified in place.
+        language_file_list: Absolute paths of the files that have a language.
+        project_dir: Root directory of the project to analyze.
+        project_file_set: Relative paths of the files that have a language.
+    """
+    for file_path in language_file_list:
+        if language_ext(file_path) not in CSHARP_EXT_SET:
+            continue
+        file_rel = _to_rel(file_path, project_dir)
+        try:
+            root_node = parse_file(file_path)[0]
+            target_list = csharp_reference_target_list(
+                root_node, file_rel, project_file_set, project_dir,
+            )
+        except Exception as e:
+            _log_graph_failure(file_rel, e)
+            continue
+        for target in target_list:
+            if target.file_rel != file_rel:
+                file_callee_dict[os.path.abspath(file_path)].add(
+                    os.path.abspath(os.path.join(project_dir, target.file_rel))
+                )
+
+
 def _to_output_entry_list(
     all_file_list: list[str],
     project_dir: str,
@@ -439,7 +476,7 @@ def build_project_dependencies(
     empty callers and callees. A file without a language that a COBOL COPY statement
     names is analyzed as a COBOL copybook, and keeps that language until the next call
     for the project (register_copy_target). The resolved references of COBOL files
-    (reference_target_cache) are cleared.
+    (reference_target_cache) and of C# files (csharp_target_cache) are cleared.
 
     Args:
         project_dir: Root directory of the project to analyze.
@@ -457,6 +494,7 @@ def build_project_dependencies(
 
     # Files without a language that COBOL COPY statements name are analyzed as COBOL
     reference_target_cache.clear()
+    csharp_target_cache.clear()
     register_copy_target(project_dir, [_to_rel(f, project_dir) for f in all_file_list])
 
     # Only the files with a language take part in import resolution and dependency edges
@@ -476,6 +514,9 @@ def build_project_dependencies(
 
     # == Step 3.5: Add files visible without an import statement as implicit callees ==
     _add_implicit_callee(file_callee_dict, language_file_list, project_dir)
+
+    # == Step 3.6: Add the files the references of a C# file resolve to ========
+    _add_reference_callee(file_callee_dict, language_file_list, project_dir, project_file_set)
 
     # == Step 4: Build the callers (reverse lookup) index ==================
     file_caller_dict: dict[str, list[str]] = {os.path.abspath(f): [] for f in language_file_list}

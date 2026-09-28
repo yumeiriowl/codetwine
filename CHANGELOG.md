@@ -3,6 +3,12 @@
 ## Unreleased
 
 ### Added
+- C# (`cs`, `tree-sitter-c-sharp`): classes, structs, interfaces, enums, records, delegates, methods, constructors, properties, events, fields and enum members are extracted as definitions. A name is resolved to the file of the type or member it names through the namespaces around it, the `using` directives (`using`, `using static`, alias, `global using` under the nearest `.csproj` directory), names written with their namespaces, the members of a `partial` type written in other files, and extension methods by name and number of arguments (`codetwine/csharp_namespace_index.py`, `codetwine/extractors/csharp_source.py`)
+- `csharp_namespace_index.csharp_reference_target_list()`: the definition each reference of a C# file resolves to
+- `settings.CSHARP_EXT_SET`: the extensions of the C# files
+- `usage_analysis.build_csharp_usage_info_list()` / `usage_analysis.build_csharp_same_file_usages()`: `callee_usages` and `same_file_usages` of a C# file from its resolved references
+- Definition name settings `__name_field__` (the `name` field of a declaration) and `__variable_declaration__` (the first variable of a field declaration)
+- `tree-sitter-c-sharp` dependency
 - `file_dependencies.json`: `language`, the extension whose language settings the file is analyzed with (`cpy` for a copybook of any extension that a `COPY` statement names, `""` for a file without a language)
 - `parsers.cobol_format.code_text_list()`: the code of each line of a COBOL source file, as the file is analyzed (columns 8 to 72 in fixed format, the whole line in free format, nothing for a comment or directive line)
 - COBOL fixed format: the code area ends at column 72 unless more lines have code past column 72 than an identification field in columns 73 to 80; one line past column 80 no longer makes the whole file read without the right margin

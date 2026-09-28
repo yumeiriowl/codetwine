@@ -14,11 +14,13 @@ _INCLUDE_GUARD_RE = re.compile(r"^_*[A-Z][A-Z0-9_]*_H(?:PP|XX)?_*(?:INCLUDED)?_*
 CONTAINER_DEFINITION_TYPE_SET = {
     "namespace_definition",   # C++
     "class_definition",       # Python
-    "class_declaration",      # Java / Kotlin / JS / TS
+    "class_declaration",      # Java / Kotlin / JS / TS / C#
     "class_specifier",        # C++
     "struct_specifier",       # C / C++
-    "interface_declaration",  # Java / TS
-    "enum_declaration",       # Java / TS
+    "interface_declaration",  # Java / TS / C#
+    "enum_declaration",       # Java / TS / C#
+    "struct_declaration",     # C#
+    "record_declaration",     # C#
     "object_declaration",     # Kotlin
     "impl_item",              # Rust
     "trait_item",             # Rust
@@ -272,7 +274,8 @@ def _extract_name(node: Node, name_type: str) -> str | None:
                                     "__function_declarator__", "__init_declarator__",
                                     "__declarator_name__", "__kotlin_property__",
                                     "__object_reference__", "__impl_type__",
-                                    "__inline_module__"
+                                    "__inline_module__", "__name_field__",
+                                    "__variable_declaration__"
 
     Returns:
         The definition name string, or None if extraction fails.
@@ -531,6 +534,55 @@ def _extract_inline_module_name(node: Node) -> str | None:
     return name_node.text.decode("utf-8") if name_node else None
 
 
+def _extract_name_field_name(node: Node) -> str | None:
+    """Extract the name from the name field of a C# declaration.
+
+    Target AST structure:
+        method_declaration               <- this node is passed as the argument
+          +-- modifier
+          +-- returns: identifier "Order"
+          +-- name: identifier "Find"    <- extract this
+          +-- parameters: parameter_list
+
+    The same structure applies to the declarations of types, constructors, properties,
+    events and enum members.
+
+    Args:
+        node: A declaration node.
+
+    Returns:
+        The name string, or None if the node has no name field.
+    """
+    name_node = node.child_by_field_name("name")
+    return name_node.text.decode("utf-8") if name_node else None
+
+
+def _extract_variable_declaration_name(node: Node) -> str | None:
+    """Extract the variable name from a C# field declaration.
+
+    Target AST structure:
+        field_declaration                <- this node is passed as the argument
+          +-- modifier
+          +-- variable_declaration
+               +-- type: identifier "Order"
+               +-- variable_declarator
+                    +-- name: identifier "X"  <- extract this
+
+    The same structure applies to event_field_declaration.
+    When several variables are declared at once (e.g. int a, b;), the first name is returned.
+
+    Args:
+        node: A field_declaration or event_field_declaration node.
+
+    Returns:
+        The variable name string, or None if extraction fails.
+    """
+    for child in node.children:
+        if child.type == "variable_declaration":
+            return _extract_variable_declarator_name(child)
+    return None
+
+
 def _extract_init_declarator_name(node: Node) -> str | None:
     """Extract the variable name from a C/C++ variable/constant declaration.
 
@@ -585,6 +637,11 @@ _SENTINEL_EXTRACTOR_DICT = {
     "__impl_type__": _extract_impl_type_name,
     # Rust: mod_item with a body > name: identifier
     "__inline_module__": _extract_inline_module_name,
+    # C#: declaration > name: identifier
+    "__name_field__": _extract_name_field_name,
+    # C#: field_declaration / event_field_declaration > variable_declaration
+    #     > variable_declarator > identifier
+    "__variable_declaration__": _extract_variable_declaration_name,
 }
 
 

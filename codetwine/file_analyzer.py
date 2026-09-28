@@ -13,14 +13,17 @@ from codetwine.extractors.usage_analysis import (
     build_caller_usages,
     build_cobol_usage_info_list,
     build_cobol_same_file_usages,
+    build_csharp_usage_info_list,
+    build_csharp_same_file_usages,
 )
 from codetwine.cobol_file_index import cobol_reference_target_list
+from codetwine.csharp_namespace_index import csharp_reference_target_list
 from codetwine.import_to_path import (
     build_symbol_to_file_map,
     get_import_params,
 )
 from codetwine.extractors.imports import extract_imports
-from codetwine.config.settings import EXT_TO_DEFINITION_DICT, language_ext
+from codetwine.config.settings import CSHARP_EXT_SET, EXT_TO_DEFINITION_DICT, language_ext
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +72,8 @@ def get_file_dependencies(
     come back empty.
     A definition of a COBOL file or a BMS source also has "name_line", and a data item
     "level" and "is_group". The references of a COBOL file are resolved with OF / IN
-    qualification (cobol_reference_target_list).
+    qualification (cobol_reference_target_list), and the references of a C# file
+    through its namespaces and using directives (csharp_reference_target_list).
 
     Args:
         target_file: Absolute path of the target file to analyze.
@@ -119,6 +123,15 @@ def get_file_dependencies(
         )
         usage_list = build_cobol_usage_info_list(target_list, target_file_rel, project_dir)
         same_file_usages = build_cobol_same_file_usages(
+            target_list, target_file_rel, definition_list,
+        )
+    elif file_ext in CSHARP_EXT_SET:
+        # Resolve each reference, through namespaces and using directives, to this file or another
+        target_list = csharp_reference_target_list(
+            root_node, target_file_rel, project_file_set, project_dir,
+        )
+        usage_list = build_csharp_usage_info_list(target_list, target_file_rel, project_dir)
+        same_file_usages = build_csharp_same_file_usages(
             target_list, target_file_rel, definition_list,
         )
     elif language:

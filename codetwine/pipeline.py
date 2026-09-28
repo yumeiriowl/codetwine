@@ -6,6 +6,7 @@ import logging
 from collections import Counter
 from codetwine.parsers.ts_parser import parse_cache
 from codetwine.cobol_file_index import file_index_cache, reference_target_cache
+from codetwine.csharp_namespace_index import csharp_target_cache, namespace_index_cache
 from codetwine.rust_module_tree import module_tree_cache
 from codetwine.extractors.dependency_graph import build_project_dependencies
 from codetwine.file_analyzer import get_file_dependencies
@@ -311,12 +312,14 @@ async def process_all_files(
             base_output_dir, all_file_list, knowledge_db_path, symbol_deps, summary_map,
         )
 
-    # Clear parse result cache, Rust module tree cache and COBOL file index and reference
-    # caches to free memory
+    # Clear parse result cache, Rust module tree cache, COBOL file index and reference
+    # caches and C# namespace index and reference caches to free memory
     parse_cache.clear()
     module_tree_cache.clear()
     file_index_cache.clear()
     reference_target_cache.clear()
+    namespace_index_cache.clear()
+    csharp_target_cache.clear()
 
     log_progress(logger, "Analysis complete.")
 

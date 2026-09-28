@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from dotenv import load_dotenv
 from tree_sitter import Language
 import tree_sitter_c as tsc
+import tree_sitter_c_sharp as tscsharp
 import tree_sitter_cpp as tscpp
 import tree_sitter_java as tsjava
 import tree_sitter_javascript as tsjavascript
@@ -240,6 +241,22 @@ RUST_DEFINITION_DICT = {
     "static_item": "identifier",
     "mod_item": "__inline_module__",
     "macro_definition": "identifier",
+}
+
+CSHARP_DEFINITION_DICT = {
+    "class_declaration": "__name_field__",
+    "struct_declaration": "__name_field__",
+    "interface_declaration": "__name_field__",
+    "enum_declaration": "__name_field__",
+    "record_declaration": "__name_field__",
+    "delegate_declaration": "__name_field__",
+    "method_declaration": "__name_field__",
+    "constructor_declaration": "__name_field__",
+    "property_declaration": "__name_field__",
+    "event_declaration": "__name_field__",
+    "enum_member_declaration": "__name_field__",
+    "field_declaration": "__variable_declaration__",
+    "event_field_declaration": "__variable_declaration__",
 }
 
 # Definition types of COBOL -> the node of a unit that holds the name.
@@ -656,6 +673,10 @@ _LANG_REGISTRY: dict[str, LangConfig] = {
         usage_node_type_dict=_RUST_USAGE_NODE_TYPE_DICT,
         import_resolve_dict={"separator": "::", "module_tree": True},
     ),
+    "cs": LangConfig(
+        language=Language(tscsharp.language()),
+        definition_dict=CSHARP_DEFINITION_DICT,
+    ),
     "sql": LangConfig(
         language=Language(tssql.language()),
         definition_dict=SQL_DEFINITION_DICT,
@@ -715,6 +736,12 @@ EXT_TO_DEFINITION_DICT: dict[str, dict[str, str]] = _expand_ext_aliases(
 COBOL_EXT_SET: set[str] = {
     ext for ext, definition_dict in EXT_TO_DEFINITION_DICT.items()
     if definition_dict is COBOL_DEFINITION_DICT
+}
+
+# Extensions of the C# files
+CSHARP_EXT_SET: set[str] = {
+    ext for ext, definition_dict in EXT_TO_DEFINITION_DICT.items()
+    if definition_dict is CSHARP_DEFINITION_DICT
 }
 
 # Extensions of the BMS sources (lower case)
