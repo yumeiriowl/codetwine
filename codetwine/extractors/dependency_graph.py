@@ -12,6 +12,7 @@ from codetwine.extractors.definitions import (
 )
 from codetwine.extractors.imports import extract_imports
 from codetwine.extractors.usages import extract_usages, symbol_part_list
+from codetwine.cobol_file_index import reference_target_cache, register_copy_target
 from codetwine.import_to_path import (
     detect_source_roots,
     resolve_module_to_project_path,
@@ -25,6 +26,7 @@ from codetwine.config.settings import (
     EXT_TO_USAGE_NODE_TYPE_DICT,
     has_language,
     implicit_scope_key,
+    language_ext,
 )
 
 logger = logging.getLogger(__name__)
@@ -166,11 +168,10 @@ def extract_callee_source(
     Returns:
         The source code string. None if the definition is not found.
     """
-    definition_dict = EXT_TO_DEFINITION_DICT.get(os.path.splitext(callee_file_path)[1].lstrip("."))
+    absolute_path = os.path.join(project_dir, callee_file_path)
+    definition_dict = EXT_TO_DEFINITION_DICT.get(language_ext(absolute_path))
     if not definition_dict:
         return None
-
-    absolute_path = os.path.join(project_dir, callee_file_path)
 
     callee_root = parse_file(absolute_path)[0]
     if isinstance(callee_root, CobolSource):
@@ -294,7 +295,7 @@ def _collect_import_callee_dict(
     file_callee_dict: dict[str, set[str]] = {}
     for file_path in language_file_list:
         callee_set: set[str] = set()
-        file_ext = os.path.splitext(file_path)[1].lstrip(".")
+        file_ext = language_ext(file_path)
         language, import_query_str = get_import_params(file_ext)
         file_rel = _to_rel(file_path, project_dir)
 
@@ -373,7 +374,7 @@ def _add_implicit_callee(
                 continue
             abs_path = os.path.abspath(os.path.join(project_dir, file_rel))
             root_node = parse_file(abs_path)[0]
-            usage_node_types = EXT_TO_USAGE_NODE_TYPE_DICT.get(os.path.splitext(file_rel)[1].lstrip("."))
+            usage_node_types = EXT_TO_USAGE_NODE_TYPE_DICT.get(language_ext(abs_path))
             for usage in extract_usages(root_node, other_name_set, usage_node_types):
                 other_rel = name_file_dict[usage.name.split(".")[0]]
                 file_callee_dict[abs_path].add(os.path.abspath(os.path.join(project_dir, other_rel)))
@@ -434,8 +435,11 @@ def build_project_dependencies(
 
     Paths use the "project_name/copy_path" format.
     Every non-empty text file that passes EXCLUDE_PATTERNS is listed. Import analysis
-    runs on the files whose extension has a tree-sitter language; every other file is
-    listed with empty callers and callees.
+    runs on the files with a language (has_language); every other file is listed with
+    empty callers and callees. A file without a language that a COBOL COPY statement
+    names is analyzed as a COBOL copybook, and keeps that language until the next call
+    for the project (register_copy_target). The resolved references of COBOL files
+    (reference_target_cache) are cleared.
 
     Args:
         project_dir: Root directory of the project to analyze.
@@ -450,6 +454,10 @@ def build_project_dependencies(
         all_file_list = _collect_text_file_list(project_dir)
     else:
         all_file_list = _filter_text_file_list(project_dir, file_list)
+
+    # Files without a language that COBOL COPY statements name are analyzed as COBOL
+    reference_target_cache.clear()
+    register_copy_target(project_dir, [_to_rel(f, project_dir) for f in all_file_list])
 
     # Only the files with a language take part in import resolution and dependency edges
     language_file_list = [f for f in all_file_list if has_language(f)]

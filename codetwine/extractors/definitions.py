@@ -43,6 +43,9 @@ class DefinitionInfo:
     type: str                                     # AST node type ("function_definition" / "expression_statement", etc.)
     start_line: int                               # Start line number of the definition (1-based)
     end_line: int                                 # End line number of the definition
+    name_line: int | None = None                  # Line the name is written on (COBOL, BMS)
+    level: int | None = None                      # Level number of a data item (COBOL, BMS)
+    is_group: bool | None = None                  # Whether a data item is a group item (COBOL, BMS)
 
 
 def extract_definitions(
@@ -52,7 +55,8 @@ def extract_definitions(
     """Extract definitions (functions, classes, variables, types, etc.) from the AST and return them in line-number order.
 
     For a CobolSource its definitions are returned: programs, ENTRY names, sections,
-    paragraphs, data items and descriptions of files.
+    paragraphs, data items and descriptions of files, with the line of the name, and the
+    level number and whether it is a group item for a data item.
 
     definition_dict structure:
         key = AST node type (e.g. "function_definition")
@@ -78,6 +82,7 @@ def extract_definitions(
         return [
             DefinitionInfo(
                 definition.name, definition.type, definition.start_line, definition.end_line,
+                definition.name_line, definition.level, definition.is_group,
             )
             for definition in root_node.definition_list
         ]

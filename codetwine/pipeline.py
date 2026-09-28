@@ -5,7 +5,7 @@ import shutil
 import logging
 from collections import Counter
 from codetwine.parsers.ts_parser import parse_cache
-from codetwine.cobol_file_index import file_index_cache
+from codetwine.cobol_file_index import file_index_cache, reference_target_cache
 from codetwine.rust_module_tree import module_tree_cache
 from codetwine.extractors.dependency_graph import build_project_dependencies
 from codetwine.file_analyzer import get_file_dependencies
@@ -200,7 +200,7 @@ async def process_all_files(
     Processing flow:
     1. Build the project-wide dependency graph over every non-empty text file.
     2. Extract dependency info for all files, changed or not.
-       A file whose extension has no tree-sitter language gets empty lists.
+       A file without a language (has_language) gets empty lists.
     3. Detect changed files and generate design documents in topological order
        (regenerate only the impact range of changes). Only files with a language
        get a design document.
@@ -253,7 +253,10 @@ async def process_all_files(
 
     # The files with a tree-sitter language: the only ones with definitions,
     # dependency targets and design documents
-    language_dep_list = [info for info in project_dep_list if has_language(info["file"])]
+    language_dep_list = [
+        info for info in project_dep_list
+        if has_language(os.path.join(project_dir, info["file"]))
+    ]
     language_file_list = [info["file"] for info in language_dep_list]
 
     log_progress(logger, f"Files to analyze: {len(all_file_list)} ({_ext_count_line(all_file_list)})")
@@ -308,10 +311,12 @@ async def process_all_files(
             base_output_dir, all_file_list, knowledge_db_path, symbol_deps, summary_map,
         )
 
-    # Clear parse result cache, Rust module tree cache and COBOL file index cache to free memory
+    # Clear parse result cache, Rust module tree cache and COBOL file index and reference
+    # caches to free memory
     parse_cache.clear()
     module_tree_cache.clear()
     file_index_cache.clear()
+    reference_target_cache.clear()
 
     log_progress(logger, "Analysis complete.")
 

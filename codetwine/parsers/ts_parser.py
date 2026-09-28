@@ -1,12 +1,14 @@
-import os
 import logging
 from collections import OrderedDict
 from tree_sitter import Node, Parser
 from codetwine.config.settings import (
+    BMS_EXT_SET,
     COBOL_EXT_SET,
     EXT_TO_LANGUAGE_DICT,
     PARSE_CACHE_MAX_FILES,
+    language_ext,
 )
+from codetwine.extractors.bms_source import read_bms_source
 from codetwine.extractors.cobol_source import CobolSource, read_cobol_source
 from codetwine.utils.file_utils import read_source
 
@@ -15,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 # Module-level cache for parse results, ordered from least to most recently used.
 # One entry holds one file's whole syntax tree: a tree-sitter Node keeps its tree alive.
-# The entry of a COBOL file holds its CobolSource.
+# The entry of a COBOL file or a BMS source holds its CobolSource.
 # The number of entries is capped by PARSE_CACHE_MAX_FILES.
 parse_cache: OrderedDict[str, tuple[Node | CobolSource, bytes]] = OrderedDict()
 
@@ -51,8 +53,9 @@ def parse_file(file_path: str) -> tuple[Node | CobolSource, bytes]:
     as UTF-8. Line numbers match the file.
 
     For a COBOL file the first element is a CobolSource (read_cobol_source) in place of
-    the root node; extract_definitions(), extract_imports() and extract_usages() take it
-    as they take a root node.
+    the root node, and for a BMS source the CobolSource of its symbolic maps
+    (read_bms_source); extract_definitions(), extract_imports() and extract_usages()
+    take it as they take a root node. The language is the one language_ext() gives.
 
     Parse results are cached at module level; a file found in the cache is not parsed again.
     The cache holds at most PARSE_CACHE_MAX_FILES entries; when it is full, the least
@@ -72,7 +75,7 @@ def parse_file(file_path: str) -> tuple[Node | CobolSource, bytes]:
         return cache_entry
 
     # Get the corresponding language from the file extension
-    ext = os.path.splitext(file_path)[1].lstrip(".")
+    ext = language_ext(file_path)
 
     # Read the file as UTF-8 bytes
     content = _read_utf8_content(file_path)
@@ -81,6 +84,9 @@ def parse_file(file_path: str) -> tuple[Node | CobolSource, bytes]:
         # Split the COBOL text into statements and parse each of them
         cobol_source = read_cobol_source(content.decode("utf-8"), EXT_TO_LANGUAGE_DICT[ext])
         parse_result = (cobol_source, content)
+    elif ext in BMS_EXT_SET:
+        # Read the maps of the BMS macros
+        parse_result = (read_bms_source(content.decode("utf-8")), content)
     else:
         # Parse with tree-sitter to generate the AST
         tree = Parser(EXT_TO_LANGUAGE_DICT[ext]).parse(content)

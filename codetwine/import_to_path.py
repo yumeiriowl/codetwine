@@ -17,6 +17,7 @@ from codetwine.config.settings import (
     SOURCE_ROOT_PATTERN_LIST,
     EXT_TO_LANGUAGE_DICT,
     implicit_scope_key,
+    language_ext,
 )
 
 logger = logging.getLogger(__name__)
@@ -227,7 +228,9 @@ def resolve_module_to_project_path(
     """
     # Get the current file's extension and resolve config
     src_ext_with_dot = os.path.splitext(current_file_rel)[1]
-    src_ext = src_ext_with_dot.lstrip(".")
+    src_ext = language_ext(
+        os.path.join(project_dir, current_file_rel) if project_dir else current_file_rel
+    )
 
     # Get the module resolve config for this extension
     resolve_config = EXT_TO_IMPORT_RESOLVE_DICT.get(src_ext)
@@ -302,7 +305,7 @@ def import_name_list(
     Returns:
         A (bound names, {alias name: original name}) tuple.
     """
-    ext = os.path.splitext(current_file_rel)[1].lstrip(".")
+    ext = language_ext(os.path.join(project_dir, current_file_rel))
     resolve_config = EXT_TO_IMPORT_RESOLVE_DICT.get(ext, {})
     if resolve_config.get("name_index"):
         name_dict = cobol_import_name_dict(
@@ -512,7 +515,7 @@ def top_level_definition_names(file_rel: str, project_dir: str) -> list[str]:
     if not os.path.isfile(abs_path):
         return []
 
-    definition_dict = EXT_TO_DEFINITION_DICT.get(os.path.splitext(file_rel)[1].lstrip("."))
+    definition_dict = EXT_TO_DEFINITION_DICT.get(language_ext(abs_path))
     if not definition_dict:
         return []
 

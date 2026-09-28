@@ -59,7 +59,7 @@ The knowledge file can be used as input material for LLM-powered code search and
 
 Definitions, dependencies and design documents are extracted for the following languages
 (extensions `py`, `java`, `kt`, `kts`, `js`, `jsx`, `ts`, `tsx`, `c`, `cpp`, `h`, `sql`, `rs`,
-`cbl`, `cob`, `cpy`, and the last three in upper case):
+and `cbl`, `cob`, `cpy`, `bms` in any case):
 
 - Python
 - Java
@@ -70,7 +70,8 @@ Definitions, dependencies and design documents are extracted for the following l
 - Kotlin
 - SQL
 - Rust
-- COBOL
+- COBOL (a file with another extension, or none, that a `COPY` statement names is read as a copybook)
+- BMS (CICS map definitions: the names of the symbolic map a COBOL program copies)
 
 Every other non-empty text file (`.md`, `.yaml`, `.toml`, `Makefile`, ...) is also listed in the
 outputs and copied to the output directory, with empty `definitions`, `callee_usages`,
@@ -225,7 +226,7 @@ The RLM QA agent example reads either form.
    - Decodes each file with, in order: the codec its BOM names, UTF-8, the encodings of `SOURCE_ENCODING`, the encoding charset-normalizer detects, and finally UTF-8 with invalid bytes replaced. All JSON output is UTF-8
    - Generates a syntax tree with tree-sitter and extracts definitions (functions, classes, etc.)
    - Based on the dependency graph built in step 1, extracts callee and caller file paths, line numbers, and source code
-   - A file whose extension has no tree-sitter language gets empty definitions and usages
+   - A file without a supported language gets empty definitions and usages
 3. **Generate design documents via LLM** (files of a supported language only)
    - Compares each source file's hash with the one recorded in its previous design document (`doc.json`) to identify the files whose documents must be regenerated
    - Sorts files in topological order, processing from files with no dependencies toward dependent files
@@ -294,11 +295,12 @@ Dependency extraction is performed through static syntax analysis with tree-sitt
 
 ### COBOL
 
-- **Definitions**: Programs (`PROGRAM-ID`), `ENTRY` names, sections, paragraphs, data items and file descriptions (`FD` / `SD`) are definitions. The items of the `SCREEN` and `REPORT` sections, `FUNCTION-ID`, `CLASS-ID` and `METHOD-ID` are not
-- **Names**: Names are compared without regard to upper and lower case. A name qualified with `OF` / `IN` is linked to the first definition of that name
-- **COPY**: `COPY name` and `EXEC SQL INCLUDE name` lead to the file of the project named `name`, with or without its extension, among the files with the extensions `cbl`, `cob` and `cpy`. A name with a directory part (`COPY "copy/name.cpy"`) is looked up by its file name, and a file whose path ends with it comes first. A copybook with another extension or without one is not resolved. The text of a copybook is not expanded into the file that includes it; a copybook is analyzed as a file of its own. The names of the copybook are linked as they are written; with `REPLACING`, an operand whose texts are one word each (`==:TAG:== BY ==WS==`, `OLD-NAME BY NEW-NAME`, `LEADING` / `TRAILING`) is applied to them
+- **Definitions**: Programs (`PROGRAM-ID`), `ENTRY` names, sections, paragraphs, data items and file descriptions (`FD` / `SD`) are definitions. The items of the `SCREEN` and `REPORT` sections, `FUNCTION-ID`, `CLASS-ID` and `METHOD-ID` are not. Each definition has the line its name is written on (`name_line`); a data item has its level number (`level`) and whether it is a group item (`is_group`). A group item is one that other items (not condition names or `RENAMES` items) belong to, or one without items of its own, without a `PICTURE` or `VALUE` clause and without a usage that takes no `PICTURE` clause (`POINTER`, `COMP-1`, `BINARY-LONG`, ...), whose fields come from the `COPY` statement right after it; that `COPY` statement is within its lines, and within the lines of the groups that hold it. A group item whose items come from a `COPY` statement after items of its own is not told apart from a `COPY` of other records
+- **Names**: Names are compared without regard to upper and lower case. A data name or procedure name is linked to its definition in the file itself, else to the first copybook, in the order of the `COPY` statements, that defines it. A name qualified with `OF` / `IN` (`CODE-X OF REC-A`, `PARA-1 IN SECTION-1`), and a host variable written `:REC-A.CODE-X` in `EXEC SQL`, is linked to the definition under those groups, in the file itself or in a copybook; a group in the file that holds the `COPY` statement of a copybook counts as a group of the copybook's definitions. A qualified name that matches no definition is linked as an unqualified one. The program name of a `CALL` is linked to the program only, not to a data item or paragraph of the same name
+- **COPY**: `COPY name` and `EXEC SQL INCLUDE name` lead to the file of the project named `name`, with or without its extension; a file with the extension `cbl`, `cob` or `cpy` comes before any other. A name with a directory part (`COPY "copy/name.cpy"`) is looked up by its file name, and a file whose path ends with it comes first. A file with another extension, or without one, that a `COPY` statement names is analyzed as a COBOL copybook when it has no other supported language (DCLGEN members, `.inc` files); the `COPY` statements of such a file are followed as well. The text of a copybook is not expanded into the file that includes it; a copybook is analyzed as a file of its own. The names of the copybook are linked as they are written; with `REPLACING`, an operand whose texts are one word each (`==:TAG:== BY ==WS==`, `OLD-NAME BY NEW-NAME`, `LEADING` / `TRAILING`) is applied to them
+- **BMS**: A `.bms` file (`DFHMSD` / `DFHMDI` / `DFHMDF` macros) defines the names of the symbolic map of each map: `<map>I` and `<map>O`, and for each named field `<field>L`, `F`, `A`, `I`, `O` and one letter per extended attribute (`DSATTS`, or `EXTATT=YES`). `COPY name` leads to the `.bms` file of that name or of that mapset name, unless a COBOL file of that name (a generated symbolic map) is in the project
 - **CALL**: `CALL "name"` and `EXEC CICS ... PROGRAM("name")` lead to the file that defines a program or an `ENTRY` of that name, or to the program file named `name`. A `CALL` of a data item leads to the programs named by the literals the item is given in the same file (`VALUE` clause, `MOVE "name" TO item`); a name built at run time is not resolved
-- **Source format**: Fixed-format and free-format source are read. A file without a `>>SOURCE` / `$SET SOURCEFORMAT` directive is read as free format when one of its lines, other than a directive line, cannot be a fixed-format line. A fixed-format file with a line of more than 80 columns is read without the right margin at column 72. A full-width character counts as two columns
+- **Source format**: Fixed-format and free-format source are read. A file without a `>>SOURCE` / `$SET SOURCEFORMAT` directive is read as free format when one of its lines, other than a directive line, cannot be a fixed-format line. The code of a fixed-format line ends at column 72, unless more of the file's lines have code past column 72 than have an identification field there (text only in columns 73 to 80, after a blank column 72); such a file is read to the end of each line. A floating comment (`*>`) past column 72 and a literal the next line continues are not counted. A full-width character counts as two columns
 - **Statements the grammar does not read**: Each data item and each sentence of the procedure division is parsed by itself. In a statement the grammar does not read, every word that is a name of a definition counts as a usage, and a paragraph that starts in the middle of a sentence (no period before it) is not a definition
 - **Debug lines and compiler directives**: Lines with `D` in the indicator column, `>>` directives, `REPLACE` statements and conditional compilation are not evaluated
 
@@ -380,7 +382,7 @@ Consolidated JSON integrating all file dependencies and design documents.
 |-----------|-----|------|
 | `project_name` | string | Project name |
 | `project_dependencies[].file` | string | Path of the source file copied to the output directory |
-| `project_dependencies[].summary` | string\|null | Summary of the file (null when the design document is not generated, and always for a file whose extension has no tree-sitter language) |
+| `project_dependencies[].summary` | string\|null | Summary of the file (null when the design document is not generated, and always for a file without a supported language) |
 | `project_dependencies[].callers` | string[] | Paths of dependent files copied to the output directory |
 | `project_dependencies[].callees` | string[] | Paths of dependency files copied to the output directory |
 | `files[].file` | string | Path of the source file copied to the output directory |
@@ -426,6 +428,9 @@ Per-file definition and dependency information.
       "type": "string",
       "start_line": 0,
       "end_line": 0,
+      "name_line": 0,
+      "level": 0,
+      "is_group": false,
       "context": "string"
     }
   ],
@@ -461,6 +466,9 @@ Per-file definition and dependency information.
 | `definitions[].type` | string | Definition type (tree-sitter node type, varies by language. Python: `function_definition`, `class_definition` / Java: `class_declaration`, `method_declaration` / JS/TS: `function_declaration`, `class_declaration` / SQL: `create_table`, `create_view` / Rust: `function_item`, `struct_item`, `impl_item`, etc.) |
 | `definitions[].start_line` | int | Start line number |
 | `definitions[].end_line` | int | End line number |
+| `definitions[].name_line` | int | Line the name is written on (COBOL and BMS only) |
+| `definitions[].level` | int | Level number of a data item (COBOL and BMS data items only) |
+| `definitions[].is_group` | bool | Whether a data item is a group item (COBOL and BMS data items only) |
 | `definitions[].context` | string | Full source code of the definition |
 | `callee_usages[].name` | string | Name of the used symbol |
 | `callee_usages[].from` | string | Path of the dependency file copied to the output directory |
@@ -598,7 +606,7 @@ codetwine/
 │   ├── doc_creator.py          # Design document generation via LLM
 │   ├── import_to_path.py       # Import statement to file path resolution
 │   ├── rust_module_tree.py     # Rust path to file resolution through mod declarations
-│   ├── cobol_file_index.py     # COBOL COPY / CALL name to file resolution
+│   ├── cobol_file_index.py     # COBOL COPY / CALL name to file resolution and reference resolution
 │   ├── output.py               # JSON and Mermaid output processing
 │   ├── knowledge_db.py         # SQLite output and read API
 │   ├── config/
@@ -609,6 +617,7 @@ codetwine/
 │   │   ├── imports.py          # Import statement extraction
 │   │   ├── rust_path.py        # Rust use declaration and path reading
 │   │   ├── cobol_source.py     # COBOL definitions, COPY / CALL statements and references
+│   │   ├── bms_source.py       # Symbolic map names of a BMS source
 │   │   ├── usages.py           # Symbol usage location extraction
 │   │   ├── usage_analysis.py   # Usage location analysis
 │   │   └── dependency_graph.py # Project-wide dependency graph construction

@@ -253,6 +253,12 @@ COBOL_DEFINITION_DICT = {
     "file_description_entry": "WORD",
 }
 
+# Definition types of a BMS source (the symbolic map of each map) -> the node that holds
+# the name. The definitions are read by bms_source.read_bms_source(); the values are not read
+BMS_DEFINITION_DICT = {
+    "data_description": "entry_name",
+}
+
 SQL_DEFINITION_DICT = {
     "create_table": "__object_reference__",
     "create_view": "__object_reference__",
@@ -536,6 +542,8 @@ class LangConfig:
                         "package" - files of the same extension in the same directory (Java / Kotlin)
                         "project" - every file of the same extension (SQL)
                         None      - none
+    ignore_ext_case:  Whether the extension is matched without regard to upper and lower
+                      case (COBOL, BMS)
     """
     language: Language
     definition_dict: dict[str, str]
@@ -543,12 +551,21 @@ class LangConfig:
     usage_node_type_dict: dict | None = None
     import_resolve_dict: dict | None = None
     implicit_visibility: str | None = None
+    ignore_ext_case: bool = False
 
 
 _COBOL_LANG_CONFIG = LangConfig(
     language=tspack.get_language("cobol"),
     definition_dict=COBOL_DEFINITION_DICT,
     import_resolve_dict={"separator": " ", "name_index": True},
+    ignore_ext_case=True,
+)
+
+# A BMS source is read without a grammar; the COBOL grammar only fills the field
+_BMS_LANG_CONFIG = LangConfig(
+    language=tspack.get_language("cobol"),
+    definition_dict=BMS_DEFINITION_DICT,
+    ignore_ext_case=True,
 )
 
 _LANG_REGISTRY: dict[str, LangConfig] = {
@@ -648,6 +665,7 @@ _LANG_REGISTRY: dict[str, LangConfig] = {
     "cbl": _COBOL_LANG_CONFIG,
     "cob": _COBOL_LANG_CONFIG,
     "cpy": _COBOL_LANG_CONFIG,
+    "bms": _BMS_LANG_CONFIG,
 }
 
 
@@ -655,14 +673,11 @@ _LANG_REGISTRY: dict[str, LangConfig] = {
 #
 # _EXT_ALIAS_DICT defines a mapping of extensions that share the same language settings.
 # When generating public dictionaries from _LANG_REGISTRY, _expand_ext_aliases()
-# automatically adds alias extensions (h, kts, jsx, CBL, COB, CPY).
+# automatically adds alias extensions (h, kts, jsx).
 _EXT_ALIAS_DICT: dict[str, str] = {
     "h":   "cpp",
     "kts": "kt",
     "jsx": "js",
-    "CBL": "cbl",
-    "COB": "cob",
-    "CPY": "cpy",
 }
 
 
@@ -696,15 +711,80 @@ EXT_TO_DEFINITION_DICT: dict[str, dict[str, str]] = _expand_ext_aliases(
 )
 
 
-# Extensions of the COBOL files
+# Extensions of the COBOL files (lower case)
 COBOL_EXT_SET: set[str] = {
     ext for ext, definition_dict in EXT_TO_DEFINITION_DICT.items()
     if definition_dict is COBOL_DEFINITION_DICT
 }
 
+# Extensions of the BMS sources (lower case)
+BMS_EXT_SET: set[str] = {
+    ext for ext, definition_dict in EXT_TO_DEFINITION_DICT.items()
+    if definition_dict is BMS_DEFINITION_DICT
+}
+
+# Extensions matched without regard to upper and lower case (lower case)
+_IGNORE_CASE_EXT_SET: set[str] = {
+    ext for ext, lang_config in _LANG_REGISTRY.items() if lang_config.ignore_ext_case
+}
+
+# Absolute path of a file whose language comes from the files that name it, not from its
+# extension -> the extension whose language settings it is analyzed with.
+# Filled by set_copy_target_ext() (COBOL: a copybook named by a COPY statement)
+_copy_target_ext_dict: dict[str, str] = {}
+
+
+def set_copy_target_ext(project_dir: str, file_ext_dict: dict[str, str]) -> None:
+    """Record the files of a project whose language comes from the files that name them.
+
+    The files recorded before for the same project are forgotten.
+
+    Args:
+        project_dir: Root directory of the project.
+        file_ext_dict: {path relative to project_dir: extension whose language settings
+            the file is analyzed with}.
+    """
+    project_prefix = os.path.join(os.path.abspath(project_dir), "")
+    for path in [path for path in _copy_target_ext_dict if path.startswith(project_prefix)]:
+        del _copy_target_ext_dict[path]
+    for file_rel, ext in file_ext_dict.items():
+        _copy_target_ext_dict[os.path.abspath(os.path.join(project_dir, file_rel))] = ext
+
+
+def language_ext(path: str) -> str:
+    """Return the extension whose language settings a file is analyzed with.
+
+    A file recorded by set_copy_target_ext() gets the extension recorded for it. Every
+    other file gets its own extension when it is a key of EXT_TO_DEFINITION_DICT; the
+    extensions of the languages with ignore_ext_case are matched in any case.
+
+    Examples:
+        "src/app.py"          -> "py"
+        "src/MAIN.Cbl"        -> "cbl"
+        "config.yaml"         -> ""
+        "dcl/DCLCUST.dcl"     -> "cpy" (when a COPY statement names it)
+
+    Args:
+        path: A file path. A relative path is taken from the current directory when
+            it is looked up among the recorded files.
+
+    Returns:
+        The extension (without the dot, a key of EXT_TO_DEFINITION_DICT), or "" for a
+        file without a language.
+    """
+    copy_target_ext = _copy_target_ext_dict.get(os.path.abspath(path))
+    if copy_target_ext:
+        return copy_target_ext
+    ext = os.path.splitext(path)[1].lstrip(".")
+    if ext in EXT_TO_DEFINITION_DICT:
+        return ext
+    if ext.lower() in _IGNORE_CASE_EXT_SET:
+        return ext.lower()
+    return ""
+
 
 def has_language(path: str) -> bool:
-    """Return whether a file's extension has a tree-sitter language in the registry.
+    """Return whether a file is analyzed with a language of the registry.
 
     Only such files get definitions, dependencies and design documents; every other
     text file is carried through the analysis with those left empty.
@@ -715,12 +795,13 @@ def has_language(path: str) -> bool:
         "Makefile"      -> False
 
     Args:
-        path: A file path (absolute or relative); only its extension is looked at.
+        path: A file path. A file recorded by set_copy_target_ext() is known by its
+            absolute path.
 
     Returns:
-        True when the extension (without the dot) is a key of EXT_TO_DEFINITION_DICT.
+        True when language_ext() gives an extension.
     """
-    return os.path.splitext(path)[1].lstrip(".") in EXT_TO_DEFINITION_DICT
+    return language_ext(path) != ""
 
 
 # Extension -> import extraction query
@@ -763,7 +844,7 @@ def implicit_scope_key(file_rel: str) -> tuple[str, str] | None:
         (extension, directory) for "package" scope, (extension, "") for "project" scope,
         None when the language has no implicit visibility.
     """
-    ext = os.path.splitext(file_rel)[1].lstrip(".")
+    ext = language_ext(file_rel)
     scope = EXT_TO_IMPLICIT_VISIBILITY_DICT.get(ext)
     if scope is None:
         return None

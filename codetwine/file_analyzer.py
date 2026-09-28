@@ -1,20 +1,53 @@
 import os
 import logging
 from codetwine.parsers.ts_parser import parse_file
-from codetwine.extractors.definitions import extract_definitions, select_top_level_definitions
+from codetwine.extractors.definitions import (
+    DefinitionInfo,
+    extract_definitions,
+    select_top_level_definitions,
+)
+from codetwine.extractors.cobol_source import CobolSource
 from codetwine.extractors.usage_analysis import (
     build_usage_info_list,
     build_same_file_usages,
     build_caller_usages,
+    build_cobol_usage_info_list,
+    build_cobol_same_file_usages,
 )
+from codetwine.cobol_file_index import cobol_reference_target_list
 from codetwine.import_to_path import (
     build_symbol_to_file_map,
     get_import_params,
 )
 from codetwine.extractors.imports import extract_imports
-from codetwine.config.settings import EXT_TO_DEFINITION_DICT
+from codetwine.config.settings import EXT_TO_DEFINITION_DICT, language_ext
 
 logger = logging.getLogger(__name__)
+
+
+def _definition_entry(definition: DefinitionInfo, content_line_list: list[str]) -> dict:
+    """Return the entry of one definition in the "definitions" list.
+
+    Args:
+        definition: The definition.
+        content_line_list: The lines of the file.
+
+    Returns:
+        {"name", "type", "start_line", "end_line", "context"}, with "name_line",
+        "level" and "is_group" after "end_line" when the definition has them.
+    """
+    entry = {
+        "name":       definition.name,
+        "type":       definition.type,
+        "start_line": definition.start_line,
+        "end_line":   definition.end_line,
+    }
+    for key in ("name_line", "level", "is_group"):
+        value = getattr(definition, key)
+        if value is not None:
+            entry[key] = value
+    entry["context"] = "\n".join(content_line_list[definition.start_line - 1 : definition.end_line])
+    return entry
 
 
 def get_file_dependencies(
@@ -31,8 +64,10 @@ def get_file_dependencies(
     project_file_set, source_root_set and caller_map are the same for every file of one
     project; the caller builds them once and passes the same values to every call.
 
-    A file whose extension has no tree-sitter language is not parsed: its lists
-    come back empty.
+    A file without a language (language_ext) is not parsed: its lists come back empty.
+    A definition of a COBOL file or a BMS source also has "name_line", and a data item
+    "level" and "is_group". The references of a COBOL file are resolved with OF / IN
+    qualification (cobol_reference_target_list).
 
     Args:
         target_file: Absolute path of the target file to analyze.
@@ -46,7 +81,7 @@ def get_file_dependencies(
         "caller_usages"} keys.
     """
     target_file_rel = os.path.relpath(target_file, project_dir).replace("\\", "/")
-    file_ext = os.path.splitext(target_file)[1].lstrip(".")
+    file_ext = language_ext(target_file)
     # Per-language definition extraction settings (None for a file without a language)
     definition_dict = EXT_TO_DEFINITION_DICT.get(file_ext)
     if definition_dict is None:
@@ -64,14 +99,7 @@ def get_file_dependencies(
     content_line_list = content.decode("utf-8").splitlines()
     definition_info_list = extract_definitions(root_node, definition_dict)
     definition_list = [
-        {
-            "name":       definition.name,
-            "type":       definition.type,
-            "start_line": definition.start_line,
-            "end_line":   definition.end_line,
-            "context":    "\n".join(content_line_list[definition.start_line - 1 : definition.end_line]),
-        }
-        for definition in definition_info_list
+        _definition_entry(definition, content_line_list) for definition in definition_info_list
     ]
 
     # import / usage analysis
@@ -81,7 +109,16 @@ def get_file_dependencies(
 
     language, import_query_str = get_import_params(file_ext)
 
-    if language:
+    if isinstance(root_node, CobolSource):
+        # Resolve each reference, with OF / IN qualification, to this file or another
+        target_list = cobol_reference_target_list(
+            root_node, target_file_rel, project_file_set, project_dir,
+        )
+        usage_list = build_cobol_usage_info_list(target_list, target_file_rel, project_dir)
+        same_file_usages = build_cobol_same_file_usages(
+            target_list, target_file_rel, definition_list,
+        )
+    elif language:
         # Parse import statements and create an "imported name -> dependency file" dict
         import_info_list = extract_imports(root_node, language, import_query_str)
         symbol_to_file_map, alias_to_original = build_symbol_to_file_map(
@@ -113,6 +150,7 @@ def get_file_dependencies(
             root_node, definition_list, file_ext, import_name_set,
         )
 
+    if language:
         # Collect locations where functions/classes/variables defined in this file are used in other project files
         caller_usages = build_caller_usages(
             target_file_rel, caller_map.get(target_file_rel, []),

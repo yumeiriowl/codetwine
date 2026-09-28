@@ -54,6 +54,8 @@ GRAMMAR_NAME_RE = re.compile(r"[A-Za-z0-9\-]+")
 _PICTURE_WORD_SET = {"PIC", "PICTURE"}
 # Words of a statement that holds no code
 _NO_CODE_WORD_SET = {"EJECT", "SKIP1", "SKIP2", "SKIP3"}
+# Words between a name and the name that qualifies it
+_QUALIFIER_WORD_SET = {"OF", "IN"}
 # Words before DIVISION in the header of the first division of a program
 _IDENTIFICATION_WORD_SET = {"IDENTIFICATION", "ID"}
 # Words before SECTION in the header of a section of the data division
@@ -73,6 +75,24 @@ ENVIRONMENT_DIVISION = "ENVIRONMENT"
 DATA_DIVISION = "DATA"
 PROCEDURE_DIVISION = "PROCEDURE"
 _DIVISION_WORD_SET = {ENVIRONMENT_DIVISION, DATA_DIVISION, PROCEDURE_DIVISION}
+
+# == Line modes (how a line is read) ==========================================
+# A format directive: no code
+_DIRECTIVE_MODE = "directive"
+# A free-format line
+_FREE_MODE = "free"
+# A fixed-format line
+_FIXED_MODE = "fixed"
+# A fixed-format line without the right margin (SOURCEFORMAT VARIABLE)
+_VARIABLE_MODE = "variable"
+
+# == What a fixed-format line holds after the code area =======================
+# Nothing but blanks, or the rest of a floating comment
+_NO_TEXT_BEYOND = ""
+# Text in the identification area only, after a blank last column of the code area
+_TAG_BEYOND = "tag"
+# Anything else: code that runs past the code area
+_CODE_BEYOND = "code"
 
 # == Unit kinds ===============================================================
 # A data item
@@ -120,6 +140,8 @@ class _Token:
     has_gap: bool = True
     # Whether the token continues the last token of the line before it
     is_glue: bool = False
+    # Index of the token among the tokens of the file
+    position: int = 0
 
 
 @dataclass
@@ -135,6 +157,9 @@ class CobolUnit:
     origin_line_list: list[int]
     # (word as written in the source, source line) of the words of the statement
     word_list: list[tuple[str, int]]
+    # Index of the first and of the last token of the statement among the tokens of the file
+    start_position: int = 0
+    end_position: int = 0
 
 
 @dataclass
@@ -143,6 +168,8 @@ class CobolCopy:
 
     name: str      # Name of the copybook
     line: int      # Source line of the statement (1-based)
+    end_line: int  # Last source line of the statement
+    position: int  # Index of its first token (COPY / EXEC) among the tokens of the file
     library: str = ""  # Library name of COPY ... OF library
     # REPLACING operands as (position, replaced text, replacement text);
     # position is "" / "LEADING" / "TRAILING"
@@ -169,10 +196,14 @@ class CobolText:
     # (name, whether it is a literal, source line) of each CALL statement and of each
     # EXEC CICS command with PROGRAM(name); a name that is not a literal is a data item
     call_list: list[tuple[str, bool, int]] = field(default_factory=list)
-    # (word, source line) of the words of the statements that are in no unit
-    word_list: list[tuple[str, int]] = field(default_factory=list)
+    # (word, source line, names that qualify it) of the words of the statements that are
+    # in no unit; X OF Y IN Z gives X the names (Y, Z), and :Y.X in an EXEC block gives X (Y,)
+    word_list: list[tuple[str, int, tuple[str, ...]]] = field(default_factory=list)
     # Source lines that hold code, in ascending order
     code_line_list: list[int] = field(default_factory=list)
+    # Index of the first token of each statement that is in no unit (division and
+    # section headers, PROGRAM-ID, ...) among the tokens of the file, in ascending order
+    other_statement_position_list: list[int] = field(default_factory=list)
 
 
 def _char_width(char: str) -> int:
@@ -279,21 +310,138 @@ def _is_free_start(line_list: list[str]) -> bool:
     return False
 
 
-def _has_right_margin(line_list: list[str]) -> bool:
-    """Return whether the code area of the fixed-format lines ends at the right margin.
+def _line_mode_list(line_list: list[str]) -> list[str]:
+    """Return how each line of a file is read.
+
+    The source format follows the format directives of the file; before the first
+    directive it is free format when a line cannot be fixed format.
 
     Args:
         line_list: The lines of the file without tab characters.
 
     Returns:
-        False when a line that is not a comment is wider than the identification area allows.
+        One line mode per line: _DIRECTIVE_MODE for a format directive, else the mode
+        of the format the line is in (_FREE_MODE / _FIXED_MODE / _VARIABLE_MODE).
     """
+    is_free = _is_free_start(line_list)
+    is_variable = False
+    mode_list: list[str] = []
     for line in line_list:
+        directive = _format_directive(line, is_free)
+        if directive is not None:
+            is_free = directive == "FREE"
+            is_variable = directive == "VARIABLE"
+            mode_list.append(_DIRECTIVE_MODE)
+        elif is_free:
+            mode_list.append(_FREE_MODE)
+        else:
+            mode_list.append(_VARIABLE_MODE if is_variable else _FIXED_MODE)
+    return mode_list
+
+
+def _code_area_end_state(code_area_text: str) -> str:
+    """Return what is open at the end of the code area of a line.
+
+    Examples:
+        "MOVE 'AB' TO C"      -> ""
+        "DISPLAY 'ABC"        -> "'"
+        "MOVE A TO B *> note" -> "*>"
+
+    Args:
+        code_area_text: Columns 8 to 72 of a fixed-format line that continues no literal.
+
+    Returns:
+        The quote of a literal left open, "*>" when a floating comment has started,
+        "" otherwise.
+    """
+    quote = ""
+    position = 0
+    while position < len(code_area_text):
+        char = code_area_text[position]
+        if quote:
+            if char == quote and code_area_text.startswith(quote, position + 1):
+                position += 1
+            elif char == quote:
+                quote = ""
+        elif char in "\"'":
+            quote = char
+        elif code_area_text.startswith("*>", position):
+            return "*>"
+        position += 1
+    return quote
+
+
+def _beyond_code_area(line: str, is_next_continuation: bool) -> str:
+    """Return what a fixed-format line holds after column 72.
+
+    Examples (the text from column 60):
+        "... MOVE A TO B.             00010000"  -> _TAG_BEYOND
+        "... MOVE A TO OUTPUT-NAME.CHG00001"     -> _TAG_BEYOND (the sentence ends at column 72)
+        "... MOVE CUSTOMER-NAME TO OUT-NAME."    -> _CODE_BEYOND (a word runs past column 72)
+        "... DISPLAY 'A LONG TEXT THAT GOES ON'" -> _CODE_BEYOND (a literal runs past column 72)
+        "... MOVE A TO B.   *> a remark"         -> _NO_TEXT_BEYOND
+        "... DISPLAY 'A LONG TEXT THAT GOES"     -> _NO_TEXT_BEYOND (the next line continues it)
+
+    Args:
+        line: A fixed-format line with code, without tab characters.
+        is_next_continuation: Whether the next line is a continuation line.
+
+    Returns:
+        _NO_TEXT_BEYOND when nothing but blanks or a floating comment is past column 72,
+        or when a literal is open from before column 72 to the end of the line, the line
+        ends by column 80 and the next line continues it; _TAG_BEYOND when the text past
+        column 72 ends by column 80, no literal is open at column 72, and column 72 is
+        blank, ends a sentence (".") or the text past it is digits only; _CODE_BEYOND
+        otherwise.
+    """
+    width = _line_width(line.rstrip())
+    if width <= _CODE_END_COLUMN:
+        return _NO_TEXT_BEYOND
+    code_area_text = _column_slice(line, _CODE_START_COLUMN, _CODE_END_COLUMN)
+    end_state = _code_area_end_state(code_area_text)
+    beyond_text = _column_slice(line, _CODE_END_COLUMN, None).strip()
+    if end_state == "*>" or (not end_state and beyond_text.startswith("*>")):
+        return _NO_TEXT_BEYOND
+    is_literal_continuation = (
+        end_state
+        and is_next_continuation
+        and width <= _LINE_END_COLUMN
+        and _code_area_end_state(code_area_text + beyond_text) == end_state
+    )
+    if is_literal_continuation:
+        return _NO_TEXT_BEYOND
+    is_tag = (
+        not end_state
+        and width <= _LINE_END_COLUMN
+        and (code_area_text.endswith((" ", ".")) or beyond_text.isdigit())
+    )
+    return _TAG_BEYOND if is_tag else _CODE_BEYOND
+
+
+def _has_right_margin(fixed_line_list: list[str]) -> bool:
+    """Return whether the code area of the fixed-format lines of a file ends at column 72.
+
+    The lines with code whose text runs past column 72 are counted: a line whose text
+    there is an identification field (_TAG_BEYOND) counts for the right margin, a
+    line with code there (_CODE_BEYOND) against it.
+
+    Args:
+        fixed_line_list: The fixed-format lines of the file (_FIXED_MODE) without tab characters.
+
+    Returns:
+        False when more of those lines hold code past column 72 than an identification field.
+    """
+    tag_count = code_count = 0
+    for index, line in enumerate(fixed_line_list):
         if _indicator(line) in _NO_CODE_INDICATOR_CHAR_SET:
             continue
-        if _line_width(line.rstrip()) > _LINE_END_COLUMN:
-            return False
-    return True
+        if _OPTION_LINE_RE.match(line) or _is_directive_line(line):
+            continue
+        next_line = fixed_line_list[index + 1] if index + 1 < len(fixed_line_list) else ""
+        beyond = _beyond_code_area(line, _indicator(next_line) == "-")
+        tag_count += beyond == _TAG_BEYOND
+        code_count += beyond == _CODE_BEYOND
+    return tag_count >= code_count
 
 
 def _code_text_list(line_list: list[str]) -> list[tuple[str, bool]]:
@@ -302,8 +450,9 @@ def _code_text_list(line_list: list[str]) -> list[tuple[str, bool]]:
     Comment lines, debug lines, directive lines and compiler option lines hold no code.
     A compiler option line starts in column 1, or comes before the first line with code.
     Columns are counted with a full-width character as two.
-    The source format follows the format directives of the file; before the first
-    directive it is free format when a line cannot be fixed format.
+    The source format follows the format directives of the file (_line_mode_list).
+    The code area of the fixed-format lines ends at column 72 when the file has the
+    right margin (_has_right_margin), and at the end of the line otherwise.
 
     Args:
         line_list: The lines of the file without tab characters.
@@ -312,24 +461,26 @@ def _code_text_list(line_list: list[str]) -> list[tuple[str, bool]]:
         One (code text, is continuation) tuple per line; the code text is "" for a
         line without code.
     """
-    is_free = _is_free_start(line_list)
-    code_end = _CODE_END_COLUMN if _has_right_margin(line_list) else None
+    mode_list = _line_mode_list(line_list)
+    has_margin = _has_right_margin(
+        [line for line, mode in zip(line_list, mode_list) if mode == _FIXED_MODE]
+    )
 
     code_text_list: list[tuple[str, bool]] = []
     has_code = False
-    for line in line_list:
+    for line, mode in zip(line_list, mode_list):
         code_text, is_continuation = "", False
-        directive = _format_directive(line, is_free)
-        if directive is not None:
-            is_free = directive == "FREE"
-            if directive == "VARIABLE":
-                code_end = None
-        elif is_free:
+        if mode == _FREE_MODE:
             if not line.strip().startswith(_NO_CODE_START_TUPLE):
                 code_text = line
-        elif not _OPTION_LINE_RE.match(line) and not _is_directive_line(line):
+        elif (
+            mode != _DIRECTIVE_MODE
+            and not _OPTION_LINE_RE.match(line)
+            and not _is_directive_line(line)
+        ):
             indicator = _indicator(line)
             if indicator not in _NO_CODE_INDICATOR_CHAR_SET:
+                code_end = _CODE_END_COLUMN if mode == _FIXED_MODE and has_margin else None
                 code_text = _column_slice(line, _CODE_START_COLUMN, code_end)
                 is_continuation = indicator == "-"
 
@@ -353,8 +504,10 @@ def code_text_list(line_list: list[str]) -> list[str]:
 
     Returns:
         One string per line: columns 8 to 72 of a fixed-format line (to its end where the
-        file has no right margin), the whole of a free-format line, "" for a line that
-        holds no code. The source format is decided from the lines given.
+        file has no right margin: most of its lines whose text runs past column 72 hold
+        code there, not an identification field in columns 73 to 80), the whole of a
+        free-format line, "" for a line that holds no code. The source format and the
+        right margin are decided from the lines given.
     """
     return [text for text, _ in _code_text_list([line.expandtabs(_TAB_SIZE) for line in line_list])]
 
@@ -536,7 +689,7 @@ def _source_token_list(line_list: list[str]) -> list[_Token]:
         line_list: The lines of the file without tab characters.
 
     Returns:
-        The tokens in source order.
+        The tokens in source order, each with its index as its position.
     """
     token_list: list[_Token] = []
     open_literal: _Token | None = None
@@ -553,6 +706,8 @@ def _source_token_list(line_list: list[str]) -> list[_Token]:
                 token_list[-1].text += token.text
             else:
                 token_list.append(token)
+    for position, token in enumerate(token_list):
+        token.position = position
     return token_list
 
 
@@ -628,6 +783,60 @@ def literal_value(text: str) -> str:
     if len(text) >= 2 and text[-1] in "\"'" and text[-1] in text[:-1]:
         return text[text.index(text[-1]) + 1:-1].strip()
     return text
+
+
+def qualifier_tuple(word_list: list[str], index: int) -> tuple[str, ...]:
+    """Return the names that qualify the word at an index (X OF Y IN Z).
+
+    Examples (words, index):
+        (["MOVE", "CODE-X", "OF", "REC-A", "IN", "FILE-B"], 1) -> ("REC-A", "FILE-B")
+        (["MOVE", "CODE-X", "OF", "REC-A", "IN", "FILE-B"], 3) -> ("FILE-B",)
+        (["MOVE", "CODE-X", "TO", "OUT-X"], 1)                  -> ()
+
+    Args:
+        word_list: The tokens of a statement in source order: the text of a word, ""
+            for a token that is not a word.
+        index: Index of the word.
+
+    Returns:
+        The words after each OF / IN that follows the word, in order.
+    """
+    qualifier_list: list[str] = []
+    position = index
+    while (
+        position + 2 < len(word_list)
+        and word_list[position + 1].upper() in _QUALIFIER_WORD_SET
+        and word_list[position + 2]
+    ):
+        qualifier_list.append(word_list[position + 2])
+        position += 2
+    return tuple(qualifier_list)
+
+
+def _host_structure_name(token_list: list[_Token], index: int) -> str:
+    """Return the host structure that qualifies a word of an EXEC block (:STRUCT.NAME).
+
+    Examples (tokens, the index of NAME):
+        : DCL-CUST . CUST-ID  -> "DCL-CUST"
+        : CUST-ID             -> ""
+
+    Args:
+        token_list: The tokens of an EXEC block.
+        index: Index of a word token.
+
+    Returns:
+        The structure name. "" when the word is not written as :STRUCT.NAME.
+    """
+    if index < 3:
+        return ""
+    colon_token, structure_token, dot_token = token_list[index - 3:index]
+    is_host_structure = (
+        colon_token.text == ":"
+        and structure_token.kind == "word"
+        and dot_token.text == "."
+        and not (structure_token.has_gap or dot_token.has_gap or token_list[index].has_gap)
+    )
+    return structure_token.text if is_host_structure else ""
 
 
 def _is_level_number(word: str) -> bool:
@@ -762,14 +971,22 @@ class _Split:
         while index < len(self.token_list):
             statement_token_list, index = self._statement(index)
             if any(token.kind != "period" for token in statement_token_list):
+                unit_count = len(self.unit_token_list)
                 index = self._read_statement(statement_token_list, index)
+                if len(self.unit_token_list) == unit_count:
+                    self.cobol_text.other_statement_position_list.append(
+                        statement_token_list[0].position
+                    )
         return self.unit_token_list
 
     def _record_word_list(self, token_list: list[_Token]) -> None:
-        """Record the words of tokens that are in no unit."""
-        for token in token_list:
+        """Record the words of tokens that are in no unit, with the names that qualify them."""
+        text_list = [token.text if token.kind == "word" else "" for token in token_list]
+        for index, token in enumerate(token_list):
             if token.kind == "word":
-                self.cobol_text.word_list.append((token.text, token.line))
+                self.cobol_text.word_list.append(
+                    (token.text, token.line, qualifier_tuple(text_list, index))
+                )
 
     def _statement(self, index: int) -> tuple[list[_Token], int]:
         """Collect the tokens of the statement that starts at an index.
@@ -922,6 +1139,7 @@ class _Split:
                 self.cobol_text.entry_list.append((literal_value(name_token.text), token.line))
                 unit_token_list[index] = _Token(
                     "word", "CALL", token.line, token.column, token.has_gap,
+                    position=token.position,
                 )
         self.unit_token_list.append((PROCEDURE_UNIT, unit_token_list))
 
@@ -931,8 +1149,9 @@ class _Split:
         EXEC SQL INCLUDE name         -> recorded in cobol_text.copy_list
         EXEC CICS ... PROGRAM(name)   -> recorded in cobol_text.call_list
         The words of the block are recorded in cobol_text.word_list, a word with ":"
-        as the words between them. In a procedure division CONTINUE is added to the
-        statement in place of the block.
+        as the words between them; a host variable written :STRUCT.NAME is qualified by
+        STRUCT. In a procedure division CONTINUE is added to the statement in place of
+        the block.
 
         Args:
             index: Index of the word EXEC.
@@ -942,17 +1161,23 @@ class _Split:
         token_list = self.token_list
         block_token_list = token_list[index + 2:end]
         line = token_list[index].line
-        for token in block_token_list:
-            if token.kind == "word":
-                self.cobol_text.word_list.extend(
-                    (word, token.line) for word in token.text.split(":") if word
-                )
+        for position, token in enumerate(block_token_list):
+            if token.kind != "word":
+                continue
+            structure_name = _host_structure_name(block_token_list, position)
+            qualifier = (structure_name,) if structure_name else ()
+            self.cobol_text.word_list.extend(
+                (word, token.line, qualifier) for word in token.text.split(":") if word
+            )
 
         kind = _word(token_list, index + 1)
         if kind == "SQL" and _word(block_token_list, 0) == "INCLUDE" and len(block_token_list) > 1:
             name_token = block_token_list[1]
             if name_token.kind in ("word", "literal"):
-                self.cobol_text.copy_list.append(CobolCopy(literal_value(name_token.text), line))
+                self.cobol_text.copy_list.append(CobolCopy(
+                    literal_value(name_token.text), line, token_list[end].line,
+                    token_list[index].position,
+                ))
         elif kind == "CICS":
             for position in range(len(block_token_list) - 2):
                 name_token = block_token_list[position + 2]
@@ -966,7 +1191,10 @@ class _Split:
                     )
 
         if self.division == PROCEDURE_DIVISION:
-            statement_token_list.append(_Token("word", "CONTINUE", line, token_list[index].column))
+            statement_token_list.append(_Token(
+                "word", "CONTINUE", line, token_list[index].column,
+                position=token_list[index].position,
+            ))
         return end + 1
 
     def _read_copy(self, index: int) -> int:
@@ -989,6 +1217,8 @@ class _Split:
         self.cobol_text.copy_list.append(CobolCopy(
             name=literal_value(operand_token_list[0].text),
             line=token_list[index].line,
+            end_line=token_list[min(end, len(token_list) - 1)].line,
+            position=token_list[index].position,
             library=library,
             replacing_list=_replacing_list(operand_token_list[phrase_start:]),
         ))
@@ -1163,7 +1393,9 @@ def _unit(kind: str, token_list: list[_Token], word_list: list[tuple[str, int]])
         origin_line_list.append(0)
 
     text = "".join(f"{_LEFT_MARGIN}{line_text}\n" for line_text in text_line_list)
-    return CobolUnit(kind, text, origin_line_list, word_list)
+    return CobolUnit(
+        kind, text, origin_line_list, word_list, token_list[0].position, token_list[-1].position,
+    )
 
 
 def item_unit(name: str) -> CobolUnit:

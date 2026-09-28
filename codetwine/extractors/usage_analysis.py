@@ -6,7 +6,9 @@ from codetwine.utils.file_utils import read_source
 from codetwine.extractors.imports import ImportInfo, extract_imports
 from codetwine.extractors.usages import UsageInfo, extract_usages, extract_typed_aliases, usage_root_name
 from codetwine.extractors.definitions import ATTACHED_DEFINITION_TYPE_SET, extract_definitions
+from codetwine.extractors.cobol_source import CobolSource
 from codetwine.extractors.dependency_graph import extract_callee_source
+from codetwine.cobol_file_index import CobolReferenceTarget, cobol_reference_target_list
 from codetwine.import_to_path import (
     resolve_module_to_project_path,
     get_import_params,
@@ -18,6 +20,7 @@ from codetwine.config.settings import (
     EXT_TO_USAGE_NODE_TYPE_DICT,
     EXT_TO_IMPORT_RESOLVE_DICT,
     implicit_scope_key,
+    language_ext,
 )
 
 logger = logging.getLogger(__name__)
@@ -196,6 +199,108 @@ def build_same_file_usages(
     return list(usage_group_map.values())
 
 
+def build_cobol_usage_info_list(
+    target_list: list[CobolReferenceTarget], file_rel: str, project_dir: str,
+) -> list[dict]:
+    """Build the callee_usages of a COBOL file from its resolved references.
+
+    The references that resolve to another file are grouped by (file, name); the
+    target_context of a group is the source text of the definition its first reference
+    resolves to.
+
+    Args:
+        target_list: Return value of cobol_reference_target_list.
+        file_rel: Relative path of the file.
+        project_dir: Absolute path to the project root.
+
+    Returns:
+        A list of {"lines", "name", "from", "target_context"} dicts.
+    """
+    usage_group_map: dict[tuple[str, str], dict] = {}
+    for target in target_list:
+        if target.file_rel == file_rel:
+            continue
+        group_key = (target.file_rel, target.name)
+        if group_key in usage_group_map:
+            usage_group_map[group_key]["lines"].append(target.line)
+            continue
+        target_context = None
+        if target.definition is not None:
+            target_source = parse_file(os.path.join(project_dir, target.file_rel))[0]
+            target_context = target_source.definition_text(target.definition)
+        usage_group_map[group_key] = {
+            "lines":          [target.line],
+            "name":           target.name,
+            "from":           target.file_rel,
+            "target_context": target_context,
+        }
+
+    for entry in usage_group_map.values():
+        entry["lines"] = sorted(set(entry["lines"]))
+    return list(usage_group_map.values())
+
+
+def build_cobol_same_file_usages(
+    target_list: list[CobolReferenceTarget], file_rel: str, definition_list: list[dict],
+) -> list[dict]:
+    """Build the same_file_usages of a COBOL file from its resolved references.
+
+    The references that resolve to the file itself are grouped by name. A reference
+    inside the line range of a definition with the same name is left out, as in
+    build_same_file_usages.
+
+    Args:
+        target_list: Return value of cobol_reference_target_list.
+        file_rel: Relative path of the file.
+        definition_list: The file's definitions (dicts with name, start_line, end_line).
+
+    Returns:
+        A list of {"lines", "name"} dicts.
+    """
+    line_range_dict: dict[str, list[tuple[int, int]]] = {}
+    for definition in definition_list:
+        line_range_dict.setdefault(definition["name"], []).append(
+            (definition["start_line"], definition["end_line"])
+        )
+
+    usage_group_map: dict[str, dict] = {}
+    for target in target_list:
+        if target.file_rel != file_rel:
+            continue
+        if any(start <= target.line <= end for start, end in line_range_dict.get(target.name, [])):
+            continue
+        entry = usage_group_map.setdefault(target.name, {"lines": [], "name": target.name})
+        entry["lines"].append(target.line)
+
+    for entry in usage_group_map.values():
+        entry["lines"] = sorted(set(entry["lines"]))
+    return list(usage_group_map.values())
+
+
+def _cobol_caller_usage_list(
+    caller_root: CobolSource,
+    caller_rel: str,
+    target_file_rel: str,
+    project_file_set: set[str],
+    project_dir: str,
+) -> list[UsageInfo]:
+    """Return the usages in a COBOL caller that resolve to the target file.
+
+    The caller's references are resolved as get_file_dependencies resolves them for the
+    caller itself (cobol_reference_target_list).
+
+    Returns:
+        UsageInfo(name, line) per reference that resolves to target_file_rel.
+    """
+    target_list = cobol_reference_target_list(
+        caller_root, caller_rel, project_file_set, project_dir,
+    )
+    return [
+        UsageInfo(name=target.name, line=target.line)
+        for target in target_list if target.file_rel == target_file_rel
+    ]
+
+
 def _collect_target_name_list(
     caller_import_list: list[ImportInfo],
     target_file_rel: str,
@@ -315,8 +420,7 @@ def _load_target_definitions(
     """
     name_list: list[str] = []
     target_abs = os.path.join(project_dir, target_file_rel)
-    target_ext = os.path.splitext(target_file_rel)[1].lstrip(".")
-    target_def_dict = EXT_TO_DEFINITION_DICT.get(target_ext)
+    target_def_dict = EXT_TO_DEFINITION_DICT.get(language_ext(target_abs))
     if target_def_dict and os.path.isfile(target_abs):
         target_root = parse_file(target_abs)[0]
         for defn in extract_definitions(target_root, target_def_dict):
@@ -416,7 +520,7 @@ def build_caller_usages(
 
     for caller_rel in caller_file_list:
         caller_abs = os.path.join(project_dir, caller_rel)
-        caller_ext = os.path.splitext(caller_rel)[1].lstrip(".")
+        caller_ext = language_ext(caller_abs)
 
         caller_root = parse_file(caller_abs)[0]
 
@@ -428,6 +532,17 @@ def build_caller_usages(
         caller_import_list = extract_imports(
             caller_root, language, import_query_str
         )
+
+        # COBOL: the caller's references resolved with OF / IN qualification
+        if isinstance(caller_root, CobolSource):
+            usage_list = _cobol_caller_usage_list(
+                caller_root, caller_rel, target_file_rel, project_file_set, project_dir,
+            )
+            if usage_list:
+                group_dict = _group_caller_usage_list(usage_list, {}, caller_rel)
+                _attach_usage_context(group_dict, caller_abs)
+                caller_usages.extend(group_dict.values())
+            continue
 
         # Step 1: Collect names that the caller imports from the target
         target_name_list, target_definition_name_list = _collect_target_name_list(
