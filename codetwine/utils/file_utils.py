@@ -73,6 +73,33 @@ def check_source_encoding() -> None:
             ) from None
 
 
+def _decode_source(file_content: bytes) -> tuple[str, str, bool]:
+    """Decode the bytes of a text file as read_source() describes.
+
+    Args:
+        file_content: The whole file's bytes.
+
+    Returns:
+        A (text, encoding, detected) tuple. encoding is the codec name that decoded the
+        bytes, or "" when they were decoded as UTF-8 with replacement; detected is True
+        when neither a BOM, UTF-8 nor SOURCE_ENCODING decoded them (steps 4 and 5).
+    """
+    # BOM, UTF-8 and the configured encodings: the first that decodes without error
+    bom_codec = _bom_codec(file_content)
+    codec_list = ([bom_codec] if bom_codec else []) + ["utf-8", *SOURCE_ENCODING]
+    for codec in codec_list:
+        try:
+            return file_content.decode(codec), codec, False
+        except UnicodeDecodeError:
+            continue
+
+    # Detected encoding, then UTF-8 with replacement
+    best_match = from_bytes(file_content).best()
+    if best_match is not None:
+        return str(best_match), best_match.encoding, True
+    return file_content.decode("utf-8", errors="replace"), "", True
+
+
 def read_source(file_path: str) -> tuple[str, str]:
     """Read a text file and return its contents decoded, with the encoding used.
 
@@ -96,22 +123,27 @@ def read_source(file_path: str) -> tuple[str, str]:
         OSError: When the file cannot be read.
     """
     with open(file_path, "rb") as f:
-        file_content = f.read()
+        text, encoding, _ = _decode_source(f.read())
+    return text, encoding
 
-    # BOM, UTF-8 and the configured encodings: the first that decodes without error
-    bom_codec = _bom_codec(file_content)
-    codec_list = ([bom_codec] if bom_codec else []) + ["utf-8", *SOURCE_ENCODING]
-    for codec in codec_list:
-        try:
-            return file_content.decode(codec), codec
-        except UnicodeDecodeError:
-            continue
 
-    # Detected encoding, then UTF-8 with replacement
-    best_match = from_bytes(file_content).best()
-    if best_match is not None:
-        return str(best_match), best_match.encoding
-    return file_content.decode("utf-8", errors="replace"), ""
+def detected_encoding(file_path: str) -> str | None:
+    """Return the encoding read_source() decodes a file with when it has to detect it.
+
+    Args:
+        file_path: Absolute path of the file to read.
+
+    Returns:
+        The encoding charset-normalizer detects (read_source() step 4), "" when the file
+        is decoded as UTF-8 with replacement (step 5), or None when a BOM, UTF-8 or
+        SOURCE_ENCODING decodes it.
+
+    Raises:
+        OSError: When the file cannot be read.
+    """
+    with open(file_path, "rb") as f:
+        _, encoding, detected = _decode_source(f.read())
+    return encoding if detected else None
 
 
 def read_source_text(file_path: str) -> str:

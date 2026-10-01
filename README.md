@@ -59,8 +59,8 @@ The knowledge file can be used as input material for LLM-powered code search and
 ## 🧬 Supported Languages
 
 Definitions, dependencies and design documents are extracted for the following languages
-(extensions `py`, `java`, `kt`, `kts`, `js`, `jsx`, `ts`, `tsx`, `c`, `cpp`, `h`, `sql`, `rs`, `cs`,
-and `cbl`, `cob`, `cpy`, `bms` in any case):
+(extensions `py`, `java`, `kt`, `kts`, `js`, `jsx`, `mjs`, `cjs`, `ts`, `tsx`, `mts`, `cts`, `c`, `cpp`,
+`cc`, `cxx`, `h`, `hpp`, `hh`, `hxx`, `sql`, `rs`, `cs`, and `cbl`, `cob`, `cpy`, `bms` in any case):
 
 - Python
 - Java
@@ -78,7 +78,7 @@ and `cbl`, `cob`, `cpy`, `bms` in any case):
 Every other non-empty text file (`.md`, `.yaml`, `.toml`, `Makefile`, ...) is also listed in the
 outputs and copied to the output directory, with empty `definitions`, `callee_usages`,
 `same_file_usages` and `caller_usages`, a `null` summary and no design document. Empty files and binary files (a NUL
-byte in the first 8 KiB) are skipped.
+byte in the first 8 KiB) are skipped, and so are symbolic links; a linked directory is not entered.
 
 ## 🚀 Quick Start
 
@@ -155,7 +155,7 @@ run_result = asyncio.run(process_all_files(
 ))
 ```
 
-`file_list` (optional) holds file paths relative to the project root. When given, only these files are analyzed instead of walking the project directory; `EXCLUDE_PATTERNS` and the empty / binary file check still apply. `llm_client` is an `LLMClient()` when `ENABLE_LLM_DOC=True`.
+`file_list` (optional) holds file paths relative to the project root. When given, only these files are analyzed instead of walking the project directory; `EXCLUDE_PATTERNS`, the empty / binary file check and the symbolic link check still apply. `llm_client` is an `LLMClient()` when `ENABLE_LLM_DOC=True`.
 
 | Return key | Type | Description |
 |-----------|-----|------|
@@ -163,6 +163,7 @@ run_result = asyncio.run(process_all_files(
 | `dependency_fail_list` | string[] | Files whose dependency extraction failed. Their `file_dependencies.json` and copy are removed from the output directory, and they have no dependencies in the dependency graph; the other files are analyzed |
 | `doc_count` | int | Files with a complete design document (`0` when `ENABLE_LLM_DOC=False`) |
 | `doc_fail_list` | string[] | Files left without a complete design document |
+| `detected_encoding_dict` | {string: string} | Files of a supported language whose encoding was detected (see **Detected encodings**), with that encoding; `""` for a file read as UTF-8 with invalid bytes replaced |
 
 ## ⚙️ Configuration Options
 
@@ -268,7 +269,7 @@ Dependency extraction is performed through static syntax analysis with tree-sitt
   - Python: `importlib.import_module(name)`, `__import__(name)`
   - JavaScript/TypeScript: `import(variable)`
   - Java: `Class.forName("com.example.Foo")`
-- **Detected encodings**: A file that has no BOM, is not valid UTF-8 and is not decoded by `SOURCE_ENCODING` is decoded with a detected encoding, which can be wrong. Its comments and strings may then be garbled, and a multi-byte encoding (e.g. Shift_JIS) taken for a single-byte one may lose definitions. Set `SOURCE_ENCODING` for such files
+- **Detected encodings**: A file that has no BOM, is not valid UTF-8 and is not decoded by `SOURCE_ENCODING` is decoded with a detected encoding, which can be wrong. Its comments and strings may then be garbled, and a multi-byte encoding (e.g. Shift_JIS) taken for a single-byte one may lose definitions. Such files are listed in `detected_encoding_dict` and carry `detected_encoding` in their `file_dependencies.json`. Set `SOURCE_ENCODING` for them
 
 ### JavaScript / TypeScript
 
@@ -436,6 +437,7 @@ Per-file definition and dependency information.
 {
   "file": "string",
   "language": "string",
+  "detected_encoding": "string|null",
   "definitions": [
     {
       "name": "string",
@@ -477,6 +479,7 @@ Per-file definition and dependency information.
 |-----------|-----|------|
 | `file` | string | Path of the source file copied to the output directory |
 | `language` | string | Extension whose language settings the file is analyzed with, in lower case (`py`, `cbl`, ...; `cpy` for a copybook of another extension or without one that a `COPY` statement names). `""` for a file without a language |
+| `detected_encoding` | string\|null | Encoding the file was decoded with when it had no BOM, was not valid UTF-8 and was not decoded by `SOURCE_ENCODING` (the encoding charset-normalizer detects; `""` when it was read as UTF-8 with invalid bytes replaced). `null` otherwise, and for a file without a language |
 | `definitions[].name` | string | Function/class name |
 | `definitions[].type` | string | Definition type (tree-sitter node type, varies by language. Python: `function_definition`, `class_definition` / Java: `class_declaration`, `method_declaration` / JS/TS: `function_declaration`, `class_declaration` / SQL: `create_table`, `create_view` / Rust: `function_item`, `struct_item`, `impl_item` / C#: `class_declaration`, `method_declaration`, `property_declaration`, etc.) |
 | `definitions[].start_line` | int | Start line number |

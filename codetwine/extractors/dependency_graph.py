@@ -205,11 +205,28 @@ def extract_callee_source(
     return None
 
 
+def _is_own_file(project_dir: str, file_path: str) -> bool:
+    """Return whether a path is a file of the project itself rather than a link to one.
+
+    Args:
+        project_dir: Root directory of the project to analyze.
+        file_path: Absolute path of a file under project_dir.
+
+    Returns:
+        False for a symbolic link and for a path under a linked directory of the
+        project, True otherwise.
+    """
+    rel_path = os.path.relpath(os.path.abspath(file_path), os.path.abspath(project_dir))
+    own_path = os.path.join(os.path.realpath(project_dir), rel_path)
+    return os.path.normcase(os.path.realpath(file_path)) == os.path.normcase(own_path)
+
+
 def _collect_text_file_list(project_dir: str) -> list[str]:
     """Walk the project and return the absolute paths of its non-empty text files.
 
-    Directories and files matching EXCLUDE_PATTERNS are left out, and so are empty,
-    binary and unreadable files (is_text_file). The number of skipped files is logged.
+    Directories and files matching EXCLUDE_PATTERNS are left out, and so are symbolic
+    links (_is_own_file) and empty, binary and unreadable files (is_text_file). Linked
+    directories are not entered. The number of skipped files is logged.
 
     Args:
         project_dir: Root directory of the project to analyze.
@@ -227,6 +244,8 @@ def _collect_text_file_list(project_dir: str) -> list[str]:
             if any(fnmatch.fnmatch(file_name, p) for p in EXCLUDE_PATTERNS):
                 continue
             file_path = os.path.join(dir_path, file_name)
+            if not _is_own_file(project_dir, file_path):
+                continue
             if is_text_file(file_path):
                 text_file_list.append(file_path)
             else:
@@ -240,9 +259,9 @@ def _filter_text_file_list(project_dir: str, file_list: list[str]) -> list[str]:
     """Return the absolute paths of the non-empty text files among the given files.
 
     The same files are left out as in _collect_text_file_list: a path with a directory
-    or file name matching EXCLUDE_PATTERNS, and empty, binary and unreadable files
-    (is_text_file). A path outside project_dir is left out too. The number of skipped
-    files is logged.
+    or file name matching EXCLUDE_PATTERNS, symbolic links and paths under a linked
+    directory (_is_own_file), and empty, binary and unreadable files (is_text_file). A
+    path outside project_dir is left out too. The number of skipped files is logged.
 
     Args:
         project_dir: Root directory of the project to analyze.
@@ -261,6 +280,8 @@ def _filter_text_file_list(project_dir: str, file_list: list[str]) -> list[str]:
             continue
         known_path_set.add(file_path)
         if any(fnmatch.fnmatch(part, p) for part in part_list for p in EXCLUDE_PATTERNS):
+            continue
+        if not _is_own_file(project_dir, file_path):
             continue
         if is_text_file(file_path):
             text_file_list.append(file_path)

@@ -24,6 +24,7 @@ from codetwine.import_to_path import (
 )
 from codetwine.extractors.imports import extract_imports
 from codetwine.config.settings import CSHARP_EXT_SET, EXT_TO_DEFINITION_DICT, language_ext
+from codetwine.utils.file_utils import detected_encoding
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +71,9 @@ def get_file_dependencies(
     "language" is the extension whose language settings the file is analyzed with
     (language_ext), "" for a file without a language. Such a file is not parsed: its lists
     come back empty.
+    "detected_encoding" is the encoding read_source() had to detect for the file
+    (detected_encoding), "" when it reads the file as UTF-8 with replacement, and None
+    when a BOM, UTF-8 or SOURCE_ENCODING decodes it or the file has no language.
     A definition of a COBOL file or a BMS source also has "name_line", and a data item
     "level" and "is_group". The references of a COBOL file are resolved with OF / IN
     qualification (cobol_reference_target_list), and the references of a C# file
@@ -83,8 +87,8 @@ def get_file_dependencies(
         caller_map: A {file relative path: list of files depending on it} dict.
 
     Returns:
-        A dict with {"file", "language", "definitions", "callee_usages",
-        "same_file_usages", "caller_usages"} keys.
+        A dict with {"file", "language", "detected_encoding", "definitions",
+        "callee_usages", "same_file_usages", "caller_usages"} keys.
     """
     target_file_rel = os.path.relpath(target_file, project_dir).replace("\\", "/")
     file_ext = language_ext(target_file)
@@ -94,6 +98,7 @@ def get_file_dependencies(
         return {
             "file":          target_file_rel,
             "language":      file_ext,
+            "detected_encoding": None,
             "definitions":   [],
             "callee_usages": [],
             "same_file_usages": [],
@@ -176,6 +181,7 @@ def get_file_dependencies(
     return {
         "file":          target_file_rel,
         "language":      file_ext,
+        "detected_encoding": detected_encoding(target_file),
         "definitions":   definition_list,
         "callee_usages": usage_list,
         "same_file_usages": same_file_usages,

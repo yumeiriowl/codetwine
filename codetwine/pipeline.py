@@ -132,7 +132,7 @@ def _process_file_dependencies(
     project_dir: str,
     base_output_dir: str,
     language_dep_list: list[dict],
-) -> list[str]:
+) -> tuple[list[str], dict[str, str]]:
     """Analyze dependency info for each file and save file_dependencies.json
     and a copy of the original file to the output directory.
 
@@ -147,7 +147,9 @@ def _process_file_dependencies(
             a language. Import resolution looks up dependency targets in these only.
 
     Returns:
-        Relative paths of the files whose analysis failed.
+        A (fail list, detected encoding dict) tuple: the relative paths of the files
+        whose analysis failed, and {relative path: detected_encoding} of the files whose
+        encoding read_source() had to detect.
     """
     log_progress(logger, f"Extracting dependencies for {len(file_rel_list)} files...")
 
@@ -157,6 +159,7 @@ def _process_file_dependencies(
     caller_map = {info["file"]: info.get("callers", []) for info in language_dep_list}
 
     fail_file_list: list[str] = []
+    detected_encoding_dict: dict[str, str] = {}
     for file_rel in file_rel_list:
         file_abs = os.path.join(project_dir, file_rel)
         output_file_dir = resolve_file_output_dir(base_output_dir, file_rel)
@@ -167,6 +170,8 @@ def _process_file_dependencies(
                 file_abs, project_dir,
                 project_file_set, source_root_set, caller_map,
             )
+            if dep_result["detected_encoding"] is not None:
+                detected_encoding_dict[file_rel] = dep_result["detected_encoding"]
 
             _to_output_format(dep_result, base_output_dir)
 
@@ -185,7 +190,7 @@ def _process_file_dependencies(
                 with contextlib.suppress(OSError):
                     os.remove(os.path.join(output_file_dir, output_name))
 
-    return fail_file_list
+    return fail_file_list, detected_encoding_dict
 
 
 async def process_all_files(
@@ -227,6 +232,10 @@ async def process_all_files(
                 (0 when ENABLE_LLM_DOC is False).
             "doc_fail_list": Relative paths of the files left without a complete
                 design document (empty when ENABLE_LLM_DOC is False).
+            "detected_encoding_dict": {relative path: encoding} of the files whose
+                encoding was detected rather than taken from a BOM, UTF-8 or
+                SOURCE_ENCODING; the encoding is "" for a file read as UTF-8 with
+                invalid bytes replaced.
 
     Raises:
         ValueError: When KNOWLEDGE_FORMAT is not one of KNOWLEDGE_FORMAT_TUPLE, or
@@ -263,7 +272,7 @@ async def process_all_files(
     log_progress(logger, f"Files to analyze: {len(all_file_list)} ({_ext_count_line(all_file_list)})")
 
     # == Step 2: Extract dependency info for all files ========================
-    dependency_fail_list = _process_file_dependencies(
+    dependency_fail_list, detected_encoding_dict = _process_file_dependencies(
         all_file_list, project_dir, base_output_dir,
         language_dep_list,
     )
@@ -329,4 +338,5 @@ async def process_all_files(
         "dependency_fail_list": dependency_fail_list,
         "doc_count":            doc_count,
         "doc_fail_list":        doc_fail_list,
+        "detected_encoding_dict": detected_encoding_dict,
     }

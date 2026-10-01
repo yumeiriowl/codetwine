@@ -533,8 +533,8 @@ _SQL_USAGE_NODE_TYPE_DICT = {
 #
 # Public mapping dictionaries (EXT_TO_LANGUAGE_DICT, EXT_TO_DEFINITION_DICT, EXT_TO_IMPORT_QUERY_DICT,
 # EXT_TO_USAGE_NODE_TYPE_DICT, EXT_TO_IMPORT_RESOLVE_DICT, EXT_TO_IMPLICIT_VISIBILITY_DICT) are auto-generated from the registry.
-_JS_TS_EXT_LIST = [".ts", ".tsx", ".js", ".jsx"]
-_C_CPP_EXT_LIST = [".h", ".c", ".cpp"]
+_JS_TS_EXT_LIST = [".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs"]
+_C_CPP_EXT_LIST = [".h", ".c", ".cpp", ".cc", ".cxx", ".hpp", ".hh", ".hxx"]
 
 
 @dataclass(frozen=True)
@@ -694,11 +694,20 @@ _LANG_REGISTRY: dict[str, LangConfig] = {
 #
 # _EXT_ALIAS_DICT defines a mapping of extensions that share the same language settings.
 # When generating public dictionaries from _LANG_REGISTRY, _expand_ext_aliases()
-# automatically adds alias extensions (h, kts, jsx).
+# automatically adds alias extensions (h, cc, kts, jsx, mts, ...).
 _EXT_ALIAS_DICT: dict[str, str] = {
     "h":   "cpp",
+    "cc":  "cpp",
+    "cxx": "cpp",
+    "hpp": "cpp",
+    "hh":  "cpp",
+    "hxx": "cpp",
     "kts": "kt",
     "jsx": "js",
+    "mjs": "js",
+    "cjs": "js",
+    "mts": "ts",
+    "cts": "ts",
 }
 
 
