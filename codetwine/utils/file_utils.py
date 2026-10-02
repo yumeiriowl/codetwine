@@ -1,4 +1,5 @@
 import os
+import re
 import codecs
 import hashlib
 from charset_normalizer import from_bytes
@@ -9,6 +10,9 @@ _TEXT_PROBE_SIZE = 8192
 
 # Size of one read (bytes) when compute_file_hash hashes a file
 _HASH_CHUNK_SIZE = 8192
+
+# A "\r" that is not the start of "\r\n"
+_LONE_CR_RE = re.compile(r"\r(?!\n)")
 
 # (BOM, codec that decodes the file and drops the BOM), checked in this order.
 # The first BOM a file starts with decides its codec.
@@ -146,10 +150,51 @@ def detected_encoding(file_path: str) -> str | None:
     return encoding if detected else None
 
 
+def lone_cr_to_lf(text: str) -> str:
+    """Return a text with every lone "\\r" turned into "\\n".
+
+    The text keeps its length and the position of every character, and "\\r\\n" stays.
+    Each "\\n" of the result ends one line as line_list_of() splits the text.
+
+    Args:
+        text: The text to change.
+
+    Returns:
+        The changed text.
+    """
+    return _LONE_CR_RE.sub("\n", text)
+
+
+def line_list_of(text: str) -> list[str]:
+    """Split a text into its lines at "\\n", "\\r\\n" and a lone "\\r" alone.
+
+    Every line number of the analysis counts lines this way. A form feed, a vertical tab,
+    U+0085, U+2028 and the other characters str.splitlines() also breaks at stay inside
+    their line.
+
+    Examples:
+        "a\\r\\nb\\rc\\n" -> ["a", "b", "c"]
+        "a\\n\\f\\nb"      -> ["a", "\\f", "b"]
+        ""              -> []
+
+    Args:
+        text: The text to split.
+
+    Returns:
+        The lines without their line breaks. A text that ends in a line break has no
+        empty line after it.
+    """
+    line_list = lone_cr_to_lf(text).replace("\r\n", "\n").split("\n")
+    if line_list[-1] == "":
+        line_list.pop()
+    return line_list
+
+
 def read_source_text(file_path: str) -> str:
     """Read a text file decoded by read_source(), with every line break turned into "\\n".
 
-    "\\r\\n" and a lone "\\r" become "\\n", as in a file opened in text mode.
+    "\\r\\n" and a lone "\\r" become "\\n", as in a file opened in text mode, so its lines are
+    those of line_list_of().
 
     Args:
         file_path: Absolute path of the file to read.
@@ -161,7 +206,7 @@ def read_source_text(file_path: str) -> str:
         OSError: When the file cannot be read.
     """
     text = read_source(file_path)[0]
-    return text.replace("\r\n", "\n").replace("\r", "\n")
+    return lone_cr_to_lf(text).replace("\r\n", "\n")
 
 
 def _to_dir_name(filename: str) -> str:

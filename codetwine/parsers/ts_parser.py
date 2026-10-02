@@ -10,7 +10,7 @@ from codetwine.config.settings import (
 )
 from codetwine.extractors.bms_source import read_bms_source
 from codetwine.extractors.cobol_source import CobolSource, read_cobol_source
-from codetwine.utils.file_utils import read_source
+from codetwine.utils.file_utils import lone_cr_to_lf, read_source
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +24,9 @@ parse_cache: OrderedDict[str, tuple[Node | CobolSource, bytes]] = OrderedDict()
 
 def _read_utf8_content(file_path: str) -> bytes:
     """Read a file with read_source() and return its text encoded as UTF-8.
+
+    A lone "\\r" is turned into "\\n" (lone_cr_to_lf), so a row of the syntax tree is a line
+    as line_list_of() splits the file; every byte stays where it is.
 
     A warning is logged when the file is read with invalid bytes replaced, and a debug
     line when it is read in an encoding other than UTF-8.
@@ -42,7 +45,7 @@ def _read_utf8_content(file_path: str) -> bytes:
         )
     elif encoding != "utf-8":
         logger.debug(f"{file_path} is read as {encoding}")
-    return text.encode("utf-8")
+    return lone_cr_to_lf(text).encode("utf-8")
 
 
 def parse_file(file_path: str) -> tuple[Node | CobolSource, bytes]:
@@ -50,7 +53,7 @@ def parse_file(file_path: str) -> tuple[Node | CobolSource, bytes]:
 
     The file is decoded by read_source() and parsed as UTF-8, whatever encoding it is
     stored in; the byte content is that UTF-8 text, and the text of every node decodes
-    as UTF-8. Line numbers match the file.
+    as UTF-8. Line numbers are those of line_list_of() over the file.
 
     For a COBOL file the first element is a CobolSource (read_cobol_source) in place of
     the root node, and for a BMS source the CobolSource of its symbolic maps

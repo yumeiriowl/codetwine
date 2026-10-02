@@ -3,7 +3,7 @@ import logging
 from collections.abc import Callable
 from tree_sitter import Node
 from codetwine.parsers.ts_parser import parse_file
-from codetwine.utils.file_utils import read_source
+from codetwine.utils.file_utils import line_list_of, read_source
 from codetwine.extractors.imports import ImportInfo, extract_imports
 from codetwine.extractors.usages import UsageInfo, extract_usages, extract_typed_aliases, usage_root_name
 from codetwine.extractors.definitions import ATTACHED_DEFINITION_TYPE_SET, extract_definitions
@@ -569,7 +569,7 @@ def _attach_usage_context(group_dict: dict[str, dict], caller_abs: str) -> None:
         caller_abs: Absolute path of the caller file.
     """
     try:
-        caller_source_line_list = read_source(caller_abs)[0].splitlines()
+        caller_source_line_list = line_list_of(read_source(caller_abs)[0])
     except OSError:
         return
     if not caller_source_line_list:

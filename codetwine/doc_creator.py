@@ -553,7 +553,8 @@ async def _splice_large_definitions(
     if not outer_list:
         return source_code
 
-    # split("\n") keeps 1-based mapping: source line N -> lines[N-1] (tree-sitter rows are \n-based)
+    # split("\n") keeps 1-based mapping: source line N -> lines[N-1] (read_source_text() leaves
+    # only "\n" line breaks, and its lines are the rows of the syntax tree)
     line_list = source_code.split("\n")
     line_count = len(line_list)
     definition_by_start_dict = {definition["start_line"]: definition for definition in outer_list}

@@ -7,6 +7,7 @@
 - `file_dependencies.json`: `detected_encoding`, the encoding a file was decoded with when no BOM, UTF-8 or `SOURCE_ENCODING` decoded it (`""` when it was read as UTF-8 with invalid bytes replaced, `null` otherwise)
 - `process_all_files()`: `detected_encoding_dict`, the files whose encoding was detected, with that encoding
 - `file_utils.detected_encoding()`: the encoding `read_source()` detects for a file, or `None` when a BOM, UTF-8 or `SOURCE_ENCODING` decodes it
+- `file_utils.line_list_of()`: the lines of a text split at `\n`, `\r\n` and a lone `\r` alone, and `file_utils.lone_cr_to_lf()`
 - C# (`cs`, `tree-sitter-c-sharp`): classes, structs, interfaces, enums, records, delegates, methods, constructors, properties, events, fields and enum members are extracted as definitions. A name is resolved to the file of the type or member it names through the namespaces around it, the `using` directives (`using`, `using static`, alias, `global using` under the nearest `.csproj` directory), names written with their namespaces, the members of a `partial` type written in other files, extension methods by name and number of arguments, and attributes to their class, written with or without the suffix `Attribute`. A usage is named as written without its namespaces, except that an attribute written without the suffix is named with it (`[Audit]` is `AuditAttribute`) and a name written with an alias of a type is named with the type (`Fmt.Format` with `using Fmt = App.Text.Formatter;` is `Formatter.Format`) (`codetwine/csharp_namespace_index.py`, `codetwine/extractors/csharp_source.py`)
 - `csharp_namespace_index.csharp_reference_target_list()`: the definition each reference of a C# file resolves to
 - `settings.CSHARP_EXT_SET`: the extensions of the C# files
@@ -83,6 +84,7 @@
 - `is_file_unchanged()`
 
 ### Fixed
+- Line numbers count lines at `\n`, `\r\n` and a lone `\r` alone. A file whose lines end in a lone `\r` was read as one line by tree-sitter, so every definition started on line 1, and a form feed, U+2028 or another character `str.splitlines()` breaks at shifted the source text of the definitions after it (and the lines of a COBOL or BMS source) by a line
 - File collection leaves out symbolic links and paths under a linked directory, whether the project is walked or `file_list` is given; a file outside the project is no longer analyzed through a link, and a file inside it is not listed twice
 - `extract_callee_source()`: returns the definition node the name belongs to instead of the parent of the name node. A C/C++ function definition now comes with its body, and a SQL object with its whole `CREATE` statement
 - Change detection compares the source with the `source_hash` recorded in `doc.json` instead of with the source copy in the output directory. The copy is refreshed by every run, so a change made between runs with `ENABLE_LLM_DOC=False` was never regenerated. A design document without `source_hash` is regenerated once

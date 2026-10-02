@@ -24,7 +24,7 @@ from codetwine.import_to_path import (
 )
 from codetwine.extractors.imports import extract_imports
 from codetwine.config.settings import CSHARP_EXT_SET, EXT_TO_DEFINITION_DICT, language_ext
-from codetwine.utils.file_utils import detected_encoding
+from codetwine.utils.file_utils import detected_encoding, line_list_of
 
 logger = logging.getLogger(__name__)
 
@@ -108,7 +108,7 @@ def get_file_dependencies(
     root_node, content = parse_file(target_file)
 
     # Convert content to text lines and extract source code from each definition's line range
-    content_line_list = content.decode("utf-8").splitlines()
+    content_line_list = line_list_of(content.decode("utf-8"))
     definition_info_list = extract_definitions(root_node, definition_dict)
     definition_list = [
         _definition_entry(definition, content_line_list) for definition in definition_info_list

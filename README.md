@@ -482,7 +482,7 @@ Per-file definition and dependency information.
 | `detected_encoding` | string\|null | Encoding the file was decoded with when it had no BOM, was not valid UTF-8 and was not decoded by `SOURCE_ENCODING` (the encoding charset-normalizer detects; `""` when it was read as UTF-8 with invalid bytes replaced). `null` otherwise, and for a file without a language |
 | `definitions[].name` | string | Function/class name |
 | `definitions[].type` | string | Definition type (tree-sitter node type, varies by language. Python: `function_definition`, `class_definition` / Java: `class_declaration`, `method_declaration` / JS/TS: `function_declaration`, `class_declaration` / SQL: `create_table`, `create_view` / Rust: `function_item`, `struct_item`, `impl_item` / C#: `class_declaration`, `method_declaration`, `property_declaration`, etc.) |
-| `definitions[].start_line` | int | Start line number |
+| `definitions[].start_line` | int | Start line number. Every line number counts from 1, and a line ends at `\n`, `\r\n` or a lone `\r` (a form feed or U+2028 stays inside its line) |
 | `definitions[].end_line` | int | End line number |
 | `definitions[].name_line` | int | Line the name is written on (COBOL and BMS only) |
 | `definitions[].level` | int | Level number of a data item (COBOL and BMS data items only) |

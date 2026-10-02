@@ -1,6 +1,7 @@
 import re
 from dataclasses import dataclass, field
 from codetwine.extractors.cobol_source import DATA_ITEM_TYPE, CobolDefinition, CobolSource
+from codetwine.utils.file_utils import line_list_of
 
 # Column (0-based) whose character marks an assembler statement as continued on the next line
 _CONTINUE_COLUMN = 71
@@ -324,7 +325,7 @@ def read_bms_source(source: str) -> CobolSource:
         A CobolSource with the data items of the symbolic maps as its definitions and the
         mapset names as its copy_name_list. It has no imports and no references.
     """
-    line_list = source.splitlines()
+    line_list = line_list_of(source)
     map_list, mapset_name_list = _read_map_list(_statement_list(line_list))
 
     definition_list: list[CobolDefinition] = []

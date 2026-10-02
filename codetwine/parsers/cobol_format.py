@@ -1,6 +1,7 @@
 import re
 import unicodedata
 from dataclasses import dataclass, field
+from codetwine.utils.file_utils import line_list_of
 
 # == Columns of a fixed-format line (0-based) ================================
 # Column of the indicator ("*" / "/" comment, "-" continuation, "D" debug line)
@@ -1437,7 +1438,7 @@ def split_cobol_source(source: str) -> CobolText:
         A CobolText. Names and line numbers in it are those of the source, except in
         the text of the units.
     """
-    line_list = [line.expandtabs(_TAB_SIZE) for line in source.splitlines()]
+    line_list = [line.expandtabs(_TAB_SIZE) for line in line_list_of(source)]
     cobol_text = CobolText()
 
     # == Step 1: Tokens =======================================================

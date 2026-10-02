@@ -2,6 +2,7 @@ import sys
 from bisect import bisect_right
 from dataclasses import dataclass, field
 from tree_sitter import Language, Node, Parser
+from codetwine.utils.file_utils import line_list_of
 from codetwine.parsers.cobol_format import (
     FILE_UNIT,
     GRAMMAR_NAME_RE,
@@ -710,4 +711,4 @@ def read_cobol_source(source: str, language: Language) -> CobolSource:
         A CobolSource.
     """
     cobol_text = split_cobol_source(source)
-    return _UnitReader(cobol_text, source.splitlines(), language).read()
+    return _UnitReader(cobol_text, line_list_of(source), language).read()
