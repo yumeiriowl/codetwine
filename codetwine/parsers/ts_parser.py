@@ -1,8 +1,9 @@
 import logging
 from collections import OrderedDict
-from tree_sitter import Language, Node, Parser
+from tree_sitter import Language, Node, Parser, Query, QueryCursor
 from codetwine.config.settings import (
     BMS_EXT_SET,
+    C_FAMILY_EXT_SET,
     COBOL_EXT_SET,
     EXT_TO_LANGUAGE_DICT,
     PARSE_CACHE_MAX_FILES,
@@ -19,6 +20,22 @@ logger = logging.getLogger(__name__)
 # Name written after a piece of code to see whether the code ends where it stops (_is_whole_code)
 _END_NAME = b"codetwine_end_of_code"
 
+# A function definition whose return type is a class, struct or union written with its
+# keyword and without a body, and whose declarator is a plain name (C / C++); the C
+# grammar has no class_specifier
+_CLASS_MACRO_QUERY_TUPLE = (
+    "(function_definition type: (struct_specifier name: (_) @macro !body) declarator: (identifier))",
+    "(function_definition type: (union_specifier name: (_) @macro !body) declarator: (identifier))",
+    "(function_definition type: (class_specifier name: (_) @macro !body) declarator: (identifier))",
+)
+
+# Compiled queries of _CLASS_MACRO_QUERY_TUPLE: id of the Language -> Query
+_class_macro_query_cache: dict[int, Query] = {}
+
+# How many times a C / C++ file is parsed again with the macro names in front of its
+# class names blanked
+_CLASS_MACRO_PASS_MAX = 8
+
 
 # Module-level cache for parse results, ordered from least to most recently used.
 # One entry holds one file's whole syntax tree: a tree-sitter Node keeps its tree alive.
@@ -26,8 +43,12 @@ _END_NAME = b"codetwine_end_of_code"
 # The number of entries is capped by PARSE_CACHE_MAX_FILES.
 parse_cache: OrderedDict[str, tuple[Node | CobolSource, bytes]] = OrderedDict()
 
+# The macro names read as spaces in front of class names (_parse_c_family), by file:
+# absolute path -> (macro name, line) pairs of the file's last parse
+class_macro_cache: dict[str, list[tuple[str, int]]] = {}
 
-def _read_utf8_content(file_path: str) -> bytes:
+
+def read_utf8_content(file_path: str) -> bytes:
     """Read a file with read_source() and return its text encoded as UTF-8.
 
     A lone "\\r" is turned into "\\n" (lone_cr_to_lf), so a row of the syntax tree is a line
@@ -72,6 +93,77 @@ def _is_whole_code(code: bytes, language: Language) -> bool:
     return bool(child_list) and child_list[-1].type == "identifier" and child_list[-1].text == _END_NAME
 
 
+def _class_macro_query(language: Language) -> Query:
+    """Return the query of _CLASS_MACRO_QUERY_TUPLE for a language, compiled once.
+
+    A pattern that names a node type the grammar of the language lacks is left out.
+    """
+    query = _class_macro_query_cache.get(id(language))
+    if query is None:
+        pattern_list = []
+        for pattern in _CLASS_MACRO_QUERY_TUPLE:
+            try:
+                Query(language, pattern)
+            except Exception:
+                continue
+            pattern_list.append(pattern)
+        query = Query(language, "\n".join(pattern_list))
+        _class_macro_query_cache[id(language)] = query
+    return query
+
+
+def _class_macro_range_list(root_node: Node, language: Language) -> list[tuple[int, int]]:
+    """Return the byte ranges of the macro names written between a class keyword and a class name.
+
+    class EXPORT Shape : public Base { ... }; is read by the grammar as a function
+    definition whose return type is "class EXPORT" and whose declarator is a plain
+    name. No function is written that way, so the name of such a type is a macro.
+
+    Args:
+        root_node: The AST root node of a C / C++ file.
+        language: The tree-sitter Language of the file.
+
+    Returns:
+        (start byte, end byte) of each such macro name.
+    """
+    capture_dict = QueryCursor(_class_macro_query(language)).captures(root_node)
+    return [(node.start_byte, node.end_byte) for node in capture_dict.get("macro", [])]
+
+
+def _parse_c_family(content: bytes, language: Language) -> tuple[Node, list[tuple[str, int]]]:
+    """Parse a C / C++ file, reading a class declared with a macro in front of its name as a class.
+
+    The macro names _class_macro_range_list() finds are replaced by spaces of the same
+    length and the text is parsed again, until none is left or _CLASS_MACRO_PASS_MAX
+    passes are done. Every other byte stays where it is.
+
+    Args:
+        content: The file's text as UTF-8 bytes.
+        language: The tree-sitter Language of the file.
+
+    Returns:
+        (AST root node of the last parse, (macro name, line) of each name replaced, in
+        line order).
+    """
+    parser = Parser(language)
+    code = content
+    root_node = parser.parse(code).root_node
+    macro_list: list[tuple[str, int]] = []
+    for _ in range(_CLASS_MACRO_PASS_MAX):
+        range_list = _class_macro_range_list(root_node, language)
+        if not range_list:
+            break
+        blank_code = bytearray(code)
+        for start_byte, end_byte in range_list:
+            macro_list.append((
+                code[start_byte:end_byte].decode("utf-8"), code.count(b"\n", 0, start_byte) + 1,
+            ))
+            blank_code[start_byte:end_byte] = b" " * (end_byte - start_byte)
+        code = bytes(blank_code)
+        root_node = parser.parse(code).root_node
+    return root_node, sorted(macro_list, key=lambda macro: macro[1])
+
+
 def parse_file(file_path: str) -> tuple[Node | CobolSource, bytes]:
     """Read a file, parse it with tree-sitter, and return (AST root node, byte content).
 
@@ -88,6 +180,10 @@ def parse_file(file_path: str) -> tuple[Node | CobolSource, bytes]:
     (r_chunk_code), each node at the position its code has in the file; the byte content
     is the whole file. A chunk whose code does not end inside the chunk (an open "{", an
     operator at its end) is left out of the tree.
+
+    For a C or C++ file a macro name written between a class keyword and a class name
+    (class EXPORT Shape { ... }) is read as spaces (_parse_c_family); the byte content
+    is the whole file, and class_macro_cache holds those names and their lines.
 
     Parse results are cached at module level; a file found in the cache is not parsed again.
     The cache holds at most PARSE_CACHE_MAX_FILES entries; when it is full, the least
@@ -110,7 +206,7 @@ def parse_file(file_path: str) -> tuple[Node | CobolSource, bytes]:
     ext = language_ext(file_path)
 
     # Read the file as UTF-8 bytes
-    content = _read_utf8_content(file_path)
+    content = read_utf8_content(file_path)
 
     if ext in COBOL_EXT_SET:
         # Split the COBOL text into statements and parse each of them
@@ -126,6 +222,10 @@ def parse_file(file_path: str) -> tuple[Node | CobolSource, bytes]:
         chunk_code = r_chunk_code(content, lambda code: _is_whole_code(code, language))
         tree = Parser(language).parse(chunk_code)
         parse_result = (tree.root_node, content)
+    elif ext in C_FAMILY_EXT_SET:
+        # Parse with the macro names in front of class names blanked
+        root_node, class_macro_cache[file_path] = _parse_c_family(content, EXT_TO_LANGUAGE_DICT[ext])
+        parse_result = (root_node, content)
     else:
         # Parse with tree-sitter to generate the AST
         tree = Parser(EXT_TO_LANGUAGE_DICT[ext]).parse(content)

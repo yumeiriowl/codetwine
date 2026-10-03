@@ -1,0 +1,1881 @@
+{
+  "file": "codetwine/codetwine/extractors/r_source_py/r_source.py",
+  "language": "py",
+  "detected_encoding": null,
+  "definitions": [
+    {
+      "name": "SOURCE_IMPORT",
+      "type": "expression_statement",
+      "start_line": 6,
+      "end_line": 6,
+      "context": "SOURCE_IMPORT = \"source\"      # source(\"path\") / sys.source(\"path\")"
+    },
+    {
+      "name": "BOX_IMPORT",
+      "type": "expression_statement",
+      "start_line": 7,
+      "end_line": 7,
+      "context": "BOX_IMPORT = \"box\"            # one argument of box::use(...)"
+    },
+    {
+      "name": "LIBRARY_IMPORT",
+      "type": "expression_statement",
+      "start_line": 8,
+      "end_line": 8,
+      "context": "LIBRARY_IMPORT = \"library\"    # library(pkg) / require(pkg)"
+    },
+    {
+      "name": "NAME_REFERENCE",
+      "type": "expression_statement",
+      "start_line": 11,
+      "end_line": 11,
+      "context": "NAME_REFERENCE = \"name\"              # a name written by itself: f(x), lapply(xs, f), new(\"A\")"
+    },
+    {
+      "name": "NAMESPACE_REFERENCE",
+      "type": "expression_statement",
+      "start_line": 12,
+      "end_line": 12,
+      "context": "NAMESPACE_REFERENCE = \"namespace\"    # pkg::name / pkg:::name"
+    },
+    {
+      "name": "MEMBER_REFERENCE",
+      "type": "expression_statement",
+      "start_line": 13,
+      "end_line": 13,
+      "context": "MEMBER_REFERENCE = \"member\"          # owner$name / owner@name"
+    },
+    {
+      "name": "_LEFT_ASSIGN_SET",
+      "type": "expression_statement",
+      "start_line": 16,
+      "end_line": 16,
+      "context": "_LEFT_ASSIGN_SET = {\"<-\", \"=\", \"<<-\"}"
+    },
+    {
+      "name": "_RIGHT_ASSIGN_SET",
+      "type": "expression_statement",
+      "start_line": 17,
+      "end_line": 17,
+      "context": "_RIGHT_ASSIGN_SET = {\"->\", \"->>\"}"
+    },
+    {
+      "name": "_LOCAL_CALL",
+      "type": "expression_statement",
+      "start_line": 20,
+      "end_line": 20,
+      "context": "_LOCAL_CALL = \"local\""
+    },
+    {
+      "name": "_LOCAL_ASSIGN_SET",
+      "type": "expression_statement",
+      "start_line": 23,
+      "end_line": 23,
+      "context": "_LOCAL_ASSIGN_SET = {\"<-\", \"=\", \"->\"}"
+    },
+    {
+      "name": "_OUTER_ASSIGN_SET",
+      "type": "expression_statement",
+      "start_line": 26,
+      "end_line": 26,
+      "context": "_OUTER_ASSIGN_SET = {\"<<-\", \"->>\"}"
+    },
+    {
+      "name": "_REPLACE_SUFFIX",
+      "type": "expression_statement",
+      "start_line": 29,
+      "end_line": 29,
+      "context": "_REPLACE_SUFFIX = \"<-\""
+    },
+    {
+      "name": "_COLUMN_ASSIGN",
+      "type": "expression_statement",
+      "start_line": 32,
+      "end_line": 32,
+      "context": "_COLUMN_ASSIGN = \":=\""
+    },
+    {
+      "name": "_TOP_LEVEL_BLOCK_TYPE_SET",
+      "type": "expression_statement",
+      "start_line": 35,
+      "end_line": 35,
+      "context": "_TOP_LEVEL_BLOCK_TYPE_SET = {\"braced_expression\", \"parenthesized_expression\", \"if_statement\"}"
+    },
+    {
+      "name": "_LOOP_FIELD_DICT",
+      "type": "expression_statement",
+      "start_line": 38,
+      "end_line": 42,
+      "context": "_LOOP_FIELD_DICT = {\n    \"for_statement\": (\"sequence\", \"body\"),\n    \"while_statement\": (\"condition\", \"body\"),\n    \"repeat_statement\": (\"body\",),\n}"
+    },
+    {
+      "name": "_FORMAL_DICT",
+      "type": "expression_statement",
+      "start_line": 46,
+      "end_line": 62,
+      "context": "_FORMAL_DICT = {\n    \"setClass\": (\"Class\", \"representation\", \"prototype\", \"contains\"),\n    \"setRefClass\": (\"Class\", \"fields\", \"contains\", \"methods\"),\n    \"setClassUnion\": (\"name\", \"members\"),\n    \"setGeneric\": (\"name\", \"def\"),\n    \"setMethod\": (\"f\", \"signature\", \"definition\"),\n    \"setReplaceMethod\": (\"f\", \"signature\", \"definition\"),\n    \"setValidity\": (\"Class\", \"method\"),\n    \"R6Class\": (\"classname\", \"public\", \"private\", \"active\"),\n    \"new\": (\"Class\",),\n    \"do.call\": (\"what\", \"args\"),\n    \"match.fun\": (\"FUN\",),\n    \"source\": (\"file\",),\n    \"sys.source\": (\"file\",),\n    \"library\": (\"package\",),\n    \"require\": (\"package\",),\n}"
+    },
+    {
+      "name": "_NAME_CALL_DICT",
+      "type": "expression_statement",
+      "start_line": 65,
+      "end_line": 70,
+      "context": "_NAME_CALL_DICT = {\n    \"setClass\": \"Class\",\n    \"setRefClass\": \"Class\",\n    \"setClassUnion\": \"name\",\n    \"setGeneric\": \"name\",\n}"
+    },
+    {
+      "name": "_ATTACH_CALL_DICT",
+      "type": "expression_statement",
+      "start_line": 73,
+      "end_line": 77,
+      "context": "_ATTACH_CALL_DICT = {\n    \"setMethod\": \"f\",\n    \"setReplaceMethod\": \"f\",\n    \"setValidity\": \"Class\",\n}"
+    },
+    {
+      "name": "_NAME_SUFFIX_CALL_DICT",
+      "type": "expression_statement",
+      "start_line": 81,
+      "end_line": 81,
+      "context": "_NAME_SUFFIX_CALL_DICT = {\"setReplaceMethod\": _REPLACE_SUFFIX}"
+    },
+    {
+      "name": "_MEMBER_ARGUMENT_DICT",
+      "type": "expression_statement",
+      "start_line": 84,
+      "end_line": 87,
+      "context": "_MEMBER_ARGUMENT_DICT = {\n    \"R6Class\": (\"public\", \"private\", \"active\"),\n    \"setRefClass\": (\"methods\", \"fields\"),\n}"
+    },
+    {
+      "name": "_STRING_NAME_CALL_DICT",
+      "type": "expression_statement",
+      "start_line": 90,
+      "end_line": 97,
+      "context": "_STRING_NAME_CALL_DICT = {\n    \"new\": \"Class\",\n    \"setValidity\": \"Class\",\n    \"setMethod\": \"f\",\n    \"setReplaceMethod\": \"f\",\n    \"do.call\": \"what\",\n    \"match.fun\": \"FUN\",\n}"
+    },
+    {
+      "name": "_CLASS_ARGUMENT_DICT",
+      "type": "expression_statement",
+      "start_line": 101,
+      "end_line": 107,
+      "context": "_CLASS_ARGUMENT_DICT = {\n    \"setMethod\": (\"signature\",),\n    \"setReplaceMethod\": (\"signature\",),\n    \"setClass\": (\"contains\",),\n    \"setRefClass\": (\"contains\",),\n    \"setClassUnion\": (\"members\",),\n}"
+    },
+    {
+      "name": "_SLOT_ARGUMENT_DICT",
+      "type": "expression_statement",
+      "start_line": 112,
+      "end_line": 115,
+      "context": "_SLOT_ARGUMENT_DICT = {\n    \"setClass\": (\"slots\",),\n    \"setRefClass\": (\"fields\",),\n}"
+    },
+    {
+      "name": "_STRING_HOLDER_CALL_SET",
+      "type": "expression_statement",
+      "start_line": 118,
+      "end_line": 118,
+      "context": "_STRING_HOLDER_CALL_SET = {\"c\", \"list\"}"
+    },
+    {
+      "name": "_CLASS_STRING_CALL_SET",
+      "type": "expression_statement",
+      "start_line": 121,
+      "end_line": 121,
+      "context": "_CLASS_STRING_CALL_SET = {\"signature\", \"representation\"}"
+    },
+    {
+      "name": "_SOURCE_CALL_SET",
+      "type": "expression_statement",
+      "start_line": 124,
+      "end_line": 124,
+      "context": "_SOURCE_CALL_SET = {\"source\", \"sys.source\"}"
+    },
+    {
+      "name": "_LIBRARY_CALL_SET",
+      "type": "expression_statement",
+      "start_line": 127,
+      "end_line": 127,
+      "context": "_LIBRARY_CALL_SET = {\"library\", \"require\"}"
+    },
+    {
+      "name": "_PATH_CALL_SET",
+      "type": "expression_statement",
+      "start_line": 130,
+      "end_line": 130,
+      "context": "_PATH_CALL_SET = {\"file.path\", \"here\"}"
+    },
+    {
+      "name": "_GENERIC_CALL",
+      "type": "expression_statement",
+      "start_line": 133,
+      "end_line": 133,
+      "context": "_GENERIC_CALL = \"UseMethod\""
+    },
+    {
+      "name": "_QUOTE_CALL_SET",
+      "type": "expression_statement",
+      "start_line": 136,
+      "end_line": 136,
+      "context": "_QUOTE_CALL_SET = {\"quote\", \"bquote\", \"substitute\", \"expression\"}"
+    },
+    {
+      "name": "RDefinition",
+      "type": "class_definition",
+      "start_line": 139,
+      "end_line": 150,
+      "context": "@dataclass\nclass RDefinition:\n    \"\"\"One definition of an R file.\"\"\"\n\n    name: str                   # Name of the definition\n    type: str                   # function_definition / binary_operator / call / argument\n    start_line: int             # First line of the statement (1-based)\n    end_line: int               # Last line of the statement\n    is_function: bool = False   # Whether the value is a function\n    is_generic: bool = False    # Whether the function calls UseMethod\n    is_member: bool = False     # Whether it is a member of a class (R6Class, setRefClass)\n    is_attach: bool = False     # Whether it is written for a name defined elsewhere (setMethod)"
+    },
+    {
+      "name": "name",
+      "type": "expression_statement",
+      "start_line": 143,
+      "end_line": 143,
+      "context": "    name: str                   # Name of the definition"
+    },
+    {
+      "name": "type",
+      "type": "expression_statement",
+      "start_line": 144,
+      "end_line": 144,
+      "context": "    type: str                   # function_definition / binary_operator / call / argument"
+    },
+    {
+      "name": "start_line",
+      "type": "expression_statement",
+      "start_line": 145,
+      "end_line": 145,
+      "context": "    start_line: int             # First line of the statement (1-based)"
+    },
+    {
+      "name": "end_line",
+      "type": "expression_statement",
+      "start_line": 146,
+      "end_line": 146,
+      "context": "    end_line: int               # Last line of the statement"
+    },
+    {
+      "name": "is_function",
+      "type": "expression_statement",
+      "start_line": 147,
+      "end_line": 147,
+      "context": "    is_function: bool = False   # Whether the value is a function"
+    },
+    {
+      "name": "is_generic",
+      "type": "expression_statement",
+      "start_line": 148,
+      "end_line": 148,
+      "context": "    is_generic: bool = False    # Whether the function calls UseMethod"
+    },
+    {
+      "name": "is_member",
+      "type": "expression_statement",
+      "start_line": 149,
+      "end_line": 149,
+      "context": "    is_member: bool = False     # Whether it is a member of a class (R6Class, setRefClass)"
+    },
+    {
+      "name": "is_attach",
+      "type": "expression_statement",
+      "start_line": 150,
+      "end_line": 150,
+      "context": "    is_attach: bool = False     # Whether it is written for a name defined elsewhere (setMethod)"
+    },
+    {
+      "name": "RImport",
+      "type": "class_definition",
+      "start_line": 153,
+      "end_line": 162,
+      "context": "@dataclass\nclass RImport:\n    \"\"\"One file or package an R file reads.\"\"\"\n\n    kind: str     # SOURCE_IMPORT / BOX_IMPORT / LIBRARY_IMPORT\n    path: str     # Path as written (source), module path \"a/b\" or package name (box), package name (library)\n    line: int     # Line of the call (1-based)\n    alias: str = \"\"                                            # box: name the module is bound to\n    name_dict: dict[str, str] = field(default_factory=dict)    # box: {name in the file: name in the module}\n    is_attach_all: bool = False                                # box: whether every name is attached ([...])"
+    },
+    {
+      "name": "kind",
+      "type": "expression_statement",
+      "start_line": 157,
+      "end_line": 157,
+      "context": "    kind: str     # SOURCE_IMPORT / BOX_IMPORT / LIBRARY_IMPORT"
+    },
+    {
+      "name": "path",
+      "type": "expression_statement",
+      "start_line": 158,
+      "end_line": 158,
+      "context": "    path: str     # Path as written (source), module path \"a/b\" or package name (box), package name (library)"
+    },
+    {
+      "name": "line",
+      "type": "expression_statement",
+      "start_line": 159,
+      "end_line": 159,
+      "context": "    line: int     # Line of the call (1-based)"
+    },
+    {
+      "name": "alias",
+      "type": "expression_statement",
+      "start_line": 160,
+      "end_line": 160,
+      "context": "    alias: str = \"\"                                            # box: name the module is bound to"
+    },
+    {
+      "name": "name_dict",
+      "type": "expression_statement",
+      "start_line": 161,
+      "end_line": 161,
+      "context": "    name_dict: dict[str, str] = field(default_factory=dict)    # box: {name in the file: name in the module}"
+    },
+    {
+      "name": "is_attach_all",
+      "type": "expression_statement",
+      "start_line": 162,
+      "end_line": 162,
+      "context": "    is_attach_all: bool = False                                # box: whether every name is attached ([...])"
+    },
+    {
+      "name": "RReference",
+      "type": "class_definition",
+      "start_line": 165,
+      "end_line": 173,
+      "context": "@dataclass(frozen=True)\nclass RReference:\n    \"\"\"One place an R file refers to a name no function around it binds.\"\"\"\n\n    name: str        # The name referred to\n    line: int        # Line of the reference (1-based)\n    kind: str        # NAME_REFERENCE / NAMESPACE_REFERENCE / MEMBER_REFERENCE\n    owner: str = \"\"  # Package of pkg::name, or the name before the first \"$\" / \"@\"\n    member_tuple: tuple[str, ...] = ()  # owner$name$a$b: the names after name (\"a\", \"b\")"
+    },
+    {
+      "name": "name",
+      "type": "expression_statement",
+      "start_line": 169,
+      "end_line": 169,
+      "context": "    name: str        # The name referred to"
+    },
+    {
+      "name": "line",
+      "type": "expression_statement",
+      "start_line": 170,
+      "end_line": 170,
+      "context": "    line: int        # Line of the reference (1-based)"
+    },
+    {
+      "name": "kind",
+      "type": "expression_statement",
+      "start_line": 171,
+      "end_line": 171,
+      "context": "    kind: str        # NAME_REFERENCE / NAMESPACE_REFERENCE / MEMBER_REFERENCE"
+    },
+    {
+      "name": "owner",
+      "type": "expression_statement",
+      "start_line": 172,
+      "end_line": 172,
+      "context": "    owner: str = \"\"  # Package of pkg::name, or the name before the first \"$\" / \"@\""
+    },
+    {
+      "name": "member_tuple",
+      "type": "expression_statement",
+      "start_line": 173,
+      "end_line": 173,
+      "context": "    member_tuple: tuple[str, ...] = ()  # owner$name$a$b: the names after name (\"a\", \"b\")"
+    },
+    {
+      "name": "RSource",
+      "type": "class_definition",
+      "start_line": 176,
+      "end_line": 182,
+      "context": "@dataclass\nclass RSource:\n    \"\"\"The definitions, imports and references of one R file.\"\"\"\n\n    definition_list: list[RDefinition]\n    import_list: list[RImport]\n    reference_list: list[RReference]"
+    },
+    {
+      "name": "definition_list",
+      "type": "expression_statement",
+      "start_line": 180,
+      "end_line": 180,
+      "context": "    definition_list: list[RDefinition]"
+    },
+    {
+      "name": "import_list",
+      "type": "expression_statement",
+      "start_line": 181,
+      "end_line": 181,
+      "context": "    import_list: list[RImport]"
+    },
+    {
+      "name": "reference_list",
+      "type": "expression_statement",
+      "start_line": 182,
+      "end_line": 182,
+      "context": "    reference_list: list[RReference]"
+    },
+    {
+      "name": "_node_text",
+      "type": "function_definition",
+      "start_line": 185,
+      "end_line": 187,
+      "context": "def _node_text(node: Node) -> str:\n    \"\"\"Return the source text of a node.\"\"\"\n    return node.text.decode(\"utf-8\")"
+    },
+    {
+      "name": "_line",
+      "type": "function_definition",
+      "start_line": 190,
+      "end_line": 192,
+      "context": "def _line(node: Node) -> int:\n    \"\"\"Return the line a node starts on (1-based).\"\"\"\n    return node.start_point[0] + 1"
+    },
+    {
+      "name": "_string_text",
+      "type": "function_definition",
+      "start_line": 195,
+      "end_line": 207,
+      "context": "def _string_text(node: Node | None) -> str | None:\n    \"\"\"Return the text between the quotes of a string node.\n\n    Returns:\n        The text, \"\" for an empty string. None when the node is not a string, or is a\n        raw string (r\"(...)\").\n    \"\"\"\n    if node is None or node.type != \"string\":\n        return None\n    content = node.child_by_field_name(\"content\")\n    if content is not None:\n        return _node_text(content)\n    return \"\" if node.child_by_field_name(\"open\") is not None else None"
+    },
+    {
+      "name": "_name_text",
+      "type": "function_definition",
+      "start_line": 210,
+      "end_line": 223,
+      "context": "def _name_text(node: Node | None) -> str | None:\n    \"\"\"Return the name a node writes: an identifier without its backticks, or a string.\n\n    Examples:\n        add        -> \"add\"\n        `my var`   -> \"my var\"\n        \"add\"      -> \"add\"\n        x$y        -> None\n    \"\"\"\n    if node is None:\n        return None\n    if node.type == \"identifier\":\n        return _node_text(node).strip(\"`\")\n    return _string_text(node)"
+    },
+    {
+      "name": "_operator",
+      "type": "function_definition",
+      "start_line": 226,
+      "end_line": 229,
+      "context": "def _operator(node: Node) -> str:\n    \"\"\"Return the operator of a binary_operator, extract_operator or namespace_operator node.\"\"\"\n    operator_node = node.child_by_field_name(\"operator\")\n    return _node_text(operator_node) if operator_node is not None else \"\""
+    },
+    {
+      "name": "_assign_part",
+      "type": "function_definition",
+      "start_line": 232,
+      "end_line": 252,
+      "context": "def _assign_part(node: Node) -> tuple[Node | None, Node | None] | None:\n    \"\"\"Split an assignment into its target and its value.\n\n    Examples:\n        x <- 1     -> (x, 1)\n        1 -> x     -> (x, 1)\n        x + 1      -> None\n\n    Returns:\n        (target node, value node), or None when the node is not an assignment.\n    \"\"\"\n    if node.type != \"binary_operator\":\n        return None\n    operator = _operator(node)\n    lhs = node.child_by_field_name(\"lhs\")\n    rhs = node.child_by_field_name(\"rhs\")\n    if operator in _LEFT_ASSIGN_SET:\n        return lhs, rhs\n    if operator in _RIGHT_ASSIGN_SET:\n        return rhs, lhs\n    return None"
+    },
+    {
+      "name": "_is_target_pair",
+      "type": "function_definition",
+      "start_line": 255,
+      "end_line": 257,
+      "context": "def _is_target_pair(node: Node | None) -> bool:\n    \"\"\"Return whether a node is \"a = b\" written without parentheses.\"\"\"\n    return node is not None and node.type == \"binary_operator\" and _operator(node) == \"=\""
+    },
+    {
+      "name": "_target_part_list",
+      "type": "function_definition",
+      "start_line": 260,
+      "end_line": 286,
+      "context": "def _target_part_list(target: Node | None) -> list[Node]:\n    \"\"\"Return the targets the target side of an assignment holds.\n\n    a = b <- value is parsed as (a = b) <- value: the target side is the node \"a = b\",\n    and both of its sides are targets.\n\n    Examples:\n        a           -> [a]\n        a = b       -> [a, b]\n        a = b = c   -> [a, b, c]\n        x$y         -> [x$y]\n\n    Args:\n        target: The target node of an assignment (_assign_part), or None.\n\n    Returns:\n        The target nodes in source order: the target itself unless it is a \"=\" node.\n    \"\"\"\n    part_list: list[Node] = []\n    while _is_target_pair(target):\n        lhs = target.child_by_field_name(\"lhs\")\n        if lhs is not None:\n            part_list.append(lhs)\n        target = target.child_by_field_name(\"rhs\")\n    if target is not None:\n        part_list.append(target)\n    return part_list"
+    },
+    {
+      "name": "_call_name_part",
+      "type": "function_definition",
+      "start_line": 289,
+      "end_line": 307,
+      "context": "def _call_name_part(node: Node) -> tuple[str, str] | None:\n    \"\"\"Return the package and the name of the function a call node calls.\n\n    Examples:\n        source(\"a.R\")       -> (\"\", \"source\")\n        box::use(./a)       -> (\"box\", \"use\")\n        obj$run()           -> None\n    \"\"\"\n    function_node = node.child_by_field_name(\"function\")\n    if function_node is None:\n        return None\n    if function_node.type == \"identifier\":\n        return \"\", _node_text(function_node).strip(\"`\")\n    if function_node.type == \"namespace_operator\":\n        owner = _name_text(function_node.child_by_field_name(\"lhs\"))\n        name = _name_text(function_node.child_by_field_name(\"rhs\"))\n        if owner is not None and name is not None:\n            return owner, name\n    return None"
+    },
+    {
+      "name": "_call_name",
+      "type": "function_definition",
+      "start_line": 310,
+      "end_line": 315,
+      "context": "def _call_name(node: Node | None) -> str | None:\n    \"\"\"Return the name of the function a call node calls, without its package.\"\"\"\n    if node is None or node.type != \"call\":\n        return None\n    name_part = _call_name_part(node)\n    return name_part[1] if name_part else None"
+    },
+    {
+      "name": "_argument_list",
+      "type": "function_definition",
+      "start_line": 318,
+      "end_line": 334,
+      "context": "def _argument_list(node: Node) -> list[tuple[str | None, Node | None, Node]]:\n    \"\"\"Return the arguments of a call or subset node.\n\n    Returns:\n        One (name or None, value node or None, argument node) per argument, in order.\n    \"\"\"\n    argument_holder = node.child_by_field_name(\"arguments\")\n    if argument_holder is None:\n        return []\n    return [\n        (\n            _name_text(child.child_by_field_name(\"name\")),\n            child.child_by_field_name(\"value\"),\n            child,\n        )\n        for child in argument_holder.children if child.type == \"argument\"\n    ]"
+    },
+    {
+      "name": "_formal_name",
+      "type": "function_definition",
+      "start_line": 337,
+      "end_line": 356,
+      "context": "def _formal_name(argument_name: str, formal_tuple: tuple[str, ...]) -> str:\n    \"\"\"Return the parameter an argument name stands for.\n\n    Examples (parameters f, signature, definition):\n        \"signature\" -> \"signature\"\n        \"sig\"       -> \"signature\"\n        \"other\"     -> \"other\"\n\n    Args:\n        argument_name: The name an argument is written with.\n        formal_tuple: The parameter names of the call.\n\n    Returns:\n        The parameter of that name, else the one parameter the name is the start of,\n        else the name itself.\n    \"\"\"\n    if argument_name in formal_tuple:\n        return argument_name\n    match_list = [formal for formal in formal_tuple if formal.startswith(argument_name)]\n    return match_list[0] if len(match_list) == 1 else argument_name"
+    },
+    {
+      "name": "_argument_value",
+      "type": "function_definition",
+      "start_line": 359,
+      "end_line": 394,
+      "context": "def _argument_value(node: Node, name: str) -> Node | None:\n    \"\"\"Return the value a call gives the parameter of a name.\n\n    An argument written with the name, or with the start of it that fits no other\n    parameter of _FORMAL_DICT, is taken. Else the arguments written without a name\n    fill, in order, the parameters of _FORMAL_DICT that no argument names.\n\n    Examples (setMethod: f, signature, definition):\n        setMethod(\"area\", \"Shape\", fn)       signature -> \"Shape\"\n        setMethod(f = \"area\", \"Shape\", fn)   signature -> \"Shape\"\n        setMethod(\"area\", sig = \"Shape\")     signature -> \"Shape\"\n        setMethod(\"area\", definition = fn)   signature -> None\n\n    Args:\n        node: A call node.\n        name: Name of the parameter.\n\n    Returns:\n        The value node, or None when the call gives the parameter no value.\n    \"\"\"\n    formal_tuple = _FORMAL_DICT.get(_call_name(node) or \"\", ())\n    argument_list = [\n        (_formal_name(argument_name, formal_tuple) if argument_name is not None else None, value)\n        for argument_name, value, _ in _argument_list(node)\n    ]\n    name_set = {argument_name for argument_name, _ in argument_list if argument_name is not None}\n    free_formal_list = [formal for formal in formal_tuple if formal not in name_set]\n    position = 0\n    for argument_name, value in argument_list:\n        if argument_name == name:\n            return value\n        if argument_name is None:\n            if position < len(free_formal_list) and free_formal_list[position] == name:\n                return value\n            position += 1\n    return None"
+    },
+    {
+      "name": "_assign_chain",
+      "type": "function_definition",
+      "start_line": 397,
+      "end_line": 421,
+      "context": "def _assign_chain(node: Node) -> tuple[list[Node], Node | None]:\n    \"\"\"Return the targets of a chain of assignments and the value they are given.\n\n    Examples:\n        a <- b <- 1     -> ([a, b], 1)\n        1 -> a -> b     -> ([b, a], 1)\n        a = b <- 1      -> ([a, b], 1)\n        f(x)            -> ([], f(x))\n\n    Args:\n        node: A statement.\n\n    Returns:\n        (target nodes from the outermost assignment inwards, the value node). A node\n        that is not an assignment is its own value.\n    \"\"\"\n    target_list: list[Node] = []\n    value: Node | None = node\n    while value is not None:\n        assign_part = _assign_part(value)\n        if assign_part is None:\n            break\n        target_list.extend(_target_part_list(assign_part[0]))\n        value = assign_part[1]\n    return target_list, value"
+    },
+    {
+      "name": "_read_top_level",
+      "type": "function_definition",
+      "start_line": 424,
+      "end_line": 458,
+      "context": "def _read_top_level(root_node: Node) -> tuple[list[Node], set[str]]:\n    \"\"\"Return the top-level statements of a file and the variables of its top-level for loops.\n\n    The statements inside a top-level \"{ }\", \"( )\" and \"if\" (condition, both branches)\n    are top-level statements themselves, and so are the sequence, the condition and the\n    statements of the body of a top-level for, while and repeat loop.\n\n    Args:\n        root_node: The AST root node of the file.\n\n    Returns:\n        (statement nodes in source order, without comments; names of the for variables).\n    \"\"\"\n    statement_list: list[Node] = []\n    loop_name_set: set[str] = set()\n    node_stack = [child for child in reversed(root_node.children) if child.is_named]\n    while node_stack:\n        node = node_stack.pop()\n        if node.type == \"comment\":\n            continue\n        if node.type in _TOP_LEVEL_BLOCK_TYPE_SET:\n            node_stack.extend(child for child in reversed(node.children) if child.is_named)\n            continue\n        loop_field_tuple = _LOOP_FIELD_DICT.get(node.type)\n        if loop_field_tuple is None:\n            statement_list.append(node)\n            continue\n        loop_name = _name_text(node.child_by_field_name(\"variable\"))\n        if loop_name:\n            loop_name_set.add(loop_name)\n        for field_name in reversed(loop_field_tuple):\n            child = node.child_by_field_name(field_name)\n            if child is not None:\n                node_stack.append(child)\n    return statement_list, loop_name_set"
+    },
+    {
+      "name": "_has_call",
+      "type": "function_definition",
+      "start_line": 461,
+      "end_line": 471,
+      "context": "def _has_call(function_node: Node, name: str) -> bool:\n    \"\"\"Return whether a function calls the named function, outside the functions written in it.\"\"\"\n    node_stack = list(function_node.children)\n    while node_stack:\n        current = node_stack.pop()\n        if current.type == \"function_definition\":\n            continue\n        if _call_name(current) == name:\n            return True\n        node_stack.extend(current.children)\n    return False"
+    },
+    {
+      "name": "_member_definition_list",
+      "type": "function_definition",
+      "start_line": 474,
+      "end_line": 511,
+      "context": "def _member_definition_list(call_node: Node) -> list[RDefinition]:\n    \"\"\"Return the members of the class a call makes.\n\n    Target AST structure:\n        call                               <- this node is passed as the argument\n          +-- function: identifier \"R6Class\"\n          +-- arguments\n               +-- argument  name: \"public\"\n                    +-- value: call \"list\"\n                         +-- argument  name: \"deposit\"  value: function_definition   <- a member\n\n    The same structure applies to private and active of R6Class and to methods and\n    fields of setRefClass.\n\n    Args:\n        call_node: A call node.\n\n    Returns:\n        One RDefinition of type \"argument\" per named argument of each list() or c(),\n        with is_member set. Empty when the call makes no class.\n    \"\"\"\n    member_list: list[RDefinition] = []\n    for argument_name in _MEMBER_ARGUMENT_DICT.get(_call_name(call_node) or \"\", ()):\n        list_node = _argument_value(call_node, argument_name)\n        if _call_name(list_node) not in _STRING_HOLDER_CALL_SET:\n            continue\n        for member_name, value, argument_node in _argument_list(list_node):\n            if member_name is None:\n                continue\n            member_list.append(RDefinition(\n                name=member_name,\n                type=\"argument\",\n                start_line=_line(argument_node),\n                end_line=argument_node.end_point[0] + 1,\n                is_function=value is not None and value.type == \"function_definition\",\n                is_member=True,\n            ))\n    return member_list"
+    },
+    {
+      "name": "_string_name",
+      "type": "function_definition",
+      "start_line": 514,
+      "end_line": 530,
+      "context": "def _string_name(call_node: Node, argument_name: str) -> str | None:\n    \"\"\"Return the name a call is given as a string.\n\n    The name of setReplaceMethod(\"f\", ...) is \"f<-\" (_NAME_SUFFIX_CALL_DICT).\n\n    Args:\n        call_node: A call node.\n        argument_name: Name of the parameter that holds the string.\n\n    Returns:\n        The name, or None when the parameter is given no string or an empty one.\n    \"\"\"\n    name = _string_text(_argument_value(call_node, argument_name))\n    if not name:\n        return None\n    suffix = _NAME_SUFFIX_CALL_DICT.get(_call_name(call_node) or \"\", \"\")\n    return name if name.endswith(suffix) else name + suffix"
+    },
+    {
+      "name": "_define_call_list",
+      "type": "function_definition",
+      "start_line": 533,
+      "end_line": 566,
+      "context": "def _define_call_list(node: Node | None) -> list[Node]:\n    \"\"\"Return the calls of a statement that define a name by a string, or a class.\n\n    The node itself when it is such a call (_NAME_CALL_DICT, _ATTACH_CALL_DICT,\n    _MEMBER_ARGUMENT_DICT), else the ones among the arguments of the calls it is made\n    of: invisible(setClass(\"A\")), suppressMessages(setGeneric(\"g\", ...)). The calls\n    inside a function, and inside quote(), bquote(), substitute() and expression(),\n    are not returned.\n\n    Args:\n        node: A call node, or any other node (no calls are returned for it).\n\n    Returns:\n        The call nodes, in source order.\n    \"\"\"\n    call_list: list[Node] = []\n    node_stack = [node] if node is not None else []\n    while node_stack:\n        current = node_stack.pop()\n        if current.type != \"call\":\n            continue\n        call_name = _call_name(current) or \"\"\n        if any(\n            call_name in call_dict\n            for call_dict in (_NAME_CALL_DICT, _ATTACH_CALL_DICT, _MEMBER_ARGUMENT_DICT)\n        ):\n            call_list.append(current)\n            continue\n        if call_name in _QUOTE_CALL_SET:\n            continue\n        node_stack.extend(\n            value for _, value, _ in reversed(_argument_list(current)) if value is not None\n        )\n    return call_list"
+    },
+    {
+      "name": "_call_definition_list",
+      "type": "function_definition",
+      "start_line": 569,
+      "end_line": 598,
+      "context": "def _call_definition_list(call_node: Node, statement: Node, skip_name_set: set[str]) -> list[RDefinition]:\n    \"\"\"Return the definitions a call writes by the string it is given.\n\n    setClass(\"A\"), setRefClass(\"A\"), setClassUnion(\"A\") and setGeneric(\"g\") define the\n    name; setMethod(\"g\", ...), setReplaceMethod(\"g\", ...) (named g<-) and\n    setValidity(\"A\", ...) are written for a name defined elsewhere (is_attach).\n\n    Args:\n        call_node: A call node.\n        statement: The top-level statement the call is written in.\n        skip_name_set: Names not returned (the names the statement assigns the call to).\n\n    Returns:\n        At most one RDefinition of type \"call\", with the lines of the statement.\n    \"\"\"\n    call_name = _call_name(call_node) or \"\"\n    is_attach = call_name in _ATTACH_CALL_DICT\n    argument_name = _ATTACH_CALL_DICT.get(call_name) or _NAME_CALL_DICT.get(call_name)\n    if argument_name is None:\n        return []\n    name = _string_name(call_node, argument_name)\n    if not name or name in skip_name_set:\n        return []\n    return [RDefinition(\n        name=name,\n        type=\"call\",\n        start_line=_line(statement),\n        end_line=statement.end_point[0] + 1,\n        is_attach=is_attach,\n    )]"
+    },
+    {
+      "name": "r_definition_list",
+      "type": "function_definition",
+      "start_line": 601,
+      "end_line": 654,
+      "context": "def r_definition_list(root_node: Node) -> list[RDefinition]:\n    \"\"\"Return the definitions of an R file in line order.\n\n    A top-level assignment to a name (name <- value, name = value, name <<- value,\n    value -> name, value ->> name; the name an identifier, a backtick name or a string)\n    is a definition: of type \"function_definition\" when the value is a function, else\n    \"binary_operator\". Every name of a chain (a <- b <- value) is one. setClass,\n    setRefClass, setClassUnion and setGeneric define the name of their string, and\n    setMethod, setReplaceMethod and setValidity are listed under the name they are\n    written for (type \"call\"), also as an argument of another top-level call\n    (invisible(setClass(\"A\"))). The named entries of public, private and active of\n    R6Class and of methods and fields of setRefClass are members (type \"argument\").\n    The statements of a top-level if, \"{ }\", \"( )\", for, while and repeat are top-level\n    statements (_read_top_level). An assignment inside a function is not a definition.\n    A name assigned inside a top-level statement, outside the functions written in it,\n    is a definition when a later top-level statement refers to it\n    (_inner_definition_list).\n\n    Args:\n        root_node: The AST root node of the file.\n\n    Returns:\n        The RDefinition list, sorted by start_line.\n    \"\"\"\n    definition_list: list[RDefinition] = []\n    for statement in _read_top_level(root_node)[0]:\n        start_line = _line(statement)\n        end_line = statement.end_point[0] + 1\n        target_list, value = _assign_chain(statement)\n        name_list = [name for name in map(_name_text, target_list) if name]\n\n        # The names the statement assigns: a function, or any other value\n        if value is not None:\n            is_function = value.type == \"function_definition\"\n            is_generic = is_function and _has_call(value, _GENERIC_CALL)\n            definition_list.extend(\n                RDefinition(\n                    name=name,\n                    type=\"function_definition\" if is_function else \"binary_operator\",\n                    start_line=start_line,\n                    end_line=end_line,\n                    is_function=is_function,\n                    is_generic=is_generic,\n                )\n                for name in name_list\n            )\n\n        # The calls that define a name by a string, or make a class\n        for call_node in _define_call_list(value):\n            definition_list.extend(_call_definition_list(call_node, statement, set(name_list)))\n            definition_list.extend(_member_definition_list(call_node))\n\n    definition_list.extend(_inner_definition_list(root_node))\n    return sorted(definition_list, key=lambda definition: definition.start_line)"
+    },
+    {
+      "name": "_is_inside_local_call",
+      "type": "function_definition",
+      "start_line": 657,
+      "end_line": 664,
+      "context": "def _is_inside_local_call(node: Node, statement: Node) -> bool:\n    \"\"\"Return whether a node of a statement is written inside a call of local().\"\"\"\n    current = node.parent\n    while current is not None and current.id != statement.id:\n        if current.type == \"call\" and _call_name(current) == _LOCAL_CALL:\n            return True\n        current = current.parent\n    return statement.type == \"call\" and _call_name(statement) == _LOCAL_CALL"
+    },
+    {
+      "name": "_inner_definition_list",
+      "type": "function_definition",
+      "start_line": 667,
+      "end_line": 716,
+      "context": "def _inner_definition_list(root_node: Node) -> list[RDefinition]:\n    \"\"\"Return the definitions written inside the top-level statements of an R file.\n\n    A name assigned inside a top-level statement, outside the functions and the\n    local() calls written in it (tryCatch({ cfg <- load() }), system.time(fit <- run())),\n    is a definition when a top-level statement after it refers to the name without\n    assigning it itself.\n\n    Args:\n        root_node: The AST root node of the file.\n\n    Returns:\n        One RDefinition per such name and statement, with the lines of the first\n        assignment of the name in the statement: of type \"function_definition\" when\n        the value is a function, else \"binary_operator\".\n    \"\"\"\n    statement_list, loop_name_set = _read_top_level(root_node)\n    definition_list: list[RDefinition] = []\n    later_name_set: set[str] = set()\n    for statement in reversed(statement_list):\n        bind_list = _local_bind_list(statement, _chain_node_id_set(statement))\n        first_node_dict: dict[str, Node] = {}\n        for name, bind_node in sorted(bind_list, key=lambda bind: bind[1].start_byte):\n            if bind_node.type == \"binary_operator\" and not _is_inside_local_call(bind_node, statement):\n                first_node_dict.setdefault(name, bind_node)\n        for name, assign_node in first_node_dict.items():\n            if name not in later_name_set:\n                continue\n            assign_part = _assign_part(assign_node)\n            is_function = (\n                assign_part is not None and assign_part[1] is not None\n                and assign_part[1].type == \"function_definition\"\n            )\n            definition_list.append(RDefinition(\n                name=name,\n                type=\"function_definition\" if is_function else \"binary_operator\",\n                start_line=_line(assign_node),\n                end_line=assign_node.end_point[0] + 1,\n                is_function=is_function,\n            ))\n\n        # The names the statement refers to without binding them itself; of owner$name\n        # the owner\n        walker = _ReferenceWalker()\n        walker.walk(statement, [{name for name, _ in bind_list} | loop_name_set])\n        later_name_set.update(\n            reference.owner if reference.kind == MEMBER_REFERENCE else reference.name\n            for reference in walker.reference_list\n        )\n    return definition_list"
+    },
+    {
+      "name": "r_definition_text",
+      "type": "function_definition",
+      "start_line": 719,
+      "end_line": 741,
+      "context": "def r_definition_text(root_node: Node, content: bytes, name: str) -> str | None:\n    \"\"\"Return the source lines of the definition of a name in an R file.\n\n    A top-level definition of the name comes before a member and before a call written\n    for a name defined elsewhere.\n\n    Args:\n        root_node: The AST root node of the file.\n        content: The file's text as UTF-8 bytes (parse_file).\n        name: Name of the definition.\n\n    Returns:\n        The lines of the first such definition joined with \"\\\\n\". None when the file\n        has no definition of the name.\n    \"\"\"\n    candidate_list = [d for d in r_definition_list(root_node) if d.name == name]\n    if not candidate_list:\n        return None\n    definition = next(\n        (d for d in candidate_list if not d.is_member and not d.is_attach), candidate_list[0],\n    )\n    line_list = line_list_of(content.decode(\"utf-8\"))\n    return \"\\n\".join(line_list[definition.start_line - 1:definition.end_line])"
+    },
+    {
+      "name": "_literal_path",
+      "type": "function_definition",
+      "start_line": 744,
+      "end_line": 764,
+      "context": "def _literal_path(node: Node | None) -> str | None:\n    \"\"\"Return the path a node writes with string literals only.\n\n    Examples:\n        \"R/helper.R\"                    -> \"R/helper.R\"\n        file.path(\"R\", \"helper.R\")      -> \"R/helper.R\"\n        here::here(\"R\", \"helper.R\")     -> \"R/helper.R\"\n        file.path(base_dir, \"x.R\")      -> None\n    \"\"\"\n    path = _string_text(node)\n    if path is not None:\n        return path\n    if _call_name(node) not in _PATH_CALL_SET:\n        return None\n    part_list = [\n        _string_text(value) if argument_name is None else None\n        for argument_name, value, _ in _argument_list(node)\n    ]\n    if not part_list or any(part is None for part in part_list):\n        return None\n    return \"/\".join(part_list)"
+    },
+    {
+      "name": "_box_path_part_list",
+      "type": "function_definition",
+      "start_line": 767,
+      "end_line": 790,
+      "context": "def _box_path_part_list(node: Node | None) -> list[str] | None:\n    \"\"\"Return the parts of a module path written in box::use.\n\n    Examples:\n        ./mod/calc          -> [\".\", \"mod\", \"calc\"]\n        app/logic/calc[add] -> [\"app\", \"logic\", \"calc\"]\n        dplyr               -> [\"dplyr\"]\n\n    Returns:\n        The parts, or None when the node is not a path.\n    \"\"\"\n    if node is None:\n        return None\n    if node.type == \"identifier\":\n        return [_node_text(node).strip(\"`\")]\n    if node.type == \"subset\":\n        return _box_path_part_list(node.child_by_field_name(\"function\"))\n    if node.type == \"binary_operator\" and _operator(node) == \"/\":\n        lhs_part_list = _box_path_part_list(node.child_by_field_name(\"lhs\"))\n        rhs_part_list = _box_path_part_list(node.child_by_field_name(\"rhs\"))\n        if lhs_part_list is None or rhs_part_list is None:\n            return None\n        return lhs_part_list + rhs_part_list\n    return None"
+    },
+    {
+      "name": "_box_import",
+      "type": "function_definition",
+      "start_line": 793,
+      "end_line": 843,
+      "context": "def _box_import(argument_name: str | None, value: Node | None) -> RImport | None:\n    \"\"\"Read one argument of box::use.\n\n    Target AST structure of alias = app/logic/calc[add, minus = sub]:\n        argument\n          +-- name: identifier \"alias\"\n          +-- value: binary_operator \"/\"\n               +-- lhs: binary_operator \"/\"  (app / logic)\n               +-- rhs: subset\n                    +-- function: identifier \"calc\"\n                    +-- arguments: add, minus = sub\n\n    The module is bound to the name of the argument, or to the last part of its path\n    when the argument has neither a name nor an attach list. Each name of the attach\n    list is bound to the name of the module it is given (\"[...]\" attaches every name).\n\n    Args:\n        argument_name: Name of the argument, or None.\n        value: Value node of the argument.\n\n    Returns:\n        The RImport, or None when the value is not a module path.\n    \"\"\"\n    part_list = _box_path_part_list(value)\n    if not part_list or value is None:\n        return None\n\n    # The attach list is written after the last part of the path\n    last_node = value\n    while last_node.type == \"binary_operator\":\n        rhs = last_node.child_by_field_name(\"rhs\")\n        if rhs is None:\n            break\n        last_node = rhs\n\n    box_import = RImport(kind=BOX_IMPORT, path=\"/\".join(part_list), line=_line(value))\n    if last_node.type != \"subset\":\n        box_import.alias = argument_name or part_list[-1]\n        return box_import\n\n    box_import.alias = argument_name or \"\"\n    for attach_name, attach_value, _ in _argument_list(last_node):\n        if attach_value is None:\n            continue\n        if attach_value.type == \"dots\":\n            box_import.is_attach_all = True\n            continue\n        original_name = _name_text(attach_value)\n        if original_name is not None:\n            box_import.name_dict[attach_name or original_name] = original_name\n    return box_import"
+    },
+    {
+      "name": "_import_list",
+      "type": "function_definition",
+      "start_line": 846,
+      "end_line": 888,
+      "context": "def _import_list(root_node: Node) -> list[RImport]:\n    \"\"\"Return the files and packages an R file reads, in line order.\n\n    source(\"path\") and sys.source(\"path\") with a path written with string literals\n    (_literal_path), library(pkg) and require(pkg) with the package written as a name\n    or a string, and each argument of box::use(...). The calls are read wherever they\n    are written in the file.\n\n    Args:\n        root_node: The AST root node of the file.\n\n    Returns:\n        The RImport list.\n    \"\"\"\n    import_list: list[RImport] = []\n    node_stack = [root_node]\n    while node_stack:\n        node = node_stack.pop()\n        node_stack.extend(node.children)\n        if node.type != \"call\":\n            continue\n        name_part = _call_name_part(node)\n        if name_part is None:\n            continue\n        owner, name = name_part\n\n        if (owner, name) == (\"box\", \"use\"):\n            for argument_name, value, _ in _argument_list(node):\n                box_import = _box_import(argument_name, value)\n                if box_import is not None:\n                    import_list.append(box_import)\n        elif name in _SOURCE_CALL_SET and owner in (\"\", \"base\"):\n            path = _literal_path(_argument_value(node, \"file\"))\n            if path:\n                import_list.append(RImport(kind=SOURCE_IMPORT, path=path, line=_line(node)))\n        elif name in _LIBRARY_CALL_SET and owner in (\"\", \"base\"):\n            package_node = _argument_value(node, \"package\")\n            is_string_only = _argument_value(node, \"character.only\") is not None\n            package = _string_text(package_node) if is_string_only else _name_text(package_node)\n            if package:\n                import_list.append(RImport(kind=LIBRARY_IMPORT, path=package, line=_line(node)))\n\n    return sorted(import_list, key=lambda r_import: r_import.line)"
+    },
+    {
+      "name": "_chain_node_id_set",
+      "type": "function_definition",
+      "start_line": 891,
+      "end_line": 911,
+      "context": "def _chain_node_id_set(statement: Node) -> set[int]:\n    \"\"\"Return the ids of the assignment nodes of the chain a statement starts with.\n\n    Examples:\n        a <- b <- f(x)   -> the ids of \"a <- b <- f(x)\" and \"b <- f(x)\"\n        a = b <- f(x)    -> the ids of \"a = b <- f(x)\" and \"a = b\"\n        f(x)             -> empty\n    \"\"\"\n    node_id_set: set[int] = set()\n    current: Node | None = statement\n    while current is not None:\n        assign_part = _assign_part(current)\n        if assign_part is None:\n            break\n        node_id_set.add(current.id)\n        target = assign_part[0]\n        while _is_target_pair(target):\n            node_id_set.add(target.id)\n            target = target.child_by_field_name(\"rhs\")\n        current = assign_part[1]\n    return node_id_set"
+    },
+    {
+      "name": "_local_bind_list",
+      "type": "function_definition",
+      "start_line": 914,
+      "end_line": 951,
+      "context": "def _local_bind_list(\n    node: Node, skip_node_id_set: set[int] | None = None,\n) -> list[tuple[str, Node]]:\n    \"\"\"Return the names bound inside a node, outside the functions written in it, with the node that binds each.\n\n    The targets of \"<-\", \"=\" and \"->\" (with their assignment node) and the variables\n    of for loops (with the loop node) are returned.\n\n    Args:\n        node: The node to read: the body of a function, or a top-level statement.\n        skip_node_id_set: Ids of the assignments whose own target is not returned (the\n            assignments a top-level statement defines names with).\n\n    Returns:\n        (name, assignment or for node) pairs.\n    \"\"\"\n    bind_list: list[tuple[str, Node]] = []\n    node_stack = [node]\n    while node_stack:\n        current = node_stack.pop()\n        if current.type == \"function_definition\":\n            continue\n        if current.type == \"binary_operator\" and (\n            skip_node_id_set is None or current.id not in skip_node_id_set\n        ):\n            operator = _operator(current)\n            if operator in _LOCAL_ASSIGN_SET:\n                target = current.child_by_field_name(\"rhs\" if operator == \"->\" else \"lhs\")\n                bind_list.extend(\n                    (name, current)\n                    for name in map(_name_text, _target_part_list(target)) if name\n                )\n        elif current.type == \"for_statement\":\n            name = _name_text(current.child_by_field_name(\"variable\"))\n            if name:\n                bind_list.append((name, current))\n        node_stack.extend(current.children)\n    return bind_list"
+    },
+    {
+      "name": "_local_name_set",
+      "type": "function_definition",
+      "start_line": 954,
+      "end_line": 968,
+      "context": "def _local_name_set(node: Node, skip_node_id_set: set[int] | None = None) -> set[str]:\n    \"\"\"Return the names assigned inside a node, outside the functions written in it.\n\n    The targets of \"<-\", \"=\" and \"->\" and the variables of for loops are returned\n    (_local_bind_list).\n\n    Args:\n        node: The node to read: the body of a function, or a top-level statement.\n        skip_node_id_set: Ids of the assignments whose own target is not returned (the\n            assignments a top-level statement defines names with).\n\n    Returns:\n        The set of names.\n    \"\"\"\n    return {name for name, _ in _local_bind_list(node, skip_node_id_set)}"
+    },
+    {
+      "name": "_function_local_name_set",
+      "type": "function_definition",
+      "start_line": 971,
+      "end_line": 984,
+      "context": "def _function_local_name_set(function_node: Node) -> set[str]:\n    \"\"\"Return the names a function binds: its parameters and the names assigned in its body.\"\"\"\n    name_set: set[str] = set()\n    parameter_holder = function_node.child_by_field_name(\"parameters\")\n    if parameter_holder is not None:\n        for parameter in parameter_holder.children:\n            if parameter.type == \"parameter\":\n                name = _name_text(parameter.child_by_field_name(\"name\"))\n                if name:\n                    name_set.add(name)\n    body = function_node.child_by_field_name(\"body\")\n    if body is not None:\n        name_set.update(_local_name_set(body))\n    return name_set"
+    },
+    {
+      "name": "_string_node_list",
+      "type": "function_definition",
+      "start_line": 987,
+      "end_line": 1008,
+      "context": "def _string_node_list(node: Node | None, is_name_only: bool = False) -> list[Node]:\n    \"\"\"Return the string nodes an argument names classes with.\n\n    One string, or the strings given to c(...) / list(...): \"A\", c(\"A\", \"B\"),\n    list(x = \"A\").\n\n    Args:\n        node: The value node of the argument.\n        is_name_only: Whether only the strings written with a name are returned\n            (c(x = \"A\") gives \"A\", c(\"x\") and \"A\" give nothing).\n    \"\"\"\n    if node is None:\n        return []\n    if node.type == \"string\":\n        return [] if is_name_only else [node]\n    if _call_name(node) in _STRING_HOLDER_CALL_SET:\n        return [\n            value for argument_name, value, _ in _argument_list(node)\n            if value is not None and value.type == \"string\"\n            and (argument_name is not None or not is_name_only)\n        ]\n    return []"
+    },
+    {
+      "name": "_string_reference_list",
+      "type": "function_definition",
+      "start_line": 1011,
+      "end_line": 1058,
+      "context": "def _string_reference_list(call_node: Node) -> list[RReference]:\n    \"\"\"Return the references a call makes with strings that name definitions.\n\n    A function or class named by a string (_STRING_NAME_CALL_DICT):\n        new(\"A\"), setValidity(\"A\", ...), setMethod(\"g\", ...), setReplaceMethod(\"g\", ...)\n        (a reference to g<-), do.call(\"f\", ...), match.fun(\"f\")\n    Classes named by the strings of an argument (_CLASS_ARGUMENT_DICT):\n        setMethod(..., \"A\"), setClass(contains = \"A\"), setRefClass(contains = \"A\"),\n        setClassUnion(members = c(\"A\", \"B\"))\n    The class of each slot or field (_SLOT_ARGUMENT_DICT):\n        setClass(slots = c(x = \"B\")), setRefClass(fields = list(x = \"B\"))\n    Classes named by every string of a call (_CLASS_STRING_CALL_SET):\n        signature(\"A\", \"B\"), representation(x = \"A\")\n\n    Args:\n        call_node: A call node.\n\n    Returns:\n        One NAME_REFERENCE per string.\n    \"\"\"\n    call_name = _call_name(call_node) or \"\"\n    reference_list: list[RReference] = []\n\n    name_argument = _STRING_NAME_CALL_DICT.get(call_name)\n    name_node = _argument_value(call_node, name_argument) if name_argument else None\n    name = _string_name(call_node, name_argument) if name_argument else None\n    if name and name_node is not None:\n        reference_list.append(RReference(name=name, line=_line(name_node), kind=NAME_REFERENCE))\n\n    string_node_list: list[Node] = []\n    for class_argument in _CLASS_ARGUMENT_DICT.get(call_name, ()):\n        string_node_list.extend(_string_node_list(_argument_value(call_node, class_argument)))\n    for slot_argument in _SLOT_ARGUMENT_DICT.get(call_name, ()):\n        string_node_list.extend(\n            _string_node_list(_argument_value(call_node, slot_argument), is_name_only=True)\n        )\n    if call_name in _CLASS_STRING_CALL_SET:\n        string_node_list.extend(\n            value for _, value, _ in _argument_list(call_node)\n            if value is not None and value.type == \"string\"\n        )\n    for string_node in string_node_list:\n        class_name = _string_text(string_node)\n        if class_name:\n            reference_list.append(\n                RReference(name=class_name, line=_line(string_node), kind=NAME_REFERENCE)\n            )\n    return reference_list"
+    },
+    {
+      "name": "_ScopeNode",
+      "type": "expression_statement",
+      "start_line": 1062,
+      "end_line": 1062,
+      "context": "_ScopeNode = tuple[Node, list[set[str]]]"
+    },
+    {
+      "name": "_ReferenceWalker",
+      "type": "class_definition",
+      "start_line": 1065,
+      "end_line": 1296,
+      "context": "class _ReferenceWalker:\n    \"\"\"Collects the references of an R file while it reads the tree with the names in scope.\"\"\"\n\n    def __init__(self) -> None:\n        \"\"\"Start with no references.\"\"\"\n        self.reference_list: list[RReference] = []\n\n    def walk(self, node: Node, scope_list: list[set[str]]) -> None:\n        \"\"\"Collect the references written in a node and below it.\n\n        Each node is handed to the method _READER_DICT names for its type, which adds\n        the references of the node and returns the nodes below it still to read; a node\n        of any other type has every child read.\n\n        Args:\n            node: The node to read.\n            scope_list: The name sets of the top-level statement and of the functions\n                around the node, outermost first. A name in one of them is no reference.\n        \"\"\"\n        node_stack: list[_ScopeNode] = [(node, scope_list)]\n        while node_stack:\n            current, current_scope_list = node_stack.pop()\n            reader = self._READER_DICT.get(current.type)\n            if reader is None:\n                node_stack.extend((child, current_scope_list) for child in current.children)\n            else:\n                node_stack.extend(reader(self, current, current_scope_list))\n\n    @staticmethod\n    def _is_bound(name: str, scope_list: list[set[str]]) -> bool:\n        \"\"\"Return whether a name is in one of the scopes.\"\"\"\n        return any(name in scope for scope in scope_list)\n\n    def _add_name(self, name: str, line: int, scope_list: list[set[str]]) -> None:\n        \"\"\"Add a NAME_REFERENCE unless a scope binds the name.\"\"\"\n        if not self._is_bound(name, scope_list):\n            self.reference_list.append(RReference(name=name, line=line, kind=NAME_REFERENCE))\n\n    def _read_comment(self, node: Node, scope_list: list[set[str]]) -> list[_ScopeNode]:\n        \"\"\"Read nothing of a comment.\"\"\"\n        return []\n\n    def _read_identifier(self, node: Node, scope_list: list[set[str]]) -> list[_ScopeNode]:\n        \"\"\"Read a name written by itself.\"\"\"\n        self._add_name(_node_text(node).strip(\"`\"), _line(node), scope_list)\n        return []\n\n    def _read_function(self, node: Node, scope_list: list[set[str]]) -> list[_ScopeNode]:\n        \"\"\"Read a function: its parameter defaults and its body, with its names in scope.\"\"\"\n        function_scope_list = scope_list + [_function_local_name_set(node)]\n        child_list: list[_ScopeNode] = []\n        parameter_holder = node.child_by_field_name(\"parameters\")\n        if parameter_holder is not None:\n            for parameter in parameter_holder.children:\n                default = parameter.child_by_field_name(\"default\")\n                if default is not None:\n                    child_list.append((default, function_scope_list))\n        body = node.child_by_field_name(\"body\")\n        if body is not None:\n            child_list.append((body, function_scope_list))\n        return child_list\n\n    def _read_namespace(self, node: Node, scope_list: list[set[str]]) -> list[_ScopeNode]:\n        \"\"\"Read pkg::name / pkg:::name as a NAMESPACE_REFERENCE.\"\"\"\n        owner = _name_text(node.child_by_field_name(\"lhs\"))\n        name = _name_text(node.child_by_field_name(\"rhs\"))\n        if owner and name:\n            self.reference_list.append(\n                RReference(name=name, line=_line(node), kind=NAMESPACE_REFERENCE, owner=owner)\n            )\n        return []\n\n    def _read_extract(self, node: Node, scope_list: list[set[str]]) -> list[_ScopeNode]:\n        \"\"\"Read owner$name / owner@name: the names after the operators are not read by themselves.\n\n        owner$name$a with owner a name out of every scope is one MEMBER_REFERENCE\n        (name \"name\", member_tuple (\"a\",)). With any other left side (f(x)$name) the\n        left side is read as an expression.\n        \"\"\"\n        name_list: list[str] = []\n        current = node\n        while current.type == \"extract_operator\":\n            name = _name_text(current.child_by_field_name(\"rhs\"))\n            lhs = current.child_by_field_name(\"lhs\")\n            if lhs is None:\n                return []\n            if name:\n                name_list.append(name)\n            current = lhs\n        if current.type != \"identifier\" or not name_list:\n            return [(current, scope_list)]\n\n        owner = _node_text(current).strip(\"`\")\n        if not self._is_bound(owner, scope_list):\n            name_list.reverse()\n            self.reference_list.append(RReference(\n                name=name_list[0], line=_line(node), kind=MEMBER_REFERENCE,\n                owner=owner, member_tuple=tuple(name_list[1:]),\n            ))\n        return []\n\n    def _read_argument(self, node: Node, scope_list: list[set[str]]) -> list[_ScopeNode]:\n        \"\"\"Read the value of an argument; its name is not read.\"\"\"\n        value = node.child_by_field_name(\"value\")\n        return [(value, scope_list)] if value is not None else []\n\n    def _read_for(self, node: Node, scope_list: list[set[str]]) -> list[_ScopeNode]:\n        \"\"\"Read the sequence and the body of a for loop; its variable is not read.\"\"\"\n        child_list = [node.child_by_field_name(\"sequence\"), node.child_by_field_name(\"body\")]\n        return [(child, scope_list) for child in child_list if child is not None]\n\n    def _read_binary(self, node: Node, scope_list: list[set[str]]) -> list[_ScopeNode]:\n        \"\"\"Read a binary operator: an assignment, or an expression with two sides.\n\n        The left side of x := v is not read when it is a name. An operator written\n        between \"%\" is a reference to the function of that name (a %+% b is a reference\n        to %+%).\n        \"\"\"\n        operator = _operator(node)\n        lhs = node.child_by_field_name(\"lhs\")\n        rhs = node.child_by_field_name(\"rhs\")\n        if operator in _LEFT_ASSIGN_SET:\n            return self._read_assign(lhs, rhs, operator, scope_list)\n        if operator in _RIGHT_ASSIGN_SET:\n            return self._read_assign(rhs, lhs, operator, scope_list)\n        if operator == _COLUMN_ASSIGN and _name_text(lhs) is not None:\n            return [(rhs, scope_list)] if rhs is not None else []\n        if len(operator) > 2 and operator[0] == operator[-1] == \"%\":\n            self._add_name(operator, _line(node.child_by_field_name(\"operator\")), scope_list)\n        return [(child, scope_list) for child in (lhs, rhs) if child is not None]\n\n    def _read_assign(\n        self, target: Node | None, value: Node | None, operator: str, scope_list: list[set[str]],\n    ) -> list[_ScopeNode]:\n        \"\"\"Read an assignment.\n\n        target a name:\n            name <- v, name = v, v -> name              the name is not read\n            name <<- v, v ->> name inside a function    a reference to the name, unless\n                                                        a scope outside that function binds it\n        any other target (names(x) <- v, x$y <- v): _read_replace_target\n        Each target of a = b <- v is read by itself (_target_part_list): the last one\n        with the operator of the assignment, the ones before it with \"=\".\n        The value is read in every case.\n        \"\"\"\n        child_list: list[_ScopeNode] = [(value, scope_list)] if value is not None else []\n        part_list = _target_part_list(target)\n        is_outer = operator in _OUTER_ASSIGN_SET and len(scope_list) > 1\n        for position, part in enumerate(part_list):\n            name = _name_text(part)\n            if name is None:\n                child_list.extend(self._read_replace_target(part, scope_list))\n            elif is_outer and position == len(part_list) - 1:\n                self._add_name(name, _line(part), scope_list[:-1])\n        return child_list\n\n    def _read_replace_target(self, target: Node, scope_list: list[set[str]]) -> list[_ScopeNode]:\n        \"\"\"Read the target of an assignment that is not a name.\n\n        The target is followed inwards through the first argument of each call, the\n        value of each \"[ ]\" / \"[[ ]]\" and the left side of each \"$\" / \"@\":\n            names(x) <- v              a reference to names<-\n            names(attr(x, \"a\")) <- v   references to names<-, attr<- and attr\n            levels(x)[2] <- v          references to levels<- and levels\n            pkg::unit(x) <- v          a reference to unit<- of pkg\n        The function of the outermost call is not read by itself. The other arguments\n        of the calls, the indexes and what is left at the innermost place (x) are read\n        as expressions. A call of a function that is not a name (x$f(y) <- v) is read\n        as an expression as a whole.\n\n        Returns:\n            The nodes still to read.\n        \"\"\"\n        child_list: list[_ScopeNode] = []\n        node: Node | None = target\n        is_outer = True\n        while node is not None:\n            name_part = _call_name_part(node) if node.type == \"call\" else None\n            if name_part is not None:\n                owner, call_name = name_part\n                name_list = [call_name + _REPLACE_SUFFIX]\n                if not is_outer:\n                    name_list.append(call_name)\n                for name in name_list:\n                    if owner:\n                        self.reference_list.append(RReference(\n                            name=name, line=_line(node), kind=NAMESPACE_REFERENCE, owner=owner,\n                        ))\n                    else:\n                        self._add_name(name, _line(node), scope_list)\n                value_list = [value for _, value, _ in _argument_list(node) if value is not None]\n                child_list.extend((value, scope_list) for value in value_list[1:])\n                node = value_list[0] if value_list else None\n            elif node.type in (\"subset\", \"subset2\"):\n                argument_holder = node.child_by_field_name(\"arguments\")\n                if argument_holder is not None:\n                    child_list.append((argument_holder, scope_list))\n                node = node.child_by_field_name(\"function\")\n            elif node.type == \"extract_operator\":\n                node = node.child_by_field_name(\"lhs\")\n            else:\n                break\n            is_outer = False\n        if node is not None:\n            child_list.append((node, scope_list))\n        return child_list\n\n    def _read_call(self, node: Node, scope_list: list[set[str]]) -> list[_ScopeNode]:\n        \"\"\"Read a call: the strings that name definitions, then its function and arguments.\n\n        The arguments of box::use, library and require are not read.\n        \"\"\"\n        name_part = _call_name_part(node)\n        if name_part == (\"box\", \"use\") or (\n            name_part is not None and name_part[1] in _LIBRARY_CALL_SET\n        ):\n            return []\n        self.reference_list.extend(_string_reference_list(node))\n        return [(child, scope_list) for child in node.children]\n\n    # Node type -> method that reads a node of that type\n    _READER_DICT = {\n        \"comment\": _read_comment,\n        \"identifier\": _read_identifier,\n        \"function_definition\": _read_function,\n        \"namespace_operator\": _read_namespace,\n        \"extract_operator\": _read_extract,\n        \"argument\": _read_argument,\n        \"for_statement\": _read_for,\n        \"binary_operator\": _read_binary,\n        \"call\": _read_call,\n    }"
+    },
+    {
+      "name": "__init__",
+      "type": "function_definition",
+      "start_line": 1068,
+      "end_line": 1070,
+      "context": "    def __init__(self) -> None:\n        \"\"\"Start with no references.\"\"\"\n        self.reference_list: list[RReference] = []"
+    },
+    {
+      "name": "walk",
+      "type": "function_definition",
+      "start_line": 1072,
+      "end_line": 1091,
+      "context": "    def walk(self, node: Node, scope_list: list[set[str]]) -> None:\n        \"\"\"Collect the references written in a node and below it.\n\n        Each node is handed to the method _READER_DICT names for its type, which adds\n        the references of the node and returns the nodes below it still to read; a node\n        of any other type has every child read.\n\n        Args:\n            node: The node to read.\n            scope_list: The name sets of the top-level statement and of the functions\n                around the node, outermost first. A name in one of them is no reference.\n        \"\"\"\n        node_stack: list[_ScopeNode] = [(node, scope_list)]\n        while node_stack:\n            current, current_scope_list = node_stack.pop()\n            reader = self._READER_DICT.get(current.type)\n            if reader is None:\n                node_stack.extend((child, current_scope_list) for child in current.children)\n            else:\n                node_stack.extend(reader(self, current, current_scope_list))"
+    },
+    {
+      "name": "_is_bound",
+      "type": "function_definition",
+      "start_line": 1093,
+      "end_line": 1096,
+      "context": "    @staticmethod\n    def _is_bound(name: str, scope_list: list[set[str]]) -> bool:\n        \"\"\"Return whether a name is in one of the scopes.\"\"\"\n        return any(name in scope for scope in scope_list)"
+    },
+    {
+      "name": "_add_name",
+      "type": "function_definition",
+      "start_line": 1098,
+      "end_line": 1101,
+      "context": "    def _add_name(self, name: str, line: int, scope_list: list[set[str]]) -> None:\n        \"\"\"Add a NAME_REFERENCE unless a scope binds the name.\"\"\"\n        if not self._is_bound(name, scope_list):\n            self.reference_list.append(RReference(name=name, line=line, kind=NAME_REFERENCE))"
+    },
+    {
+      "name": "_read_comment",
+      "type": "function_definition",
+      "start_line": 1103,
+      "end_line": 1105,
+      "context": "    def _read_comment(self, node: Node, scope_list: list[set[str]]) -> list[_ScopeNode]:\n        \"\"\"Read nothing of a comment.\"\"\"\n        return []"
+    },
+    {
+      "name": "_read_identifier",
+      "type": "function_definition",
+      "start_line": 1107,
+      "end_line": 1110,
+      "context": "    def _read_identifier(self, node: Node, scope_list: list[set[str]]) -> list[_ScopeNode]:\n        \"\"\"Read a name written by itself.\"\"\"\n        self._add_name(_node_text(node).strip(\"`\"), _line(node), scope_list)\n        return []"
+    },
+    {
+      "name": "_read_function",
+      "type": "function_definition",
+      "start_line": 1112,
+      "end_line": 1125,
+      "context": "    def _read_function(self, node: Node, scope_list: list[set[str]]) -> list[_ScopeNode]:\n        \"\"\"Read a function: its parameter defaults and its body, with its names in scope.\"\"\"\n        function_scope_list = scope_list + [_function_local_name_set(node)]\n        child_list: list[_ScopeNode] = []\n        parameter_holder = node.child_by_field_name(\"parameters\")\n        if parameter_holder is not None:\n            for parameter in parameter_holder.children:\n                default = parameter.child_by_field_name(\"default\")\n                if default is not None:\n                    child_list.append((default, function_scope_list))\n        body = node.child_by_field_name(\"body\")\n        if body is not None:\n            child_list.append((body, function_scope_list))\n        return child_list"
+    },
+    {
+      "name": "_read_namespace",
+      "type": "function_definition",
+      "start_line": 1127,
+      "end_line": 1135,
+      "context": "    def _read_namespace(self, node: Node, scope_list: list[set[str]]) -> list[_ScopeNode]:\n        \"\"\"Read pkg::name / pkg:::name as a NAMESPACE_REFERENCE.\"\"\"\n        owner = _name_text(node.child_by_field_name(\"lhs\"))\n        name = _name_text(node.child_by_field_name(\"rhs\"))\n        if owner and name:\n            self.reference_list.append(\n                RReference(name=name, line=_line(node), kind=NAMESPACE_REFERENCE, owner=owner)\n            )\n        return []"
+    },
+    {
+      "name": "_read_extract",
+      "type": "function_definition",
+      "start_line": 1137,
+      "end_line": 1164,
+      "context": "    def _read_extract(self, node: Node, scope_list: list[set[str]]) -> list[_ScopeNode]:\n        \"\"\"Read owner$name / owner@name: the names after the operators are not read by themselves.\n\n        owner$name$a with owner a name out of every scope is one MEMBER_REFERENCE\n        (name \"name\", member_tuple (\"a\",)). With any other left side (f(x)$name) the\n        left side is read as an expression.\n        \"\"\"\n        name_list: list[str] = []\n        current = node\n        while current.type == \"extract_operator\":\n            name = _name_text(current.child_by_field_name(\"rhs\"))\n            lhs = current.child_by_field_name(\"lhs\")\n            if lhs is None:\n                return []\n            if name:\n                name_list.append(name)\n            current = lhs\n        if current.type != \"identifier\" or not name_list:\n            return [(current, scope_list)]\n\n        owner = _node_text(current).strip(\"`\")\n        if not self._is_bound(owner, scope_list):\n            name_list.reverse()\n            self.reference_list.append(RReference(\n                name=name_list[0], line=_line(node), kind=MEMBER_REFERENCE,\n                owner=owner, member_tuple=tuple(name_list[1:]),\n            ))\n        return []"
+    },
+    {
+      "name": "_read_argument",
+      "type": "function_definition",
+      "start_line": 1166,
+      "end_line": 1169,
+      "context": "    def _read_argument(self, node: Node, scope_list: list[set[str]]) -> list[_ScopeNode]:\n        \"\"\"Read the value of an argument; its name is not read.\"\"\"\n        value = node.child_by_field_name(\"value\")\n        return [(value, scope_list)] if value is not None else []"
+    },
+    {
+      "name": "_read_for",
+      "type": "function_definition",
+      "start_line": 1171,
+      "end_line": 1174,
+      "context": "    def _read_for(self, node: Node, scope_list: list[set[str]]) -> list[_ScopeNode]:\n        \"\"\"Read the sequence and the body of a for loop; its variable is not read.\"\"\"\n        child_list = [node.child_by_field_name(\"sequence\"), node.child_by_field_name(\"body\")]\n        return [(child, scope_list) for child in child_list if child is not None]"
+    },
+    {
+      "name": "_read_binary",
+      "type": "function_definition",
+      "start_line": 1176,
+      "end_line": 1194,
+      "context": "    def _read_binary(self, node: Node, scope_list: list[set[str]]) -> list[_ScopeNode]:\n        \"\"\"Read a binary operator: an assignment, or an expression with two sides.\n\n        The left side of x := v is not read when it is a name. An operator written\n        between \"%\" is a reference to the function of that name (a %+% b is a reference\n        to %+%).\n        \"\"\"\n        operator = _operator(node)\n        lhs = node.child_by_field_name(\"lhs\")\n        rhs = node.child_by_field_name(\"rhs\")\n        if operator in _LEFT_ASSIGN_SET:\n            return self._read_assign(lhs, rhs, operator, scope_list)\n        if operator in _RIGHT_ASSIGN_SET:\n            return self._read_assign(rhs, lhs, operator, scope_list)\n        if operator == _COLUMN_ASSIGN and _name_text(lhs) is not None:\n            return [(rhs, scope_list)] if rhs is not None else []\n        if len(operator) > 2 and operator[0] == operator[-1] == \"%\":\n            self._add_name(operator, _line(node.child_by_field_name(\"operator\")), scope_list)\n        return [(child, scope_list) for child in (lhs, rhs) if child is not None]"
+    },
+    {
+      "name": "_read_assign",
+      "type": "function_definition",
+      "start_line": 1196,
+      "end_line": 1219,
+      "context": "    def _read_assign(\n        self, target: Node | None, value: Node | None, operator: str, scope_list: list[set[str]],\n    ) -> list[_ScopeNode]:\n        \"\"\"Read an assignment.\n\n        target a name:\n            name <- v, name = v, v -> name              the name is not read\n            name <<- v, v ->> name inside a function    a reference to the name, unless\n                                                        a scope outside that function binds it\n        any other target (names(x) <- v, x$y <- v): _read_replace_target\n        Each target of a = b <- v is read by itself (_target_part_list): the last one\n        with the operator of the assignment, the ones before it with \"=\".\n        The value is read in every case.\n        \"\"\"\n        child_list: list[_ScopeNode] = [(value, scope_list)] if value is not None else []\n        part_list = _target_part_list(target)\n        is_outer = operator in _OUTER_ASSIGN_SET and len(scope_list) > 1\n        for position, part in enumerate(part_list):\n            name = _name_text(part)\n            if name is None:\n                child_list.extend(self._read_replace_target(part, scope_list))\n            elif is_outer and position == len(part_list) - 1:\n                self._add_name(name, _line(part), scope_list[:-1])\n        return child_list"
+    },
+    {
+      "name": "_read_replace_target",
+      "type": "function_definition",
+      "start_line": 1221,
+      "end_line": 1270,
+      "context": "    def _read_replace_target(self, target: Node, scope_list: list[set[str]]) -> list[_ScopeNode]:\n        \"\"\"Read the target of an assignment that is not a name.\n\n        The target is followed inwards through the first argument of each call, the\n        value of each \"[ ]\" / \"[[ ]]\" and the left side of each \"$\" / \"@\":\n            names(x) <- v              a reference to names<-\n            names(attr(x, \"a\")) <- v   references to names<-, attr<- and attr\n            levels(x)[2] <- v          references to levels<- and levels\n            pkg::unit(x) <- v          a reference to unit<- of pkg\n        The function of the outermost call is not read by itself. The other arguments\n        of the calls, the indexes and what is left at the innermost place (x) are read\n        as expressions. A call of a function that is not a name (x$f(y) <- v) is read\n        as an expression as a whole.\n\n        Returns:\n            The nodes still to read.\n        \"\"\"\n        child_list: list[_ScopeNode] = []\n        node: Node | None = target\n        is_outer = True\n        while node is not None:\n            name_part = _call_name_part(node) if node.type == \"call\" else None\n            if name_part is not None:\n                owner, call_name = name_part\n                name_list = [call_name + _REPLACE_SUFFIX]\n                if not is_outer:\n                    name_list.append(call_name)\n                for name in name_list:\n                    if owner:\n                        self.reference_list.append(RReference(\n                            name=name, line=_line(node), kind=NAMESPACE_REFERENCE, owner=owner,\n                        ))\n                    else:\n                        self._add_name(name, _line(node), scope_list)\n                value_list = [value for _, value, _ in _argument_list(node) if value is not None]\n                child_list.extend((value, scope_list) for value in value_list[1:])\n                node = value_list[0] if value_list else None\n            elif node.type in (\"subset\", \"subset2\"):\n                argument_holder = node.child_by_field_name(\"arguments\")\n                if argument_holder is not None:\n                    child_list.append((argument_holder, scope_list))\n                node = node.child_by_field_name(\"function\")\n            elif node.type == \"extract_operator\":\n                node = node.child_by_field_name(\"lhs\")\n            else:\n                break\n            is_outer = False\n        if node is not None:\n            child_list.append((node, scope_list))\n        return child_list"
+    },
+    {
+      "name": "_read_call",
+      "type": "function_definition",
+      "start_line": 1272,
+      "end_line": 1283,
+      "context": "    def _read_call(self, node: Node, scope_list: list[set[str]]) -> list[_ScopeNode]:\n        \"\"\"Read a call: the strings that name definitions, then its function and arguments.\n\n        The arguments of box::use, library and require are not read.\n        \"\"\"\n        name_part = _call_name_part(node)\n        if name_part == (\"box\", \"use\") or (\n            name_part is not None and name_part[1] in _LIBRARY_CALL_SET\n        ):\n            return []\n        self.reference_list.extend(_string_reference_list(node))\n        return [(child, scope_list) for child in node.children]"
+    },
+    {
+      "name": "_READER_DICT",
+      "type": "expression_statement",
+      "start_line": 1286,
+      "end_line": 1296,
+      "context": "    _READER_DICT = {\n        \"comment\": _read_comment,\n        \"identifier\": _read_identifier,\n        \"function_definition\": _read_function,\n        \"namespace_operator\": _read_namespace,\n        \"extract_operator\": _read_extract,\n        \"argument\": _read_argument,\n        \"for_statement\": _read_for,\n        \"binary_operator\": _read_binary,\n        \"call\": _read_call,\n    }"
+    },
+    {
+      "name": "_reference_list",
+      "type": "function_definition",
+      "start_line": 1299,
+      "end_line": 1330,
+      "context": "def _reference_list(root_node: Node) -> list[RReference]:\n    \"\"\"Return the references of an R file.\n\n    Read as a reference:\n        - an identifier (the function of a call, a value)\n        - an operator written between \"%\" (a %+% b is a reference to %+%)\n        - pkg::name and pkg:::name\n        - owner$name and owner@name with owner an identifier\n        - a string that names a definition (_string_reference_list)\n        - f(x) <- value, a reference to f<- (_read_replace_target)\n        - name <<- value and value ->> name inside a function\n    Not read: the name of an argument (f(x = 1)), the name of a parameter, the target\n    of any other assignment, the names after \"$\" / \"@\", the arguments of box::use,\n    library and require.\n    A name is no reference where it is bound: by the parameters of a function around\n    it, by an assignment (\"<-\", \"=\", \"->\") or a for loop in the body of such a function,\n    or by an assignment or a for loop inside the top-level statement it is written in\n    (outside the functions of that statement; the names the statement defines are not\n    bound), or by a top-level for loop of the file as its variable.\n\n    Args:\n        root_node: The AST root node of the file.\n\n    Returns:\n        The RReference list, in the order the statements are read.\n    \"\"\"\n    statement_list, loop_name_set = _read_top_level(root_node)\n    walker = _ReferenceWalker()\n    for statement in statement_list:\n        local_name_set = _local_name_set(statement, _chain_node_id_set(statement))\n        walker.walk(statement, [local_name_set | loop_name_set])\n    return walker.reference_list"
+    },
+    {
+      "name": "read_r_source",
+      "type": "function_definition",
+      "start_line": 1333,
+      "end_line": 1346,
+      "context": "def read_r_source(root_node: Node) -> RSource:\n    \"\"\"Read the definitions, imports and references of an R file.\n\n    Args:\n        root_node: The AST root node of the file.\n\n    Returns:\n        The RSource of the file (r_definition_list, _import_list, _reference_list).\n    \"\"\"\n    return RSource(\n        definition_list=r_definition_list(root_node),\n        import_list=_import_list(root_node),\n        reference_list=_reference_list(root_node),\n    )"
+    }
+  ],
+  "callee_usages": [
+    {
+      "lines": [
+        740
+      ],
+      "name": "line_list_of",
+      "from": "codetwine/codetwine/utils/file_utils_py/file_utils.py",
+      "target_context": "def line_list_of(text: str) -> list[str]:\n    \"\"\"Split a text into its lines at \"\\\\n\", \"\\\\r\\\\n\" and a lone \"\\\\r\" alone.\n\n    Every line number of the analysis counts lines this way. A form feed, a vertical tab,\n    U+0085, U+2028 and the other characters str.splitlines() also breaks at stay inside\n    their line.\n\n    Examples:\n        \"a\\\\r\\\\nb\\\\rc\\\\n\" -> [\"a\", \"b\", \"c\"]\n        \"a\\\\n\\\\f\\\\nb\"      -> [\"a\", \"\\\\f\", \"b\"]\n        \"\"              -> []\n\n    Args:\n        text: The text to split.\n\n    Returns:\n        The lines without their line breaks. A text that ends in a line break has no\n        empty line after it.\n    \"\"\"\n    line_list = lone_cr_to_lf(text).replace(\"\\r\\n\", \"\\n\").split(\"\\n\")\n    if line_list[-1] == \"\":\n        line_list.pop()\n    return line_list",
+      "target_name": "line_list_of",
+      "target_start_line": 168
+    }
+  ],
+  "same_file_usages": [
+    {
+      "lines": [
+        81,
+        1245
+      ],
+      "name": "_REPLACE_SUFFIX",
+      "target_name": "_REPLACE_SUFFIX",
+      "target_start_line": 29
+    },
+    {
+      "lines": [
+        180,
+        474,
+        495,
+        503,
+        569,
+        592,
+        601,
+        625,
+        637,
+        667,
+        684,
+        700
+      ],
+      "name": "RDefinition",
+      "target_name": "RDefinition",
+      "target_start_line": 139
+    },
+    {
+      "lines": [
+        181,
+        793,
+        828,
+        831,
+        843,
+        846,
+        860,
+        880,
+        886
+      ],
+      "name": "RImport",
+      "target_name": "RImport",
+      "target_start_line": 153
+    },
+    {
+      "lines": [
+        182,
+        1011,
+        1032,
+        1038,
+        1056,
+        1070,
+        1101,
+        1133,
+        1160,
+        1250,
+        1299
+      ],
+      "name": "RReference",
+      "target_name": "RReference",
+      "target_start_line": 165
+    },
+    {
+      "lines": [
+        206,
+        222,
+        229,
+        301,
+        781,
+        1109,
+        1157
+      ],
+      "name": "_node_text",
+      "target_name": "_node_text",
+      "target_start_line": 185
+    },
+    {
+      "lines": [
+        223,
+        526,
+        753,
+        759,
+        884,
+        1053
+      ],
+      "name": "_string_text",
+      "target_name": "_string_text",
+      "target_start_line": 195
+    },
+    {
+      "lines": [
+        245,
+        257,
+        784,
+        939,
+        1183
+      ],
+      "name": "_operator",
+      "target_name": "_operator",
+      "target_start_line": 226
+    },
+    {
+      "lines": [
+        248,
+        1186
+      ],
+      "name": "_LEFT_ASSIGN_SET",
+      "target_name": "_LEFT_ASSIGN_SET",
+      "target_start_line": 16
+    },
+    {
+      "lines": [
+        250,
+        1188
+      ],
+      "name": "_RIGHT_ASSIGN_SET",
+      "target_name": "_RIGHT_ASSIGN_SET",
+      "target_start_line": 17
+    },
+    {
+      "lines": [
+        279,
+        907
+      ],
+      "name": "_is_target_pair",
+      "target_name": "_is_target_pair",
+      "target_start_line": 255
+    },
+    {
+      "lines": [
+        303,
+        304,
+        329,
+        451,
+        630,
+        840,
+        884,
+        944,
+        947,
+        978,
+        1129,
+        1130,
+        1147,
+        1190,
+        1214
+      ],
+      "name": "_name_text",
+      "target_name": "_name_text",
+      "target_start_line": 210
+    },
+    {
+      "lines": [
+        314,
+        867,
+        1242,
+        1277
+      ],
+      "name": "_call_name_part",
+      "target_name": "_call_name_part",
+      "target_start_line": 289
+    },
+    {
+      "lines": [
+        379
+      ],
+      "name": "_FORMAL_DICT.get",
+      "target_name": "_FORMAL_DICT",
+      "target_start_line": 46
+    },
+    {
+      "lines": [
+        379,
+        468,
+        496,
+        498,
+        529,
+        554,
+        584,
+        661,
+        664,
+        756,
+        1002,
+        1031
+      ],
+      "name": "_call_name",
+      "target_name": "_call_name",
+      "target_start_line": 310
+    },
+    {
+      "lines": [
+        381
+      ],
+      "name": "_formal_name",
+      "target_name": "_formal_name",
+      "target_start_line": 337
+    },
+    {
+      "lines": [
+        382,
+        500,
+        564,
+        760,
+        834,
+        873,
+        1004,
+        1049,
+        1255
+      ],
+      "name": "_argument_list",
+      "target_name": "_argument_list",
+      "target_start_line": 318
+    },
+    {
+      "lines": [
+        416,
+        695,
+        902
+      ],
+      "name": "_assign_part",
+      "target_name": "_assign_part",
+      "target_start_line": 232
+    },
+    {
+      "lines": [
+        419,
+        944,
+        1211
+      ],
+      "name": "_target_part_list",
+      "target_name": "_target_part_list",
+      "target_start_line": 260
+    },
+    {
+      "lines": [
+        444
+      ],
+      "name": "_TOP_LEVEL_BLOCK_TYPE_SET",
+      "target_name": "_TOP_LEVEL_BLOCK_TYPE_SET",
+      "target_start_line": 35
+    },
+    {
+      "lines": [
+        447
+      ],
+      "name": "_LOOP_FIELD_DICT.get",
+      "target_name": "_LOOP_FIELD_DICT",
+      "target_start_line": 38
+    },
+    {
+      "lines": [
+        496
+      ],
+      "name": "_MEMBER_ARGUMENT_DICT.get",
+      "target_name": "_MEMBER_ARGUMENT_DICT",
+      "target_start_line": 84
+    },
+    {
+      "lines": [
+        497,
+        526,
+        878,
+        882,
+        883,
+        1035,
+        1042,
+        1045
+      ],
+      "name": "_argument_value",
+      "target_name": "_argument_value",
+      "target_start_line": 359
+    },
+    {
+      "lines": [
+        498,
+        1002
+      ],
+      "name": "_STRING_HOLDER_CALL_SET",
+      "target_name": "_STRING_HOLDER_CALL_SET",
+      "target_start_line": 118
+    },
+    {
+      "lines": [
+        506,
+        595,
+        627,
+        703,
+        828,
+        880,
+        886,
+        1038,
+        1056,
+        1109,
+        1133,
+        1161,
+        1193,
+        1218,
+        1251,
+        1254
+      ],
+      "name": "_line",
+      "target_name": "_line",
+      "target_start_line": 190
+    },
+    {
+      "lines": [
+        529
+      ],
+      "name": "_NAME_SUFFIX_CALL_DICT.get",
+      "target_name": "_NAME_SUFFIX_CALL_DICT",
+      "target_start_line": 81
+    },
+    {
+      "lines": [
+        557
+      ],
+      "name": "_MEMBER_ARGUMENT_DICT",
+      "target_name": "_MEMBER_ARGUMENT_DICT",
+      "target_start_line": 84
+    },
+    {
+      "lines": [
+        557,
+        585
+      ],
+      "name": "_ATTACH_CALL_DICT",
+      "target_name": "_ATTACH_CALL_DICT",
+      "target_start_line": 73
+    },
+    {
+      "lines": [
+        557
+      ],
+      "name": "_NAME_CALL_DICT",
+      "target_name": "_NAME_CALL_DICT",
+      "target_start_line": 65
+    },
+    {
+      "lines": [
+        561
+      ],
+      "name": "_QUOTE_CALL_SET",
+      "target_name": "_QUOTE_CALL_SET",
+      "target_start_line": 136
+    },
+    {
+      "lines": [
+        586
+      ],
+      "name": "_NAME_CALL_DICT.get",
+      "target_name": "_NAME_CALL_DICT",
+      "target_start_line": 65
+    },
+    {
+      "lines": [
+        586
+      ],
+      "name": "_ATTACH_CALL_DICT.get",
+      "target_name": "_ATTACH_CALL_DICT",
+      "target_start_line": 73
+    },
+    {
+      "lines": [
+        589,
+        1036
+      ],
+      "name": "_string_name",
+      "target_name": "_string_name",
+      "target_start_line": 514
+    },
+    {
+      "lines": [
+        626,
+        683,
+        1325
+      ],
+      "name": "_read_top_level",
+      "target_name": "_read_top_level",
+      "target_start_line": 424
+    },
+    {
+      "lines": [
+        629
+      ],
+      "name": "_assign_chain",
+      "target_name": "_assign_chain",
+      "target_start_line": 397
+    },
+    {
+      "lines": [
+        635
+      ],
+      "name": "_has_call",
+      "target_name": "_has_call",
+      "target_start_line": 461
+    },
+    {
+      "lines": [
+        635
+      ],
+      "name": "_GENERIC_CALL",
+      "target_name": "_GENERIC_CALL",
+      "target_start_line": 133
+    },
+    {
+      "lines": [
+        649
+      ],
+      "name": "_define_call_list",
+      "target_name": "_define_call_list",
+      "target_start_line": 533
+    },
+    {
+      "lines": [
+        650
+      ],
+      "name": "_call_definition_list",
+      "target_name": "_call_definition_list",
+      "target_start_line": 569
+    },
+    {
+      "lines": [
+        651
+      ],
+      "name": "_member_definition_list",
+      "target_name": "_member_definition_list",
+      "target_start_line": 474
+    },
+    {
+      "lines": [
+        653
+      ],
+      "name": "_inner_definition_list",
+      "target_name": "_inner_definition_list",
+      "target_start_line": 667
+    },
+    {
+      "lines": [
+        661,
+        664
+      ],
+      "name": "_LOCAL_CALL",
+      "target_name": "_LOCAL_CALL",
+      "target_start_line": 20
+    },
+    {
+      "lines": [
+        687,
+        968
+      ],
+      "name": "_local_bind_list",
+      "target_name": "_local_bind_list",
+      "target_start_line": 914
+    },
+    {
+      "lines": [
+        687,
+        1328
+      ],
+      "name": "_chain_node_id_set",
+      "target_name": "_chain_node_id_set",
+      "target_start_line": 891
+    },
+    {
+      "lines": [
+        690
+      ],
+      "name": "_is_inside_local_call",
+      "target_name": "_is_inside_local_call",
+      "target_start_line": 657
+    },
+    {
+      "lines": [
+        710,
+        1326
+      ],
+      "name": "_ReferenceWalker",
+      "target_name": "_ReferenceWalker",
+      "target_start_line": 1065
+    },
+    {
+      "lines": [
+        711,
+        1329
+      ],
+      "name": "_ReferenceWalker.walk",
+      "target_name": "walk",
+      "target_start_line": 1072
+    },
+    {
+      "lines": [
+        713,
+        1161
+      ],
+      "name": "MEMBER_REFERENCE",
+      "target_name": "MEMBER_REFERENCE",
+      "target_start_line": 13
+    },
+    {
+      "lines": [
+        714,
+        1330
+      ],
+      "name": "_ReferenceWalker.reference_list",
+      "target_name": "_ReferenceWalker",
+      "target_start_line": 1065
+    },
+    {
+      "lines": [
+        734,
+        1343
+      ],
+      "name": "r_definition_list",
+      "target_name": "r_definition_list",
+      "target_start_line": 601
+    },
+    {
+      "lines": [
+        756
+      ],
+      "name": "_PATH_CALL_SET",
+      "target_name": "_PATH_CALL_SET",
+      "target_start_line": 130
+    },
+    {
+      "lines": [
+        816
+      ],
+      "name": "_box_path_part_list",
+      "target_name": "_box_path_part_list",
+      "target_start_line": 767
+    },
+    {
+      "lines": [
+        828
+      ],
+      "name": "BOX_IMPORT",
+      "target_name": "BOX_IMPORT",
+      "target_start_line": 7
+    },
+    {
+      "lines": [
+        830,
+        833
+      ],
+      "name": "RImport.alias",
+      "target_name": "alias",
+      "target_start_line": 160
+    },
+    {
+      "lines": [
+        838
+      ],
+      "name": "RImport.is_attach_all",
+      "target_name": "is_attach_all",
+      "target_start_line": 162
+    },
+    {
+      "lines": [
+        842
+      ],
+      "name": "RImport.name_dict",
+      "target_name": "name_dict",
+      "target_start_line": 161
+    },
+    {
+      "lines": [
+        874
+      ],
+      "name": "_box_import",
+      "target_name": "_box_import",
+      "target_start_line": 793
+    },
+    {
+      "lines": [
+        877
+      ],
+      "name": "_SOURCE_CALL_SET",
+      "target_name": "_SOURCE_CALL_SET",
+      "target_start_line": 124
+    },
+    {
+      "lines": [
+        878
+      ],
+      "name": "_literal_path",
+      "target_name": "_literal_path",
+      "target_start_line": 744
+    },
+    {
+      "lines": [
+        880
+      ],
+      "name": "SOURCE_IMPORT",
+      "target_name": "SOURCE_IMPORT",
+      "target_start_line": 6
+    },
+    {
+      "lines": [
+        881,
+        1279
+      ],
+      "name": "_LIBRARY_CALL_SET",
+      "target_name": "_LIBRARY_CALL_SET",
+      "target_start_line": 127
+    },
+    {
+      "lines": [
+        886
+      ],
+      "name": "LIBRARY_IMPORT",
+      "target_name": "LIBRARY_IMPORT",
+      "target_start_line": 8
+    },
+    {
+      "lines": [
+        940
+      ],
+      "name": "_LOCAL_ASSIGN_SET",
+      "target_name": "_LOCAL_ASSIGN_SET",
+      "target_start_line": 23
+    },
+    {
+      "lines": [
+        983,
+        1328
+      ],
+      "name": "_local_name_set",
+      "target_name": "_local_name_set",
+      "target_start_line": 954
+    },
+    {
+      "lines": [
+        1034
+      ],
+      "name": "_STRING_NAME_CALL_DICT.get",
+      "target_name": "_STRING_NAME_CALL_DICT",
+      "target_start_line": 90
+    },
+    {
+      "lines": [
+        1038,
+        1056,
+        1101
+      ],
+      "name": "NAME_REFERENCE",
+      "target_name": "NAME_REFERENCE",
+      "target_start_line": 11
+    },
+    {
+      "lines": [
+        1041
+      ],
+      "name": "_CLASS_ARGUMENT_DICT.get",
+      "target_name": "_CLASS_ARGUMENT_DICT",
+      "target_start_line": 101
+    },
+    {
+      "lines": [
+        1042,
+        1045
+      ],
+      "name": "_string_node_list",
+      "target_name": "_string_node_list",
+      "target_start_line": 987
+    },
+    {
+      "lines": [
+        1043
+      ],
+      "name": "_SLOT_ARGUMENT_DICT.get",
+      "target_name": "_SLOT_ARGUMENT_DICT",
+      "target_start_line": 112
+    },
+    {
+      "lines": [
+        1047
+      ],
+      "name": "_CLASS_STRING_CALL_SET",
+      "target_name": "_CLASS_STRING_CALL_SET",
+      "target_start_line": 121
+    },
+    {
+      "lines": [
+        1070
+      ],
+      "name": "reference_list",
+      "target_name": "reference_list",
+      "target_start_line": 182
+    },
+    {
+      "lines": [
+        1084,
+        1103,
+        1107,
+        1112,
+        1115,
+        1127,
+        1137,
+        1166,
+        1171,
+        1176,
+        1198,
+        1210,
+        1221,
+        1238,
+        1272
+      ],
+      "name": "_ScopeNode",
+      "target_name": "_ScopeNode",
+      "target_start_line": 1062
+    },
+    {
+      "lines": [
+        1087
+      ],
+      "name": "_READER_DICT.get",
+      "target_name": "_READER_DICT",
+      "target_start_line": 1286
+    },
+    {
+      "lines": [
+        1100,
+        1158
+      ],
+      "name": "_is_bound",
+      "target_name": "_is_bound",
+      "target_start_line": 1093
+    },
+    {
+      "lines": [
+        1101,
+        1132,
+        1160,
+        1250
+      ],
+      "name": "reference_list.append",
+      "target_name": "reference_list",
+      "target_start_line": 182
+    },
+    {
+      "lines": [
+        1109,
+        1193,
+        1218,
+        1254
+      ],
+      "name": "_add_name",
+      "target_name": "_add_name",
+      "target_start_line": 1098
+    },
+    {
+      "lines": [
+        1114
+      ],
+      "name": "_function_local_name_set",
+      "target_name": "_function_local_name_set",
+      "target_start_line": 971
+    },
+    {
+      "lines": [
+        1133,
+        1251
+      ],
+      "name": "NAMESPACE_REFERENCE",
+      "target_name": "NAMESPACE_REFERENCE",
+      "target_start_line": 12
+    },
+    {
+      "lines": [
+        1187,
+        1189
+      ],
+      "name": "_read_assign",
+      "target_name": "_read_assign",
+      "target_start_line": 1196
+    },
+    {
+      "lines": [
+        1190
+      ],
+      "name": "_COLUMN_ASSIGN",
+      "target_name": "_COLUMN_ASSIGN",
+      "target_start_line": 32
+    },
+    {
+      "lines": [
+        1212
+      ],
+      "name": "_OUTER_ASSIGN_SET",
+      "target_name": "_OUTER_ASSIGN_SET",
+      "target_start_line": 26
+    },
+    {
+      "lines": [
+        1216
+      ],
+      "name": "_read_replace_target",
+      "target_name": "_read_replace_target",
+      "target_start_line": 1221
+    },
+    {
+      "lines": [
+        1282
+      ],
+      "name": "reference_list.extend",
+      "target_name": "reference_list",
+      "target_start_line": 182
+    },
+    {
+      "lines": [
+        1282
+      ],
+      "name": "_string_reference_list",
+      "target_name": "_string_reference_list",
+      "target_start_line": 1011
+    },
+    {
+      "lines": [
+        1287
+      ],
+      "name": "_read_comment",
+      "target_name": "_read_comment",
+      "target_start_line": 1103
+    },
+    {
+      "lines": [
+        1288
+      ],
+      "name": "_read_identifier",
+      "target_name": "_read_identifier",
+      "target_start_line": 1107
+    },
+    {
+      "lines": [
+        1289
+      ],
+      "name": "_read_function",
+      "target_name": "_read_function",
+      "target_start_line": 1112
+    },
+    {
+      "lines": [
+        1290
+      ],
+      "name": "_read_namespace",
+      "target_name": "_read_namespace",
+      "target_start_line": 1127
+    },
+    {
+      "lines": [
+        1291
+      ],
+      "name": "_read_extract",
+      "target_name": "_read_extract",
+      "target_start_line": 1137
+    },
+    {
+      "lines": [
+        1292
+      ],
+      "name": "_read_argument",
+      "target_name": "_read_argument",
+      "target_start_line": 1166
+    },
+    {
+      "lines": [
+        1293
+      ],
+      "name": "_read_for",
+      "target_name": "_read_for",
+      "target_start_line": 1171
+    },
+    {
+      "lines": [
+        1294
+      ],
+      "name": "_read_binary",
+      "target_name": "_read_binary",
+      "target_start_line": 1176
+    },
+    {
+      "lines": [
+        1295
+      ],
+      "name": "_read_call",
+      "target_name": "_read_call",
+      "target_start_line": 1272
+    },
+    {
+      "lines": [
+        1333,
+        1342
+      ],
+      "name": "RSource",
+      "target_name": "RSource",
+      "target_start_line": 176
+    },
+    {
+      "lines": [
+        1344
+      ],
+      "name": "_import_list",
+      "target_name": "_import_list",
+      "target_start_line": 846
+    },
+    {
+      "lines": [
+        1345
+      ],
+      "name": "_reference_list",
+      "target_name": "_reference_list",
+      "target_start_line": 1299
+    }
+  ],
+  "caller_usages": [
+    {
+      "lines": [
+        296
+      ],
+      "name": "r_definition_text",
+      "file": "codetwine/codetwine/extractors/definition_source_py/definition_source.py",
+      "usage_context": "        return parse_file(absolute_path)[0].definition_source(callee_name)\n    if file_ext in R_EXT_SET:\n        callee_root, callee_content = parse_file(absolute_path)\n        return r_definition_text(callee_root, callee_content, callee_name)\n\n    definition_tuple = source_definition(callee_file_path, callee_name, project_dir)\n    return definition_tuple[1] if definition_tuple is not None else None"
+    },
+    {
+      "lines": [
+        174
+      ],
+      "name": "r_definition_list",
+      "file": "codetwine/codetwine/extractors/definitions_py/definitions.py",
+      "usage_context": "    if definition_dict is R_DEFINITION_DICT:\n        return [\n            DefinitionInfo(definition.name, definition.type, definition.start_line, definition.end_line)\n            for definition in r_definition_list(root_node)\n        ]\n\n    definition_list: list[DefinitionInfo] = []"
+    },
+    {
+      "lines": [
+        143
+      ],
+      "name": "r_definition_list",
+      "file": "codetwine/codetwine/extractors/usage_analysis_py/usage_analysis.py",
+      "usage_context": "    (setMethod) are not such definitions.\n    \"\"\"\n    range_dict = _definition_range_dict([\n        definition for definition in r_definition_list(root_node)\n        if not definition.is_member and not definition.is_attach\n    ])\n"
+    },
+    {
+      "lines": [
+        53
+      ],
+      "name": "RDefinition",
+      "file": "codetwine/codetwine/r_name_index_py/r_name_index.py",
+      "usage_context": "_ROOT_PATH_RE = re.compile(r\"^(/|~|[A-Za-z]:)\")\n\n# A definition and the relative path of the file it is written in\n_Entry = tuple[str, RDefinition]\n\n# Name -> the definitions of that name\n_NameTable = dict[str, list[_Entry]]"
+    },
+    {
+      "lines": [
+        103,
+        130
+      ],
+      "name": "RSource",
+      "file": "codetwine/codetwine/r_name_index_py/r_name_index.py",
+      "usage_context": "    \"\"\"The definitions, imports and packages of the R files of a project.\"\"\"\n\n    # Relative path -> what the file defines, reads and refers to\n    source_dict: dict[str, RSource] = field(default_factory=dict)\n    # Relative path -> the top-level names the file defines\n    table_dict: dict[str, _NameTable] = field(default_factory=dict)\n    # Relative paths of the R scripts (not R Markdown or Quarto files)\n...\n    box_scope_dict: dict[str, _BoxScope] = field(default_factory=dict)\n\n\ndef _file_table(file_rel: str, r_source: RSource) -> _NameTable:\n    \"\"\"Return the top-level names an R file defines.\n\n    Members of a class and calls written for a name defined elsewhere (setMethod) are"
+    },
+    {
+      "lines": [
+        137
+      ],
+      "name": "RSource.definition_list",
+      "file": "codetwine/codetwine/r_name_index_py/r_name_index.py",
+      "usage_context": "    left out.\n    \"\"\"\n    table: _NameTable = {}\n    for definition in r_source.definition_list:\n        if definition.is_member or definition.is_attach:\n            continue\n        table.setdefault(definition.name, []).append((file_rel, definition))"
+    },
+    {
+      "lines": [
+        284,
+        294,
+        367
+      ],
+      "name": "RImport",
+      "file": "codetwine/codetwine/r_name_index_py/r_name_index.py",
+      "usage_context": "    return None\n\n\ndef _import_file(name_index: RNameIndex, file_rel: str, r_import: RImport) -> str | None:\n    \"\"\"Return the script a source() call or a box module path of a file leads to.\n\n    Returns:\n...\n    if r_import.kind == SOURCE_IMPORT:\n        return _source_file(name_index, file_rel, r_import.path)\n    if r_import.kind == BOX_IMPORT:\n        module = _box_module(name_index, file_rel, r_import)\n        return module.file_rel if module else None\n    return None\n"
+    },
+    {
+      "lines": [
+        291,
+        304
+      ],
+      "name": "SOURCE_IMPORT",
+      "file": "codetwine/codetwine/r_name_index_py/r_name_index.py",
+      "usage_context": "        The relative path, or None for a package (library(pkg), box::use(pkg)) and\n        for a path that leads to no script.\n    \"\"\"\n    if r_import.kind == SOURCE_IMPORT:\n        return _source_file(name_index, file_rel, r_import.path)\n    if r_import.kind == BOX_IMPORT:\n        module = _box_module(name_index, file_rel, r_import)\n...\n    for file_rel, r_source in name_index.source_dict.items():\n        source_file_list: list[str] = []\n        for r_import in r_source.import_list:\n            if r_import.kind != SOURCE_IMPORT:\n                continue\n            source_rel = _source_file(name_index, file_rel, r_import.path)\n            if source_rel and source_rel != file_rel and source_rel not in source_file_list:"
+    },
+    {
+      "lines": [
+        291,
+        293
+      ],
+      "name": "RImport.kind",
+      "file": "codetwine/codetwine/r_name_index_py/r_name_index.py",
+      "usage_context": "        The relative path, or None for a package (library(pkg), box::use(pkg)) and\n        for a path that leads to no script.\n    \"\"\"\n    if r_import.kind == SOURCE_IMPORT:\n        return _source_file(name_index, file_rel, r_import.path)\n    if r_import.kind == BOX_IMPORT:\n        module = _box_module(name_index, file_rel, r_import)\n...\n    \"\"\"\n    if r_import.kind == SOURCE_IMPORT:\n        return _source_file(name_index, file_rel, r_import.path)\n    if r_import.kind == BOX_IMPORT:\n        module = _box_module(name_index, file_rel, r_import)\n        return module.file_rel if module else None\n    return None"
+    },
+    {
+      "lines": [
+        292,
+        376,
+        377,
+        379,
+        380
+      ],
+      "name": "RImport.path",
+      "file": "codetwine/codetwine/r_name_index_py/r_name_index.py",
+      "usage_context": "        for a path that leads to no script.\n    \"\"\"\n    if r_import.kind == SOURCE_IMPORT:\n        return _source_file(name_index, file_rel, r_import.path)\n    if r_import.kind == BOX_IMPORT:\n        module = _box_module(name_index, file_rel, r_import)\n        return module.file_rel if module else None\n...\n    Returns:\n        The module, or None when the path leads to nothing in the project.\n    \"\"\"\n    if \"/\" in r_import.path:\n        module_file = _box_module_file(name_index, file_rel, r_import.path)\n        return _BoxModule(file_rel=module_file) if module_file else None\n    if r_import.path in name_index.package_name_dict:"
+    },
+    {
+      "lines": [
+        293,
+        448
+      ],
+      "name": "BOX_IMPORT",
+      "file": "codetwine/codetwine/r_name_index_py/r_name_index.py",
+      "usage_context": "    \"\"\"\n    if r_import.kind == SOURCE_IMPORT:\n        return _source_file(name_index, file_rel, r_import.path)\n    if r_import.kind == BOX_IMPORT:\n        module = _box_module(name_index, file_rel, r_import)\n        return module.file_rel if module else None\n    return None\n...\n\n    attach_all_table_list: list[_NameTable] = []\n    for r_import in name_index.source_dict[file_rel].import_list:\n        if r_import.kind != BOX_IMPORT:\n            continue\n        module = _box_module(name_index, file_rel, r_import)\n        if module is None:"
+    },
+    {
+      "lines": [
+        492
+      ],
+      "name": "read_r_source",
+      "file": "codetwine/codetwine/r_name_index_py/r_name_index.py",
+      "usage_context": "        if file_ext not in R_EXT_SET:\n            continue\n        try:\n            r_source = read_r_source(parse_file(file_abs)[0])\n        except Exception as e:\n            logger.warning(f\"{file_rel} is not read as R: {type(e).__name__}: {e}\")\n            continue"
+    },
+    {
+      "lines": [
+        621
+      ],
+      "name": "LIBRARY_IMPORT",
+      "file": "codetwine/codetwine/r_name_index_py/r_name_index.py",
+      "usage_context": "        file_set_dict: dict[str, set[str]] = {}\n        for file_rel in file_rel_list:\n            for r_import in name_index.source_dict[file_rel].import_list:\n                if r_import.kind != LIBRARY_IMPORT or r_import.path in file_set_dict:\n                    continue\n                file_set_dict[r_import.path] = set().union(*(\n                    name_index.package_file_dict[package_dir]"
+    },
+    {
+      "lines": [
+        751
+      ],
+      "name": "RReference",
+      "file": "codetwine/codetwine/r_name_index_py/r_name_index.py",
+      "usage_context": "            module = inner_module\n        return []\n\n    def _entry_list(self, reference: RReference) -> list[_Entry]:\n        \"\"\"Return the definitions a reference refers to.\n\n        pkg::name is looked up in the package of the project named pkg. owner$name is"
+    },
+    {
+      "lines": [
+        759
+      ],
+      "name": "NAMESPACE_REFERENCE",
+      "file": "codetwine/codetwine/r_name_index_py/r_name_index.py",
+      "usage_context": "        module it is a reference to owner. Any other name is looked up through the\n        tables of the file.\n        \"\"\"\n        if reference.kind == NAMESPACE_REFERENCE:\n            return self._package_table(reference.owner).get(reference.name, [])\n        if reference.kind == MEMBER_REFERENCE:\n            module = self._box_scope.module_dict.get(reference.owner)"
+    },
+    {
+      "lines": [
+        759,
+        761
+      ],
+      "name": "RReference.kind",
+      "file": "codetwine/codetwine/r_name_index_py/r_name_index.py",
+      "usage_context": "        module it is a reference to owner. Any other name is looked up through the\n        tables of the file.\n        \"\"\"\n        if reference.kind == NAMESPACE_REFERENCE:\n            return self._package_table(reference.owner).get(reference.name, [])\n        if reference.kind == MEMBER_REFERENCE:\n            module = self._box_scope.module_dict.get(reference.owner)\n...\n        \"\"\"\n        if reference.kind == NAMESPACE_REFERENCE:\n            return self._package_table(reference.owner).get(reference.name, [])\n        if reference.kind == MEMBER_REFERENCE:\n            module = self._box_scope.module_dict.get(reference.owner)\n            if module is not None:\n                return self._member_entry_list(module, [reference.name, *reference.member_tuple])"
+    },
+    {
+      "lines": [
+        760,
+        764,
+        766
+      ],
+      "name": "RReference.name",
+      "file": "codetwine/codetwine/r_name_index_py/r_name_index.py",
+      "usage_context": "        tables of the file.\n        \"\"\"\n        if reference.kind == NAMESPACE_REFERENCE:\n            return self._package_table(reference.owner).get(reference.name, [])\n        if reference.kind == MEMBER_REFERENCE:\n            module = self._box_scope.module_dict.get(reference.owner)\n            if module is not None:\n...\n        if reference.kind == MEMBER_REFERENCE:\n            module = self._box_scope.module_dict.get(reference.owner)\n            if module is not None:\n                return self._member_entry_list(module, [reference.name, *reference.member_tuple])\n            return self._lookup(reference.owner)\n        return self._lookup(reference.name)\n"
+    },
+    {
+      "lines": [
+        760,
+        762,
+        765
+      ],
+      "name": "RReference.owner",
+      "file": "codetwine/codetwine/r_name_index_py/r_name_index.py",
+      "usage_context": "        tables of the file.\n        \"\"\"\n        if reference.kind == NAMESPACE_REFERENCE:\n            return self._package_table(reference.owner).get(reference.name, [])\n        if reference.kind == MEMBER_REFERENCE:\n            module = self._box_scope.module_dict.get(reference.owner)\n            if module is not None:\n...\n        if reference.kind == NAMESPACE_REFERENCE:\n            return self._package_table(reference.owner).get(reference.name, [])\n        if reference.kind == MEMBER_REFERENCE:\n            module = self._box_scope.module_dict.get(reference.owner)\n            if module is not None:\n                return self._member_entry_list(module, [reference.name, *reference.member_tuple])\n            return self._lookup(reference.owner)"
+    },
+    {
+      "lines": [
+        761
+      ],
+      "name": "MEMBER_REFERENCE",
+      "file": "codetwine/codetwine/r_name_index_py/r_name_index.py",
+      "usage_context": "        \"\"\"\n        if reference.kind == NAMESPACE_REFERENCE:\n            return self._package_table(reference.owner).get(reference.name, [])\n        if reference.kind == MEMBER_REFERENCE:\n            module = self._box_scope.module_dict.get(reference.owner)\n            if module is not None:\n                return self._member_entry_list(module, [reference.name, *reference.member_tuple])"
+    },
+    {
+      "lines": [
+        764
+      ],
+      "name": "RReference.member_tuple",
+      "file": "codetwine/codetwine/r_name_index_py/r_name_index.py",
+      "usage_context": "        if reference.kind == MEMBER_REFERENCE:\n            module = self._box_scope.module_dict.get(reference.owner)\n            if module is not None:\n                return self._member_entry_list(module, [reference.name, *reference.member_tuple])\n            return self._lookup(reference.owner)\n        return self._lookup(reference.name)\n"
+    }
+  ]
+}

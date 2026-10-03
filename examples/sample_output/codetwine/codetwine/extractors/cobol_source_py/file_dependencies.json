@@ -1,0 +1,1721 @@
+{
+  "file": "codetwine/codetwine/extractors/cobol_source_py/cobol_source.py",
+  "language": "py",
+  "detected_encoding": null,
+  "definitions": [
+    {
+      "name": "PROGRAM_TYPE",
+      "type": "expression_statement",
+      "start_line": 20,
+      "end_line": 20,
+      "context": "PROGRAM_TYPE = \"program_definition\""
+    },
+    {
+      "name": "ENTRY_TYPE",
+      "type": "expression_statement",
+      "start_line": 21,
+      "end_line": 21,
+      "context": "ENTRY_TYPE = \"entry_statement\""
+    },
+    {
+      "name": "SECTION_TYPE",
+      "type": "expression_statement",
+      "start_line": 22,
+      "end_line": 22,
+      "context": "SECTION_TYPE = \"section_header\""
+    },
+    {
+      "name": "PARAGRAPH_TYPE",
+      "type": "expression_statement",
+      "start_line": 23,
+      "end_line": 23,
+      "context": "PARAGRAPH_TYPE = \"paragraph_header\""
+    },
+    {
+      "name": "DATA_ITEM_TYPE",
+      "type": "expression_statement",
+      "start_line": 24,
+      "end_line": 24,
+      "context": "DATA_ITEM_TYPE = \"data_description\""
+    },
+    {
+      "name": "FILE_TYPE",
+      "type": "expression_statement",
+      "start_line": 25,
+      "end_line": 25,
+      "context": "FILE_TYPE = \"file_description_entry\""
+    },
+    {
+      "name": "INDEX_TYPE",
+      "type": "expression_statement",
+      "start_line": 26,
+      "end_line": 26,
+      "context": "INDEX_TYPE = \"occurs_indexed\""
+    },
+    {
+      "name": "CALL_TARGET_TYPE_TUPLE",
+      "type": "expression_statement",
+      "start_line": 29,
+      "end_line": 29,
+      "context": "CALL_TARGET_TYPE_TUPLE = (PROGRAM_TYPE, ENTRY_TYPE)"
+    },
+    {
+      "name": "COPY_KIND",
+      "type": "expression_statement",
+      "start_line": 32,
+      "end_line": 32,
+      "context": "COPY_KIND = \"COPY\""
+    },
+    {
+      "name": "CALL_KIND",
+      "type": "expression_statement",
+      "start_line": 33,
+      "end_line": 33,
+      "context": "CALL_KIND = \"CALL\""
+    },
+    {
+      "name": "_HEADER_NODE_TYPE_SET",
+      "type": "expression_statement",
+      "start_line": 36,
+      "end_line": 36,
+      "context": "_HEADER_NODE_TYPE_SET = {SECTION_TYPE, PARAGRAPH_TYPE}"
+    },
+    {
+      "name": "_STATEMENT_NODE_SUFFIX",
+      "type": "expression_statement",
+      "start_line": 38,
+      "end_line": 38,
+      "context": "_STATEMENT_NODE_SUFFIX = \"_statement\""
+    },
+    {
+      "name": "_NO_GROUP_LEVEL_SET",
+      "type": "expression_statement",
+      "start_line": 41,
+      "end_line": 41,
+      "context": "_NO_GROUP_LEVEL_SET = {1, 77, 78}"
+    },
+    {
+      "name": "_RENAME_LEVEL",
+      "type": "expression_statement",
+      "start_line": 43,
+      "end_line": 43,
+      "context": "_RENAME_LEVEL = 66"
+    },
+    {
+      "name": "_CONDITION_LEVEL",
+      "type": "expression_statement",
+      "start_line": 44,
+      "end_line": 44,
+      "context": "_CONDITION_LEVEL = 88"
+    },
+    {
+      "name": "_TOP_RANK",
+      "type": "expression_statement",
+      "start_line": 47,
+      "end_line": 47,
+      "context": "_TOP_RANK = 1"
+    },
+    {
+      "name": "_RENAME_RANK",
+      "type": "expression_statement",
+      "start_line": 50,
+      "end_line": 50,
+      "context": "_RENAME_RANK = _TOP_RANK + 1"
+    },
+    {
+      "name": "_CONDITION_RANK",
+      "type": "expression_statement",
+      "start_line": 51,
+      "end_line": 51,
+      "context": "_CONDITION_RANK = 100"
+    },
+    {
+      "name": "_FILE_RANK",
+      "type": "expression_statement",
+      "start_line": 53,
+      "end_line": 53,
+      "context": "_FILE_RANK = 0"
+    },
+    {
+      "name": "_NO_POSITION",
+      "type": "expression_statement",
+      "start_line": 55,
+      "end_line": 55,
+      "context": "_NO_POSITION = sys.maxsize"
+    },
+    {
+      "name": "_GROUP_LEVEL_RANGE",
+      "type": "expression_statement",
+      "start_line": 57,
+      "end_line": 57,
+      "context": "_GROUP_LEVEL_RANGE = range(1, 50)"
+    },
+    {
+      "name": "_ELEMENTARY_WORD_SET",
+      "type": "expression_statement",
+      "start_line": 60,
+      "end_line": 67,
+      "context": "_ELEMENTARY_WORD_SET = {\n    \"PIC\", \"PICTURE\", \"VALUE\", \"VALUES\", \"INDEX\", \"POINTER\", \"POINTER-32\",\n    \"PROGRAM-POINTER\", \"PROCEDURE-POINTER\", \"FUNCTION-POINTER\", \"COMP-1\", \"COMP-2\",\n    \"COMPUTATIONAL-1\", \"COMPUTATIONAL-2\", \"FLOAT-SHORT\", \"FLOAT-LONG\", \"FLOAT-EXTENDED\",\n    \"FLOAT-DECIMAL-16\", \"FLOAT-DECIMAL-34\", \"FLOAT-BINARY-32\", \"FLOAT-BINARY-64\",\n    \"FLOAT-BINARY-128\", \"BINARY-CHAR\", \"BINARY-SHORT\", \"BINARY-LONG\", \"BINARY-INT\",\n    \"BINARY-DOUBLE\", \"BINARY-C-LONG\", \"OBJECT\", \"CONSTANT\", \"ANY\",\n}"
+    },
+    {
+      "name": "CobolDefinition",
+      "type": "class_definition",
+      "start_line": 70,
+      "end_line": 83,
+      "context": "@dataclass\nclass CobolDefinition:\n    \"\"\"One definition of a COBOL file.\"\"\"\n\n    name: str        # Name as written in the source\n    type: str        # One of the definition types of this module\n    start_line: int  # First line of the definition (1-based)\n    end_line: int    # Last line of the definition\n    name_line: int   # Line the name is written on (1-based)\n    # Level number of a data item; None for the other types\n    level: int | None = None\n    # Whether a data item is a group item (items belong to it, or a COPY statement\n    # inside it brings them in); None for the other types\n    is_group: bool | None = None"
+    },
+    {
+      "name": "name",
+      "type": "expression_statement",
+      "start_line": 74,
+      "end_line": 74,
+      "context": "    name: str        # Name as written in the source"
+    },
+    {
+      "name": "type",
+      "type": "expression_statement",
+      "start_line": 75,
+      "end_line": 75,
+      "context": "    type: str        # One of the definition types of this module"
+    },
+    {
+      "name": "start_line",
+      "type": "expression_statement",
+      "start_line": 76,
+      "end_line": 76,
+      "context": "    start_line: int  # First line of the definition (1-based)"
+    },
+    {
+      "name": "end_line",
+      "type": "expression_statement",
+      "start_line": 77,
+      "end_line": 77,
+      "context": "    end_line: int    # Last line of the definition"
+    },
+    {
+      "name": "name_line",
+      "type": "expression_statement",
+      "start_line": 78,
+      "end_line": 78,
+      "context": "    name_line: int   # Line the name is written on (1-based)"
+    },
+    {
+      "name": "level",
+      "type": "expression_statement",
+      "start_line": 80,
+      "end_line": 80,
+      "context": "    level: int | None = None"
+    },
+    {
+      "name": "is_group",
+      "type": "expression_statement",
+      "start_line": 83,
+      "end_line": 83,
+      "context": "    is_group: bool | None = None"
+    },
+    {
+      "name": "CobolReference",
+      "type": "class_definition",
+      "start_line": 86,
+      "end_line": 95,
+      "context": "@dataclass\nclass CobolReference:\n    \"\"\"One place a COBOL file refers to a name.\"\"\"\n\n    name: str    # Upper-case name\n    line: int    # Line of the reference (1-based)\n    # Upper-case names that qualify it (X OF Y IN Z -> (\"Y\", \"Z\")), innermost first\n    qualifier_tuple: tuple[str, ...] = ()\n    # Whether it is the program name a CALL statement names\n    is_call: bool = False"
+    },
+    {
+      "name": "name",
+      "type": "expression_statement",
+      "start_line": 90,
+      "end_line": 90,
+      "context": "    name: str    # Upper-case name"
+    },
+    {
+      "name": "line",
+      "type": "expression_statement",
+      "start_line": 91,
+      "end_line": 91,
+      "context": "    line: int    # Line of the reference (1-based)"
+    },
+    {
+      "name": "qualifier_tuple",
+      "type": "expression_statement",
+      "start_line": 93,
+      "end_line": 93,
+      "context": "    qualifier_tuple: tuple[str, ...] = ()"
+    },
+    {
+      "name": "is_call",
+      "type": "expression_statement",
+      "start_line": 95,
+      "end_line": 95,
+      "context": "    is_call: bool = False"
+    },
+    {
+      "name": "CobolImport",
+      "type": "class_definition",
+      "start_line": 98,
+      "end_line": 107,
+      "context": "@dataclass\nclass CobolImport:\n    \"\"\"One statement of a COBOL file that names another file.\"\"\"\n\n    kind: str               # COPY_KIND / CALL_KIND\n    name: str               # Name of the copybook or of the program\n    line: int               # Line of the statement (1-based)\n    library: str = \"\"       # Library name of COPY ... OF library\n    # REPLACING operands of a COPY statement as (position, replaced text, replacement text)\n    replacing_list: list[tuple[str, str, str]] = field(default_factory=list)"
+    },
+    {
+      "name": "kind",
+      "type": "expression_statement",
+      "start_line": 102,
+      "end_line": 102,
+      "context": "    kind: str               # COPY_KIND / CALL_KIND"
+    },
+    {
+      "name": "name",
+      "type": "expression_statement",
+      "start_line": 103,
+      "end_line": 103,
+      "context": "    name: str               # Name of the copybook or of the program"
+    },
+    {
+      "name": "line",
+      "type": "expression_statement",
+      "start_line": 104,
+      "end_line": 104,
+      "context": "    line: int               # Line of the statement (1-based)"
+    },
+    {
+      "name": "library",
+      "type": "expression_statement",
+      "start_line": 105,
+      "end_line": 105,
+      "context": "    library: str = \"\"       # Library name of COPY ... OF library"
+    },
+    {
+      "name": "replacing_list",
+      "type": "expression_statement",
+      "start_line": 107,
+      "end_line": 107,
+      "context": "    replacing_list: list[tuple[str, str, str]] = field(default_factory=list)"
+    },
+    {
+      "name": "CobolSource",
+      "type": "class_definition",
+      "start_line": 110,
+      "end_line": 162,
+      "context": "@dataclass\nclass CobolSource:\n    \"\"\"What one COBOL file defines, names and refers to.\"\"\"\n\n    # Lines of the source text\n    line_list: list[str]\n    # Definitions in line order\n    definition_list: list[CobolDefinition] = field(default_factory=list)\n    # COPY and CALL statements in line order\n    import_list: list[CobolImport] = field(default_factory=list)\n    # Each place a name is referred to\n    reference_list: list[CobolReference] = field(default_factory=list)\n    # Upper-case names a COPY statement can name the file by besides its file name\n    # (BMS: the mapset names)\n    copy_name_list: list[str] = field(default_factory=list)\n\n    def usage_line_list(self, name_set: set[str]) -> list[tuple[str, int]]:\n        \"\"\"Return the places the file refers to one of the given names.\n\n        Names are compared without regard to upper and lower case.\n\n        Args:\n            name_set: The names to look for.\n\n        Returns:\n            (name as given in name_set, line) tuples in line order, without duplicates.\n        \"\"\"\n        name_dict = {name.upper(): name for name in name_set}\n        usage_set = {\n            (name_dict[reference.name], reference.line)\n            for reference in self.reference_list if reference.name in name_dict\n        }\n        return sorted(usage_set, key=lambda usage: (usage[1], usage[0]))\n\n    def definition_text(self, definition: CobolDefinition) -> str:\n        \"\"\"Return the source text of a definition: its lines joined by \"\\\\n\".\"\"\"\n        return \"\\n\".join(self.line_list[definition.start_line - 1:definition.end_line])\n\n    def definition_source(self, name: str) -> str | None:\n        \"\"\"Return the source text of the first definition with a name.\n\n        Names are compared without regard to upper and lower case.\n\n        Args:\n            name: The definition name.\n\n        Returns:\n            The lines of the definition joined by \"\\\\n\". None when no definition has the name.\n        \"\"\"\n        for definition in self.definition_list:\n            if definition.name.upper() == name.upper():\n                return self.definition_text(definition)\n        return None"
+    },
+    {
+      "name": "line_list",
+      "type": "expression_statement",
+      "start_line": 115,
+      "end_line": 115,
+      "context": "    line_list: list[str]"
+    },
+    {
+      "name": "definition_list",
+      "type": "expression_statement",
+      "start_line": 117,
+      "end_line": 117,
+      "context": "    definition_list: list[CobolDefinition] = field(default_factory=list)"
+    },
+    {
+      "name": "import_list",
+      "type": "expression_statement",
+      "start_line": 119,
+      "end_line": 119,
+      "context": "    import_list: list[CobolImport] = field(default_factory=list)"
+    },
+    {
+      "name": "reference_list",
+      "type": "expression_statement",
+      "start_line": 121,
+      "end_line": 121,
+      "context": "    reference_list: list[CobolReference] = field(default_factory=list)"
+    },
+    {
+      "name": "copy_name_list",
+      "type": "expression_statement",
+      "start_line": 124,
+      "end_line": 124,
+      "context": "    copy_name_list: list[str] = field(default_factory=list)"
+    },
+    {
+      "name": "usage_line_list",
+      "type": "function_definition",
+      "start_line": 126,
+      "end_line": 142,
+      "context": "    def usage_line_list(self, name_set: set[str]) -> list[tuple[str, int]]:\n        \"\"\"Return the places the file refers to one of the given names.\n\n        Names are compared without regard to upper and lower case.\n\n        Args:\n            name_set: The names to look for.\n\n        Returns:\n            (name as given in name_set, line) tuples in line order, without duplicates.\n        \"\"\"\n        name_dict = {name.upper(): name for name in name_set}\n        usage_set = {\n            (name_dict[reference.name], reference.line)\n            for reference in self.reference_list if reference.name in name_dict\n        }\n        return sorted(usage_set, key=lambda usage: (usage[1], usage[0]))"
+    },
+    {
+      "name": "definition_text",
+      "type": "function_definition",
+      "start_line": 144,
+      "end_line": 146,
+      "context": "    def definition_text(self, definition: CobolDefinition) -> str:\n        \"\"\"Return the source text of a definition: its lines joined by \"\\\\n\".\"\"\"\n        return \"\\n\".join(self.line_list[definition.start_line - 1:definition.end_line])"
+    },
+    {
+      "name": "definition_source",
+      "type": "function_definition",
+      "start_line": 148,
+      "end_line": 162,
+      "context": "    def definition_source(self, name: str) -> str | None:\n        \"\"\"Return the source text of the first definition with a name.\n\n        Names are compared without regard to upper and lower case.\n\n        Args:\n            name: The definition name.\n\n        Returns:\n            The lines of the definition joined by \"\\\\n\". None when no definition has the name.\n        \"\"\"\n        for definition in self.definition_list:\n            if definition.name.upper() == name.upper():\n                return self.definition_text(definition)\n        return None"
+    },
+    {
+      "name": "_item_rank",
+      "type": "function_definition",
+      "start_line": 165,
+      "end_line": 180,
+      "context": "def _item_rank(level: int) -> int:\n    \"\"\"Return the rank of a data item: an item belongs to the item before it with a lower rank.\n\n    Examples:\n        1, 77, 78 -> 1\n        5         -> 5\n        66        -> 2\n        88        -> 100\n    \"\"\"\n    if level in _NO_GROUP_LEVEL_SET:\n        return _TOP_RANK\n    if level == _RENAME_LEVEL:\n        return _RENAME_RANK\n    if level == _CONDITION_LEVEL:\n        return _CONDITION_RANK\n    return level"
+    },
+    {
+      "name": "_Item",
+      "type": "class_definition",
+      "start_line": 183,
+      "end_line": 194,
+      "context": "@dataclass\nclass _Item:\n    \"\"\"One data item of a COBOL file, as the units are read.\"\"\"\n\n    name: str | None   # Name as written in the source; None for FILLER or no name\n    level: int         # Level number\n    start_line: int    # First line of its statement\n    end_line: int      # Last line of its statement\n    name_line: int     # Line of its name (its first line without one)\n    unit_index: int    # Index of its unit in CobolText.unit_list\n    # Whether its statement has a PICTURE clause or a USAGE that makes it an elementary item\n    is_elementary: bool"
+    },
+    {
+      "name": "name",
+      "type": "expression_statement",
+      "start_line": 187,
+      "end_line": 187,
+      "context": "    name: str | None   # Name as written in the source; None for FILLER or no name"
+    },
+    {
+      "name": "level",
+      "type": "expression_statement",
+      "start_line": 188,
+      "end_line": 188,
+      "context": "    level: int         # Level number"
+    },
+    {
+      "name": "start_line",
+      "type": "expression_statement",
+      "start_line": 189,
+      "end_line": 189,
+      "context": "    start_line: int    # First line of its statement"
+    },
+    {
+      "name": "end_line",
+      "type": "expression_statement",
+      "start_line": 190,
+      "end_line": 190,
+      "context": "    end_line: int      # Last line of its statement"
+    },
+    {
+      "name": "name_line",
+      "type": "expression_statement",
+      "start_line": 191,
+      "end_line": 191,
+      "context": "    name_line: int     # Line of its name (its first line without one)"
+    },
+    {
+      "name": "unit_index",
+      "type": "expression_statement",
+      "start_line": 192,
+      "end_line": 192,
+      "context": "    unit_index: int    # Index of its unit in CobolText.unit_list"
+    },
+    {
+      "name": "is_elementary",
+      "type": "expression_statement",
+      "start_line": 194,
+      "end_line": 194,
+      "context": "    is_elementary: bool"
+    },
+    {
+      "name": "_File",
+      "type": "class_definition",
+      "start_line": 197,
+      "end_line": 205,
+      "context": "@dataclass\nclass _File:\n    \"\"\"One description of a file (FD / SD) of a COBOL file, as the units are read.\"\"\"\n\n    name: str          # Name as written in the source\n    start_line: int    # First line of its statement\n    end_line: int      # Last line of its statement\n    name_line: int     # Line of its name\n    unit_index: int    # Index of its unit in CobolText.unit_list"
+    },
+    {
+      "name": "name",
+      "type": "expression_statement",
+      "start_line": 201,
+      "end_line": 201,
+      "context": "    name: str          # Name as written in the source"
+    },
+    {
+      "name": "start_line",
+      "type": "expression_statement",
+      "start_line": 202,
+      "end_line": 202,
+      "context": "    start_line: int    # First line of its statement"
+    },
+    {
+      "name": "end_line",
+      "type": "expression_statement",
+      "start_line": 203,
+      "end_line": 203,
+      "context": "    end_line: int      # Last line of its statement"
+    },
+    {
+      "name": "name_line",
+      "type": "expression_statement",
+      "start_line": 204,
+      "end_line": 204,
+      "context": "    name_line: int     # Line of its name"
+    },
+    {
+      "name": "unit_index",
+      "type": "expression_statement",
+      "start_line": 205,
+      "end_line": 205,
+      "context": "    unit_index: int    # Index of its unit in CobolText.unit_list"
+    },
+    {
+      "name": "_is_elementary_word_list",
+      "type": "function_definition",
+      "start_line": 208,
+      "end_line": 217,
+      "context": "def _is_elementary_word_list(word_list: list[tuple[str, int]]) -> bool:\n    \"\"\"Return whether the words of a data item's statement make it an elementary item.\n\n    The statement has a PICTURE clause, a VALUE clause, or a USAGE that takes no PICTURE\n    clause (INDEX, POINTER, COMP-1, ...); it is looked at for an item no item belongs to.\n\n    Args:\n        word_list: (word, source line) of the words of the statement, level number first.\n    \"\"\"\n    return any(word.upper() in _ELEMENTARY_WORD_SET for word, _ in word_list[1:])"
+    },
+    {
+      "name": "_node_list",
+      "type": "function_definition",
+      "start_line": 220,
+      "end_line": 228,
+      "context": "def _node_list(root_node: Node) -> list[Node]:\n    \"\"\"Return every node of a tree in source order.\"\"\"\n    node_list: list[Node] = []\n    node_stack = [root_node]\n    while node_stack:\n        node = node_stack.pop()\n        node_list.append(node)\n        node_stack.extend(reversed(node.children))\n    return node_list"
+    },
+    {
+      "name": "_UnitReader",
+      "type": "class_definition",
+      "start_line": 231,
+      "end_line": 780,
+      "context": "class _UnitReader:\n    \"\"\"Reads the units of one COBOL file into a CobolSource.\"\"\"\n\n    def __init__(self, cobol_text: CobolText, line_list: list[str], language: Language) -> None:\n        \"\"\"\n        Args:\n            cobol_text: The units of the file and what is read without the grammar.\n            line_list: Lines of the source text.\n            language: The tree-sitter Language of the COBOL grammar.\n        \"\"\"\n        self.cobol_text = cobol_text\n        self.parser = Parser(language)\n        self.source = CobolSource(line_list=line_list)\n        # (name, type, line) of each header of the procedure division\n        self.header_list: list[tuple[str, str, int]] = []\n        # Each data item\n        self.item_list: list[_Item] = []\n        # Each description of a file with a name\n        self.file_list: list[_File] = []\n        # The definition of each index name (INDEXED BY)\n        self.index_definition_list: list[CobolDefinition] = []\n        # Index in CobolText.unit_list of the unit being read\n        self.unit_index = -1\n        # Upper-case data item name -> literals the item is given (VALUE clause, MOVE)\n        self.item_literal_dict: dict[str, list[str]] = {}\n        # Upper-case word -> whether the grammar reads it as the name of a data item\n        self.is_item_name_dict: dict[str, bool] = {}\n\n    def name(self, text: str) -> str:\n        \"\"\"Return the name written in the source for a name written in a unit.\"\"\"\n        return self.cobol_text.name_dict.get(text.upper(), text)\n\n    def node_name(self, node: Node) -> str:\n        \"\"\"Return the name or the literal content a node holds.\"\"\"\n        text = node.text.decode(\"utf-8\")\n        value = literal_value(text)\n        return value if value != text else self.name(text)\n\n    def read(self) -> CobolSource:\n        \"\"\"Read the file and return the CobolSource.\n\n        Processing flow:\n        1. Parse each unit and collect the headers, data items, descriptions of\n           files and references\n        2. Add the references of the statements that are in no unit\n        3. Build the definitions with their line ranges\n        4. Build the COPY and CALL statements\n        \"\"\"\n        # == Step 1: Units ====================================================\n        for unit in self.cobol_text.unit_list:\n            self._read_unit(unit)\n\n        # == Step 2: Words outside the units ==================================\n        for word, line, qualifier_list in self.cobol_text.word_list:\n            self.source.reference_list.append(CobolReference(\n                word.upper(), line, tuple(qualifier.upper() for qualifier in qualifier_list),\n            ))\n\n        # == Step 3: Definitions ==============================================\n        definition_list = [\n            *self._program_definition_list(),\n            *self._header_definition_list(),\n            *self._item_definition_list(),\n            *self.index_definition_list,\n            *self._file_definition_list(),\n        ]\n        for name, line in self.cobol_text.entry_list:\n            definition_list.append(CobolDefinition(name, ENTRY_TYPE, line, line, line))\n        self.source.definition_list = sorted(\n            definition_list, key=lambda definition: (definition.start_line, -definition.end_line),\n        )\n\n        # == Step 4: COPY and CALL statements =================================\n        self._add_import()\n        return self.source\n\n    def _read_unit(self, unit: CobolUnit) -> None:\n        \"\"\"Parse one unit and record what it defines and refers to.\n\n        The name a unit defines is read from the tree. References are the WORD nodes\n        of the tree; for a unit the grammar does not read without error they are\n        every word of the statement except the name it defines.\n        \"\"\"\n        root_node = self.parser.parse(unit.text.encode(\"utf-8\")).root_node\n        source_line_list = [line for line in unit.origin_line_list if line]\n        self.unit_index += 1\n        if not source_line_list:\n            return\n        node_list = [\n            node for node in _node_list(root_node)\n            if node.start_point[0] < len(unit.origin_line_list)\n            and unit.origin_line_list[node.start_point[0]]\n        ]\n\n        define_name = self._read_definition(\n            unit, node_list, source_line_list[0], source_line_list[-1],\n        )\n        if root_node.has_error:\n            self._add_word_reference(unit, define_name)\n        else:\n            self._add_node_reference(unit, node_list)\n\n    def _read_definition(\n        self, unit: CobolUnit, node_list: list[Node], start_line: int, end_line: int,\n    ) -> str | None:\n        \"\"\"Record what a unit defines and the literals it gives to data items.\n\n        Args:\n            unit: The unit.\n            node_list: The nodes of the tree of the unit that start on a source line.\n            start_line: First source line of the unit.\n            end_line: Last source line of the unit.\n\n        Returns:\n            The name the unit defines. None when it defines none.\n        \"\"\"\n        define_name = None\n        if unit.kind == ITEM_UNIT:\n            define_name, name_line = self._item_name(unit, node_list)\n            self.item_list.append(_Item(\n                name=define_name,\n                level=int(unit.word_list[0][0]),\n                start_line=start_line,\n                end_line=end_line,\n                name_line=name_line or start_line,\n                unit_index=self.unit_index,\n                is_elementary=_is_elementary_word_list(unit.word_list),\n            ))\n            if define_name is not None:\n                self._read_value(node_list, define_name)\n            self._read_index(unit, node_list, start_line, end_line)\n        elif unit.kind == FILE_UNIT:\n            define_name, name_line = self._file_name(unit, node_list)\n            if define_name is not None:\n                self.file_list.append(\n                    _File(define_name, start_line, end_line, name_line, self.unit_index)\n                )\n        elif unit.kind == PROCEDURE_UNIT:\n            define_name = self._header_name(unit, node_list, start_line)\n            self._read_move(node_list)\n        return define_name\n\n    def _add_word_reference(self, unit: CobolUnit, define_name: str | None) -> None:\n        \"\"\"Add every word of a unit as a reference, except the first one that is the defined name.\n\n        A word followed by OF / IN is qualified by the words after them.\n        \"\"\"\n        text_list = [word for word, _ in unit.word_list]\n        is_define_due = define_name is not None\n        for index, (word, line) in enumerate(unit.word_list):\n            if is_define_due and word.upper() == define_name.upper():\n                is_define_due = False\n                continue\n            qualifier_list = qualifier_tuple(text_list, index)\n            self.source.reference_list.append(CobolReference(\n                word.upper(), line, tuple(qualifier.upper() for qualifier in qualifier_list),\n            ))\n\n    def _add_node_reference(self, unit: CobolUnit, node_list: list[Node]) -> None:\n        \"\"\"Add each WORD node of a unit that is not the name of a definition as a reference.\n\n        A WORD of a qualified_word node is qualified by the WORD nodes after it.\n        \"\"\"\n        for node in node_list:\n            if node.type == \"WORD\" and not self._is_definition_name(node):\n                line = unit.origin_line_list[node.start_point[0]]\n                self.source.reference_list.append(CobolReference(\n                    self.node_name(node).upper(), line, self._node_qualifier_tuple(node),\n                ))\n\n    def _node_qualifier_tuple(self, node: Node) -> tuple[str, ...]:\n        \"\"\"Return the upper-case names that qualify a WORD node.\n\n        They are the WORD nodes after it in its qualified_word node.\n        \"\"\"\n        parent = node.parent\n        if parent is None or parent.type != \"qualified_word\":\n            return ()\n        word_node_list = [child for child in parent.children if child.type == \"WORD\"]\n        index = next(\n            (position for position, child in enumerate(word_node_list) if child.id == node.id),\n            None,\n        )\n        if index is None:\n            return ()\n        return tuple(self.node_name(child).upper() for child in word_node_list[index + 1:])\n\n    @staticmethod\n    def _is_definition_name(node: Node) -> bool:\n        \"\"\"Return whether a WORD node is a name its statement defines.\n\n        The names are that of a constant, that of the description of a file and the\n        index names of a data item.\n        \"\"\"\n        parent = node.parent\n        if parent is not None and parent.type == INDEX_TYPE:\n            return True\n        if parent is None or parent.type not in (\"constant_entry\", FILE_TYPE):\n            return False\n        first_word = next(child for child in parent.children if child.type == \"WORD\")\n        return first_word.id == node.id\n\n    def _item_name(self, unit: CobolUnit, node_list: list[Node]) -> tuple[str | None, int]:\n        \"\"\"Return the name of the data item of a unit and the line it is written on.\n\n        The name is the entry name of the tree. When the tree holds none, it is the\n        word after the level number, provided the grammar reads that word as the name\n        of a data item. An item has no name when a token is written right after the\n        first word after the level number (\"(PFX)-ID\", \"WS-(SFX)\").\n\n        Returns:\n            A (name, source line) tuple. (None, 0) for an item without a name or FILLER.\n        \"\"\"\n        if unit.has_name_suffix:\n            return None, 0\n        for node in node_list:\n            if node.type == \"entry_name\" or (\n                node.type == \"WORD\" and self._is_definition_name(node)\n                and node.parent.type == \"constant_entry\"\n            ):\n                text = node.text.decode(\"utf-8\")\n                if text.upper() == \"FILLER\":\n                    return None, 0\n                return self.name(text), unit.origin_line_list[node.start_point[0]]\n\n        if len(unit.word_list) > 1 and unit.word_list[1][1] == unit.word_list[0][1]:\n            word, line = unit.word_list[1]\n            if not GRAMMAR_NAME_RE.fullmatch(word) or self._is_item_name(word):\n                return word, line\n        return None, 0\n\n    def _read_index(\n        self, unit: CobolUnit, node_list: list[Node], start_line: int, end_line: int,\n    ) -> None:\n        \"\"\"Record the definition of each index name of a data item (INDEXED BY).\n\n        Args:\n            unit: The unit of the data item.\n            node_list: The nodes of the tree of the unit that start on a source line.\n            start_line: First source line of the unit.\n            end_line: Last source line of the unit.\n        \"\"\"\n        for node in node_list:\n            if node.type == \"WORD\" and node.parent is not None and node.parent.type == INDEX_TYPE:\n                self.index_definition_list.append(CobolDefinition(\n                    self.node_name(node), INDEX_TYPE, start_line, end_line,\n                    unit.origin_line_list[node.start_point[0]],\n                ))\n\n    def _is_item_name(self, word: str) -> bool:\n        \"\"\"Return whether the grammar reads a word as the name of a data item.\"\"\"\n        if word.upper() not in self.is_item_name_dict:\n            unit = item_unit(word)\n            root_node = self.parser.parse(unit.text.encode(\"utf-8\")).root_node\n            self.is_item_name_dict[word.upper()] = not root_node.has_error and any(\n                node.type == \"entry_name\" and node.text.decode(\"utf-8\") == word\n                for node in _node_list(root_node)\n            )\n        return self.is_item_name_dict[word.upper()]\n\n    def _file_name(self, unit: CobolUnit, node_list: list[Node]) -> tuple[str | None, int]:\n        \"\"\"Return the name of the file a unit describes and the line it is written on.\n\n        Returns:\n            A (name, source line) tuple. (None, 0) when the name is not read.\n        \"\"\"\n        for node in node_list:\n            if node.type == \"WORD\" and self._is_definition_name(node):\n                return self.node_name(node), unit.origin_line_list[node.start_point[0]]\n        return None, 0\n\n    def _header_name(self, unit: CobolUnit, node_list: list[Node], line: int) -> str | None:\n        \"\"\"Record the section or paragraph header a sentence is and return its name.\n\n        A sentence is a header when the tree holds a header node named by the first\n        word of the sentence.\n\n        Returns:\n            The name of the header. None when the sentence is not one.\n        \"\"\"\n        if not unit.word_list:\n            return None\n        first_word = unit.word_list[0][0]\n        for node in node_list:\n            if node.type not in _HEADER_NODE_TYPE_SET:\n                continue\n            text = node.text.decode(\"utf-8\").split()[0].rstrip(\".\")\n            if self.name(text).upper() == first_word.upper():\n                self.header_list.append((first_word, node.type, line))\n                return first_word\n        return None\n\n    def _read_value(self, node_list: list[Node], item_name: str) -> None:\n        \"\"\"Record the literals of the VALUE clause of a data item.\"\"\"\n        for node in node_list:\n            if node.type == \"string\" and node.parent is not None and node.parent.type == \"value_item\":\n                self.item_literal_dict.setdefault(item_name.upper(), []).append(\n                    self.node_name(node)\n                )\n\n    def _read_move(self, node_list: list[Node]) -> None:\n        \"\"\"Record the literal each MOVE statement gives to the data items after TO.\"\"\"\n        for node in node_list:\n            child_list = node.named_children if node.type == \"move_statement\" else []\n            if len(child_list) < 2 or child_list[0].type != \"string\":\n                continue\n            literal = self.node_name(child_list[0])\n            for target_node in child_list[1:]:\n                word_node = next(\n                    (item for item in _node_list(target_node) if item.type == \"WORD\"), None,\n                )\n                if word_node is not None:\n                    item_name = self.node_name(word_node).upper()\n                    self.item_literal_dict.setdefault(item_name, []).append(literal)\n\n    def _add_import(self) -> None:\n        \"\"\"Build the COPY and CALL statements of the file, in line order.\n\n        A CALL of a data item becomes one CALL for each literal the item is given.\n        Each CALL adds a reference to the program name on its line.\n        \"\"\"\n        import_list = [\n            CobolImport(COPY_KIND, copy.name, copy.line, copy.library, copy.replacing_list)\n            for copy in self.cobol_text.copy_list\n        ]\n        for name, is_literal, line in self.cobol_text.call_list:\n            if is_literal:\n                name_list = [name]\n            else:\n                name_list = list(dict.fromkeys(self.item_literal_dict.get(name.upper(), [])))\n            for program_name in name_list:\n                if program_name:\n                    import_list.append(CobolImport(CALL_KIND, program_name, line))\n                    self.source.reference_list.append(\n                        CobolReference(program_name.upper(), line, is_call=True)\n                    )\n        self.source.import_list = sorted(import_list, key=lambda cobol_import: cobol_import.line)\n\n    def _last_code_line(self, line: int) -> int:\n        \"\"\"Return the last line with code at or before a line (the line itself without one).\"\"\"\n        code_line_list = self.cobol_text.code_line_list\n        index = bisect_right(code_line_list, line)\n        return code_line_list[index - 1] if index else line\n\n    def _program_definition_list(self) -> list[CobolDefinition]:\n        \"\"\"Build the definition of each program.\n\n        A program ends on its END PROGRAM line. Without one it ends on the last line\n        with code before the next program, or on the last line with code of the file.\n        \"\"\"\n        program_list = self.cobol_text.program_list\n        definition_list: list[CobolDefinition] = []\n        last_line = self._last_code_line(len(self.source.line_list))\n        for index, (name, start_line, name_line) in enumerate(program_list):\n            end_line = next(\n                (\n                    line for end_name, line in self.cobol_text.program_end_list\n                    if end_name.upper() == name.upper() and line > name_line\n                ),\n                0,\n            )\n            if not end_line and index + 1 < len(program_list):\n                end_line = self._last_code_line(program_list[index + 1][1] - 1)\n            definition_list.append(CobolDefinition(\n                name, PROGRAM_TYPE, start_line, max(end_line or last_line, name_line), name_line,\n            ))\n        return definition_list\n\n    def _header_definition_list(self) -> list[CobolDefinition]:\n        \"\"\"Build the definition of each section and paragraph.\n\n        A paragraph ends on the last line with code before the next header, a section\n        before the next section header; both end before the line that starts or ends\n        a program.\n        \"\"\"\n        limit_line_list = sorted(\n            [start_line for _, start_line, _ in self.cobol_text.program_list]\n            + [line for _, line in self.cobol_text.program_end_list]\n            + [len(self.source.line_list) + 1]\n        )\n        definition_list: list[CobolDefinition] = []\n        for index, (name, header_type, line) in enumerate(self.header_list):\n            next_line = limit_line_list[bisect_right(limit_line_list, line)]\n            for _, next_type, next_header_line in self.header_list[index + 1:]:\n                if next_header_line >= next_line:\n                    break\n                if header_type == PARAGRAPH_TYPE or next_type == SECTION_TYPE:\n                    next_line = next_header_line\n                    break\n            end_line = max(self._last_code_line(next_line - 1), line)\n            definition_list.append(CobolDefinition(name, header_type, line, end_line, line))\n        return definition_list\n\n    def _item_definition_list(self) -> list[CobolDefinition]:\n        \"\"\"Build the definition of each data item with a name.\n\n        Processing flow:\n        1. Find the items that items belong to (_subordinate_extent_list)\n        2. Make an item that is not an elementary item and that no item belongs to a\n           group item when a COPY statement comes after it before the next statement\n           that does not belong to it; its own lines end on the last line of the first\n           such COPY statement (_copy_end_line)\n        3. End each item on the last line of the items that belong to it\n        4. Build the definitions\n        \"\"\"\n        # == Step 1: Items that items belong to ===============================\n        own_end_line_list = [item.end_line for item in self.item_list]\n        _, is_group_list = self._subordinate_extent_list(own_end_line_list)\n\n        # == Step 2: Items whose items come from a COPY statement ===============\n        item_by_unit_dict = {item.unit_index: item for item in self.item_list}\n        for index, item in enumerate(self.item_list):\n            if is_group_list[index] or item.is_elementary or item.level not in _GROUP_LEVEL_RANGE:\n                continue\n            copy_end_line = self._copy_end_line(item, item_by_unit_dict)\n            if copy_end_line is not None:\n                is_group_list[index] = True\n                own_end_line_list[index] = max(own_end_line_list[index], copy_end_line)\n\n        # == Step 3: Last line of each item ===================================\n        end_line_list, _ = self._subordinate_extent_list(own_end_line_list)\n\n        # == Step 4: Definitions ==============================================\n        return [\n            CobolDefinition(\n                name=item.name,\n                type=DATA_ITEM_TYPE,\n                start_line=item.start_line,\n                end_line=end_line_list[index],\n                name_line=item.name_line,\n                level=item.level,\n                is_group=is_group_list[index],\n            )\n            for index, item in enumerate(self.item_list)\n            if item.name is not None\n        ]\n\n    def _subordinate_extent_list(\n        self, own_end_line_list: list[int],\n    ) -> tuple[list[int], list[bool]]:\n        \"\"\"Return the last line of each data item and whether items belong to it.\n\n        An item belongs to the item before it with a lower rank (_item_rank). An item\n        ends on the last of its own last line and those of the items that belong to it.\n\n        Args:\n            own_end_line_list: The last line of each item by itself, in the order of item_list.\n\n        Returns:\n            (last line of each item, whether an item other than a condition name or a\n            RENAMES item belongs to it), both in the order of item_list.\n        \"\"\"\n        end_line_list = list(own_end_line_list)\n        is_group_list = [False] * len(self.item_list)\n        # (index, rank) of the items the next item can belong to\n        open_list: list[tuple[int, int]] = []\n        for index, item in enumerate(self.item_list):\n            rank = _item_rank(item.level)\n            while open_list and open_list[-1][1] >= rank:\n                open_list.pop()\n            for open_index, _ in open_list:\n                end_line_list[open_index] = max(end_line_list[open_index], end_line_list[index])\n                if item.level not in (_RENAME_LEVEL, _CONDITION_LEVEL):\n                    is_group_list[open_index] = True\n            open_list.append((index, rank))\n        return end_line_list, is_group_list\n\n    def _copy_end_line(self, item: _Item, item_by_unit_dict: dict[int, _Item]) -> int | None:\n        \"\"\"Return the last line of the first COPY statement after a data item that belongs to it.\n\n        Args:\n            item: The data item.\n            item_by_unit_dict: {unit index: data item of that unit} of every data item.\n\n        Returns:\n            The line. None when no COPY statement comes after the item's statement before\n            the next statement that does not belong to it (_extent_end_position).\n        \"\"\"\n        start_position = self.cobol_text.unit_list[item.unit_index].end_position\n        end_position = self._extent_end_position(\n            item.unit_index, _item_rank(item.level), item_by_unit_dict,\n        )\n        return next(\n            (\n                cobol_copy.end_line for cobol_copy in self.cobol_text.copy_list\n                if start_position < cobol_copy.position < end_position\n            ),\n            None,\n        )\n\n    def _extent_end_position(\n        self, unit_index: int, rank: int, item_by_unit_dict: dict[int, _Item],\n    ) -> int:\n        \"\"\"Return the position of the next statement that does not belong to a unit.\n\n        The statement is the next one in no unit (a section header, ...), the next unit\n        that is not a data item, or the next data item whose rank is not higher than\n        the rank given.\n\n        Args:\n            unit_index: Index in CobolText.unit_list of the unit of a data item or of\n                the description of a file.\n            rank: Rank of the data item (_item_rank), _FILE_RANK for the description of\n                a file.\n            item_by_unit_dict: {unit index: data item of that unit} of every data item.\n\n        Returns:\n            Index of the first token of that statement among the tokens of the file; one\n            more than the last index of any token when no such statement follows.\n        \"\"\"\n        unit_list = self.cobol_text.unit_list\n        start_position = unit_list[unit_index].end_position\n        other_position_list = self.cobol_text.other_statement_position_list\n        other_index = bisect_right(other_position_list, start_position)\n        end_position = (\n            other_position_list[other_index] if other_index < len(other_position_list)\n            else _NO_POSITION\n        )\n        for next_index in range(unit_index + 1, len(unit_list)):\n            other = item_by_unit_dict.get(next_index)\n            if other is None or _item_rank(other.level) <= rank:\n                return min(end_position, unit_list[next_index].start_position)\n        return end_position\n\n    def _file_definition_list(self) -> list[CobolDefinition]:\n        \"\"\"Build the definition of each description of a file.\n\n        A description ends on the last line of the data items and COPY statements\n        after it, up to the next statement that is not a data item (_extent_end_position).\n        \"\"\"\n        unit_list = self.cobol_text.unit_list\n        item_by_unit_dict = {item.unit_index: item for item in self.item_list}\n        definition_list: list[CobolDefinition] = []\n        for cobol_file in self.file_list:\n            start_position = unit_list[cobol_file.unit_index].end_position\n            end_position = self._extent_end_position(\n                cobol_file.unit_index, _FILE_RANK, item_by_unit_dict,\n            )\n            end_line_list = [\n                item.end_line for item in self.item_list\n                if start_position < unit_list[item.unit_index].start_position < end_position\n            ] + [\n                cobol_copy.end_line for cobol_copy in self.cobol_text.copy_list\n                if start_position < cobol_copy.position < end_position\n            ]\n            definition_list.append(CobolDefinition(\n                cobol_file.name, FILE_TYPE, cobol_file.start_line,\n                max([cobol_file.end_line, *end_line_list]), cobol_file.name_line,\n            ))\n        return definition_list"
+    },
+    {
+      "name": "__init__",
+      "type": "function_definition",
+      "start_line": 234,
+      "end_line": 257,
+      "context": "    def __init__(self, cobol_text: CobolText, line_list: list[str], language: Language) -> None:\n        \"\"\"\n        Args:\n            cobol_text: The units of the file and what is read without the grammar.\n            line_list: Lines of the source text.\n            language: The tree-sitter Language of the COBOL grammar.\n        \"\"\"\n        self.cobol_text = cobol_text\n        self.parser = Parser(language)\n        self.source = CobolSource(line_list=line_list)\n        # (name, type, line) of each header of the procedure division\n        self.header_list: list[tuple[str, str, int]] = []\n        # Each data item\n        self.item_list: list[_Item] = []\n        # Each description of a file with a name\n        self.file_list: list[_File] = []\n        # The definition of each index name (INDEXED BY)\n        self.index_definition_list: list[CobolDefinition] = []\n        # Index in CobolText.unit_list of the unit being read\n        self.unit_index = -1\n        # Upper-case data item name -> literals the item is given (VALUE clause, MOVE)\n        self.item_literal_dict: dict[str, list[str]] = {}\n        # Upper-case word -> whether the grammar reads it as the name of a data item\n        self.is_item_name_dict: dict[str, bool] = {}"
+    },
+    {
+      "name": "name",
+      "type": "function_definition",
+      "start_line": 259,
+      "end_line": 261,
+      "context": "    def name(self, text: str) -> str:\n        \"\"\"Return the name written in the source for a name written in a unit.\"\"\"\n        return self.cobol_text.name_dict.get(text.upper(), text)"
+    },
+    {
+      "name": "node_name",
+      "type": "function_definition",
+      "start_line": 263,
+      "end_line": 267,
+      "context": "    def node_name(self, node: Node) -> str:\n        \"\"\"Return the name or the literal content a node holds.\"\"\"\n        text = node.text.decode(\"utf-8\")\n        value = literal_value(text)\n        return value if value != text else self.name(text)"
+    },
+    {
+      "name": "read",
+      "type": "function_definition",
+      "start_line": 269,
+      "end_line": 305,
+      "context": "    def read(self) -> CobolSource:\n        \"\"\"Read the file and return the CobolSource.\n\n        Processing flow:\n        1. Parse each unit and collect the headers, data items, descriptions of\n           files and references\n        2. Add the references of the statements that are in no unit\n        3. Build the definitions with their line ranges\n        4. Build the COPY and CALL statements\n        \"\"\"\n        # == Step 1: Units ====================================================\n        for unit in self.cobol_text.unit_list:\n            self._read_unit(unit)\n\n        # == Step 2: Words outside the units ==================================\n        for word, line, qualifier_list in self.cobol_text.word_list:\n            self.source.reference_list.append(CobolReference(\n                word.upper(), line, tuple(qualifier.upper() for qualifier in qualifier_list),\n            ))\n\n        # == Step 3: Definitions ==============================================\n        definition_list = [\n            *self._program_definition_list(),\n            *self._header_definition_list(),\n            *self._item_definition_list(),\n            *self.index_definition_list,\n            *self._file_definition_list(),\n        ]\n        for name, line in self.cobol_text.entry_list:\n            definition_list.append(CobolDefinition(name, ENTRY_TYPE, line, line, line))\n        self.source.definition_list = sorted(\n            definition_list, key=lambda definition: (definition.start_line, -definition.end_line),\n        )\n\n        # == Step 4: COPY and CALL statements =================================\n        self._add_import()\n        return self.source"
+    },
+    {
+      "name": "_read_unit",
+      "type": "function_definition",
+      "start_line": 307,
+      "end_line": 331,
+      "context": "    def _read_unit(self, unit: CobolUnit) -> None:\n        \"\"\"Parse one unit and record what it defines and refers to.\n\n        The name a unit defines is read from the tree. References are the WORD nodes\n        of the tree; for a unit the grammar does not read without error they are\n        every word of the statement except the name it defines.\n        \"\"\"\n        root_node = self.parser.parse(unit.text.encode(\"utf-8\")).root_node\n        source_line_list = [line for line in unit.origin_line_list if line]\n        self.unit_index += 1\n        if not source_line_list:\n            return\n        node_list = [\n            node for node in _node_list(root_node)\n            if node.start_point[0] < len(unit.origin_line_list)\n            and unit.origin_line_list[node.start_point[0]]\n        ]\n\n        define_name = self._read_definition(\n            unit, node_list, source_line_list[0], source_line_list[-1],\n        )\n        if root_node.has_error:\n            self._add_word_reference(unit, define_name)\n        else:\n            self._add_node_reference(unit, node_list)"
+    },
+    {
+      "name": "_read_definition",
+      "type": "function_definition",
+      "start_line": 333,
+      "end_line": 371,
+      "context": "    def _read_definition(\n        self, unit: CobolUnit, node_list: list[Node], start_line: int, end_line: int,\n    ) -> str | None:\n        \"\"\"Record what a unit defines and the literals it gives to data items.\n\n        Args:\n            unit: The unit.\n            node_list: The nodes of the tree of the unit that start on a source line.\n            start_line: First source line of the unit.\n            end_line: Last source line of the unit.\n\n        Returns:\n            The name the unit defines. None when it defines none.\n        \"\"\"\n        define_name = None\n        if unit.kind == ITEM_UNIT:\n            define_name, name_line = self._item_name(unit, node_list)\n            self.item_list.append(_Item(\n                name=define_name,\n                level=int(unit.word_list[0][0]),\n                start_line=start_line,\n                end_line=end_line,\n                name_line=name_line or start_line,\n                unit_index=self.unit_index,\n                is_elementary=_is_elementary_word_list(unit.word_list),\n            ))\n            if define_name is not None:\n                self._read_value(node_list, define_name)\n            self._read_index(unit, node_list, start_line, end_line)\n        elif unit.kind == FILE_UNIT:\n            define_name, name_line = self._file_name(unit, node_list)\n            if define_name is not None:\n                self.file_list.append(\n                    _File(define_name, start_line, end_line, name_line, self.unit_index)\n                )\n        elif unit.kind == PROCEDURE_UNIT:\n            define_name = self._header_name(unit, node_list, start_line)\n            self._read_move(node_list)\n        return define_name"
+    },
+    {
+      "name": "_add_word_reference",
+      "type": "function_definition",
+      "start_line": 373,
+      "end_line": 387,
+      "context": "    def _add_word_reference(self, unit: CobolUnit, define_name: str | None) -> None:\n        \"\"\"Add every word of a unit as a reference, except the first one that is the defined name.\n\n        A word followed by OF / IN is qualified by the words after them.\n        \"\"\"\n        text_list = [word for word, _ in unit.word_list]\n        is_define_due = define_name is not None\n        for index, (word, line) in enumerate(unit.word_list):\n            if is_define_due and word.upper() == define_name.upper():\n                is_define_due = False\n                continue\n            qualifier_list = qualifier_tuple(text_list, index)\n            self.source.reference_list.append(CobolReference(\n                word.upper(), line, tuple(qualifier.upper() for qualifier in qualifier_list),\n            ))"
+    },
+    {
+      "name": "_add_node_reference",
+      "type": "function_definition",
+      "start_line": 389,
+      "end_line": 399,
+      "context": "    def _add_node_reference(self, unit: CobolUnit, node_list: list[Node]) -> None:\n        \"\"\"Add each WORD node of a unit that is not the name of a definition as a reference.\n\n        A WORD of a qualified_word node is qualified by the WORD nodes after it.\n        \"\"\"\n        for node in node_list:\n            if node.type == \"WORD\" and not self._is_definition_name(node):\n                line = unit.origin_line_list[node.start_point[0]]\n                self.source.reference_list.append(CobolReference(\n                    self.node_name(node).upper(), line, self._node_qualifier_tuple(node),\n                ))"
+    },
+    {
+      "name": "_node_qualifier_tuple",
+      "type": "function_definition",
+      "start_line": 401,
+      "end_line": 416,
+      "context": "    def _node_qualifier_tuple(self, node: Node) -> tuple[str, ...]:\n        \"\"\"Return the upper-case names that qualify a WORD node.\n\n        They are the WORD nodes after it in its qualified_word node.\n        \"\"\"\n        parent = node.parent\n        if parent is None or parent.type != \"qualified_word\":\n            return ()\n        word_node_list = [child for child in parent.children if child.type == \"WORD\"]\n        index = next(\n            (position for position, child in enumerate(word_node_list) if child.id == node.id),\n            None,\n        )\n        if index is None:\n            return ()\n        return tuple(self.node_name(child).upper() for child in word_node_list[index + 1:])"
+    },
+    {
+      "name": "_is_definition_name",
+      "type": "function_definition",
+      "start_line": 418,
+      "end_line": 431,
+      "context": "    @staticmethod\n    def _is_definition_name(node: Node) -> bool:\n        \"\"\"Return whether a WORD node is a name its statement defines.\n\n        The names are that of a constant, that of the description of a file and the\n        index names of a data item.\n        \"\"\"\n        parent = node.parent\n        if parent is not None and parent.type == INDEX_TYPE:\n            return True\n        if parent is None or parent.type not in (\"constant_entry\", FILE_TYPE):\n            return False\n        first_word = next(child for child in parent.children if child.type == \"WORD\")\n        return first_word.id == node.id"
+    },
+    {
+      "name": "_item_name",
+      "type": "function_definition",
+      "start_line": 433,
+      "end_line": 460,
+      "context": "    def _item_name(self, unit: CobolUnit, node_list: list[Node]) -> tuple[str | None, int]:\n        \"\"\"Return the name of the data item of a unit and the line it is written on.\n\n        The name is the entry name of the tree. When the tree holds none, it is the\n        word after the level number, provided the grammar reads that word as the name\n        of a data item. An item has no name when a token is written right after the\n        first word after the level number (\"(PFX)-ID\", \"WS-(SFX)\").\n\n        Returns:\n            A (name, source line) tuple. (None, 0) for an item without a name or FILLER.\n        \"\"\"\n        if unit.has_name_suffix:\n            return None, 0\n        for node in node_list:\n            if node.type == \"entry_name\" or (\n                node.type == \"WORD\" and self._is_definition_name(node)\n                and node.parent.type == \"constant_entry\"\n            ):\n                text = node.text.decode(\"utf-8\")\n                if text.upper() == \"FILLER\":\n                    return None, 0\n                return self.name(text), unit.origin_line_list[node.start_point[0]]\n\n        if len(unit.word_list) > 1 and unit.word_list[1][1] == unit.word_list[0][1]:\n            word, line = unit.word_list[1]\n            if not GRAMMAR_NAME_RE.fullmatch(word) or self._is_item_name(word):\n                return word, line\n        return None, 0"
+    },
+    {
+      "name": "_read_index",
+      "type": "function_definition",
+      "start_line": 462,
+      "end_line": 478,
+      "context": "    def _read_index(\n        self, unit: CobolUnit, node_list: list[Node], start_line: int, end_line: int,\n    ) -> None:\n        \"\"\"Record the definition of each index name of a data item (INDEXED BY).\n\n        Args:\n            unit: The unit of the data item.\n            node_list: The nodes of the tree of the unit that start on a source line.\n            start_line: First source line of the unit.\n            end_line: Last source line of the unit.\n        \"\"\"\n        for node in node_list:\n            if node.type == \"WORD\" and node.parent is not None and node.parent.type == INDEX_TYPE:\n                self.index_definition_list.append(CobolDefinition(\n                    self.node_name(node), INDEX_TYPE, start_line, end_line,\n                    unit.origin_line_list[node.start_point[0]],\n                ))"
+    },
+    {
+      "name": "_is_item_name",
+      "type": "function_definition",
+      "start_line": 480,
+      "end_line": 489,
+      "context": "    def _is_item_name(self, word: str) -> bool:\n        \"\"\"Return whether the grammar reads a word as the name of a data item.\"\"\"\n        if word.upper() not in self.is_item_name_dict:\n            unit = item_unit(word)\n            root_node = self.parser.parse(unit.text.encode(\"utf-8\")).root_node\n            self.is_item_name_dict[word.upper()] = not root_node.has_error and any(\n                node.type == \"entry_name\" and node.text.decode(\"utf-8\") == word\n                for node in _node_list(root_node)\n            )\n        return self.is_item_name_dict[word.upper()]"
+    },
+    {
+      "name": "_file_name",
+      "type": "function_definition",
+      "start_line": 491,
+      "end_line": 500,
+      "context": "    def _file_name(self, unit: CobolUnit, node_list: list[Node]) -> tuple[str | None, int]:\n        \"\"\"Return the name of the file a unit describes and the line it is written on.\n\n        Returns:\n            A (name, source line) tuple. (None, 0) when the name is not read.\n        \"\"\"\n        for node in node_list:\n            if node.type == \"WORD\" and self._is_definition_name(node):\n                return self.node_name(node), unit.origin_line_list[node.start_point[0]]\n        return None, 0"
+    },
+    {
+      "name": "_header_name",
+      "type": "function_definition",
+      "start_line": 502,
+      "end_line": 521,
+      "context": "    def _header_name(self, unit: CobolUnit, node_list: list[Node], line: int) -> str | None:\n        \"\"\"Record the section or paragraph header a sentence is and return its name.\n\n        A sentence is a header when the tree holds a header node named by the first\n        word of the sentence.\n\n        Returns:\n            The name of the header. None when the sentence is not one.\n        \"\"\"\n        if not unit.word_list:\n            return None\n        first_word = unit.word_list[0][0]\n        for node in node_list:\n            if node.type not in _HEADER_NODE_TYPE_SET:\n                continue\n            text = node.text.decode(\"utf-8\").split()[0].rstrip(\".\")\n            if self.name(text).upper() == first_word.upper():\n                self.header_list.append((first_word, node.type, line))\n                return first_word\n        return None"
+    },
+    {
+      "name": "_read_value",
+      "type": "function_definition",
+      "start_line": 523,
+      "end_line": 529,
+      "context": "    def _read_value(self, node_list: list[Node], item_name: str) -> None:\n        \"\"\"Record the literals of the VALUE clause of a data item.\"\"\"\n        for node in node_list:\n            if node.type == \"string\" and node.parent is not None and node.parent.type == \"value_item\":\n                self.item_literal_dict.setdefault(item_name.upper(), []).append(\n                    self.node_name(node)\n                )"
+    },
+    {
+      "name": "_read_move",
+      "type": "function_definition",
+      "start_line": 531,
+      "end_line": 544,
+      "context": "    def _read_move(self, node_list: list[Node]) -> None:\n        \"\"\"Record the literal each MOVE statement gives to the data items after TO.\"\"\"\n        for node in node_list:\n            child_list = node.named_children if node.type == \"move_statement\" else []\n            if len(child_list) < 2 or child_list[0].type != \"string\":\n                continue\n            literal = self.node_name(child_list[0])\n            for target_node in child_list[1:]:\n                word_node = next(\n                    (item for item in _node_list(target_node) if item.type == \"WORD\"), None,\n                )\n                if word_node is not None:\n                    item_name = self.node_name(word_node).upper()\n                    self.item_literal_dict.setdefault(item_name, []).append(literal)"
+    },
+    {
+      "name": "_add_import",
+      "type": "function_definition",
+      "start_line": 546,
+      "end_line": 567,
+      "context": "    def _add_import(self) -> None:\n        \"\"\"Build the COPY and CALL statements of the file, in line order.\n\n        A CALL of a data item becomes one CALL for each literal the item is given.\n        Each CALL adds a reference to the program name on its line.\n        \"\"\"\n        import_list = [\n            CobolImport(COPY_KIND, copy.name, copy.line, copy.library, copy.replacing_list)\n            for copy in self.cobol_text.copy_list\n        ]\n        for name, is_literal, line in self.cobol_text.call_list:\n            if is_literal:\n                name_list = [name]\n            else:\n                name_list = list(dict.fromkeys(self.item_literal_dict.get(name.upper(), [])))\n            for program_name in name_list:\n                if program_name:\n                    import_list.append(CobolImport(CALL_KIND, program_name, line))\n                    self.source.reference_list.append(\n                        CobolReference(program_name.upper(), line, is_call=True)\n                    )\n        self.source.import_list = sorted(import_list, key=lambda cobol_import: cobol_import.line)"
+    },
+    {
+      "name": "_last_code_line",
+      "type": "function_definition",
+      "start_line": 569,
+      "end_line": 573,
+      "context": "    def _last_code_line(self, line: int) -> int:\n        \"\"\"Return the last line with code at or before a line (the line itself without one).\"\"\"\n        code_line_list = self.cobol_text.code_line_list\n        index = bisect_right(code_line_list, line)\n        return code_line_list[index - 1] if index else line"
+    },
+    {
+      "name": "_program_definition_list",
+      "type": "function_definition",
+      "start_line": 575,
+      "end_line": 597,
+      "context": "    def _program_definition_list(self) -> list[CobolDefinition]:\n        \"\"\"Build the definition of each program.\n\n        A program ends on its END PROGRAM line. Without one it ends on the last line\n        with code before the next program, or on the last line with code of the file.\n        \"\"\"\n        program_list = self.cobol_text.program_list\n        definition_list: list[CobolDefinition] = []\n        last_line = self._last_code_line(len(self.source.line_list))\n        for index, (name, start_line, name_line) in enumerate(program_list):\n            end_line = next(\n                (\n                    line for end_name, line in self.cobol_text.program_end_list\n                    if end_name.upper() == name.upper() and line > name_line\n                ),\n                0,\n            )\n            if not end_line and index + 1 < len(program_list):\n                end_line = self._last_code_line(program_list[index + 1][1] - 1)\n            definition_list.append(CobolDefinition(\n                name, PROGRAM_TYPE, start_line, max(end_line or last_line, name_line), name_line,\n            ))\n        return definition_list"
+    },
+    {
+      "name": "_header_definition_list",
+      "type": "function_definition",
+      "start_line": 599,
+      "end_line": 622,
+      "context": "    def _header_definition_list(self) -> list[CobolDefinition]:\n        \"\"\"Build the definition of each section and paragraph.\n\n        A paragraph ends on the last line with code before the next header, a section\n        before the next section header; both end before the line that starts or ends\n        a program.\n        \"\"\"\n        limit_line_list = sorted(\n            [start_line for _, start_line, _ in self.cobol_text.program_list]\n            + [line for _, line in self.cobol_text.program_end_list]\n            + [len(self.source.line_list) + 1]\n        )\n        definition_list: list[CobolDefinition] = []\n        for index, (name, header_type, line) in enumerate(self.header_list):\n            next_line = limit_line_list[bisect_right(limit_line_list, line)]\n            for _, next_type, next_header_line in self.header_list[index + 1:]:\n                if next_header_line >= next_line:\n                    break\n                if header_type == PARAGRAPH_TYPE or next_type == SECTION_TYPE:\n                    next_line = next_header_line\n                    break\n            end_line = max(self._last_code_line(next_line - 1), line)\n            definition_list.append(CobolDefinition(name, header_type, line, end_line, line))\n        return definition_list"
+    },
+    {
+      "name": "_item_definition_list",
+      "type": "function_definition",
+      "start_line": 624,
+      "end_line": 666,
+      "context": "    def _item_definition_list(self) -> list[CobolDefinition]:\n        \"\"\"Build the definition of each data item with a name.\n\n        Processing flow:\n        1. Find the items that items belong to (_subordinate_extent_list)\n        2. Make an item that is not an elementary item and that no item belongs to a\n           group item when a COPY statement comes after it before the next statement\n           that does not belong to it; its own lines end on the last line of the first\n           such COPY statement (_copy_end_line)\n        3. End each item on the last line of the items that belong to it\n        4. Build the definitions\n        \"\"\"\n        # == Step 1: Items that items belong to ===============================\n        own_end_line_list = [item.end_line for item in self.item_list]\n        _, is_group_list = self._subordinate_extent_list(own_end_line_list)\n\n        # == Step 2: Items whose items come from a COPY statement ===============\n        item_by_unit_dict = {item.unit_index: item for item in self.item_list}\n        for index, item in enumerate(self.item_list):\n            if is_group_list[index] or item.is_elementary or item.level not in _GROUP_LEVEL_RANGE:\n                continue\n            copy_end_line = self._copy_end_line(item, item_by_unit_dict)\n            if copy_end_line is not None:\n                is_group_list[index] = True\n                own_end_line_list[index] = max(own_end_line_list[index], copy_end_line)\n\n        # == Step 3: Last line of each item ===================================\n        end_line_list, _ = self._subordinate_extent_list(own_end_line_list)\n\n        # == Step 4: Definitions ==============================================\n        return [\n            CobolDefinition(\n                name=item.name,\n                type=DATA_ITEM_TYPE,\n                start_line=item.start_line,\n                end_line=end_line_list[index],\n                name_line=item.name_line,\n                level=item.level,\n                is_group=is_group_list[index],\n            )\n            for index, item in enumerate(self.item_list)\n            if item.name is not None\n        ]"
+    },
+    {
+      "name": "_subordinate_extent_list",
+      "type": "function_definition",
+      "start_line": 668,
+      "end_line": 696,
+      "context": "    def _subordinate_extent_list(\n        self, own_end_line_list: list[int],\n    ) -> tuple[list[int], list[bool]]:\n        \"\"\"Return the last line of each data item and whether items belong to it.\n\n        An item belongs to the item before it with a lower rank (_item_rank). An item\n        ends on the last of its own last line and those of the items that belong to it.\n\n        Args:\n            own_end_line_list: The last line of each item by itself, in the order of item_list.\n\n        Returns:\n            (last line of each item, whether an item other than a condition name or a\n            RENAMES item belongs to it), both in the order of item_list.\n        \"\"\"\n        end_line_list = list(own_end_line_list)\n        is_group_list = [False] * len(self.item_list)\n        # (index, rank) of the items the next item can belong to\n        open_list: list[tuple[int, int]] = []\n        for index, item in enumerate(self.item_list):\n            rank = _item_rank(item.level)\n            while open_list and open_list[-1][1] >= rank:\n                open_list.pop()\n            for open_index, _ in open_list:\n                end_line_list[open_index] = max(end_line_list[open_index], end_line_list[index])\n                if item.level not in (_RENAME_LEVEL, _CONDITION_LEVEL):\n                    is_group_list[open_index] = True\n            open_list.append((index, rank))\n        return end_line_list, is_group_list"
+    },
+    {
+      "name": "_copy_end_line",
+      "type": "function_definition",
+      "start_line": 698,
+      "end_line": 719,
+      "context": "    def _copy_end_line(self, item: _Item, item_by_unit_dict: dict[int, _Item]) -> int | None:\n        \"\"\"Return the last line of the first COPY statement after a data item that belongs to it.\n\n        Args:\n            item: The data item.\n            item_by_unit_dict: {unit index: data item of that unit} of every data item.\n\n        Returns:\n            The line. None when no COPY statement comes after the item's statement before\n            the next statement that does not belong to it (_extent_end_position).\n        \"\"\"\n        start_position = self.cobol_text.unit_list[item.unit_index].end_position\n        end_position = self._extent_end_position(\n            item.unit_index, _item_rank(item.level), item_by_unit_dict,\n        )\n        return next(\n            (\n                cobol_copy.end_line for cobol_copy in self.cobol_text.copy_list\n                if start_position < cobol_copy.position < end_position\n            ),\n            None,\n        )"
+    },
+    {
+      "name": "_extent_end_position",
+      "type": "function_definition",
+      "start_line": 721,
+      "end_line": 753,
+      "context": "    def _extent_end_position(\n        self, unit_index: int, rank: int, item_by_unit_dict: dict[int, _Item],\n    ) -> int:\n        \"\"\"Return the position of the next statement that does not belong to a unit.\n\n        The statement is the next one in no unit (a section header, ...), the next unit\n        that is not a data item, or the next data item whose rank is not higher than\n        the rank given.\n\n        Args:\n            unit_index: Index in CobolText.unit_list of the unit of a data item or of\n                the description of a file.\n            rank: Rank of the data item (_item_rank), _FILE_RANK for the description of\n                a file.\n            item_by_unit_dict: {unit index: data item of that unit} of every data item.\n\n        Returns:\n            Index of the first token of that statement among the tokens of the file; one\n            more than the last index of any token when no such statement follows.\n        \"\"\"\n        unit_list = self.cobol_text.unit_list\n        start_position = unit_list[unit_index].end_position\n        other_position_list = self.cobol_text.other_statement_position_list\n        other_index = bisect_right(other_position_list, start_position)\n        end_position = (\n            other_position_list[other_index] if other_index < len(other_position_list)\n            else _NO_POSITION\n        )\n        for next_index in range(unit_index + 1, len(unit_list)):\n            other = item_by_unit_dict.get(next_index)\n            if other is None or _item_rank(other.level) <= rank:\n                return min(end_position, unit_list[next_index].start_position)\n        return end_position"
+    },
+    {
+      "name": "_file_definition_list",
+      "type": "function_definition",
+      "start_line": 755,
+      "end_line": 780,
+      "context": "    def _file_definition_list(self) -> list[CobolDefinition]:\n        \"\"\"Build the definition of each description of a file.\n\n        A description ends on the last line of the data items and COPY statements\n        after it, up to the next statement that is not a data item (_extent_end_position).\n        \"\"\"\n        unit_list = self.cobol_text.unit_list\n        item_by_unit_dict = {item.unit_index: item for item in self.item_list}\n        definition_list: list[CobolDefinition] = []\n        for cobol_file in self.file_list:\n            start_position = unit_list[cobol_file.unit_index].end_position\n            end_position = self._extent_end_position(\n                cobol_file.unit_index, _FILE_RANK, item_by_unit_dict,\n            )\n            end_line_list = [\n                item.end_line for item in self.item_list\n                if start_position < unit_list[item.unit_index].start_position < end_position\n            ] + [\n                cobol_copy.end_line for cobol_copy in self.cobol_text.copy_list\n                if start_position < cobol_copy.position < end_position\n            ]\n            definition_list.append(CobolDefinition(\n                cobol_file.name, FILE_TYPE, cobol_file.start_line,\n                max([cobol_file.end_line, *end_line_list]), cobol_file.name_line,\n            ))\n        return definition_list"
+    },
+    {
+      "name": "has_statement",
+      "type": "function_definition",
+      "start_line": 783,
+      "end_line": 802,
+      "context": "def has_statement(unit: CobolUnit, language: Language) -> bool:\n    \"\"\"Return whether the grammar reads a statement in a sentence of the procedure division.\n\n    Args:\n        unit: A unit of a sentence of the procedure division.\n        language: The tree-sitter Language of the COBOL grammar.\n\n    Returns:\n        True when the tree of the unit has no error and holds a statement node that\n        starts on a source line.\n    \"\"\"\n    root_node = Parser(language).parse(unit.text.encode(\"utf-8\")).root_node\n    if root_node.has_error:\n        return False\n    return any(\n        node.type.endswith(_STATEMENT_NODE_SUFFIX)\n        and node.start_point[0] < len(unit.origin_line_list)\n        and unit.origin_line_list[node.start_point[0]]\n        for node in _node_list(root_node)\n    )"
+    },
+    {
+      "name": "read_cobol_source",
+      "type": "function_definition",
+      "start_line": 805,
+      "end_line": 819,
+      "context": "def read_cobol_source(source: str, language: Language) -> CobolSource:\n    \"\"\"Parse the text of a COBOL file and return what it defines, names and refers to.\n\n    The text is split by split_cobol_source() and each unit is parsed by itself.\n    Names and line numbers of the result are those of the source.\n\n    Args:\n        source: The text of the file.\n        language: The tree-sitter Language of the COBOL grammar.\n\n    Returns:\n        A CobolSource.\n    \"\"\"\n    cobol_text = split_cobol_source(source)\n    return _UnitReader(cobol_text, line_list_of(source), language).read()"
+    }
+  ],
+  "callee_usages": [
+    {
+      "lines": [
+        93,
+        384
+      ],
+      "name": "qualifier_tuple",
+      "from": "codetwine/codetwine/parsers/cobol_format_py/cobol_format.py",
+      "target_context": "def qualifier_tuple(word_list: list[str], index: int) -> tuple[str, ...]:\n    \"\"\"Return the names that qualify the word at an index (X OF Y IN Z).\n\n    Examples (words, index):\n        ([\"MOVE\", \"CODE-X\", \"OF\", \"REC-A\", \"IN\", \"FILE-B\"], 1) -> (\"REC-A\", \"FILE-B\")\n        ([\"MOVE\", \"CODE-X\", \"OF\", \"REC-A\", \"IN\", \"FILE-B\"], 3) -> (\"FILE-B\",)\n        ([\"MOVE\", \"CODE-X\", \"TO\", \"OUT-X\"], 1)                  -> ()\n\n    Args:\n        word_list: The tokens of a statement in source order: the text of a word, \"\"\n            for a token that is not a word.\n        index: Index of the word.\n\n    Returns:\n        The words after each OF / IN that follows the word, in order.\n    \"\"\"\n    qualifier_list: list[str] = []\n    position = index\n    while (\n        position + 2 < len(word_list)\n        and word_list[position + 1].upper() in _QUALIFIER_WORD_SET\n        and word_list[position + 2]\n    ):\n        qualifier_list.append(word_list[position + 2])\n        position += 2\n    return tuple(qualifier_list)",
+      "target_name": "qualifier_tuple",
+      "target_start_line": 944
+    },
+    {
+      "lines": [
+        234,
+        241
+      ],
+      "name": "CobolText",
+      "from": "codetwine/codetwine/parsers/cobol_format_py/cobol_format.py",
+      "target_context": "@dataclass\nclass CobolText:\n    \"\"\"A COBOL source file split into the units the grammar reads and what is read without it.\"\"\"\n\n    # Data items, descriptions of files, SELECT entries and sentences of the\n    # procedure division, in source order\n    unit_list: list[CobolUnit] = field(default_factory=list)\n    # Stand-in name written in the units (upper case) -> the name written in the source\n    name_dict: dict[str, str] = field(default_factory=dict)\n    # (name, line of the start of the program, line of the name) of each PROGRAM-ID\n    program_list: list[tuple[str, int, int]] = field(default_factory=list)\n    # (name, source line) of each END PROGRAM\n    program_end_list: list[tuple[str, int]] = field(default_factory=list)\n    # (name, source line) of each ENTRY statement\n    entry_list: list[tuple[str, int]] = field(default_factory=list)\n    # COPY statements and EXEC SQL INCLUDE\n    copy_list: list[CobolCopy] = field(default_factory=list)\n    # (name, whether it is a literal, source line) of each CALL statement and of each\n    # EXEC CICS command with PROGRAM(name); a name that is not a literal is a data item\n    call_list: list[tuple[str, bool, int]] = field(default_factory=list)\n    # (word, source line, names that qualify it) of the words of the statements that are\n    # in no unit; X OF Y IN Z gives X the names (Y, Z), and :Y.X in an EXEC block gives X (Y,)\n    word_list: list[tuple[str, int, tuple[str, ...]]] = field(default_factory=list)\n    # Source lines that hold code, in ascending order\n    code_line_list: list[int] = field(default_factory=list)\n    # Index of the first token of each statement that is in no unit (division and\n    # section headers, PROGRAM-ID, ...) among the tokens of the file, in ascending order\n    other_statement_position_list: list[int] = field(default_factory=list)",
+      "target_name": "CobolText",
+      "target_start_line": 207
+    },
+    {
+      "lines": [
+        266
+      ],
+      "name": "literal_value",
+      "from": "codetwine/codetwine/parsers/cobol_format_py/cobol_format.py",
+      "target_context": "def literal_value(text: str) -> str:\n    \"\"\"Return the content of a literal, or the text itself when it is not one.\n\n    Examples:\n        '\"TAXCALC\"'  -> \"TAXCALC\"\n        \"X'0A'\"      -> \"0A\"\n        \"TAXCALC\"    -> \"TAXCALC\"\n    \"\"\"\n    if len(text) >= 2 and text[-1] in \"\\\"'\" and text[-1] in text[:-1]:\n        return text[text.index(text[-1]) + 1:-1].strip()\n    return text",
+      "target_name": "literal_value",
+      "target_start_line": 931
+    },
+    {
+      "lines": [
+        307,
+        326,
+        329,
+        331,
+        334,
+        349,
+        361,
+        363,
+        369,
+        373,
+        389,
+        433,
+        463,
+        491,
+        502,
+        783
+      ],
+      "name": "CobolUnit",
+      "from": "codetwine/codetwine/parsers/cobol_format_py/cobol_format.py",
+      "target_context": "@dataclass\nclass CobolUnit:\n    \"\"\"One statement of a COBOL file as fixed-format text the grammar reads.\"\"\"\n\n    # ITEM_UNIT / FILE_UNIT / SELECT_UNIT / PROCEDURE_UNIT\n    kind: str\n    # The header lines of a program, then the statement: comments removed, every\n    # name written in ASCII, no EXEC block, no COPY statement\n    text: str\n    # Source line (1-based) of each line of text; 0 for a line that is added\n    origin_line_list: list[int]\n    # (word as written in the source, source line) of the words of the statement\n    word_list: list[tuple[str, int]]\n    # Index of the first and of the last token of the statement among the tokens of the file\n    start_position: int = 0\n    end_position: int = 0\n    # Whether a token other than a period or a separator follows the first word after\n    # the first token of the statement without a blank between them\n    has_name_suffix: bool = False",
+      "target_name": "CobolUnit",
+      "target_start_line": 172
+    },
+    {
+      "lines": [
+        314,
+        794
+      ],
+      "name": "CobolUnit.text.encode",
+      "from": "codetwine/codetwine/parsers/cobol_format_py/cobol_format.py",
+      "target_context": "text: str",
+      "target_name": "text",
+      "target_start_line": 180
+    },
+    {
+      "lines": [
+        315,
+        321,
+        322,
+        396,
+        454,
+        477,
+        499,
+        799,
+        800
+      ],
+      "name": "CobolUnit.origin_line_list",
+      "from": "codetwine/codetwine/parsers/cobol_format_py/cobol_format.py",
+      "target_context": "origin_line_list: list[int]",
+      "target_name": "origin_line_list",
+      "target_start_line": 182
+    },
+    {
+      "lines": [
+        348
+      ],
+      "name": "ITEM_UNIT",
+      "from": "codetwine/codetwine/parsers/cobol_format_py/cobol_format.py",
+      "target_context": "ITEM_UNIT = \"item\"",
+      "target_name": "ITEM_UNIT",
+      "target_start_line": 124
+    },
+    {
+      "lines": [
+        348,
+        362,
+        368
+      ],
+      "name": "CobolUnit.kind",
+      "from": "codetwine/codetwine/parsers/cobol_format_py/cobol_format.py",
+      "target_context": "kind: str",
+      "target_name": "kind",
+      "target_start_line": 177
+    },
+    {
+      "lines": [
+        352,
+        357,
+        378,
+        380,
+        456,
+        457,
+        511,
+        513
+      ],
+      "name": "CobolUnit.word_list",
+      "from": "codetwine/codetwine/parsers/cobol_format_py/cobol_format.py",
+      "target_context": "word_list: list[tuple[str, int]]",
+      "target_name": "word_list",
+      "target_start_line": 184
+    },
+    {
+      "lines": [
+        362
+      ],
+      "name": "FILE_UNIT",
+      "from": "codetwine/codetwine/parsers/cobol_format_py/cobol_format.py",
+      "target_context": "FILE_UNIT = \"file\"",
+      "target_name": "FILE_UNIT",
+      "target_start_line": 126
+    },
+    {
+      "lines": [
+        368
+      ],
+      "name": "PROCEDURE_UNIT",
+      "from": "codetwine/codetwine/parsers/cobol_format_py/cobol_format.py",
+      "target_context": "PROCEDURE_UNIT = \"procedure\"",
+      "target_name": "PROCEDURE_UNIT",
+      "target_start_line": 130
+    },
+    {
+      "lines": [
+        444
+      ],
+      "name": "CobolUnit.has_name_suffix",
+      "from": "codetwine/codetwine/parsers/cobol_format_py/cobol_format.py",
+      "target_context": "has_name_suffix: bool = False",
+      "target_name": "has_name_suffix",
+      "target_start_line": 190
+    },
+    {
+      "lines": [
+        458
+      ],
+      "name": "GRAMMAR_NAME_RE.fullmatch",
+      "from": "codetwine/codetwine/parsers/cobol_format_py/cobol_format.py",
+      "target_context": "GRAMMAR_NAME_RE = re.compile(r\"[A-Za-z0-9\\-]+\")",
+      "target_name": "GRAMMAR_NAME_RE",
+      "target_start_line": 74
+    },
+    {
+      "lines": [
+        483
+      ],
+      "name": "item_unit",
+      "from": "codetwine/codetwine/parsers/cobol_format_py/cobol_format.py",
+      "target_context": "def item_unit(name: str) -> CobolUnit:\n    \"\"\"Return the unit of a data item of one character with the given name.\n\n    Args:\n        name: A word of ASCII letters, digits and \"-\".\n\n    Returns:\n        The unit of the statement \"01 name PIC X.\" on line 1.\n    \"\"\"\n    token_list = [\n        _Token(kind, text, 1, has_gap=kind != \"period\")\n        for kind, text in (\n            (\"word\", \"01\"), (\"word\", name), (\"word\", \"PIC\"), (\"picture\", \"X\"), (\"period\", \".\"),\n        )\n    ]\n    return _unit(ITEM_UNIT, token_list, [(\"01\", 1), (name, 1)])",
+      "target_name": "item_unit",
+      "target_start_line": 1588
+    },
+    {
+      "lines": [
+        818
+      ],
+      "name": "split_cobol_source",
+      "from": "codetwine/codetwine/parsers/cobol_format_py/cobol_format.py",
+      "target_context": "def split_cobol_source(source: str) -> CobolText:\n    \"\"\"Split the text of a COBOL source file into the units the grammar reads.\n\n    Processing flow:\n    1. Split the code into tokens. Fixed-format and free-format lines are read by their\n       own columns, comments are dropped, a literal or word continued on the next\n       line becomes one token\n    2. Split the tokens into statements. Data items, descriptions of files, SELECT\n       entries and sentences of the procedure division become units; programs, COPY\n       statements, CALL statements, EXEC blocks and ENTRY statements are recorded\n    3. Write a stand-in name for each name with a character outside ASCII letters,\n       digits and \"-\"\n    4. Write each unit as fixed-format text\n\n    Args:\n        source: The text of the file.\n\n    Returns:\n        A CobolText. Names and line numbers in it are those of the source, except in\n        the text of the units.\n    \"\"\"\n    line_list = [line.expandtabs(_TAB_SIZE) for line in line_list_of(source)]\n    cobol_text = CobolText()\n\n    # == Step 1: Tokens =======================================================\n    token_list = _source_token_list(line_list)\n    cobol_text.code_line_list = sorted({token.line for token in token_list})\n\n    # == Step 2: Statements ===================================================\n    unit_token_list = _Split(token_list, cobol_text).run()\n    unit_word_list = [\n        [(token.text, token.line) for token in statement_token_list if token.kind == \"word\"]\n        for _, statement_token_list in unit_token_list\n    ]\n\n    # == Step 3: Stand-in names ===============================================\n    _put_stand_in_name(token_list, unit_token_list, cobol_text)\n\n    # == Step 4: Text of the units ============================================\n    for (kind, statement_token_list), word_list in zip(unit_token_list, unit_word_list):\n        cobol_text.unit_list.append(_unit(kind, statement_token_list, word_list))\n    return cobol_text",
+      "target_name": "split_cobol_source",
+      "target_start_line": 1606
+    },
+    {
+      "lines": [
+        819
+      ],
+      "name": "line_list_of",
+      "from": "codetwine/codetwine/utils/file_utils_py/file_utils.py",
+      "target_context": "def line_list_of(text: str) -> list[str]:\n    \"\"\"Split a text into its lines at \"\\\\n\", \"\\\\r\\\\n\" and a lone \"\\\\r\" alone.\n\n    Every line number of the analysis counts lines this way. A form feed, a vertical tab,\n    U+0085, U+2028 and the other characters str.splitlines() also breaks at stay inside\n    their line.\n\n    Examples:\n        \"a\\\\r\\\\nb\\\\rc\\\\n\" -> [\"a\", \"b\", \"c\"]\n        \"a\\\\n\\\\f\\\\nb\"      -> [\"a\", \"\\\\f\", \"b\"]\n        \"\"              -> []\n\n    Args:\n        text: The text to split.\n\n    Returns:\n        The lines without their line breaks. A text that ends in a line break has no\n        empty line after it.\n    \"\"\"\n    line_list = lone_cr_to_lf(text).replace(\"\\r\\n\", \"\\n\").split(\"\\n\")\n    if line_list[-1] == \"\":\n        line_list.pop()\n    return line_list",
+      "target_name": "line_list_of",
+      "target_start_line": 168
+    }
+  ],
+  "same_file_usages": [
+    {
+      "lines": [
+        29,
+        298
+      ],
+      "name": "ENTRY_TYPE",
+      "target_name": "ENTRY_TYPE",
+      "target_start_line": 21
+    },
+    {
+      "lines": [
+        29,
+        595
+      ],
+      "name": "PROGRAM_TYPE",
+      "target_name": "PROGRAM_TYPE",
+      "target_start_line": 20
+    },
+    {
+      "lines": [
+        36,
+        617
+      ],
+      "name": "PARAGRAPH_TYPE",
+      "target_name": "PARAGRAPH_TYPE",
+      "target_start_line": 23
+    },
+    {
+      "lines": [
+        36,
+        617
+      ],
+      "name": "SECTION_TYPE",
+      "target_name": "SECTION_TYPE",
+      "target_start_line": 22
+    },
+    {
+      "lines": [
+        50,
+        175
+      ],
+      "name": "_TOP_RANK",
+      "target_name": "_TOP_RANK",
+      "target_start_line": 47
+    },
+    {
+      "lines": [
+        117,
+        144,
+        251,
+        298,
+        475,
+        575,
+        582,
+        594,
+        599,
+        611,
+        621,
+        624,
+        655,
+        755,
+        763,
+        776
+      ],
+      "name": "CobolDefinition",
+      "target_name": "CobolDefinition",
+      "target_start_line": 70
+    },
+    {
+      "lines": [
+        119,
+        553,
+        563
+      ],
+      "name": "CobolImport",
+      "target_name": "CobolImport",
+      "target_start_line": 98
+    },
+    {
+      "lines": [
+        121,
+        285,
+        385,
+        397,
+        565
+      ],
+      "name": "CobolReference",
+      "target_name": "CobolReference",
+      "target_start_line": 86
+    },
+    {
+      "lines": [
+        140
+      ],
+      "name": "reference_list",
+      "target_name": "reference_list",
+      "target_start_line": 121
+    },
+    {
+      "lines": [
+        146
+      ],
+      "name": "CobolDefinition.end_line",
+      "target_name": "end_line",
+      "target_start_line": 77
+    },
+    {
+      "lines": [
+        146
+      ],
+      "name": "CobolDefinition.start_line",
+      "target_name": "start_line",
+      "target_start_line": 76
+    },
+    {
+      "lines": [
+        146
+      ],
+      "name": "line_list",
+      "target_name": "line_list",
+      "target_start_line": 115
+    },
+    {
+      "lines": [
+        159
+      ],
+      "name": "definition_list",
+      "target_name": "definition_list",
+      "target_start_line": 117
+    },
+    {
+      "lines": [
+        161
+      ],
+      "name": "definition_text",
+      "target_name": "definition_text",
+      "target_start_line": 144
+    },
+    {
+      "lines": [
+        174
+      ],
+      "name": "_NO_GROUP_LEVEL_SET",
+      "target_name": "_NO_GROUP_LEVEL_SET",
+      "target_start_line": 41
+    },
+    {
+      "lines": [
+        176,
+        693
+      ],
+      "name": "_RENAME_LEVEL",
+      "target_name": "_RENAME_LEVEL",
+      "target_start_line": 43
+    },
+    {
+      "lines": [
+        177
+      ],
+      "name": "_RENAME_RANK",
+      "target_name": "_RENAME_RANK",
+      "target_start_line": 50
+    },
+    {
+      "lines": [
+        178,
+        693
+      ],
+      "name": "_CONDITION_LEVEL",
+      "target_name": "_CONDITION_LEVEL",
+      "target_start_line": 44
+    },
+    {
+      "lines": [
+        179
+      ],
+      "name": "_CONDITION_RANK",
+      "target_name": "_CONDITION_RANK",
+      "target_start_line": 51
+    },
+    {
+      "lines": [
+        217
+      ],
+      "name": "_ELEMENTARY_WORD_SET",
+      "target_name": "_ELEMENTARY_WORD_SET",
+      "target_start_line": 60
+    },
+    {
+      "lines": [
+        243,
+        269,
+        805
+      ],
+      "name": "CobolSource",
+      "target_name": "CobolSource",
+      "target_start_line": 110
+    },
+    {
+      "lines": [
+        247,
+        350,
+        698,
+        722
+      ],
+      "name": "_Item",
+      "target_name": "_Item",
+      "target_start_line": 183
+    },
+    {
+      "lines": [
+        249,
+        366
+      ],
+      "name": "_File",
+      "target_name": "_File",
+      "target_start_line": 197
+    },
+    {
+      "lines": [
+        253,
+        316,
+        356,
+        366
+      ],
+      "name": "unit_index",
+      "target_name": "unit_index",
+      "target_start_line": 192
+    },
+    {
+      "lines": [
+        267,
+        454,
+        518
+      ],
+      "name": "name",
+      "target_name": "name",
+      "target_start_line": 74
+    },
+    {
+      "lines": [
+        281
+      ],
+      "name": "_read_unit",
+      "target_name": "_read_unit",
+      "target_start_line": 307
+    },
+    {
+      "lines": [
+        291
+      ],
+      "name": "_program_definition_list",
+      "target_name": "_program_definition_list",
+      "target_start_line": 575
+    },
+    {
+      "lines": [
+        292
+      ],
+      "name": "_header_definition_list",
+      "target_name": "_header_definition_list",
+      "target_start_line": 599
+    },
+    {
+      "lines": [
+        293
+      ],
+      "name": "_item_definition_list",
+      "target_name": "_item_definition_list",
+      "target_start_line": 624
+    },
+    {
+      "lines": [
+        295
+      ],
+      "name": "_file_definition_list",
+      "target_name": "_file_definition_list",
+      "target_start_line": 755
+    },
+    {
+      "lines": [
+        304
+      ],
+      "name": "_add_import",
+      "target_name": "_add_import",
+      "target_start_line": 546
+    },
+    {
+      "lines": [
+        320,
+        487,
+        540,
+        801
+      ],
+      "name": "_node_list",
+      "target_name": "_node_list",
+      "target_start_line": 220
+    },
+    {
+      "lines": [
+        325
+      ],
+      "name": "_read_definition",
+      "target_name": "_read_definition",
+      "target_start_line": 333
+    },
+    {
+      "lines": [
+        329
+      ],
+      "name": "_add_word_reference",
+      "target_name": "_add_word_reference",
+      "target_start_line": 373
+    },
+    {
+      "lines": [
+        331
+      ],
+      "name": "_add_node_reference",
+      "target_name": "_add_node_reference",
+      "target_start_line": 389
+    },
+    {
+      "lines": [
+        349
+      ],
+      "name": "_item_name",
+      "target_name": "_item_name",
+      "target_start_line": 433
+    },
+    {
+      "lines": [
+        357
+      ],
+      "name": "_is_elementary_word_list",
+      "target_name": "_is_elementary_word_list",
+      "target_start_line": 208
+    },
+    {
+      "lines": [
+        360
+      ],
+      "name": "_read_value",
+      "target_name": "_read_value",
+      "target_start_line": 523
+    },
+    {
+      "lines": [
+        361
+      ],
+      "name": "_read_index",
+      "target_name": "_read_index",
+      "target_start_line": 462
+    },
+    {
+      "lines": [
+        363
+      ],
+      "name": "_file_name",
+      "target_name": "_file_name",
+      "target_start_line": 491
+    },
+    {
+      "lines": [
+        369
+      ],
+      "name": "_header_name",
+      "target_name": "_header_name",
+      "target_start_line": 502
+    },
+    {
+      "lines": [
+        370
+      ],
+      "name": "_read_move",
+      "target_name": "_read_move",
+      "target_start_line": 531
+    },
+    {
+      "lines": [
+        395,
+        448,
+        498
+      ],
+      "name": "_is_definition_name",
+      "target_name": "_is_definition_name",
+      "target_start_line": 418
+    },
+    {
+      "lines": [
+        398
+      ],
+      "name": "_node_qualifier_tuple",
+      "target_name": "_node_qualifier_tuple",
+      "target_start_line": 401
+    },
+    {
+      "lines": [
+        398,
+        416,
+        476,
+        499,
+        528,
+        537,
+        543
+      ],
+      "name": "node_name",
+      "target_name": "node_name",
+      "target_start_line": 263
+    },
+    {
+      "lines": [
+        426,
+        474,
+        476
+      ],
+      "name": "INDEX_TYPE",
+      "target_name": "INDEX_TYPE",
+      "target_start_line": 26
+    },
+    {
+      "lines": [
+        428,
+        777
+      ],
+      "name": "FILE_TYPE",
+      "target_name": "FILE_TYPE",
+      "target_start_line": 25
+    },
+    {
+      "lines": [
+        458
+      ],
+      "name": "_is_item_name",
+      "target_name": "_is_item_name",
+      "target_start_line": 480
+    },
+    {
+      "lines": [
+        515
+      ],
+      "name": "_HEADER_NODE_TYPE_SET",
+      "target_name": "_HEADER_NODE_TYPE_SET",
+      "target_start_line": 36
+    },
+    {
+      "lines": [
+        553
+      ],
+      "name": "COPY_KIND",
+      "target_name": "COPY_KIND",
+      "target_start_line": 32
+    },
+    {
+      "lines": [
+        563
+      ],
+      "name": "CALL_KIND",
+      "target_name": "CALL_KIND",
+      "target_start_line": 33
+    },
+    {
+      "lines": [
+        583,
+        593,
+        620
+      ],
+      "name": "_last_code_line",
+      "target_name": "_last_code_line",
+      "target_start_line": 569
+    },
+    {
+      "lines": [
+        638,
+        651
+      ],
+      "name": "_subordinate_extent_list",
+      "target_name": "_subordinate_extent_list",
+      "target_start_line": 668
+    },
+    {
+      "lines": [
+        643
+      ],
+      "name": "_GROUP_LEVEL_RANGE",
+      "target_name": "_GROUP_LEVEL_RANGE",
+      "target_start_line": 57
+    },
+    {
+      "lines": [
+        645
+      ],
+      "name": "_copy_end_line",
+      "target_name": "_copy_end_line",
+      "target_start_line": 698
+    },
+    {
+      "lines": [
+        657
+      ],
+      "name": "DATA_ITEM_TYPE",
+      "target_name": "DATA_ITEM_TYPE",
+      "target_start_line": 24
+    },
+    {
+      "lines": [
+        688,
+        711,
+        751
+      ],
+      "name": "_item_rank",
+      "target_name": "_item_rank",
+      "target_start_line": 165
+    },
+    {
+      "lines": [
+        709,
+        711
+      ],
+      "name": "_Item.unit_index",
+      "target_name": "unit_index",
+      "target_start_line": 192
+    },
+    {
+      "lines": [
+        710,
+        766
+      ],
+      "name": "_extent_end_position",
+      "target_name": "_extent_end_position",
+      "target_start_line": 721
+    },
+    {
+      "lines": [
+        711
+      ],
+      "name": "_Item.level",
+      "target_name": "level",
+      "target_start_line": 188
+    },
+    {
+      "lines": [
+        747
+      ],
+      "name": "_NO_POSITION",
+      "target_name": "_NO_POSITION",
+      "target_start_line": 55
+    },
+    {
+      "lines": [
+        767
+      ],
+      "name": "_FILE_RANK",
+      "target_name": "_FILE_RANK",
+      "target_start_line": 53
+    },
+    {
+      "lines": [
+        798
+      ],
+      "name": "_STATEMENT_NODE_SUFFIX",
+      "target_name": "_STATEMENT_NODE_SUFFIX",
+      "target_start_line": 38
+    },
+    {
+      "lines": [
+        819
+      ],
+      "name": "_UnitReader",
+      "target_name": "_UnitReader",
+      "target_start_line": 231
+    }
+  ],
+  "caller_usages": [
+    {
+      "lines": [
+        58,
+        86,
+        321,
+        479,
+        556,
+        562,
+        624,
+        645,
+        658
+      ],
+      "name": "CobolSource",
+      "file": "codetwine/codetwine/cobol_file_index_py/cobol_file_index.py",
+      "usage_context": "    program_file_set: set[str] = field(default_factory=set)\n\n\ndef _cobol_source(file_rel: str, project_dir: str) -> CobolSource | None:\n    \"\"\"Parse a COBOL file or BMS source of the project and return its CobolSource.\n\n    Returns:\n...\n    return language_ext(os.path.join(project_dir, file_rel)) in COBOL_EXT_SET\n\n\ndef _add_source(file_index: CobolFileIndex, file_rel: str, cobol_source: CobolSource) -> None:\n    \"\"\"Index a COBOL file or BMS source by its file name, its copy_name_list and its programs.\"\"\"\n    _add_file_name(file_index, file_rel, cobol_source.copy_name_list)\n    for definition in cobol_source.definition_list:"
+    },
+    {
+      "lines": [
+        88
+      ],
+      "name": "CobolSource.copy_name_list",
+      "file": "codetwine/codetwine/cobol_file_index_py/cobol_file_index.py",
+      "usage_context": "\ndef _add_source(file_index: CobolFileIndex, file_rel: str, cobol_source: CobolSource) -> None:\n    \"\"\"Index a COBOL file or BMS source by its file name, its copy_name_list and its programs.\"\"\"\n    _add_file_name(file_index, file_rel, cobol_source.copy_name_list)\n    for definition in cobol_source.definition_list:\n        if definition.type in CALL_TARGET_TYPE_TUPLE:\n            file_list = file_index.program_dict.setdefault(definition.name.upper(), [])"
+    },
+    {
+      "lines": [
+        89
+      ],
+      "name": "CobolSource.definition_list",
+      "file": "codetwine/codetwine/cobol_file_index_py/cobol_file_index.py",
+      "usage_context": "def _add_source(file_index: CobolFileIndex, file_rel: str, cobol_source: CobolSource) -> None:\n    \"\"\"Index a COBOL file or BMS source by its file name, its copy_name_list and its programs.\"\"\"\n    _add_file_name(file_index, file_rel, cobol_source.copy_name_list)\n    for definition in cobol_source.definition_list:\n        if definition.type in CALL_TARGET_TYPE_TUPLE:\n            file_list = file_index.program_dict.setdefault(definition.name.upper(), [])\n            if file_rel not in file_list:"
+    },
+    {
+      "lines": [
+        90,
+        505,
+        652,
+        665
+      ],
+      "name": "CALL_TARGET_TYPE_TUPLE",
+      "file": "codetwine/codetwine/cobol_file_index_py/cobol_file_index.py",
+      "usage_context": "    \"\"\"Index a COBOL file or BMS source by its file name, its copy_name_list and its programs.\"\"\"\n    _add_file_name(file_index, file_rel, cobol_source.copy_name_list)\n    for definition in cobol_source.definition_list:\n        if definition.type in CALL_TARGET_TYPE_TUPLE:\n            file_list = file_index.program_dict.setdefault(definition.name.upper(), [])\n            if file_rel not in file_list:\n                file_list.append(file_rel)\n...\n        if self.definition_dict is None:\n            self.definition_dict = {}\n            for definition in self.cobol_source.definition_list:\n                if definition.type in CALL_TARGET_TYPE_TUPLE:\n                    continue\n                local_name = self.local_name(definition).upper()\n                self.definition_dict.setdefault(local_name, []).append(definition)"
+    },
+    {
+      "lines": [
+        278,
+        325,
+        534,
+        536
+      ],
+      "name": "COPY_KIND",
+      "file": "codetwine/codetwine/cobol_file_index_py/cobol_file_index.py",
+      "usage_context": "    kind, name, library = cobol_module_part(module)\n    file_index = _get_file_index(project_dir, project_file_set)\n    resolved = None\n    if kind == COPY_KIND:\n        resolved = _copybook_path(name, library, current_file_rel, file_index)\n    elif kind == CALL_KIND:\n        resolved = _program_path(name, current_file_rel, file_index)\n...\n    \"\"\"Return (copybook name, library name) of each COPY statement and EXEC SQL INCLUDE.\"\"\"\n    return [\n        (cobol_import.name, cobol_import.library)\n        for cobol_import in cobol_source.import_list if cobol_import.kind == COPY_KIND\n    ]\n\n"
+    },
+    {
+      "lines": [
+        280,
+        634,
+        636
+      ],
+      "name": "CALL_KIND",
+      "file": "codetwine/codetwine/cobol_file_index_py/cobol_file_index.py",
+      "usage_context": "    resolved = None\n    if kind == COPY_KIND:\n        resolved = _copybook_path(name, library, current_file_rel, file_index)\n    elif kind == CALL_KIND:\n        resolved = _program_path(name, current_file_rel, file_index)\n    return resolved if resolved != current_file_rel else None\n\n...\n    \"\"\"\n    program_target_dict: dict[tuple[str, int], tuple[str, str]] = {}\n    for cobol_import in cobol_source.import_list:\n        if cobol_import.kind != CALL_KIND:\n            continue\n        module = cobol_module(CALL_KIND, cobol_import.name)\n        resolved = resolve_cobol_module_path(module, file_rel, project_file_set, project_dir)"
+    },
+    {
+      "lines": [
+        325,
+        633
+      ],
+      "name": "CobolSource.import_list",
+      "file": "codetwine/codetwine/cobol_file_index_py/cobol_file_index.py",
+      "usage_context": "    \"\"\"Return (copybook name, library name) of each COPY statement and EXEC SQL INCLUDE.\"\"\"\n    return [\n        (cobol_import.name, cobol_import.library)\n        for cobol_import in cobol_source.import_list if cobol_import.kind == COPY_KIND\n    ]\n\n\n...\n        relative path of the file)} of each CALL that resolves to another file.\n    \"\"\"\n    program_target_dict: dict[tuple[str, int], tuple[str, str]] = {}\n    for cobol_import in cobol_source.import_list:\n        if cobol_import.kind != CALL_KIND:\n            continue\n        module = cobol_module(CALL_KIND, cobol_import.name)"
+    },
+    {
+      "lines": [
+        357
+      ],
+      "name": "has_statement",
+      "file": "codetwine/codetwine/cobol_file_index_py/cobol_file_index.py",
+      "usage_context": "        return True\n    language = EXT_TO_LANGUAGE_DICT[_COPYBOOK_EXT]\n    return any(\n        unit.kind == PROCEDURE_UNIT and has_statement(unit, language) for unit in unit_list\n    )\n\n"
+    },
+    {
+      "lines": [
+        471,
+        486,
+        488,
+        492,
+        570,
+        586,
+        600,
+        645,
+        658
+      ],
+      "name": "CobolDefinition",
+      "file": "codetwine/codetwine/cobol_file_index_py/cobol_file_index.py",
+      "usage_context": "    line: int        # Line of the reference (1-based)\n    file_rel: str    # Relative path of the file with the definition\n    # The definition; None when the program file of a CALL is not read\n    definition: CobolDefinition | None\n\n\n@dataclass\n...\n    replacing_list: list[tuple[str, str, str]] = field(default_factory=list)\n    # Upper-case local name -> definitions with it other than programs and ENTRY\n    # names, built on first use\n    definition_dict: dict[str, list[CobolDefinition]] | None = None\n\n    def local_name(self, definition: CobolDefinition) -> str:\n        \"\"\"Return the name of a definition as the referring file writes it.\"\"\""
+    },
+    {
+      "lines": [
+        490
+      ],
+      "name": "CobolDefinition.name",
+      "file": "codetwine/codetwine/cobol_file_index_py/cobol_file_index.py",
+      "usage_context": "\n    def local_name(self, definition: CobolDefinition) -> str:\n        \"\"\"Return the name of a definition as the referring file writes it.\"\"\"\n        return replace_name(definition.name, self.replacing_list)\n\n    def find_definition_list(self, name: str) -> list[CobolDefinition]:\n        \"\"\"Return the definitions a data name or procedure name can refer to."
+    },
+    {
+      "lines": [
+        587
+      ],
+      "name": "CobolDefinition.start_line",
+      "file": "codetwine/codetwine/cobol_file_index_py/cobol_file_index.py",
+      "usage_context": "    \"\"\"\n    if any(\n        holder is not definition\n        and holder.start_line <= definition.start_line\n        and definition.end_line <= holder.end_line\n        for holder in candidate.find_definition_list(qualifier)\n    ):"
+    },
+    {
+      "lines": [
+        588
+      ],
+      "name": "CobolDefinition.end_line",
+      "file": "codetwine/codetwine/cobol_file_index_py/cobol_file_index.py",
+      "usage_context": "    if any(\n        holder is not definition\n        and holder.start_line <= definition.start_line\n        and definition.end_line <= holder.end_line\n        for holder in candidate.find_definition_list(qualifier)\n    ):\n        return True"
+    },
+    {
+      "lines": [
+        672,
+        708
+      ],
+      "name": "CobolReference",
+      "file": "codetwine/codetwine/cobol_file_index_py/cobol_file_index.py",
+      "usage_context": "\n\ndef _call_target(\n    reference: CobolReference,\n    file_rel: str,\n    program_target_dict: dict[tuple[str, int], tuple[str, str]],\n    project_dir: str,\n...\n\n\ndef _name_target(\n    reference: CobolReference, candidate_list: list[_Candidate],\n) -> CobolReferenceTarget | None:\n    \"\"\"Resolve a data name or procedure name.\n"
+    },
+    {
+      "lines": [
+        693,
+        703,
+        737
+      ],
+      "name": "CobolReference.line",
+      "file": "codetwine/codetwine/cobol_file_index_py/cobol_file_index.py",
+      "usage_context": "        when the program file has no definition.\n    \"\"\"\n    program_name, program_file_rel = program_target_dict.get(\n        (reference.name, reference.line), (\"\", file_rel),\n    )\n    program_source = _cobol_source(program_file_rel, project_dir)\n    definition = _program_definition(program_source, reference.name)\n...\n        definition = _first_program_definition(program_source)\n    return CobolReferenceTarget(\n        definition.name if definition is not None else program_name,\n        reference.line, program_file_rel, definition,\n    )\n\n"
+    },
+    {
+      "lines": [
+        693,
+        696,
+        723,
+        727,
+        729
+      ],
+      "name": "CobolReference.name",
+      "file": "codetwine/codetwine/cobol_file_index_py/cobol_file_index.py",
+      "usage_context": "        when the program file has no definition.\n    \"\"\"\n    program_name, program_file_rel = program_target_dict.get(\n        (reference.name, reference.line), (\"\", file_rel),\n    )\n    program_source = _cobol_source(program_file_rel, project_dir)\n    definition = _program_definition(program_source, reference.name)\n...\n        (reference.name, reference.line), (\"\", file_rel),\n    )\n    program_source = _cobol_source(program_file_rel, project_dir)\n    definition = _program_definition(program_source, reference.name)\n    if program_file_rel == file_rel and definition is None:\n        return None\n    if definition is None:"
+    },
+    {
+      "lines": [
+        722,
+        723
+      ],
+      "name": "CobolReference.qualifier_tuple",
+      "file": "codetwine/codetwine/cobol_file_index_py/cobol_file_index.py",
+      "usage_context": "        order of the COPY statements. None when no file defines the name.\n    \"\"\"\n    match = None\n    if reference.qualifier_tuple:\n        match = _target_under_qualifier(reference.name, reference.qualifier_tuple, candidate_list)\n    if match is None:\n        match = next(\n...\n    \"\"\"\n    match = None\n    if reference.qualifier_tuple:\n        match = _target_under_qualifier(reference.name, reference.qualifier_tuple, candidate_list)\n    if match is None:\n        match = next(\n            ("
+    },
+    {
+      "lines": [
+        247,
+        260,
+        273,
+        331
+      ],
+      "name": "CobolDefinition",
+      "file": "codetwine/codetwine/extractors/bms_source_py/bms_source.py",
+      "usage_context": "\ndef _item_definition(\n    name: str, start_line: int, end_line: int, level: int, is_group: bool,\n) -> CobolDefinition:\n    \"\"\"Return the definition of one data item of a symbolic map.\n\n    Args:\n...\n    Returns:\n        A data item definition whose name is on start_line.\n    \"\"\"\n    return CobolDefinition(\n        name=name,\n        type=DATA_ITEM_TYPE,\n        start_line=start_line,"
+    },
+    {
+      "lines": [
+        262
+      ],
+      "name": "DATA_ITEM_TYPE",
+      "file": "codetwine/codetwine/extractors/bms_source_py/bms_source.py",
+      "usage_context": "    \"\"\"\n    return CobolDefinition(\n        name=name,\n        type=DATA_ITEM_TYPE,\n        start_line=start_line,\n        end_line=end_line,\n        name_line=start_line,"
+    },
+    {
+      "lines": [
+        314,
+        341
+      ],
+      "name": "CobolSource",
+      "file": "codetwine/codetwine/extractors/bms_source_py/bms_source.py",
+      "usage_context": "    return definition_list\n\n\ndef read_bms_source(source: str) -> CobolSource:\n    \"\"\"Read a BMS source (DFHMSD / DFHMDI / DFHMDF macros) and return its symbolic maps.\n\n    Each map is an input record <map>I and an output record <map>O, the names a COBOL\n...\n            level = _FIELD_LEVEL + 1 if bms_field.occurs else _FIELD_LEVEL\n            definition_list += _field_definition_list(bms_field, bms_map.attribute_list, level)\n\n    return CobolSource(\n        line_list=line_list,\n        definition_list=sorted(\n            definition_list, key=lambda definition: (definition.start_line, -definition.end_line),"
+    },
+    {
+      "lines": [
+        127,
+        163
+      ],
+      "name": "CobolSource",
+      "file": "codetwine/codetwine/extractors/definitions_py/definitions.py",
+      "usage_context": "\n\ndef extract_definitions(\n    root_node: Node | CobolSource,\n    definition_dict: dict[str, str],\n) -> list[DefinitionInfo]:\n    \"\"\"Extract definitions (functions, classes, variables, types, etc.) from the AST and return them in line-number order.\n...\n    Returns:\n        A list of DefinitionInfo sorted by line number in ascending order.\n    \"\"\"\n    if isinstance(root_node, CobolSource):\n        return [\n            DefinitionInfo(\n                definition.name, definition.type, definition.start_line, definition.end_line,"
+    },
+    {
+      "lines": [
+        78
+      ],
+      "name": "COPY_KIND",
+      "file": "codetwine/codetwine/extractors/imports_py/imports.py",
+      "usage_context": "        \"CALL LIST OF ITEMS\"       -> (\"CALL\", \"LIST OF ITEMS\", \"\")\n    \"\"\"\n    kind, _, operand = module.partition(\" \")\n    if kind != COPY_KIND:\n        return kind, operand, \"\"\n    name, _, library = operand.partition(\" OF \")\n    return kind, name, library"
+    },
+    {
+      "lines": [
+        84,
+        207,
+        247
+      ],
+      "name": "CobolSource",
+      "file": "codetwine/codetwine/extractors/imports_py/imports.py",
+      "usage_context": "    return kind, name, library\n\n\ndef _cobol_import_list(cobol_source: CobolSource) -> list[ImportInfo]:\n    \"\"\"Return the COPY and CALL statements of a COBOL file as ImportInfo.\n\n    COPY name        -> module \"COPY name\", names [\"*\"]\n...\n\n\ndef extract_imports(\n    root_node: Node | CobolSource,\n    language: Language,\n    import_query_str: str | None,\n    scope_types: set[str] | None = None,"
+    },
+    {
+      "lines": [
+        98
+      ],
+      "name": "CobolSource.import_list",
+      "file": "codetwine/codetwine/extractors/imports_py/imports.py",
+      "usage_context": "        A list of ImportInfo in line order.\n    \"\"\"\n    import_by_key_dict: dict[tuple[str, int], ImportInfo] = {}\n    for cobol_import in cobol_source.import_list:\n        module = cobol_module(cobol_import.kind, cobol_import.name, cobol_import.library)\n        is_call = cobol_import.kind == CALL_KIND\n        import_by_key_dict.setdefault((module, cobol_import.line), ImportInfo("
+    },
+    {
+      "lines": [
+        100
+      ],
+      "name": "CALL_KIND",
+      "file": "codetwine/codetwine/extractors/imports_py/imports.py",
+      "usage_context": "    import_by_key_dict: dict[tuple[str, int], ImportInfo] = {}\n    for cobol_import in cobol_source.import_list:\n        module = cobol_module(cobol_import.kind, cobol_import.name, cobol_import.library)\n        is_call = cobol_import.kind == CALL_KIND\n        import_by_key_dict.setdefault((module, cobol_import.line), ImportInfo(\n            module=module,\n            names=[cobol_import.name] if is_call else [\"*\"],"
+    },
+    {
+      "lines": [
+        122,
+        135,
+        155,
+        363
+      ],
+      "name": "CobolSource",
+      "file": "codetwine/codetwine/extractors/usage_analysis_py/usage_analysis.py",
+      "usage_context": "\n\ndef _cobol_own_range_function(\n    definition_list: list[DefinitionInfo], root_node: Node | CobolSource,\n) -> Callable[[CobolReferenceTarget], list[tuple[int, int]]]:\n    \"\"\"Return the function giving the lines of the definition a COBOL reference resolved to.\"\"\"\n    def cobol_range_list(target: CobolReferenceTarget) -> list[tuple[int, int]]:\n...\n\n\ndef _r_own_range_function(\n    definition_list: list[DefinitionInfo], root_node: Node | CobolSource,\n) -> Callable[[RReferenceTarget], list[tuple[int, int]]]:\n    \"\"\"Return the function giving the lines of the top-level definitions of the name of an R reference.\n"
+    },
+    {
+      "lines": [
+        373,
+        440
+      ],
+      "name": "CobolSource",
+      "file": "codetwine/codetwine/extractors/usages_py/usages.py",
+      "usage_context": "\n\ndef extract_usages(\n    root_node: Node | CobolSource,\n    imported_names: set[str],\n    usage_node_types: dict | None = None,\n    member_names: set[str] | None = None,\n...\n    Returns:\n        A list of UsageInfo (deduplicated).\n    \"\"\"\n    if isinstance(root_node, CobolSource):\n        return [\n            UsageInfo(name=name, line=line)\n            for name, line in root_node.usage_line_list(imported_names)"
+    },
+    {
+      "lines": [
+        44,
+        167
+      ],
+      "name": "CobolSource",
+      "file": "codetwine/codetwine/parsers/ts_parser_py/ts_parser.py",
+      "usage_context": "# One entry holds one file's whole syntax tree: a tree-sitter Node keeps its tree alive.\n# The entry of a COBOL file or a BMS source holds its CobolSource.\n# The number of entries is capped by PARSE_CACHE_MAX_FILES.\nparse_cache: OrderedDict[str, tuple[Node | CobolSource, bytes]] = OrderedDict()\n\n# The macro names read as spaces in front of class names (_parse_c_family), by file:\n# absolute path -> (macro name, line) pairs of the file's last parse\n...\n    return root_node, sorted(macro_list, key=lambda macro: macro[1])\n\n\ndef parse_file(file_path: str) -> tuple[Node | CobolSource, bytes]:\n    \"\"\"Read a file, parse it with tree-sitter, and return (AST root node, byte content).\n\n    The file is decoded by read_source() and parsed as UTF-8, whatever encoding it is"
+    },
+    {
+      "lines": [
+        213
+      ],
+      "name": "read_cobol_source",
+      "file": "codetwine/codetwine/parsers/ts_parser_py/ts_parser.py",
+      "usage_context": "\n    if ext in COBOL_EXT_SET:\n        # Split the COBOL text into statements and parse each of them\n        cobol_source = read_cobol_source(content.decode(\"utf-8\"), EXT_TO_LANGUAGE_DICT[ext])\n        parse_result = (cobol_source, content)\n    elif ext in BMS_EXT_SET:\n        # Read the maps of the BMS macros"
+    }
+  ]
+}

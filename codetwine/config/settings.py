@@ -378,10 +378,13 @@ _PYTHON_IMPORT_QUERY = """
 # - export * as X from 'module': @module and @namespace_name (re-export)
 # - require('module') / import('module'): @module only (CommonJS, dynamic import)
 # - const X = require('module'): @module and @namespace_name (CommonJS)
-# - const { X, Y: Z } = require('module'): @module and @name (CommonJS destructuring)
+# - const { X, Y: Z, V = 1, W: U = 2 } = require('module'): @module and @name (CommonJS
+#   destructuring, with or without a default value)
 # - const X = require('module').Y: @module, @name and @member_name (a member of the module)
 # - const X = await import('module') / const { X, Y: Z } = await import('module'):
 #   @module and @namespace_name / @name (dynamic import)
+# - require('module').X: @module and @member_use (a member used where the module is required)
+# - import('module').then((X) => ...): @module and @callback (the function given the module)
 _JS_IMPORT_QUERY = """
 (import_statement
   source: (string) @module) @import_node
@@ -426,6 +429,20 @@ _JS_IMPORT_QUERY = """
   function: (import)
   arguments: (arguments (string) @module)) @import_node
 
+(member_expression
+  object: (call_expression
+    function: (identifier) @_require_func
+    arguments: (arguments (string) @module))
+  property: (property_identifier) @member_use) @import_node
+
+(call_expression
+  function: (member_expression
+    object: (call_expression
+      function: (import)
+      arguments: (arguments (string) @module))
+    property: (property_identifier) @_then_func)
+  arguments: (arguments . [(arrow_function) (function_expression)] @callback))
+
 (variable_declarator
   name: (identifier) @namespace_name
   value: (call_expression
@@ -443,6 +460,23 @@ _JS_IMPORT_QUERY = """
   name: (object_pattern
     (pair_pattern
       value: (identifier) @name))
+  value: (call_expression
+    function: (identifier) @_require_func
+    arguments: (arguments (string) @module))) @import_node
+
+(variable_declarator
+  name: (object_pattern
+    (object_assignment_pattern
+      left: (shorthand_property_identifier_pattern) @name))
+  value: (call_expression
+    function: (identifier) @_require_func
+    arguments: (arguments (string) @module))) @import_node
+
+(variable_declarator
+  name: (object_pattern
+    (pair_pattern
+      value: (assignment_pattern
+        left: (identifier) @name)))
   value: (call_expression
     function: (identifier) @_require_func
     arguments: (arguments (string) @module))) @import_node
@@ -474,6 +508,25 @@ _JS_IMPORT_QUERY = """
   name: (object_pattern
     (pair_pattern
       value: (identifier) @name))
+  value: (await_expression
+    (call_expression
+      function: (import)
+      arguments: (arguments (string) @module)))) @import_node
+
+(variable_declarator
+  name: (object_pattern
+    (object_assignment_pattern
+      left: (shorthand_property_identifier_pattern) @name))
+  value: (await_expression
+    (call_expression
+      function: (import)
+      arguments: (arguments (string) @module)))) @import_node
+
+(variable_declarator
+  name: (object_pattern
+    (pair_pattern
+      value: (assignment_pattern
+        left: (identifier) @name)))
   value: (await_expression
     (call_expression
       function: (import)
@@ -545,6 +598,15 @@ _RUST_IMPORT_QUERY = """
 #                 (self.name, this.name); the member after it is a usage of the file's own name
 # typed_alias_parent_types: AST node types of a variable declaration with a type; a variable
 #                 declared with a tracked type is tracked under the type name
+# typed_alias_name_field_dict: typed_alias_parent_types node type -> field holding its
+#                 variable ("" for its first named child); its type is in the field "type"
+# typed_alias_value_dict: AST node type that gives a variable a value -> (field of the
+#                 variable, field of the value; "" for its first named child)
+# typed_alias_new_dict: AST node type of a value that makes an object -> field naming its
+#                 type; a variable given such a value of a tracked type inside a function
+#                 is tracked under the type name from that line on
+# typed_alias_class_only: True when typed_alias_new_dict also matches a plain call, so the
+#                 type has to be a definition in CLASS_DEFINITION_TYPE_SET (Python)
 #
 # Names bound inside a function are not usages of a name written outside it; a name an
 # import statement binds there (const m = require("./m")) stays a name of the import:
@@ -557,7 +619,12 @@ _RUST_IMPORT_QUERY = """
 # local_binding_dict: node type -> field holding the pattern the node binds in the scope around
 #                 it; "" when the named children of the node are the patterns
 # pattern_types:  AST node types of a pattern whose named children are patterns
-# pattern_field_dict: pattern node type -> the one field of it that is a pattern
+# pattern_field_dict: pattern node type -> the one field of it that is a pattern ("" for
+#                 its first named child)
+# pattern_reference_types: definition types a name written in a pattern refers to instead
+#                 of binding it (Rust: a constant, a static, a struct without fields)
+# pattern_variant_types: definition types whose members such a name refers to as well
+#                 (Rust: the variants of an enum)
 # opaque_types:   AST node types inside a scope whose inner nodes bind nothing in it
 # unbind_types:   AST node types naming names that are not local (Python global / nonlocal)
 # call_ignores_local: True when the name of a called function is never a local variable (Java)
@@ -577,6 +644,13 @@ _PYTHON_USAGE_NODE_TYPE_DICT = {
     },
     "skip_parent_types_for_type_ref": set(),
     "self_names": {"self", "cls"},
+    "typed_alias_parent_types": {"typed_parameter", "typed_default_parameter", "assignment"},
+    "typed_alias_name_field_dict": {
+        "typed_parameter": "", "typed_default_parameter": "name", "assignment": "left",
+    },
+    "typed_alias_value_dict": {"assignment": ("left", "right"), "as_pattern": ("alias", "")},
+    "typed_alias_new_dict": {"call": "function"},
+    "typed_alias_class_only": True,
     "scope_types": {
         "function_definition", "lambda",
         "list_comprehension", "set_comprehension", "dictionary_comprehension",
@@ -658,6 +732,13 @@ _JS_USAGE_NODE_TYPE_DICT = {
     },
     "identifier_types": {"shorthand_property_identifier"},
     "self_types": {"this"},
+    "typed_alias_parent_types": {"variable_declarator", "required_parameter", "optional_parameter"},
+    "typed_alias_name_field_dict": {
+        "variable_declarator": "name", "required_parameter": "pattern",
+        "optional_parameter": "pattern",
+    },
+    "typed_alias_value_dict": {"variable_declarator": ("name", "value")},
+    "typed_alias_new_dict": {"new_expression": "constructor"},
     "scope_types": {
         "function_declaration", "generator_function_declaration", "function_expression",
         "generator_function", "arrow_function", "method_definition",
@@ -767,17 +848,25 @@ _RUST_USAGE_NODE_TYPE_DICT = {
         "visibility_modifier",
     },
     "self_types": {"self"},
-    "scope_types": {"function_item", "closure_expression"},
+    "scope_types": {
+        "function_item", "closure_expression", "match_arm", "if_expression", "while_expression",
+    },
+    "scope_binding_dict": {"match_arm": "pattern"},
     "local_binding_dict": {
         "parameter": "pattern",
         "let_declaration": "pattern",
+        "let_condition": "pattern",
         "for_expression": "pattern",
         "closure_parameters": "",
     },
     "pattern_types": {
         "tuple_pattern", "slice_pattern", "reference_pattern", "mut_pattern", "ref_pattern",
+        "tuple_struct_pattern", "struct_pattern", "field_pattern", "or_pattern",
+        "captured_pattern",
     },
-    "pattern_field_dict": {"parameter": "pattern"},
+    "pattern_field_dict": {"parameter": "pattern", "match_pattern": ""},
+    "pattern_reference_types": {"const_item", "static_item", "struct_item"},
+    "pattern_variant_types": {"enum_item"},
 }
 
 _SQL_USAGE_NODE_TYPE_DICT = {
@@ -815,6 +904,12 @@ _JS_TS_RESOLVE_DICT = {
     "alt_ext_list": _JS_TS_EXT_LIST,
     "source_ext_dict": _JS_SOURCE_EXT_DICT,
     "path_config_name_list": ["tsconfig.json", "jsconfig.json"],
+    "package_file_name": "package.json",
+    "alias_config_name_list": [
+        "vite.config.ts", "vite.config.mts", "vite.config.js", "vite.config.mjs",
+        "vite.config.cjs", "webpack.config.js", "webpack.config.cjs", "webpack.config.mjs",
+        "webpack.config.ts",
+    ],
 }
 
 _C_CPP_RESOLVE_DICT = {
@@ -855,6 +950,11 @@ class LangConfig:
                         path_config_name_list - File names of the config files whose "baseUrl"
                                          and "paths" a module that is not relative is
                                          resolved through (JS/TS)
+                        package_file_name - File name of the package file whose "imports"
+                                         and "name" a module that is not relative is
+                                         resolved through (JS/TS)
+                        alias_config_name_list - File names of the bundler config files whose
+                                         aliases such a module is resolved through (JS/TS)
                         min_path_end_part - Number of parts a module needs to be matched against
                                          the end of the project file paths; absent: never
                         module_tree    - Whether to resolve paths through the tree of mod declarations (Rust)
@@ -1059,6 +1159,15 @@ COBOL_EXT_SET: set[str] = {
     if definition_dict is COBOL_DEFINITION_DICT
 }
 
+# Extensions of the C and C++ files
+C_FAMILY_EXT_SET: set[str] = {
+    ext for ext, lang_config in _LANG_REGISTRY.items()
+    if (lang_config.import_resolve_dict or {}).get("bind") == "include"
+} | {
+    alias for alias, canonical in _EXT_ALIAS_DICT.items()
+    if (_LANG_REGISTRY[canonical].import_resolve_dict or {}).get("bind") == "include"
+}
+
 # Extensions of the C# files
 CSHARP_EXT_SET: set[str] = {
     ext for ext, definition_dict in EXT_TO_DEFINITION_DICT.items()
@@ -1197,6 +1306,18 @@ EXT_TO_IMPORT_QUERY_DICT: dict[str, str | None] = _expand_ext_aliases(
 EXT_TO_USAGE_NODE_TYPE_DICT: dict[str, dict | None] = _expand_ext_aliases(
     {ext: lang_config.usage_node_type_dict for ext, lang_config in _LANG_REGISTRY.items()}
 )
+
+# Pattern node types of every language together (pattern_types, pattern_field_dict):
+# what the names a declaration defines are read with
+PATTERN_TYPE_SET: set[str] = set().union(*(
+    lang_config.usage_node_type_dict.get("pattern_types", set())
+    for lang_config in _LANG_REGISTRY.values() if lang_config.usage_node_type_dict
+))
+PATTERN_FIELD_DICT: dict[str, str] = {
+    node_type: field_name
+    for lang_config in _LANG_REGISTRY.values() if lang_config.usage_node_type_dict
+    for node_type, field_name in lang_config.usage_node_type_dict.get("pattern_field_dict", {}).items()
+}
 
 # Extension -> import path resolution settings
 EXT_TO_IMPORT_RESOLVE_DICT: dict[str, dict] = _expand_ext_aliases(

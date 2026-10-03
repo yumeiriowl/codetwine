@@ -4,47 +4,63 @@
 
 **Overview**
 
-Provides the query functions the QA agent calls to inspect a single project's pre-computed code analysis (definitions, dependencies, and generated documentation) file-by-file rather than loading the whole analysis into the agent's context.
+Provide query tools for a large language model agent to navigate and analyze source code project structure, definitions, dependencies, and design documentation stored in a KnowledgeStore.
 
-- Call `get_file_detail` when the agent has narrowed its focus to a specific file and needs that file's definitions, callee/caller usages, and design-doc summary/sections.
-- Call `read_source_file` when the agent needs the actual source text of a file (e.g. to slice out a function body using line numbers returned by `get_file_detail`).
-- Call `search_text` when the agent has a keyword and needs to find which files' summaries, doc sections, definitions, or usages mention it.
-- Call `get_files_using` when the agent needs to know which files depend on a given file (reverse dependency lookup).
-- Call `graph_search` when the agent needs a bounded-hop dependency graph (callers and/or callees) starting from a named definition.
+This file is used to:
+- Call `read_source_file()` to retrieve the full text of a source file by its project path for detailed code inspection.
+- Call `get_file_detail()` to fetch a file's definitions (with line ranges), callee and caller usages, and design document for focused analysis.
+- Call `search_text()` to find where a keyword appears across the project in documentation, definitions, and dependency contexts.
+- Call `get_files_using()` to identify which files depend on a target file by examining callee usage patterns.
+- Call `graph_search()` to explore definition dependencies as a graph, traversing outgoing dependencies (what a definition uses) or incoming dependents (what uses a definition) within a specified hop distance.
 
-This file relies on the module-level `store` object (a `KnowledgeStore`), which every function queries via `store.entry`, `store.iter_entries`, `store.find_definitions`, `store.project_name`, and `store.base_dir`; it performs no other project-internal calls. It is used by `rlm_qa_agent.py`, which sets `qa_tools.store` via `load_project()`, reads `store.project_name` and `store.dependencies()` to build the initial project data payload, and registers `get_file_detail`, `search_text`, `read_source_file`, `get_files_using`, and `graph_search` as the tool set passed to `dspy.RLM`.
+The file relies on `codetwine/utils/file_utils.py` to decode and normalize line endings when reading source text from the project's output directory. The file `examples/rlm_qa/rlm_qa_agent.py` uses all tool functions as methods passed to a DSPy RLM agent, along with accessing the module-level `store` variable to retrieve project metadata (name, dependencies list) and to build documentation schema for LLM instructions.
 
-The `store` variable is a module-level global set externally rather than passed as an argument, so each tool function can be used directly as a standalone callable by the agent framework; every function checks for an uninitialized store and returns an error string/dict/list instead of raising, and `search_text` and `graph_search` cache per-file lookups (via a hit limit and an `entry_cache`, respectively) to bound how much of the store is scanned or re-read in one call.
+The module uses a module-level `store` variable (a KnowledgeStore instance) initialized by external code rather than created internally, allowing the store to be shared across multiple tool function calls and preventing the entire analysis from being held in memory at once. All tool functions check that `store` is initialized and return error dictionaries or lists on failure rather than raising exceptions, supporting graceful degradation in agent execution. The `graph_search()` function caches file entries it reads to avoid redundant store lookups during BFS traversal.
 
 **Definitions**
 
 ## `store`
-Module-level variable holding the active `KnowledgeStore` instance, set externally by `load_project()` (in `rlm_qa_agent.py`) before any tool function is called; every function in this file reads it to access `project_name`, `base_dir`, `entry()`, `iter_entries()`, and `find_definitions()`. All functions treat a `None` value as "not initialized" and return an error instead of querying it.
+
+Module-level variable holding a KnowledgeStore instance (either backed by project_knowledge.json or project_knowledge.sqlite) that is initialized externally and shared across all tool function calls. Must be set before calling any tool function; all tools check this and return error messages if it is None.
 
 ## `SEARCH_HIT_LIMIT`
-Constant defining the default cap (40) on how many hits `search_text` collects before it stops scanning the project, used to bound the cost of an unbounded keyword search across all files.
 
-## `read_source_file`
-Reads and returns the raw text of a source file that was copied into the analysis output directory, given the file path as it appears in the project's `file` field; it strips a leading `project_name/` prefix before joining with `store.base_dir`. Used after `get_file_detail` to fetch a definition's actual code by slicing lines between `start_line` and `end_line`; returns an error string (not an exception) on read failure.
+Constant set to 40 that defines the maximum number of search results `search_text()` returns before it stops scanning the project.
 
-## `get_file_detail`
-Looks up one file's full analysis entry via `store.entry(file)` and returns its `file_dependencies` (`definitions`, `callee_usages`, `caller_usages`) and its `doc` (`summary`, `sections`). Intended for files the agent has already narrowed down to, since it exposes detail not present in the project-wide dependency list; returns `{"error": ...}` if the file is not found in the project.
+## `read_source_file()`
 
-## `search_text`
-Performs a case-insensitive keyword search across every file's doc summary, doc sections, definition source (`context`), callee usage target context, and caller usage context, using `store.iter_entries()`. Returns a list of hit dicts tagged by `kind` ("summary", "section", "definition", "callee", "caller") plus the file and matched name, stopping early once `limit` hits are collected; used when the agent needs to locate where a term (e.g. a function name, error message, or concept like "retry") appears anywhere in the project.
+Read and return the full text content of a source file identified by its project-relative path (the same path as listed in project_data file fields). Strips a leading project_name/ prefix if present, constructs the full path within the store's base directory, and delegates to `read_source_text()` for encoding-aware reading with normalized line endings. Returns an error message string if the store is not initialized or if file reading fails with an OSError.
 
-## `add`
-Internal helper closure inside `search_text` that appends one hit dict to the running `hits` list and reports whether the `limit` has been reached, letting `search_text` short-circuit its nested loops as soon as the cap is hit.
+## `get_file_detail()`
 
-## `get_files_using`
-Scans every file's `callee_usages` via `store.iter_entries()` and collects entries whose `from` field contains `target_file` as a substring, returning each match paired with the consuming file's path. Used to find dependents (files that use a given file) by partial path match, complementing `graph_search`'s definition-level, exact-name traversal.
+Query the store for a single file's structured metadata: its definitions with start/end line numbers and context, callee usages (dependencies it has on other definitions) and caller usages (where it is used by other definitions), and its design documentation (summary and titled sections). Accepts the exact file path as it appears in project_data. Returns a dictionary with file_dependencies and doc keys on success, or an error dictionary if the file is not found or the store is uninitialized.
 
-## `graph_search`
-Performs a breadth-first search over the project's definitions treated as a dependency graph, starting from a definition found by exact match (`store.find_definitions(name)`) or, if absent, partial match, and expanding up to `hops` steps in the `outgoing` (callee), `incoming` (caller), or `both` direction. For each visited definition it determines outgoing edges by checking whether a callee usage's line numbers fall inside the current definition's line range (falling back to a synthetic `"__module__"` node for usages outside any definition), and incoming edges by matching caller usages whose `name` equals the current definition and mapping their `lines` back to the enclosing definition in the source file; returns discovered `nodes` (each tagged with `hop` and `via`) and `edges`. Used to trace how a specific function or class is connected to the rest of the codebase, and caches per-file `file_dependencies` lookups (`entry_cache`) for the duration of one call to avoid re-reading the same file's entry multiple times.
+## `search_text()`
 
-## `deps_of`
-Internal helper inside `graph_search` that returns a file's `file_dependencies`, populating and reusing `entry_cache` so each file touched during the BFS is read from `store.entry` at most once per `graph_search` call.
+Perform a case-insensitive keyword search across the entire project, returning hits from design document summaries and section content, definition source context, and callee and caller usage contexts. Stops scanning and returns early once the hit limit (default 40) is reached. Each hit is a dictionary recording the kind (summary, section, definition, callee, or caller), file path, and name of the matched entity.
+
+## `get_files_using()`
+
+Find all files in the project that depend on a specified target file by traversing the callee_usages of every file and collecting entries whose from field partially matches the target_file path. Returns a list of dictionaries, each pairing a file path with the callee usage record that references the target file.
+
+## `_find_definition()`
+
+Search a list of definitions for the first one matching a given name and return it, or None if not found. Used internally to locate a definition by name within a file's definition list.
+
+## `_is_usage_in()`
+
+Determine whether a callee usage (a call to another definition) occurs within the line range of a current definition. Handles the pseudo definition "__module__" to mean usages outside all named definitions. Used by `graph_search()` to filter callee usages that belong to a specific definition.
+
+## `_enclosing_definition()`
+
+Find the definition in a file that contains a caller usage (a location where the current definition is called), returning both the definition name and type. Returns the tuple ("__module__", "") if no named definition contains any of the usage lines, indicating module-level usage. Used by `graph_search()` to identify which definition in the dependent file makes each call.
+
+## `graph_search()`
+
+Perform a breadth-first search for definitions reachable within a specified hop distance from a named definition, treating definitions as nodes and dependencies as edges. Supports direction control: "outgoing" follows callee usages (dependencies the definition has), "incoming" follows caller usages (definitions that depend on it), or "both" explores both directions. Performs exact match search first, then falls back to partial match if the definition is not found. Returns a dictionary containing the start node key, hop count, direction, lists of visited nodes (with their file, name, type, hop distance, and direction), and edge records (source, target, hop). Caches file entries during traversal to avoid redundant store reads.
 
 # Summary
 
-This module exposes file-scoped query tools for a QA agent to explore a project's precomputed code analysis without loading it all into context. Main functions: read_source_file, get_file_detail, search_text (with helper add), get_files_using, graph_search (with helper deps_of); uses module-level `store` (KnowledgeStore). Key concepts: definitions, dependencies, callee/caller usages, documentation sections, keyword search, reverse dependency lookup, BFS graph traversal, caching (hit limits, entry_cache), graceful error handling instead of exceptions.
+# Summary of qa_tools.py
+
+This module provides query tools for LLM agents to explore project structure and code analysis through a shared KnowledgeStore. It enables retrieval of source files, file metadata (definitions, usages, documentation), keyword searching across the project, and graph-based traversal of definition dependencies in both directions. Main public functions are `read_source_file()`, `get_file_detail()`, `search_text()`, `get_files_using()`, and `graph_search()`. The module handles graceful error handling and result caching to support agent-driven code navigation without holding the entire project in memory.

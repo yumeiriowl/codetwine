@@ -1,66 +1,281 @@
 {
   "file": "codetwine/codetwine/utils/file_utils_py/file_utils.py",
+  "language": "py",
+  "detected_encoding": null,
   "definitions": [
+    {
+      "name": "_TEXT_PROBE_SIZE",
+      "type": "expression_statement",
+      "start_line": 9,
+      "end_line": 9,
+      "context": "_TEXT_PROBE_SIZE = 8192"
+    },
+    {
+      "name": "_HASH_CHUNK_SIZE",
+      "type": "expression_statement",
+      "start_line": 12,
+      "end_line": 12,
+      "context": "_HASH_CHUNK_SIZE = 8192"
+    },
+    {
+      "name": "_LONE_CR_RE",
+      "type": "expression_statement",
+      "start_line": 15,
+      "end_line": 15,
+      "context": "_LONE_CR_RE = re.compile(r\"\\r(?!\\n)\")"
+    },
+    {
+      "name": "_BOM_CODEC_TUPLE",
+      "type": "expression_statement",
+      "start_line": 19,
+      "end_line": 25,
+      "context": "_BOM_CODEC_TUPLE = (\n    (codecs.BOM_UTF32_LE, \"utf-32\"),\n    (codecs.BOM_UTF32_BE, \"utf-32\"),\n    (codecs.BOM_UTF8, \"utf-8-sig\"),\n    (codecs.BOM_UTF16_LE, \"utf-16\"),\n    (codecs.BOM_UTF16_BE, \"utf-16\"),\n)"
+    },
+    {
+      "name": "_bom_codec",
+      "type": "function_definition",
+      "start_line": 28,
+      "end_line": 33,
+      "context": "def _bom_codec(head: bytes) -> str | None:\n    \"\"\"Return the codec named by the BOM at the start of head, or None when it has none.\"\"\"\n    for bom, codec in _BOM_CODEC_TUPLE:\n        if head.startswith(bom):\n            return codec\n    return None"
+    },
+    {
+      "name": "is_text_file",
+      "type": "function_definition",
+      "start_line": 36,
+      "end_line": 58,
+      "context": "def is_text_file(file_path: str) -> bool:\n    \"\"\"Return whether a file is non-empty text, judged from its first _TEXT_PROBE_SIZE bytes.\n\n    A file that starts with a UTF-8, UTF-16 or UTF-32 BOM is text when the probe,\n    decoded with that codec, is not all whitespace. Any other file is text when the\n    probe holds no NUL byte and is not all whitespace. A file that cannot be read\n    counts as not text.\n\n    Args:\n        file_path: Absolute path of the file to probe.\n\n    Returns:\n        True for a non-empty text file, False for an empty, binary or unreadable one.\n    \"\"\"\n    try:\n        with open(file_path, \"rb\") as f:\n            head = f.read(_TEXT_PROBE_SIZE)\n    except OSError:\n        return False\n    bom_codec = _bom_codec(head)\n    if bom_codec is not None:\n        return bool(head.decode(bom_codec, errors=\"ignore\").strip())\n    return b\"\\0\" not in head and bool(head.strip())"
+    },
+    {
+      "name": "check_source_encoding",
+      "type": "function_definition",
+      "start_line": 61,
+      "end_line": 77,
+      "context": "def check_source_encoding() -> None:\n    \"\"\"Check that every name in SOURCE_ENCODING is a codec Python knows.\n\n    What is checked is the value this module holds when it is called.\n\n    Raises:\n        ValueError: When a name is not a known codec.\n    \"\"\"\n    for encoding in SOURCE_ENCODING:\n        try:\n            codecs.lookup(encoding)\n        except LookupError:\n            raise ValueError(\n                f\"SOURCE_ENCODING names an unknown encoding '{encoding}'. \"\n                f\"Use Python codec names such as cp932, euc_jp or cp1252, \"\n                f\"in the .env file or your shell.\"\n            ) from None"
+    },
+    {
+      "name": "_decode_source",
+      "type": "function_definition",
+      "start_line": 80,
+      "end_line": 104,
+      "context": "def _decode_source(file_content: bytes) -> tuple[str, str, bool]:\n    \"\"\"Decode the bytes of a text file as read_source() describes.\n\n    Args:\n        file_content: The whole file's bytes.\n\n    Returns:\n        A (text, encoding, detected) tuple. encoding is the codec name that decoded the\n        bytes, or \"\" when they were decoded as UTF-8 with replacement; detected is True\n        when neither a BOM, UTF-8 nor SOURCE_ENCODING decoded them (steps 4 and 5).\n    \"\"\"\n    # BOM, UTF-8 and the configured encodings: the first that decodes without error\n    bom_codec = _bom_codec(file_content)\n    codec_list = ([bom_codec] if bom_codec else []) + [\"utf-8\", *SOURCE_ENCODING]\n    for codec in codec_list:\n        try:\n            return file_content.decode(codec), codec, False\n        except UnicodeDecodeError:\n            continue\n\n    # Detected encoding, then UTF-8 with replacement\n    best_match = from_bytes(file_content).best()\n    if best_match is not None:\n        return str(best_match), best_match.encoding, True\n    return file_content.decode(\"utf-8\", errors=\"replace\"), \"\", True"
+    },
+    {
+      "name": "read_source",
+      "type": "function_definition",
+      "start_line": 107,
+      "end_line": 131,
+      "context": "def read_source(file_path: str) -> tuple[str, str]:\n    \"\"\"Read a text file and return its contents decoded, with the encoding used.\n\n    The encoding is chosen in this order:\n    1. The codec named by a BOM at the start of the file (the BOM is dropped)\n    2. UTF-8\n    3. The encodings of SOURCE_ENCODING, in order\n    4. The encoding charset-normalizer detects\n    5. UTF-8 with each invalid byte replaced by U+FFFD\n    Steps 1 to 3 take the first codec that decodes the whole file without error.\n    Line breaks are kept as they are; line numbers match the file.\n\n    Args:\n        file_path: Absolute path of the file to read.\n\n    Returns:\n        A (text, encoding) tuple. encoding is the codec name that decoded the file,\n        or \"\" when step 5 decoded it.\n\n    Raises:\n        OSError: When the file cannot be read.\n    \"\"\"\n    with open(file_path, \"rb\") as f:\n        text, encoding, _ = _decode_source(f.read())\n    return text, encoding"
+    },
+    {
+      "name": "detected_encoding",
+      "type": "function_definition",
+      "start_line": 134,
+      "end_line": 150,
+      "context": "def detected_encoding(file_path: str) -> str | None:\n    \"\"\"Return the encoding read_source() decodes a file with when it has to detect it.\n\n    Args:\n        file_path: Absolute path of the file to read.\n\n    Returns:\n        The encoding charset-normalizer detects (read_source() step 4), \"\" when the file\n        is decoded as UTF-8 with replacement (step 5), or None when a BOM, UTF-8 or\n        SOURCE_ENCODING decodes it.\n\n    Raises:\n        OSError: When the file cannot be read.\n    \"\"\"\n    with open(file_path, \"rb\") as f:\n        _, encoding, detected = _decode_source(f.read())\n    return encoding if detected else None"
+    },
+    {
+      "name": "lone_cr_to_lf",
+      "type": "function_definition",
+      "start_line": 153,
+      "end_line": 165,
+      "context": "def lone_cr_to_lf(text: str) -> str:\n    \"\"\"Return a text with every lone \"\\\\r\" turned into \"\\\\n\".\n\n    The text keeps its length and the position of every character, and \"\\\\r\\\\n\" stays.\n    Each \"\\\\n\" of the result ends one line as line_list_of() splits the text.\n\n    Args:\n        text: The text to change.\n\n    Returns:\n        The changed text.\n    \"\"\"\n    return _LONE_CR_RE.sub(\"\\n\", text)"
+    },
+    {
+      "name": "line_list_of",
+      "type": "function_definition",
+      "start_line": 168,
+      "end_line": 190,
+      "context": "def line_list_of(text: str) -> list[str]:\n    \"\"\"Split a text into its lines at \"\\\\n\", \"\\\\r\\\\n\" and a lone \"\\\\r\" alone.\n\n    Every line number of the analysis counts lines this way. A form feed, a vertical tab,\n    U+0085, U+2028 and the other characters str.splitlines() also breaks at stay inside\n    their line.\n\n    Examples:\n        \"a\\\\r\\\\nb\\\\rc\\\\n\" -> [\"a\", \"b\", \"c\"]\n        \"a\\\\n\\\\f\\\\nb\"      -> [\"a\", \"\\\\f\", \"b\"]\n        \"\"              -> []\n\n    Args:\n        text: The text to split.\n\n    Returns:\n        The lines without their line breaks. A text that ends in a line break has no\n        empty line after it.\n    \"\"\"\n    line_list = lone_cr_to_lf(text).replace(\"\\r\\n\", \"\\n\").split(\"\\n\")\n    if line_list[-1] == \"\":\n        line_list.pop()\n    return line_list"
+    },
+    {
+      "name": "read_source_text",
+      "type": "function_definition",
+      "start_line": 193,
+      "end_line": 209,
+      "context": "def read_source_text(file_path: str) -> str:\n    \"\"\"Read a text file decoded by read_source(), with every line break turned into \"\\\\n\".\n\n    \"\\\\r\\\\n\" and a lone \"\\\\r\" become \"\\\\n\", as in a file opened in text mode, so its lines are\n    those of line_list_of().\n\n    Args:\n        file_path: Absolute path of the file to read.\n\n    Returns:\n        The file's text.\n\n    Raises:\n        OSError: When the file cannot be read.\n    \"\"\"\n    text = read_source(file_path)[0]\n    return lone_cr_to_lf(text).replace(\"\\r\\n\", \"\\n\")"
+    },
     {
       "name": "_to_dir_name",
       "type": "function_definition",
-      "start_line": 5,
-      "end_line": 25,
+      "start_line": 212,
+      "end_line": 232,
       "context": "def _to_dir_name(filename: str) -> str:\n    \"\"\"Generate an output directory name from a filename.\n\n    Returns the name with the \".\" in the extension replaced by \"_\".\n    Files without extensions (e.g. Makefile) are returned as-is.\n\n    Examples:\n        \"settings.py\"  -> \"settings_py\"\n        \"helper.h\"     -> \"helper_h\"\n        \"Makefile\"     -> \"Makefile\"\n\n    Args:\n        filename: The source filename (e.g. \"settings.py\").\n\n    Returns:\n        str: The directory name with the extension's \".\" replaced by \"_\".\n    \"\"\"\n    stem, ext = os.path.splitext(filename)\n    if ext:\n        return f\"{stem}_{ext[1:]}\"\n    return stem"
     },
     {
       "name": "rel_to_copy_path",
       "type": "function_definition",
-      "start_line": 28,
-      "end_line": 56,
-      "context": "def rel_to_copy_path(rel_path: str) -> str:\n    \"\"\"Convert a project-relative path to a copy-destination directory structure path.\n\n    Matches the path structure used by process_single_file when copying source code.\n    The destination follows the format {parent_dir}/{stem}_{ext}/{filename}.\n    By appending the extension as a suffix, output destinations for files with the\n    same name but different extensions (e.g. utils.c and utils.h) do not collide.\n\n    Examples:\n        \"config.py\"                    -> \"config_py/config.py\"\n        \"repo_graphrag/prompts.py\"     -> \"repo_graphrag/prompts_py/prompts.py\"\n        \"repo_graphrag/llm/client.py\"  -> \"repo_graphrag/llm/client_py/client.py\"\n        \"Makefile\"                     -> \"Makefile/Makefile\"\n\n    Args:\n        rel_path: Relative path from the project root.\n\n    Returns:\n        A path matching the copy-destination directory structure.\n    \"\"\"\n    # Separate the filename and parent directory\n    parent_dir = os.path.dirname(rel_path)\n    filename = os.path.basename(rel_path)\n    dir_name = _to_dir_name(filename)\n    # Include the parent directory in the path if present\n    if parent_dir:\n        return f\"{parent_dir}/{dir_name}/{filename}\"\n    # For top-level files\n    return f\"{dir_name}/{filename}\""
+      "start_line": 235,
+      "end_line": 262,
+      "context": "def rel_to_copy_path(rel_path: str) -> str:\n    \"\"\"Convert a project-relative path to a copy-destination directory structure path.\n\n    The destination follows the format {parent_dir}/{stem}_{ext}/{filename}, the path at\n    which the pipeline copies each source file into the output directory. Files with the\n    same stem and different extensions (e.g. utils.c and utils.h) get different directories.\n\n    Examples:\n        \"config.py\"                    -> \"config_py/config.py\"\n        \"repo_graphrag/prompts.py\"     -> \"repo_graphrag/prompts_py/prompts.py\"\n        \"repo_graphrag/llm/client.py\"  -> \"repo_graphrag/llm/client_py/client.py\"\n        \"Makefile\"                     -> \"Makefile/Makefile\"\n\n    Args:\n        rel_path: Relative path from the project root.\n\n    Returns:\n        A path matching the copy-destination directory structure.\n    \"\"\"\n    # Separate the filename and parent directory\n    parent_dir = os.path.dirname(rel_path)\n    filename = os.path.basename(rel_path)\n    dir_name = _to_dir_name(filename)\n    # Include the parent directory in the path if present\n    if parent_dir:\n        return f\"{parent_dir}/{dir_name}/{filename}\"\n    # For top-level files\n    return f\"{dir_name}/{filename}\""
     },
     {
       "name": "copy_path_to_rel",
       "type": "function_definition",
-      "start_line": 59,
-      "end_line": 84,
-      "context": "def copy_path_to_rel(copy_path: str) -> str:\n    \"\"\"Restore a copy-destination directory structure path to a project-relative path.\n\n    The inverse of rel_to_copy_path. In copy-destination paths, a {stem}_{ext}\n    directory is inserted; this removes it to recover the original relative path.\n\n    Examples:\n        \"config_py/config.py\"                    -> \"config.py\"\n        \"repo_graphrag/prompts_py/prompts.py\"     -> \"repo_graphrag/prompts.py\"\n        \"repo_graphrag/llm/client_py/client.py\"   -> \"repo_graphrag/llm/client.py\"\n        \"Makefile/Makefile\"                       -> \"Makefile\"\n\n    Args:\n        copy_path: A copy-destination directory structure path.\n\n    Returns:\n        The relative path from the project root.\n    \"\"\"\n    # Split the path by separator\n    parts = copy_path.replace(\"\\\\\", \"/\").split(\"/\")\n    if len(parts) >= 2:\n        filename = parts[-1]\n        # If the second-to-last directory name matches _to_dir_name(filename), it was inserted\n        if parts[-2] == _to_dir_name(filename):\n            return \"/\".join(parts[:-2] + [filename])\n    return copy_path"
+      "start_line": 265,
+      "end_line": 290,
+      "context": "def copy_path_to_rel(copy_path: str) -> str:\n    \"\"\"Restore a copy-destination directory structure path to a project-relative path.\n\n    The inverse of rel_to_copy_path. In copy-destination paths, a {stem}_{ext}\n    directory is inserted; this removes it to recover the original relative path.\n\n    Examples:\n        \"config_py/config.py\"                    -> \"config.py\"\n        \"repo_graphrag/prompts_py/prompts.py\"     -> \"repo_graphrag/prompts.py\"\n        \"repo_graphrag/llm/client_py/client.py\"   -> \"repo_graphrag/llm/client.py\"\n        \"Makefile/Makefile\"                       -> \"Makefile\"\n\n    Args:\n        copy_path: A copy-destination directory structure path.\n\n    Returns:\n        The relative path from the project root.\n    \"\"\"\n    # Split the path by separator\n    part_list = copy_path.replace(\"\\\\\", \"/\").split(\"/\")\n    if len(part_list) >= 2:\n        filename = part_list[-1]\n        # If the second-to-last directory name matches _to_dir_name(filename), it was inserted\n        if part_list[-2] == _to_dir_name(filename):\n            return \"/\".join(part_list[:-2] + [filename])\n    return copy_path"
     },
     {
       "name": "output_path_to_rel",
       "type": "function_definition",
-      "start_line": 87,
-      "end_line": 107,
-      "context": "def output_path_to_rel(output_path: str) -> str:\n    \"\"\"Restore a \"project_name/copy_destination_path\" format path to a source-relative path.\n\n    The inverse of to_output_path() in output.py.\n    Removes the project name prefix and converts the copy-destination path\n    back to the original relative path.\n\n    Examples:\n        \"js_project/src/emitter_js/emitter.js\"  -> \"src/emitter.js\"\n        \"my_project/config_py/config.py\"         -> \"config.py\"\n\n    Args:\n        output_path: A path in \"project_name/copy_destination_path\" format.\n\n    Returns:\n        The relative path from the project root.\n    \"\"\"\n    parts = output_path.split(\"/\", 1)\n    if len(parts) == 2:\n        return copy_path_to_rel(parts[1])\n    return output_path"
+      "start_line": 293,
+      "end_line": 313,
+      "context": "def output_path_to_rel(output_path: str) -> str:\n    \"\"\"Restore a \"project_name/copy_destination_path\" format path to a source-relative path.\n\n    The inverse of to_output_path() in output.py.\n    Removes the project name prefix and converts the copy-destination path\n    back to the original relative path.\n\n    Examples:\n        \"js_project/src/emitter_js/emitter.js\"  -> \"src/emitter.js\"\n        \"my_project/config_py/config.py\"         -> \"config.py\"\n\n    Args:\n        output_path: A path in \"project_name/copy_destination_path\" format.\n\n    Returns:\n        The relative path from the project root.\n    \"\"\"\n    part_list = output_path.split(\"/\", 1)\n    if len(part_list) == 2:\n        return copy_path_to_rel(part_list[1])\n    return output_path"
     },
     {
       "name": "resolve_file_output_dir",
       "type": "function_definition",
-      "start_line": 110,
-      "end_line": 127,
-      "context": "def resolve_file_output_dir(base_output_dir: str, file_rel: str) -> str:\n    \"\"\"Resolve the absolute output directory path from a file's relative path.\n\n    The output destination follows the structure {base_output_dir}/{parent_dir}/{stem}_{ext}/.\n    Shares the same path structure as rel_to_copy_path; by appending the extension\n    as a suffix, output destinations for files with the same name but different\n    extensions (e.g. utils.c and utils.h) do not collide.\n\n    Args:\n        base_output_dir: Base output directory.\n        file_rel: File's relative path (e.g. \"src/foo.py\").\n\n    Returns:\n        The absolute path of the output directory.\n    \"\"\"\n    # Convert the path structure with rel_to_copy_path and use its parent directory as the output destination\n    copy_path = rel_to_copy_path(file_rel)\n    return os.path.join(base_output_dir, os.path.dirname(copy_path))"
+      "start_line": 316,
+      "end_line": 331,
+      "context": "def resolve_file_output_dir(base_output_dir: str, file_rel: str) -> str:\n    \"\"\"Resolve the absolute output directory path from a file's relative path.\n\n    The output destination follows the structure {base_output_dir}/{parent_dir}/{stem}_{ext}/,\n    the directory of rel_to_copy_path's result.\n\n    Args:\n        base_output_dir: Base output directory.\n        file_rel: File's relative path (e.g. \"src/foo.py\").\n\n    Returns:\n        The absolute path of the output directory.\n    \"\"\"\n    # Convert the path structure with rel_to_copy_path and use its parent directory as the output destination\n    copy_path = rel_to_copy_path(file_rel)\n    return os.path.join(base_output_dir, os.path.dirname(copy_path))"
     },
     {
       "name": "compute_file_hash",
       "type": "function_definition",
-      "start_line": 130,
-      "end_line": 145,
-      "context": "def compute_file_hash(file_path: str) -> str:\n    \"\"\"Return the SHA256 hash of a file as a hex string.\n\n    Args:\n        file_path: Absolute path of the file to hash.\n\n    Returns:\n        SHA256 hash as a hex string.\n    \"\"\"\n    # Initialize a SHA256 hash object\n    h = hashlib.sha256()\n    # Read and hash in 8KB chunks\n    with open(file_path, \"rb\") as f:\n        for chunk in iter(lambda: f.read(8192), b\"\"):\n            h.update(chunk)\n    return h.hexdigest()"
+      "start_line": 334,
+      "end_line": 347,
+      "context": "def compute_file_hash(file_path: str) -> str:\n    \"\"\"Return the SHA256 hash of a file as a hex string.\n\n    Args:\n        file_path: Absolute path of the file to hash.\n\n    Returns:\n        SHA256 hash as a hex string.\n    \"\"\"\n    sha256 = hashlib.sha256()\n    with open(file_path, \"rb\") as f:\n        for chunk in iter(lambda: f.read(_HASH_CHUNK_SIZE), b\"\"):\n            sha256.update(chunk)\n    return sha256.hexdigest()"
     }
   ],
-  "callee_usages": [],
-  "caller_usages": [
+  "callee_usages": [
     {
       "lines": [
-        229,
-        254,
-        271,
-        363,
-        365
+        69,
+        93
       ],
-      "name": "output_path_to_rel",
-      "file": "codetwine/codetwine/doc_creator_py/doc_creator.py",
-      "usage_context": "    \"\"\"\n    # Basic prompt structure: target file name + source code\n    parts = [\n        HEADER_TARGET_FILE.format(file=output_path_to_rel(file_deps.get('file', 'unknown'))),\n        \"\",\n        HEADER_SOURCE_CODE,\n        \"```\",\n...\n        parts.append(HEADER_CALLEE_USAGES)\n        parts.append(CALLEE_USAGES_SCHEMA_NOTE)\n        for u in callee_usages:\n            parts.append(f\"- {u['name']} (from {output_path_to_rel(u['from'])})\")\n            # Attach the full dependency source code if available\n            target_context = u.get(\"target_context\")\n            if target_context:"
+      "name": "SOURCE_ENCODING",
+      "from": "codetwine/codetwine/config/settings_py/settings.py",
+      "target_context": "SOURCE_ENCODING: list[str] = [\n    e.strip() for e in _SOURCE_ENCODING_ENV.split(\",\") if e.strip()\n]",
+      "target_name": "SOURCE_ENCODING",
+      "target_start_line": 135
+    }
+  ],
+  "same_file_usages": [
+    {
+      "lines": [
+        30
+      ],
+      "name": "_BOM_CODEC_TUPLE",
+      "target_name": "_BOM_CODEC_TUPLE",
+      "target_start_line": 19
     },
     {
       "lines": [
-        777
+        52
+      ],
+      "name": "_TEXT_PROBE_SIZE",
+      "target_name": "_TEXT_PROBE_SIZE",
+      "target_start_line": 9
+    },
+    {
+      "lines": [
+        55,
+        92
+      ],
+      "name": "_bom_codec",
+      "target_name": "_bom_codec",
+      "target_start_line": 28
+    },
+    {
+      "lines": [
+        130,
+        149
+      ],
+      "name": "_decode_source",
+      "target_name": "_decode_source",
+      "target_start_line": 80
+    },
+    {
+      "lines": [
+        165
+      ],
+      "name": "_LONE_CR_RE.sub",
+      "target_name": "_LONE_CR_RE",
+      "target_start_line": 15
+    },
+    {
+      "lines": [
+        187,
+        209
+      ],
+      "name": "lone_cr_to_lf",
+      "target_name": "lone_cr_to_lf",
+      "target_start_line": 153
+    },
+    {
+      "lines": [
+        208
+      ],
+      "name": "read_source",
+      "target_name": "read_source",
+      "target_start_line": 107
+    },
+    {
+      "lines": [
+        257,
+        288
+      ],
+      "name": "_to_dir_name",
+      "target_name": "_to_dir_name",
+      "target_start_line": 212
+    },
+    {
+      "lines": [
+        312
+      ],
+      "name": "copy_path_to_rel",
+      "target_name": "copy_path_to_rel",
+      "target_start_line": 265
+    },
+    {
+      "lines": [
+        330
+      ],
+      "name": "rel_to_copy_path",
+      "target_name": "rel_to_copy_path",
+      "target_start_line": 235
+    },
+    {
+      "lines": [
+        345
+      ],
+      "name": "_HASH_CHUNK_SIZE",
+      "target_name": "_HASH_CHUNK_SIZE",
+      "target_start_line": 12
+    }
+  ],
+  "caller_usages": [
+    {
+      "lines": [
+        348
+      ],
+      "name": "read_source",
+      "file": "codetwine/codetwine/cobol_file_index_py/cobol_file_index.py",
+      "usage_context": "        of the procedure division the grammar reads a statement in (has_statement).\n    \"\"\"\n    try:\n        text = read_source(os.path.join(project_dir, file_rel))[0]\n        unit_list = split_cobol_source(text).unit_list\n    except Exception as e:\n        logger.warning(f\"{file_rel} is not read as COBOL: {type(e).__name__}: {e}\")"
+    },
+    {
+      "lines": [
+        227,
+        259,
+        376,
+        378
+      ],
+      "name": "output_path_to_rel",
+      "file": "codetwine/codetwine/doc_creator_py/doc_creator.py",
+      "usage_context": "    \"\"\"\n    part_list = [header, schema_note]\n    for usage in usage_list:\n        part_list.append(f\"- {usage['name']} (from {output_path_to_rel(usage[path_key])})\")\n        context = usage.get(context_key)\n        if context:\n            part_list.append(context_label)\n...\n    \"\"\"\n    # Basic prompt structure: target file name + source code\n    part_list = [\n        HEADER_TARGET_FILE.format(file=output_path_to_rel(file_deps.get('file', 'unknown'))),\n        \"\",\n        HEADER_SOURCE_CODE,\n        \"```\","
+    },
+    {
+      "lines": [
+        610,
+        729
+      ],
+      "name": "read_source_text",
+      "file": "codetwine/codetwine/doc_creator_py/doc_creator.py",
+      "usage_context": "        impl_dir = os.path.join(base_dir, f\"{stem}_{impl_ext}\")\n        impl_file = os.path.join(impl_dir, f\"{stem}.{impl_ext}\")\n        if os.path.isfile(impl_file):\n            return read_source_text(impl_file)\n\n    return \"\"\n\n...\n        logger.warning(f\"Source file not found: {file_output_dir}\")\n        return None\n\n    source_code = read_source_text(source_file)\n\n    # Read file_dependencies.json\n    deps_path = os.path.join(file_output_dir, \"file_dependencies.json\")"
+    },
+    {
+      "lines": [
+        781
       ],
       "name": "compute_file_hash",
       "file": "codetwine/codetwine/doc_creator_py/doc_creator.py",
@@ -68,7 +283,7 @@
     },
     {
       "lines": [
-        1104
+        1130
       ],
       "name": "resolve_file_output_dir",
       "file": "codetwine/codetwine/doc_creator_py/doc_creator.py",
@@ -76,32 +291,98 @@
     },
     {
       "lines": [
-        56
+        328
       ],
-      "name": "copy_path_to_rel",
-      "file": "codetwine/codetwine/pipeline_py/pipeline.py",
-      "usage_context": "\n    def to_internal(path: str) -> str:\n        stripped = path[len(prefix):] if path.startswith(prefix) else path\n        return copy_path_to_rel(stripped)\n\n    return [\n        {"
+      "name": "line_list_of",
+      "file": "codetwine/codetwine/extractors/bms_source_py/bms_source.py",
+      "usage_context": "        A CobolSource with the data items of the symbolic maps as its definitions and the\n        mapset names as its copy_name_list. It has no imports and no references.\n    \"\"\"\n    line_list = line_list_of(source)\n    map_list, mapset_name_list = _read_map_list(_statement_list(line_list))\n\n    definition_list: list[CobolDefinition] = []"
     },
     {
       "lines": [
-        90,
-        123
+        819
       ],
-      "name": "resolve_file_output_dir",
-      "file": "codetwine/codetwine/pipeline_py/pipeline.py",
-      "usage_context": "    changed: set[str] = set()\n    for file_rel in all_file_list:\n        file_abs = os.path.join(project_dir, file_rel)\n        doc = load_doc(resolve_file_output_dir(base_output_dir, file_rel))\n\n        if doc is None or doc.get(\"source_hash\") != compute_file_hash(file_abs):\n            changed.add(file_rel)\n...\n    for file_rel in files_to_process:\n        try:\n            file_abs = os.path.join(project_dir, file_rel)\n            output_file_dir = resolve_file_output_dir(base_output_dir, file_rel)\n\n            os.makedirs(output_file_dir, exist_ok=True)\n"
+      "name": "line_list_of",
+      "file": "codetwine/codetwine/extractors/cobol_source_py/cobol_source.py",
+      "usage_context": "        A CobolSource.\n    \"\"\"\n    cobol_text = split_cobol_source(source)\n    return _UnitReader(cobol_text, line_list_of(source), language).read()"
     },
     {
       "lines": [
-        92
+        82,
+        119
       ],
-      "name": "compute_file_hash",
-      "file": "codetwine/codetwine/pipeline_py/pipeline.py",
-      "usage_context": "        file_abs = os.path.join(project_dir, file_rel)\n        doc = load_doc(resolve_file_output_dir(base_output_dir, file_rel))\n\n        if doc is None or doc.get(\"source_hash\") != compute_file_hash(file_abs):\n            changed.add(file_rel)\n    return changed\n"
+      "name": "is_text_file",
+      "file": "codetwine/codetwine/extractors/dependency_graph_py/dependency_graph.py",
+      "usage_context": "            file_path = os.path.join(dir_path, file_name)\n            if not _is_own_file(project_dir, file_path):\n                continue\n            if is_text_file(file_path):\n                text_file_list.append(file_path)\n            else:\n                skip_count += 1\n...\n            continue\n        if not _is_own_file(project_dir, file_path):\n            continue\n        if is_text_file(file_path):\n            text_file_list.append(file_path)\n        else:\n            skip_count += 1"
     },
     {
       "lines": [
-        31
+        148
+      ],
+      "name": "lone_cr_to_lf",
+      "file": "codetwine/codetwine/extractors/dependency_graph_py/dependency_graph.py",
+      "usage_context": "        if os.path.splitext(file_path)[1].lstrip(\".\").lower() not in R_MARKDOWN_EXT_SET:\n            continue\n        try:\n            content = lone_cr_to_lf(read_source(file_path)[0]).encode(\"utf-8\")\n        except OSError:\n            continue\n        if not has_r_chunk(content):"
+    },
+    {
+      "lines": [
+        148
+      ],
+      "name": "read_source",
+      "file": "codetwine/codetwine/extractors/dependency_graph_py/dependency_graph.py",
+      "usage_context": "        if os.path.splitext(file_path)[1].lstrip(\".\").lower() not in R_MARKDOWN_EXT_SET:\n            continue\n        try:\n            content = lone_cr_to_lf(read_source(file_path)[0]).encode(\"utf-8\")\n        except OSError:\n            continue\n        if not has_r_chunk(content):"
+    },
+    {
+      "lines": [
+        299
+      ],
+      "name": "rel_to_copy_path",
+      "file": "codetwine/codetwine/extractors/dependency_graph_py/dependency_graph.py",
+      "usage_context": "\n    def to_output(path: str) -> str:\n        \"\"\"Convert an absolute path to \"project_name/copy_path\".\"\"\"\n        return f\"{project_name}/{rel_to_copy_path(_to_rel(path, project_dir))}\"\n\n    file_info_list = []\n    for file_path in all_file_list:"
+    },
+    {
+      "lines": [
+        740
+      ],
+      "name": "line_list_of",
+      "file": "codetwine/codetwine/extractors/r_source_py/r_source.py",
+      "usage_context": "    definition = next(\n        (d for d in candidate_list if not d.is_member and not d.is_attach), candidate_list[0],\n    )\n    line_list = line_list_of(content.decode(\"utf-8\"))\n    return \"\\n\".join(line_list[definition.start_line - 1:definition.end_line])\n\n"
+    },
+    {
+      "lines": [
+        269,
+        440
+      ],
+      "name": "read_source",
+      "file": "codetwine/codetwine/extractors/usage_analysis_py/usage_analysis.py",
+      "usage_context": "    def r_definition(target: RReferenceTarget) -> _TargetDefinition:\n        \"\"\"Return the definition an R reference resolves to, with its lines as text.\"\"\"\n        if target.file_rel not in line_list_dict:\n            target_text = read_source(os.path.join(project_dir, target.file_rel))[0]\n            line_list_dict[target.file_rel] = line_list_of(target_text)\n        return _TargetDefinition(\n            \"\\n\".join(line_list_dict[target.file_rel][target.start_line - 1:target.end_line]),\n...\n        caller_abs: Absolute path of the caller file.\n    \"\"\"\n    try:\n        caller_source_line_list = line_list_of(read_source(caller_abs)[0])\n    except OSError:\n        return\n    if not caller_source_line_list:"
+    },
+    {
+      "lines": [
+        270,
+        440
+      ],
+      "name": "line_list_of",
+      "file": "codetwine/codetwine/extractors/usage_analysis_py/usage_analysis.py",
+      "usage_context": "        \"\"\"Return the definition an R reference resolves to, with its lines as text.\"\"\"\n        if target.file_rel not in line_list_dict:\n            target_text = read_source(os.path.join(project_dir, target.file_rel))[0]\n            line_list_dict[target.file_rel] = line_list_of(target_text)\n        return _TargetDefinition(\n            \"\\n\".join(line_list_dict[target.file_rel][target.start_line - 1:target.end_line]),\n            target.definition_name, target.start_line,\n...\n        caller_abs: Absolute path of the caller file.\n    \"\"\"\n    try:\n        caller_source_line_list = line_list_of(read_source(caller_abs)[0])\n    except OSError:\n        return\n    if not caller_source_line_list:"
+    },
+    {
+      "lines": [
+        101
+      ],
+      "name": "line_list_of",
+      "file": "codetwine/codetwine/file_analyzer_py/file_analyzer.py",
+      "usage_context": "    )\n\n    # Convert content to text lines and extract source code from each definition's line range\n    content_line_list = line_list_of(file_content(target_file).decode(\"utf-8\"))\n    definition_list = [\n        _definition_entry(definition, content_line_list) for definition in definition_info_list\n    ]"
+    },
+    {
+      "lines": [
+        120
+      ],
+      "name": "detected_encoding",
+      "file": "codetwine/codetwine/file_analyzer_py/file_analyzer.py",
+      "usage_context": "    return {\n        \"file\":          target_file_rel,\n        \"language\":      file_ext,\n        \"detected_encoding\": detected_encoding(target_file),\n        \"definitions\":   definition_list,\n        \"callee_usages\": usage_list,\n        \"same_file_usages\": same_file_usages,"
+    },
+    {
+      "lines": [
+        60
       ],
       "name": "rel_to_copy_path",
       "file": "codetwine/codetwine/output_py/output.py",
@@ -109,40 +390,98 @@
     },
     {
       "lines": [
-        49,
-        108,
-        233
+        78,
+        132,
+        263
       ],
       "name": "resolve_file_output_dir",
       "file": "codetwine/codetwine/output_py/output.py",
-      "usage_context": "    \"\"\"\n    summary_map: dict[str, str | None] = {}\n    for file_rel in all_file_list:\n        output_file_dir = resolve_file_output_dir(base_output_dir, file_rel)\n        doc_path = os.path.join(output_file_dir, \"doc.json\")\n        summary = None\n        if os.path.exists(doc_path):\n...\n        A dict with a \"file\" key plus \"file_dependencies\" and \"doc\" where those JSON\n        files exist. None when neither exists.\n    \"\"\"\n    output_file_dir = resolve_file_output_dir(base_output_dir, file_rel)\n\n    entry: dict = {\"file\": to_output_path(base_output_dir, file_rel)}\n"
+      "usage_context": "    \"\"\"\n    summary_map: dict[str, str | None] = {}\n    for file_rel in all_file_list:\n        output_file_dir = resolve_file_output_dir(base_output_dir, file_rel)\n        doc = _load_json(os.path.join(output_file_dir, \"doc.json\"))\n        summary_map[file_rel] = doc.get(\"summary\") if doc is not None else None\n    return summary_map\n...\n        A dict with a \"file\" key plus \"file_dependencies\" and \"doc\" where those JSON\n        files exist. None when neither exists.\n    \"\"\"\n    output_file_dir = resolve_file_output_dir(base_output_dir, file_rel)\n\n    entry: dict = {\"file\": to_output_path(base_output_dir, file_rel)}\n"
     },
     {
       "lines": [
-        244,
-        250
+        272,
+        278,
+        356
       ],
       "name": "output_path_to_rel",
       "file": "codetwine/codetwine/output_py/output.py",
-      "usage_context": "        for usage in file_deps.get(\"callee_usages\", []):\n            callee_file = usage.get(\"from\")\n            if callee_file:\n                deps_map[file_rel][\"callees\"].add(output_path_to_rel(callee_file))\n\n        # Add dependency source files from caller_usages' file field\n        for usage in file_deps.get(\"caller_usages\", []):\n...\n        for usage in file_deps.get(\"caller_usages\", []):\n            caller_file = usage.get(\"file\")\n            if caller_file:\n                deps_map[file_rel][\"callers\"].add(output_path_to_rel(caller_file))\n\n    return deps_map\n"
+      "usage_context": "        for usage in file_deps.get(\"callee_usages\", []):\n            callee_file = usage.get(\"from\")\n            if callee_file:\n                dep_dict[file_rel][\"callees\"].add(output_path_to_rel(callee_file))\n\n        # Add dependency source files from caller_usages' file field\n        for usage in file_deps.get(\"caller_usages\", []):\n...\n        for usage in file_deps.get(\"caller_usages\", []):\n            caller_file = usage.get(\"file\")\n            if caller_file:\n                dep_dict[file_rel][\"callers\"].add(output_path_to_rel(caller_file))\n\n    return dep_dict\n"
     },
     {
       "lines": [
-        349
+        1627
       ],
-      "name": "copy_path_to_rel",
-      "file": "codetwine/codetwine/output_py/output.py",
-      "usage_context": "        \"\"\"\n        parts = path.split(\"/\", 1)\n        if len(parts) == 2:\n            return copy_path_to_rel(parts[1])\n        return path\n\n    # Build the Mermaid text"
+      "name": "line_list_of",
+      "file": "codetwine/codetwine/parsers/cobol_format_py/cobol_format.py",
+      "usage_context": "        A CobolText. Names and line numbers in it are those of the source, except in\n        the text of the units.\n    \"\"\"\n    line_list = [line.expandtabs(_TAB_SIZE) for line in line_list_of(source)]\n    cobol_text = CobolText()\n\n    # == Step 1: Tokens ======================================================="
     },
     {
       "lines": [
-        243,
-        244,
-        245
+        66
       ],
-      "name": "rel_to_copy_path",
-      "file": "codetwine/codetwine/extractors/dependency_graph_py/dependency_graph.py",
-      "usage_context": "        caller_rels = [os.path.relpath(p, project_dir).replace(\"\\\\\", \"/\") for p in file_caller_map[abs_path]]\n        callee_rels = [os.path.relpath(p, project_dir).replace(\"\\\\\", \"/\") for p in file_callee_map[abs_path]]\n        file_info_list.append({\n            \"file\":    f\"{project_name}/{rel_to_copy_path(rel)}\",\n            \"callers\": [f\"{project_name}/{rel_to_copy_path(r)}\" for r in caller_rels],\n            \"callees\": [f\"{project_name}/{rel_to_copy_path(r)}\" for r in callee_rels],\n        })\n...\n        callee_rels = [os.path.relpath(p, project_dir).replace(\"\\\\\", \"/\") for p in file_callee_map[abs_path]]\n        file_info_list.append({\n            \"file\":    f\"{project_name}/{rel_to_copy_path(rel)}\",\n            \"callers\": [f\"{project_name}/{rel_to_copy_path(r)}\" for r in caller_rels],\n            \"callees\": [f\"{project_name}/{rel_to_copy_path(r)}\" for r in callee_rels],\n        })\n"
+      "name": "read_source",
+      "file": "codetwine/codetwine/parsers/ts_parser_py/ts_parser.py",
+      "usage_context": "    Returns:\n        The file's text as UTF-8 bytes.\n    \"\"\"\n    text, encoding = read_source(file_path)\n    if encoding == \"\":\n        logger.warning(\n            f\"No encoding decodes {file_path}; it is read as UTF-8 with invalid bytes \""
+    },
+    {
+      "lines": [
+        74
+      ],
+      "name": "lone_cr_to_lf",
+      "file": "codetwine/codetwine/parsers/ts_parser_py/ts_parser.py",
+      "usage_context": "        )\n    elif encoding != \"utf-8\":\n        logger.debug(f\"{file_path} is read as {encoding}\")\n    return lone_cr_to_lf(text).encode(\"utf-8\")\n\n\ndef _is_whole_code(code: bytes, language: Language) -> bool:"
+    },
+    {
+      "lines": [
+        121
+      ],
+      "name": "read_source",
+      "file": "codetwine/codetwine/path_config_py/path_config.py",
+      "usage_context": "        object; the exception is logged.\n    \"\"\"\n    try:\n        text = read_source(os.path.join(project_dir, file_rel))[0]\n        option_dict = json.loads(_strip_json_comment(text))\n    except (OSError, ValueError) as e:\n        logger.warning(f\"{file_rel} cannot be read: {type(e).__name__}: {e}\")"
+    },
+    {
+      "lines": [
+        63,
+        64,
+        65
+      ],
+      "name": "output_path_to_rel",
+      "file": "codetwine/codetwine/pipeline_py/pipeline.py",
+      "usage_context": "    \"\"\"\n    return [\n        {\n            \"file\": output_path_to_rel(dep[\"file\"]),\n            \"callers\": [output_path_to_rel(caller) for caller in dep.get(\"callers\", [])],\n            \"callees\": [output_path_to_rel(callee) for callee in dep.get(\"callees\", [])],\n        }\n...\n    return [\n        {\n            \"file\": output_path_to_rel(dep[\"file\"]),\n            \"callers\": [output_path_to_rel(caller) for caller in dep.get(\"callers\", [])],\n            \"callees\": [output_path_to_rel(callee) for callee in dep.get(\"callees\", [])],\n        }\n        for dep in project_dep_list_raw"
+    },
+    {
+      "lines": [
+        93,
+        169
+      ],
+      "name": "resolve_file_output_dir",
+      "file": "codetwine/codetwine/pipeline_py/pipeline.py",
+      "usage_context": "    changed_file_set: set[str] = set()\n    for file_rel in all_file_list:\n        file_abs = os.path.join(project_dir, file_rel)\n        doc = load_doc(resolve_file_output_dir(base_output_dir, file_rel))\n\n        if doc is None or doc.get(\"source_hash\") != compute_file_hash(file_abs):\n            changed_file_set.add(file_rel)\n...\n    detected_encoding_dict: dict[str, str] = {}\n    for file_rel in file_rel_list:\n        file_abs = os.path.join(project_dir, file_rel)\n        output_file_dir = resolve_file_output_dir(base_output_dir, file_rel)\n        try:\n            os.makedirs(output_file_dir, exist_ok=True)\n"
+    },
+    {
+      "lines": [
+        95
+      ],
+      "name": "compute_file_hash",
+      "file": "codetwine/codetwine/pipeline_py/pipeline.py",
+      "usage_context": "        file_abs = os.path.join(project_dir, file_rel)\n        doc = load_doc(resolve_file_output_dir(base_output_dir, file_rel))\n\n        if doc is None or doc.get(\"source_hash\") != compute_file_hash(file_abs):\n            changed_file_set.add(file_rel)\n    return changed_file_set\n"
+    },
+    {
+      "lines": [
+        261
+      ],
+      "name": "check_source_encoding",
+      "file": "codetwine/codetwine/pipeline_py/pipeline.py",
+      "usage_context": "            f\"{' / '.join(KNOWLEDGE_FORMAT_TUPLE)}, but got '{KNOWLEDGE_FORMAT}'. \"\n            f\"Set it in the .env file or your shell.\"\n        )\n    check_source_encoding()\n\n    project_name = os.path.basename(project_dir)\n    base_output_dir = os.path.join(output_dir, project_name)"
+    },
+    {
+      "lines": [
+        46
+      ],
+      "name": "read_source_text",
+      "file": "codetwine/examples/rlm_qa/qa_tools_py/qa_tools.py",
+      "usage_context": "    full_path = os.path.join(store.base_dir, path)\n\n    try:\n        return read_source_text(full_path)\n    except OSError as e:\n        return f\"Error reading {path}: {e}\"\n"
     }
   ]
 }

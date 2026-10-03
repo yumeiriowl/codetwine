@@ -1,7 +1,7 @@
 import os
 import logging
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from tree_sitter import Node
 from codetwine.parsers.ts_parser import parse_file
 from codetwine.utils.file_utils import line_list_of, read_source
@@ -38,6 +38,33 @@ class _TargetDefinition:
 _NO_DEFINITION = _TargetDefinition(None, None, None)
 
 
+def _memo_definition_function(
+    target_definition: Callable[[ReferenceTarget], _TargetDefinition],
+) -> Callable[[ReferenceTarget], _TargetDefinition]:
+    """Return a function that looks the definition of each distinct reference target up once.
+
+    Args:
+        target_definition: Returns the definition a reference leads to.
+
+    Returns:
+        The same function, answering from memory for a reference whose fields apart
+        from its line equal those of an earlier one.
+    """
+    definition_dict: dict[str, _TargetDefinition] = {}
+
+    def memo_definition(target: ReferenceTarget) -> _TargetDefinition:
+        """Return the definition a reference leads to."""
+        target_key = repr([
+            (target_field.name, getattr(target, target_field.name))
+            for target_field in fields(target) if target_field.name != "line"
+        ])
+        if target_key not in definition_dict:
+            definition_dict[target_key] = target_definition(target)
+        return definition_dict[target_key]
+
+    return memo_definition
+
+
 def _group_other_file_target_list(
     target_list: list[ReferenceTarget],
     file_rel: str,
@@ -48,22 +75,23 @@ def _group_other_file_target_list(
     Args:
         target_list: The resolved references of the file.
         file_rel: Relative path of the file.
-        target_definition: Returns the definition a reference leads to; called for
-            the first reference of each group.
+        target_definition: Returns the definition a reference leads to.
 
     Returns:
         One {"lines", "name", "from", "target_context", "target_name",
-        "target_start_line"} dict per (file, name).
+        "target_start_line"} dict per (file, name, definition): a name that leads to
+        two definitions of a file (two overloads) gives two.
     """
-    usage_group_map: dict[tuple[str, str], dict] = {}
+    target_definition = _memo_definition_function(target_definition)
+    usage_group_map: dict[tuple, dict] = {}
     for target in target_list:
         if target.file_rel == file_rel:
             continue
-        group_key = (target.file_rel, target.name)
+        definition = target_definition(target)
+        group_key = (target.file_rel, target.name, definition.name, definition.start_line)
         if group_key in usage_group_map:
             usage_group_map[group_key]["lines"].append(target.line)
             continue
-        definition = target_definition(target)
         usage_group_map[group_key] = {
             "lines":             [target.line],
             "name":              target.name,
@@ -162,6 +190,9 @@ _OWN_RANGE_FUNCTION_DICT: dict[str, Callable[..., Callable[..., list[tuple[int, 
     "import": _name_own_range_function,
 }
 
+# Reference kinds whose function of _OWN_RANGE_FUNCTION_DICT reads the syntax tree
+TREE_RANGE_KIND_SET = {"r"}
+
 
 def _group_same_file_target_list(
     target_list: list[ReferenceTarget],
@@ -179,27 +210,29 @@ def _group_same_file_target_list(
         file_rel: Relative path of the file.
         own_range_list: Returns the line ranges of the definition a reference names
             (_OWN_RANGE_FUNCTION_DICT).
-        target_definition: Returns the definition a reference leads to; called for
-            the first reference of each group.
+        target_definition: Returns the definition a reference leads to.
 
     Returns:
-        One {"lines", "name", "target_name", "target_start_line"} dict per name.
+        One {"lines", "name", "target_name", "target_start_line"} dict per
+        (name, definition).
     """
-    usage_group_map: dict[str, dict] = {}
+    target_definition = _memo_definition_function(target_definition)
+    usage_group_map: dict[tuple, dict] = {}
     for target in target_list:
         if target.file_rel != file_rel:
             continue
         if any(start <= target.line <= end for start, end in own_range_list(target)):
             continue
-        if target.name not in usage_group_map:
-            definition = target_definition(target)
-            usage_group_map[target.name] = {
+        definition = target_definition(target)
+        group_key = (target.name, definition.name, definition.start_line)
+        if group_key not in usage_group_map:
+            usage_group_map[group_key] = {
                 "lines":             [],
                 "name":              target.name,
                 "target_name":       definition.name,
                 "target_start_line": definition.start_line,
             }
-        usage_group_map[target.name]["lines"].append(target.line)
+        usage_group_map[group_key]["lines"].append(target.line)
 
     for entry in usage_group_map.values():
         entry["lines"] = sorted(set(entry["lines"]))
@@ -298,10 +331,10 @@ def build_callee_usages(
 ) -> list[dict]:
     """Build the callee_usages of a file from its resolved references.
 
-    The references that resolve to another file are grouped by (file, name). The
-    target_context of a group is the source text of the definition its first reference
-    resolves to, target_name the name "definitions" of that file lists it under and
-    target_start_line its first line; all three are None when the reference leads to
+    The references that resolve to another file are grouped by (file, name) and the
+    definition they lead to. The target_context of a group is the source text of that
+    definition, target_name the name "definitions" of that file lists it under and
+    target_start_line its first line; all three are None when the references lead to
     no definition of that file (a module used as a value). The definition is read the
     way the reference kind of the file gives (_TARGET_DEFINITION_FUNCTION_DICT).
 
@@ -327,23 +360,25 @@ def build_same_file_usages(
     file_rel: str,
     project_dir: str,
     definition_list: list[DefinitionInfo],
-    root_node: Node | CobolSource,
+    root_node: Node | CobolSource | None,
 ) -> list[dict]:
     """Build the same_file_usages of a file from its resolved references.
 
-    The references that resolve to the file itself are grouped by name. A reference
+    The references that resolve to the file itself are grouped by name and the
+    definition they lead to. A reference
     written inside the lines of the definition it names (the definition's own name, a
     recursive call) is left out; the lines of that definition are found the way the
     reference kind of the file gives (_OWN_RANGE_FUNCTION_DICT). target_name and
     target_start_line of a group are the name and the first line of the definition its
-    first reference resolves to, None when it leads to no definition.
+    references resolve to, None when they lead to no definition.
 
     Args:
         target_list: Return value of reference_target_list.
         file_rel: Relative path of the file.
         project_dir: Absolute path to the project root.
         definition_list: The file's definitions, sorted by start_line.
-        root_node: The AST root node of the file, or the CobolSource of a COBOL file.
+        root_node: The AST root node of the file; None for a file whose reference
+            kind is not in TREE_RANGE_KIND_SET.
 
     Returns:
         A list of {"lines", "name", "target_name", "target_start_line"} dicts. Empty
@@ -359,21 +394,29 @@ def build_same_file_usages(
 
 
 def _group_caller_usage_list(
-    target_list: list[ReferenceTarget], caller_rel: str,
-) -> dict[str, dict]:
-    """Group the references of a caller by name.
+    target_list: list[ReferenceTarget],
+    caller_rel: str,
+    target_definition: Callable[[ReferenceTarget], _TargetDefinition],
+) -> dict[tuple, dict]:
+    """Group the references of a caller by name and the definition they lead to.
 
     Args:
         target_list: The caller's references that resolve to one file.
         caller_rel: Relative path of the caller file.
+        target_definition: Returns the definition a reference leads to.
 
     Returns:
-        A {name: {"lines", "name", "file"}} dict; lines are sorted without duplicates.
+        A {(name, definition name, first line of the definition): {"lines", "name",
+        "file"}} dict, the groups _group_other_file_target_list makes for the caller;
+        lines are sorted without duplicates.
     """
-    group_dict: dict[str, dict] = {}
+    target_definition = _memo_definition_function(target_definition)
+    group_dict: dict[tuple, dict] = {}
     for target in target_list:
+        definition = target_definition(target)
         group = group_dict.setdefault(
-            target.name, {"lines": [], "name": target.name, "file": caller_rel},
+            (target.name, definition.name, definition.start_line),
+            {"lines": [], "name": target.name, "file": caller_rel},
         )
         group["lines"].append(target.line)
 
@@ -382,7 +425,7 @@ def _group_caller_usage_list(
     return group_dict
 
 
-def _attach_usage_context(group_dict: dict[str, dict], caller_abs: str) -> None:
+def _attach_usage_context(group_dict: dict[tuple, dict], caller_abs: str) -> None:
     """Add usage_context, the code around the first usage lines, to each group.
 
     Up to _MAX_CONTEXT_LOCATION lines of each group are taken, each with
@@ -421,7 +464,7 @@ def build_caller_usages(
 
     The references of each caller are resolved as get_file_dependencies resolves them
     for the caller itself (reference_target_list); the ones that lead to this file are
-    grouped by name.
+    grouped by name and the definition they lead to.
 
     Args:
         target_file_rel: Relative path of this file from the project root.
@@ -441,7 +484,10 @@ def build_caller_usages(
         ]
         if not target_list:
             continue
-        group_dict = _group_caller_usage_list(target_list, caller_rel)
+        caller_kind = reference_kind(os.path.join(project_dir, caller_rel))
+        group_dict = _group_caller_usage_list(
+            target_list, caller_rel, _TARGET_DEFINITION_FUNCTION_DICT[caller_kind](project_dir),
+        )
         _attach_usage_context(group_dict, os.path.join(project_dir, caller_rel))
         caller_usages.extend(group_dict.values())
     return caller_usages

@@ -1,0 +1,341 @@
+{
+  "file": "codetwine/codetwine/alias_path_py/alias_path.py",
+  "language": "py",
+  "detected_encoding": null,
+  "definitions": [
+    {
+      "name": "logger",
+      "type": "expression_statement",
+      "start_line": 8,
+      "end_line": 8,
+      "context": "logger = logging.getLogger(__name__)"
+    },
+    {
+      "name": "alias_cache",
+      "type": "expression_statement",
+      "start_line": 12,
+      "end_line": 12,
+      "context": "alias_cache: dict[str, dict[str, list[tuple[str, str]]]] = {}"
+    },
+    {
+      "name": "_ALIAS_KEY",
+      "type": "expression_statement",
+      "start_line": 15,
+      "end_line": 15,
+      "context": "_ALIAS_KEY = \"alias\""
+    },
+    {
+      "name": "_FIND_KEY",
+      "type": "expression_statement",
+      "start_line": 16,
+      "end_line": 16,
+      "context": "_FIND_KEY = \"find\""
+    },
+    {
+      "name": "_REPLACEMENT_KEY",
+      "type": "expression_statement",
+      "start_line": 17,
+      "end_line": 17,
+      "context": "_REPLACEMENT_KEY = \"replacement\""
+    },
+    {
+      "name": "_JOIN_FUNCTION_NAME_SET",
+      "type": "expression_statement",
+      "start_line": 21,
+      "end_line": 21,
+      "context": "_JOIN_FUNCTION_NAME_SET = {\"resolve\", \"join\"}"
+    },
+    {
+      "name": "_CONFIG_DIR_NAME_SET",
+      "type": "expression_statement",
+      "start_line": 22,
+      "end_line": 22,
+      "context": "_CONFIG_DIR_NAME_SET = {\"__dirname\", \"import.meta.dirname\"}"
+    },
+    {
+      "name": "_URL_PATH_FUNCTION_NAME",
+      "type": "expression_statement",
+      "start_line": 26,
+      "end_line": 26,
+      "context": "_URL_PATH_FUNCTION_NAME = \"fileURLToPath\""
+    },
+    {
+      "name": "_URL_TYPE_NAME",
+      "type": "expression_statement",
+      "start_line": 27,
+      "end_line": 27,
+      "context": "_URL_TYPE_NAME = \"URL\""
+    },
+    {
+      "name": "_CONFIG_URL_NAME",
+      "type": "expression_statement",
+      "start_line": 28,
+      "end_line": 28,
+      "context": "_CONFIG_URL_NAME = \"import.meta.url\""
+    },
+    {
+      "name": "clear_alias_path_cache",
+      "type": "function_definition",
+      "start_line": 31,
+      "end_line": 33,
+      "context": "def clear_alias_path_cache() -> None:\n    \"\"\"Forget the aliases of every project.\"\"\"\n    alias_cache.clear()"
+    },
+    {
+      "name": "_text",
+      "type": "function_definition",
+      "start_line": 36,
+      "end_line": 38,
+      "context": "def _text(node: Node) -> str:\n    \"\"\"Return the source text of a node.\"\"\"\n    return node.text.decode(\"utf-8\")"
+    },
+    {
+      "name": "_string_value",
+      "type": "function_definition",
+      "start_line": 41,
+      "end_line": 45,
+      "context": "def _string_value(node: Node | None) -> str | None:\n    \"\"\"Return the text of a string constant without its quotes, None for any other node.\"\"\"\n    if node is None or node.type != \"string\":\n        return None\n    return \"\".join(_text(child) for child in node.named_children if child.type == \"string_fragment\")"
+    },
+    {
+      "name": "_argument_list",
+      "type": "function_definition",
+      "start_line": 48,
+      "end_line": 51,
+      "context": "def _argument_list(node: Node) -> list[Node]:\n    \"\"\"Return the argument nodes of a call or of a new expression.\"\"\"\n    argument_node = node.child_by_field_name(\"arguments\")\n    return list(argument_node.named_children) if argument_node is not None else []"
+    },
+    {
+      "name": "_alias_target",
+      "type": "function_definition",
+      "start_line": 54,
+      "end_line": 99,
+      "context": "def _alias_target(node: Node, config_dir: str) -> str | None:\n    \"\"\"Return the directory or file an alias stands for, relative to the project root.\n\n    Examples (config file in \"web\"):\n        \"./src\"                                          -> \"web/src\"\n        path.resolve(__dirname, \"src\", \"app\")            -> \"web/src/app\"\n        join(__dirname, \"./src\")                         -> \"web/src\"\n        fileURLToPath(new URL(\"./src\", import.meta.url)) -> \"web/src\"\n\n    Args:\n        node: The value node of an alias.\n        config_dir: Directory of the config file, relative to the project root.\n\n    Returns:\n        The path. None for a value written any other way, and for a path that leads\n        outside the project.\n    \"\"\"\n    text = _string_value(node)\n    if text is not None:\n        return inside_project(posixpath.join(config_dir, text)) if text.startswith(\".\") else None\n    if node.type != \"call_expression\":\n        return None\n    function_node = node.child_by_field_name(\"function\")\n    argument_list = _argument_list(node)\n    if function_node is None or not argument_list:\n        return None\n    function_name = _text(function_node).rsplit(\".\", 1)[-1]\n\n    if function_name in _JOIN_FUNCTION_NAME_SET:\n        part_list = [_string_value(argument) for argument in argument_list[1:]]\n        if _text(argument_list[0]) not in _CONFIG_DIR_NAME_SET or None in part_list:\n            return None\n        return inside_project(posixpath.join(config_dir, *part_list))\n\n    if function_name == _URL_PATH_FUNCTION_NAME and argument_list[0].type == \"new_expression\":\n        url_node = argument_list[0]\n        constructor_node = url_node.child_by_field_name(\"constructor\")\n        url_argument_list = _argument_list(url_node)\n        if (\n            constructor_node is None or _text(constructor_node) != _URL_TYPE_NAME\n            or len(url_argument_list) != 2 or _text(url_argument_list[1]) != _CONFIG_URL_NAME\n        ):\n            return None\n        text = _string_value(url_argument_list[0])\n        return inside_project(posixpath.join(config_dir, text)) if text is not None else None\n    return None"
+    },
+    {
+      "name": "_pair_dict",
+      "type": "function_definition",
+      "start_line": 102,
+      "end_line": 113,
+      "context": "def _pair_dict(object_node: Node) -> dict[str, Node]:\n    \"\"\"Return the values of an object by their keys, for the keys written as a name or a string.\"\"\"\n    pair_dict: dict[str, Node] = {}\n    for pair_node in object_node.named_children:\n        key_node = pair_node.child_by_field_name(\"key\")\n        value_node = pair_node.child_by_field_name(\"value\")\n        if pair_node.type != \"pair\" or key_node is None or value_node is None:\n            continue\n        key = _string_value(key_node) if key_node.type == \"string\" else _text(key_node)\n        if key is not None:\n            pair_dict[key] = value_node\n    return pair_dict"
+    },
+    {
+      "name": "_read_alias_list",
+      "type": "function_definition",
+      "start_line": 116,
+      "end_line": 162,
+      "context": "def _read_alias_list(config_rel: str, project_dir: str) -> list[tuple[str, str]]:\n    \"\"\"Read the aliases a bundler config file writes.\n\n    alias: { \"@\": path.resolve(__dirname, \"src\") }\n    alias: [{ find: \"@\", replacement: path.resolve(__dirname, \"src\") }]\n    Every \"alias\" key of the file whose value is an object or an array is read. An\n    alias whose name is not a string (a regular expression) or whose value is not\n    written as _alias_target reads it is left out.\n\n    Args:\n        config_rel: Relative path of the config file.\n        project_dir: Absolute path to the project root.\n\n    Returns:\n        (alias name, the path it stands for relative to the project root), the\n        longest name first. Empty when the file cannot be parsed; the exception is\n        logged.\n    \"\"\"\n    try:\n        root_node = parse_file(os.path.join(project_dir, config_rel))[0]\n    except Exception as e:\n        logger.warning(f\"The aliases of {config_rel} cannot be read: {type(e).__name__}: {e}\")\n        return []\n    config_dir = posixpath.dirname(config_rel)\n    alias_dict: dict[str, str] = {}\n    node_stack = [root_node]\n    while node_stack:\n        node = node_stack.pop()\n        node_stack.extend(reversed(node.children))\n        key_node = node.child_by_field_name(\"key\") if node.type == \"pair\" else None\n        value_node = node.child_by_field_name(\"value\") if key_node is not None else None\n        if key_node is None or value_node is None or _text(key_node).strip(\"'\\\"\") != _ALIAS_KEY:\n            continue\n        if value_node.type == \"object\":\n            for name, target_node in _pair_dict(value_node).items():\n                target = _alias_target(target_node, config_dir)\n                if target is not None:\n                    alias_dict.setdefault(name, target)\n        elif value_node.type == \"array\":\n            for entry_node in value_node.named_children:\n                entry_dict = _pair_dict(entry_node) if entry_node.type == \"object\" else {}\n                name = _string_value(entry_dict.get(_FIND_KEY))\n                target_node = entry_dict.get(_REPLACEMENT_KEY)\n                target = _alias_target(target_node, config_dir) if target_node is not None else None\n                if name is not None and target is not None:\n                    alias_dict.setdefault(name, target)\n    return sorted(alias_dict.items(), key=lambda alias: -len(alias[0]))"
+    },
+    {
+      "name": "_alias_list",
+      "type": "function_definition",
+      "start_line": 165,
+      "end_line": 207,
+      "context": "def _alias_list(\n    dir_rel: str, project_dir: str, config_name_list: list[str],\n) -> list[tuple[str, str]]:\n    \"\"\"Return the aliases that count for a directory, read once per directory.\n\n    These are the aliases of the bundler config file in the directory, else in the\n    nearest directory above it; in one directory the first name of config_name_list\n    that names a file is taken.\n\n    Args:\n        dir_rel: Directory relative to the project root (\"\" for the root).\n        project_dir: Absolute path to the project root.\n        config_name_list: File names of the bundler config files.\n\n    Returns:\n        The result of _read_alias_list for that file; empty without one.\n    \"\"\"\n    dir_dict = alias_cache.setdefault(project_dir, {})\n    walk_dir_list: list[str] = []\n    alias_list: list[tuple[str, str]] = []\n    while True:\n        if dir_rel in dir_dict:\n            alias_list = dir_dict[dir_rel]\n            break\n        walk_dir_list.append(dir_rel)\n        config_rel = next(\n            (\n                candidate_rel for config_name in config_name_list\n                if os.path.isfile(os.path.join(\n                    project_dir, candidate_rel := posixpath.join(dir_rel, config_name),\n                ))\n            ),\n            None,\n        )\n        if config_rel is not None:\n            alias_list = _read_alias_list(config_rel, project_dir)\n            break\n        if not dir_rel:\n            break\n        dir_rel = posixpath.dirname(dir_rel)\n    for walk_dir in walk_dir_list:\n        dir_dict[walk_dir] = alias_list\n    return alias_list"
+    },
+    {
+      "name": "alias_path_list",
+      "type": "function_definition",
+      "start_line": 210,
+      "end_line": 239,
+      "context": "def alias_path_list(\n    module: str, file_rel: str, project_dir: str, config_name_list: list[str],\n) -> list[str]:\n    \"\"\"Return the paths a module string written with an alias of a bundler config can stand for.\n\n    Examples (alias \"@\" -> \"web/src\", \"~lib/\" -> \"web/lib/\"):\n        \"@/store/user\"   -> [\"web/src/store/user\"]\n        \"@\"              -> [\"web/src\"]\n        \"~lib/log\"       -> [\"web/lib/log\"]\n        \"@scope/pkg\"     -> []\n\n    Args:\n        module: The module string of an import statement.\n        file_rel: Relative path of the file the import statement is written in.\n        project_dir: Absolute path to the project root.\n        config_name_list: File names of the bundler config files.\n\n    Returns:\n        Paths relative to the project root: for the longest alias that is the module\n        itself, or that the module starts with up to a \"/\", the path of the alias\n        with the rest of the module. Empty when no alias matches.\n    \"\"\"\n    dir_rel = posixpath.dirname(file_rel.replace(\"\\\\\", \"/\"))\n    for name, target in _alias_list(dir_rel, project_dir, config_name_list):\n        if module == name:\n            return [target]\n        prefix = name if name.endswith(\"/\") else name + \"/\"\n        if module.startswith(prefix):\n            return [posixpath.normpath(posixpath.join(target, module[len(prefix):]))]\n    return []"
+    }
+  ],
+  "callee_usages": [
+    {
+      "lines": [
+        73,
+        86,
+        98
+      ],
+      "name": "inside_project",
+      "from": "codetwine/codetwine/path_config_py/path_config.py",
+      "target_context": "def inside_project(path: str) -> str | None:\n    \"\"\"Return a normalized relative path (\"\" for the project root), None when it leads outside the project.\"\"\"\n    clean_path = posixpath.normpath(path)\n    if clean_path == \".\":\n        return \"\"\n    if clean_path.startswith(\"../\") or clean_path == \"..\" or clean_path.startswith(\"/\"):\n        return None\n    return clean_path",
+      "target_name": "inside_project",
+      "target_start_line": 173
+    },
+    {
+      "lines": [
+        135
+      ],
+      "name": "parse_file",
+      "from": "codetwine/codetwine/parsers/ts_parser_py/ts_parser.py",
+      "target_context": "def parse_file(file_path: str) -> tuple[Node | CobolSource, bytes]:\n    \"\"\"Read a file, parse it with tree-sitter, and return (AST root node, byte content).\n\n    The file is decoded by read_source() and parsed as UTF-8, whatever encoding it is\n    stored in; the byte content is that UTF-8 text, and the text of every node decodes\n    as UTF-8. Line numbers are those of line_list_of() over the file.\n\n    For a COBOL file the first element is a CobolSource (read_cobol_source) in place of\n    the root node, and for a BMS source the CobolSource of its symbolic maps\n    (read_bms_source); extract_definitions(), extract_imports() and extract_usages()\n    take it as they take a root node. The language is the one language_ext() gives.\n\n    For an R Markdown or Quarto file the root node is the tree of its R code chunks\n    (r_chunk_code), each node at the position its code has in the file; the byte content\n    is the whole file. A chunk whose code does not end inside the chunk (an open \"{\", an\n    operator at its end) is left out of the tree.\n\n    For a C or C++ file a macro name written between a class keyword and a class name\n    (class EXPORT Shape { ... }) is read as spaces (_parse_c_family); the byte content\n    is the whole file, and class_macro_cache holds those names and their lines.\n\n    Parse results are cached at module level; a file found in the cache is not parsed again.\n    The cache holds at most PARSE_CACHE_MAX_FILES entries; when it is full, the least\n    recently used entry is discarded and that file is parsed again the next time it is\n    requested. PARSE_CACHE_MAX_FILES = 0 disables the limit.\n\n    Args:\n        file_path: Absolute path of the file to parse.\n\n    Returns:\n        A (root_node, content) tuple.\n    \"\"\"\n    # Return from cache if available, marking the entry as most recently used\n    cache_entry = parse_cache.get(file_path)\n    if cache_entry is not None:\n        parse_cache.move_to_end(file_path)\n        return cache_entry\n\n    # Get the corresponding language from the file extension\n    ext = language_ext(file_path)\n\n    # Read the file as UTF-8 bytes\n    content = read_utf8_content(file_path)\n\n    if ext in COBOL_EXT_SET:\n        # Split the COBOL text into statements and parse each of them\n        cobol_source = read_cobol_source(content.decode(\"utf-8\"), EXT_TO_LANGUAGE_DICT[ext])\n        parse_result = (cobol_source, content)\n    elif ext in BMS_EXT_SET:\n        # Read the maps of the BMS macros\n        parse_result = (read_bms_source(content.decode(\"utf-8\")), content)\n    elif ext in R_MARKDOWN_EXT_SET:\n        # Parse the R code chunks of the document, everything else blanked; a chunk\n        # whose code runs on past its end is blanked as well\n        language = EXT_TO_LANGUAGE_DICT[ext]\n        chunk_code = r_chunk_code(content, lambda code: _is_whole_code(code, language))\n        tree = Parser(language).parse(chunk_code)\n        parse_result = (tree.root_node, content)\n    elif ext in C_FAMILY_EXT_SET:\n        # Parse with the macro names in front of class names blanked\n        root_node, class_macro_cache[file_path] = _parse_c_family(content, EXT_TO_LANGUAGE_DICT[ext])\n        parse_result = (root_node, content)\n    else:\n        # Parse with tree-sitter to generate the AST\n        tree = Parser(EXT_TO_LANGUAGE_DICT[ext]).parse(content)\n        parse_result = (tree.root_node, content)\n\n    # Store in cache and drop the oldest entries once the limit is exceeded\n    parse_cache[file_path] = parse_result\n    if PARSE_CACHE_MAX_FILES > 0:\n        while len(parse_cache) > PARSE_CACHE_MAX_FILES:\n            parse_cache.popitem(last=False)\n    return parse_result",
+      "target_name": "parse_file",
+      "target_start_line": 167
+    }
+  ],
+  "same_file_usages": [
+    {
+      "lines": [
+        33
+      ],
+      "name": "alias_cache.clear",
+      "target_name": "alias_cache",
+      "target_start_line": 12
+    },
+    {
+      "lines": [
+        45,
+        80,
+        84,
+        93,
+        94,
+        110,
+        147
+      ],
+      "name": "_text",
+      "target_name": "_text",
+      "target_start_line": 36
+    },
+    {
+      "lines": [
+        71,
+        83,
+        97,
+        110,
+        157
+      ],
+      "name": "_string_value",
+      "target_name": "_string_value",
+      "target_start_line": 41
+    },
+    {
+      "lines": [
+        77,
+        91
+      ],
+      "name": "_argument_list",
+      "target_name": "_argument_list",
+      "target_start_line": 48
+    },
+    {
+      "lines": [
+        82
+      ],
+      "name": "_JOIN_FUNCTION_NAME_SET",
+      "target_name": "_JOIN_FUNCTION_NAME_SET",
+      "target_start_line": 21
+    },
+    {
+      "lines": [
+        84
+      ],
+      "name": "_CONFIG_DIR_NAME_SET",
+      "target_name": "_CONFIG_DIR_NAME_SET",
+      "target_start_line": 22
+    },
+    {
+      "lines": [
+        88
+      ],
+      "name": "_URL_PATH_FUNCTION_NAME",
+      "target_name": "_URL_PATH_FUNCTION_NAME",
+      "target_start_line": 26
+    },
+    {
+      "lines": [
+        93
+      ],
+      "name": "_URL_TYPE_NAME",
+      "target_name": "_URL_TYPE_NAME",
+      "target_start_line": 27
+    },
+    {
+      "lines": [
+        94
+      ],
+      "name": "_CONFIG_URL_NAME",
+      "target_name": "_CONFIG_URL_NAME",
+      "target_start_line": 28
+    },
+    {
+      "lines": [
+        137
+      ],
+      "name": "logger.warning",
+      "target_name": "logger",
+      "target_start_line": 8
+    },
+    {
+      "lines": [
+        147
+      ],
+      "name": "_ALIAS_KEY",
+      "target_name": "_ALIAS_KEY",
+      "target_start_line": 15
+    },
+    {
+      "lines": [
+        150,
+        156
+      ],
+      "name": "_pair_dict",
+      "target_name": "_pair_dict",
+      "target_start_line": 102
+    },
+    {
+      "lines": [
+        151,
+        159
+      ],
+      "name": "_alias_target",
+      "target_name": "_alias_target",
+      "target_start_line": 54
+    },
+    {
+      "lines": [
+        157
+      ],
+      "name": "_FIND_KEY",
+      "target_name": "_FIND_KEY",
+      "target_start_line": 16
+    },
+    {
+      "lines": [
+        158
+      ],
+      "name": "_REPLACEMENT_KEY",
+      "target_name": "_REPLACEMENT_KEY",
+      "target_start_line": 17
+    },
+    {
+      "lines": [
+        182
+      ],
+      "name": "alias_cache.setdefault",
+      "target_name": "alias_cache",
+      "target_start_line": 12
+    },
+    {
+      "lines": [
+        200
+      ],
+      "name": "_read_alias_list",
+      "target_name": "_read_alias_list",
+      "target_start_line": 116
+    },
+    {
+      "lines": [
+        233
+      ],
+      "name": "_alias_list",
+      "target_name": "_alias_list",
+      "target_start_line": 165
+    }
+  ],
+  "caller_usages": [
+    {
+      "lines": [
+        374
+      ],
+      "name": "clear_alias_path_cache",
+      "file": "codetwine/codetwine/extractors/dependency_graph_py/dependency_graph.py",
+      "usage_context": "    clear_definition_source_cache()\n    path_config_cache.clear()\n    clear_package_path_cache()\n    clear_alias_path_cache()\n\n    # R Markdown and Quarto files without an R code chunk are analyzed without a language,\n    # and files without a language that COBOL COPY statements name are analyzed as COBOL"
+    },
+    {
+      "lines": [
+        378
+      ],
+      "name": "alias_path_list",
+      "file": "codetwine/codetwine/import_to_path_py/import_to_path.py",
+      "usage_context": "        module_path_list = [\n            *import_path_list,\n            *(config.module_path_list(module) if config is not None else []),\n            *alias_path_list(\n                module, current_file_rel, project_dir, resolve_config[\"alias_config_name_list\"],\n            ),\n            *package_name_path_list(module, project_dir, project_file_set, package_file_name),"
+    }
+  ]
+}

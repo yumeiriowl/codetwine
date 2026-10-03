@@ -1,9 +1,9 @@
 import re
-from collections.abc import Container
+from collections.abc import Callable, Container
 from dataclasses import dataclass, field
 from tree_sitter import Node
 from codetwine.extractors.cobol_source import CobolSource
-from codetwine.extractors.definitions import declarator_name_node
+from codetwine.extractors.definitions import declarator_name_node, pattern_name_list
 from codetwine.extractors.rust_path import macro_path_list, path_segment_list
 
 # Separators between the parts of a usage name: "." (attribute access) and "::" (Rust / C++ path)
@@ -11,9 +11,6 @@ _SYMBOL_SEPARATOR_RE = re.compile(r"\.|::")
 
 # Type reference / namespace reference node types (skip_parent_types check not needed)
 _TYPE_REFERENCE_NODE_TYPE_SET = {"type_identifier", "namespace_identifier"}
-
-# Node types of a name inside a binding pattern
-_NAME_LEAF_TYPE_SET = {"identifier", "shorthand_property_identifier_pattern"}
 
 # Node types of a name written with template arguments (C++: Box<int>, twice<int>, obj.get<int>)
 _TEMPLATE_NODE_TYPE_SET = {"template_type", "template_function", "template_method"}
@@ -23,6 +20,12 @@ _DECLARATOR_TYPE_SET = {
     "variable_declarator", "init_declarator", "pointer_declarator", "array_declarator",
     "reference_declarator",
 }
+
+# Node types that wrap the type a declaration is written with (Kotlin, Python, TS)
+_TYPE_WRAP_NODE_TYPE_SET = {"user_type", "type", "type_annotation"}
+
+# A name written with dots only (core.Engine)
+_DOTTED_NAME_RE = re.compile(r"[^\W\d]\w*(?:\.[^\W\d]\w*)*")
 
 _EMPTY_SET: set[str] = set()
 
@@ -106,6 +109,9 @@ class _UsageSetting:
     import_line_dict: dict[str, set[int]] = field(default_factory=dict)
     # Node id of a scope -> names bound inside it, filled on first use
     local_name_dict: dict[int, set[str]] = field(default_factory=dict)
+    # Returns whether a name written in a pattern refers to a definition instead of
+    # binding the name (Rust: a constant, a variant); None when no name does
+    is_reference_name: Callable[[str], bool] | None = None
 
     def type_set(self, key: str) -> set[str]:
         """Return a node type set of the settings, empty when the language has none."""
@@ -113,32 +119,11 @@ class _UsageSetting:
 
 
 def _pattern_name_list(node: Node, setting: _UsageSetting) -> list[str]:
-    """Return the names a binding pattern binds.
-
-    A node in _NAME_LEAF_TYPE_SET is a name. Of a node in pattern_field_dict only the
-    child in that field is read (b=1 -> b), and of a node in pattern_types every named
-    child. Any other node (an attribute, a subscript, a type) binds nothing.
-
-    Args:
-        node: A pattern node, or a node holding patterns.
-        setting: The usage settings of the file.
-
-    Returns:
-        The bound names.
-    """
-    name_list: list[str] = []
-    node_stack = [node]
-    pattern_field_dict = setting.usage_node_types.get("pattern_field_dict", {})
-    pattern_type_set = setting.type_set("pattern_types")
-    while node_stack:
-        current = node_stack.pop()
-        if current.type in _NAME_LEAF_TYPE_SET:
-            name_list.append(current.text.decode("utf-8"))
-        elif current.type in pattern_field_dict:
-            node_stack.extend(current.children_by_field_name(pattern_field_dict[current.type]))
-        elif current.type in pattern_type_set:
-            node_stack.extend(current.named_children)
-    return name_list
+    """Return the names a binding pattern binds (pattern_name_list with the settings of the file)."""
+    return pattern_name_list(
+        node, setting.type_set("pattern_types"),
+        setting.usage_node_types.get("pattern_field_dict", {}),
+    )
 
 
 def _binding_name_list(node: Node, field_name: str, setting: _UsageSetting) -> list[str]:
@@ -152,7 +137,8 @@ def _binding_name_list(node: Node, field_name: str, setting: _UsageSetting) -> l
 
     Returns:
         The bound names, without the names an import statement written on the lines
-        of their pattern binds (import_line_dict).
+        of their pattern binds (import_line_dict) and the names a pattern refers to
+        (is_reference_name).
     """
     pattern_node_list = (
         node.children_by_field_name(field_name) if field_name else node.named_children
@@ -166,6 +152,7 @@ def _binding_name_list(node: Node, field_name: str, setting: _UsageSetting) -> l
                 start_line <= line <= end_line
                 for line in setting.import_line_dict.get(name, ())
             )
+            and not (setting.is_reference_name is not None and setting.is_reference_name(name))
         )
     return name_list
 
@@ -230,16 +217,15 @@ def _is_local_name(node: Node, name: str, setting: _UsageSetting) -> bool:
 
     Returns:
         True when a scope_types node among the ancestors of node binds the name
-        (_local_name_set) and the name is no typed variable declared for the line of
-        the node (alias_list). A scope whose type is a key of scope_body_dict binds
+        (_local_name_set) and the name is no typed variable declared inside that scope
+        for the line of the node (alias_list). A scope whose type is a key of scope_body_dict binds
         its names only for the nodes inside that field of it (Python: a default value
         or an annotation of a function is read outside the function).
     """
     scope_type_set = setting.type_set("scope_types")
     if not scope_type_set:
         return False
-    if typed_alias_type(setting.alias_list, name, node.start_point[0] + 1) is not None:
-        return False
+    alias = typed_alias(setting.alias_list, name, node.start_point[0] + 1)
     scope_body_dict = setting.usage_node_types.get("scope_body_dict", {})
     child = node
     current = node.parent
@@ -247,7 +233,13 @@ def _is_local_name(node: Node, name: str, setting: _UsageSetting) -> bool:
         if current.type in scope_type_set and name in _local_name_set(current, setting):
             body_field = scope_body_dict.get(current.type)
             if body_field is None or current.child_by_field_name(body_field) == child:
-                return True
+                is_alias_inside = (
+                    alias is not None and alias.type_name is not None
+                    and current.start_point[0] + 1 <= alias.start_line
+                    and alias.end_line <= current.end_point[0] + 1
+                )
+                if not is_alias_inside:
+                    return True
         child = current
         current = current.parent
     return False
@@ -384,6 +376,7 @@ def extract_usages(
     member_names: set[str] | None = None,
     alias_list: list["TypedAlias"] | None = None,
     import_line_dict: dict[str, set[int]] | None = None,
+    is_reference_name: Callable[[str], bool] | None = None,
 ) -> list[UsageInfo]:
     """Extract usage locations of imported names from the AST and return them.
 
@@ -438,6 +431,8 @@ def extract_usages(
                     binds it. None for none.
         import_line_dict: Name an import statement binds -> lines of those statements.
                     None for none.
+        is_reference_name: Returns whether a name written in a pattern refers to a
+                    definition instead of binding the name. None when no name does.
 
     Returns:
         A list of UsageInfo (deduplicated).
@@ -456,6 +451,7 @@ def extract_usages(
         alias_list=alias_list or [],
         usage_node_types=usage_node_types,
         import_line_dict=import_line_dict or {},
+        is_reference_name=is_reference_name,
     )
 
     # Retrieve per-language node types from the settings
@@ -721,7 +717,8 @@ def _parse_identifier_node(node: Node, setting: _UsageSetting) -> UsageInfo | No
     or argument declarations (i.e., part of syntax), and where a scope around it
     binds its name.
     For node types in skip_name_field_types, only the "name"-field child is
-    skipped while the "value" side is detected as a usage.
+    skipped while the "value" side is detected as a usage. The child a pattern node
+    binds (pattern_field_dict) is skipped the same way.
     When identifier_parent_types is not empty, only an identifier whose parent
     is one of those types is detected (SQL: object_reference).
 
@@ -748,6 +745,10 @@ def _parse_identifier_node(node: Node, setting: _UsageSetting) -> UsageInfo | No
                 return None
         elif parent.type in setting.usage_node_types["skip_parent_types"]:
             return None
+        # The name a pattern binds (inner in { hp: inner = hp }) is no usage of that name
+        pattern_field = setting.usage_node_types.get("pattern_field_dict", {}).get(parent.type)
+        if pattern_field is not None and node in parent.children_by_field_name(pattern_field):
+            return None
 
     # Check if the name matches an imported name
     name = node.text.decode("utf-8")
@@ -759,43 +760,68 @@ def _parse_identifier_node(node: Node, setting: _UsageSetting) -> UsageInfo | No
 
 @dataclass
 class TypedAlias:
-    """A variable declared with a tracked type, and the lines it is declared for."""
+    """A variable that stands for an object of a tracked type, and the lines it does so for."""
 
-    name: str        # Name of the variable
-    type_name: str   # Name of the type it is declared with
-    start_line: int  # First line of the scope the declaration is written in (1-based)
-    end_line: int    # Last line of that scope
+    name: str              # Name of the variable
+    # Name of the type; None for the lines the variable is given a value of no tracked type
+    type_name: str | None
+    start_line: int        # First line the variable counts for (1-based)
+    end_line: int          # Last line it counts for
+
+
+def _scope_node(
+    node: Node, scope_types: set[str], root_node: Node, opaque_types: set[str] = _EMPTY_SET,
+) -> Node | None:
+    """Return the innermost scope_types node around a node, the root node when there is none.
+
+    Returns:
+        The node; None when an opaque_types node (Python: a class body) comes before
+        it, since a name written there is no variable of the scope.
+    """
+    scope_node = node.parent
+    while scope_node is not None and scope_node.type not in scope_types:
+        if scope_node.type in opaque_types:
+            return None
+        scope_node = scope_node.parent
+    return scope_node or root_node
 
 
 def extract_typed_aliases(
     root_node: Node,
     imported_names: set[str],
-    typed_alias_parent_types: set[str],
-    scope_types: set[str],
+    usage_node_types: dict,
 ) -> list[TypedAlias]:
     """Traverse the AST to find the variables declared with a tracked type.
 
     Detects variables declared with an imported type (e.g. Genre) such as genre.
     A variable counts for the lines of the innermost scope_types node around its
-    declaration (a function), or for the whole file when there is none (a field).
+    declaration (a function), or for the whole file when there is none (a field). A
+    declaration written in an opaque_types node (Python: a class body) is not read.
 
-    Supported AST patterns:
+    Supported AST patterns (typed_alias_parent_types):
       Java:   field_declaration / local_variable_declaration / formal_parameter
       Kotlin: property_declaration / parameter
       C/C++:  declaration / parameter_declaration
+      Python: e: Engine = ... / a parameter e: Engine
+      TS:     const e: Engine = ... / a parameter e: Engine
+    A node type in typed_alias_name_field_dict names its variable in that field ("" for
+    its first named child) and its type in the field "type".
 
     Args:
         root_node: The AST root node covering the entire file.
-        imported_names: Set of imported type names to track.
-        typed_alias_parent_types: Set of AST node types representing typed variable declarations.
-        scope_types: Set of AST node types that open a scope.
+        imported_names: Set of type names to track.
+        usage_node_types: The EXT_TO_USAGE_NODE_TYPE_DICT entry of the language.
 
     Returns:
-        One TypedAlias per variable whose type name is in imported_names, in no
-        particular order.
+        One TypedAlias per variable whose type name is in imported_names, or starts
+        with a name of it ("core.Engine"), in no particular order.
     """
+    typed_alias_parent_types = usage_node_types.get("typed_alias_parent_types", set())
     if not typed_alias_parent_types:
         return []
+    scope_types = usage_node_types.get("scope_types", set())
+    opaque_types = usage_node_types.get("opaque_types", set())
+    name_field_dict = usage_node_types.get("typed_alias_name_field_dict", {})
 
     alias_list: list[TypedAlias] = []
     stack = [root_node]
@@ -804,12 +830,15 @@ def extract_typed_aliases(
         node = stack.pop()
 
         if node.type in typed_alias_parent_types:
-            type_name, var_names = _extract_type_and_var(node)
-            if type_name and type_name in imported_names:
-                scope_node = node.parent
-                while scope_node is not None and scope_node.type not in scope_types:
-                    scope_node = scope_node.parent
-                scope_node = scope_node or root_node
+            if node.type in name_field_dict:
+                type_name, var_names = _field_type_and_var(node, name_field_dict[node.type])
+            else:
+                type_name, var_names = _extract_type_and_var(node)
+            scope_node = (
+                _scope_node(node, scope_types, root_node, opaque_types)
+                if type_name and _track_root(type_name, imported_names) is not None else None
+            )
+            if scope_node is not None:
                 for var_name in var_names:
                     if var_name != type_name:
                         alias_list.append(TypedAlias(
@@ -822,17 +851,117 @@ def extract_typed_aliases(
     return alias_list
 
 
-def typed_alias_type(alias_list: list[TypedAlias], name: str, line: int) -> str | None:
-    """Return the type a variable name stands for on a line.
+def _new_type_name(value_node: Node, usage_node_types: dict) -> str | None:
+    """Return the name of the type a value makes an object of, None for any other value.
+
+    Examples (typed_alias_new_dict):
+        Engine(1)         -> "Engine"       (Python: call, function)
+        core.Engine()     -> "core.Engine"
+        new Engine(1)     -> "Engine"       (JS / TS: new_expression, constructor)
 
     Args:
-        alias_list: Return value of extract_typed_aliases.
+        value_node: The value node.
+        usage_node_types: The EXT_TO_USAGE_NODE_TYPE_DICT entry of the language.
+
+    Returns:
+        The name written in the field typed_alias_new_dict gives for the node type,
+        when it is a name or an attribute access made of names only.
+    """
+    name_field = usage_node_types.get("typed_alias_new_dict", {}).get(value_node.type)
+    name_node = value_node.child_by_field_name(name_field) if name_field else None
+    if name_node is None:
+        return None
+    if name_node.type == "identifier":
+        return name_node.text.decode("utf-8")
+    if name_node.type in usage_node_types["attribute_types"]:
+        chain = _chain_part(name_node, usage_node_types["attribute_types"])
+        if chain is not None and chain[0].type == "identifier":
+            return ".".join([chain[0].text.decode("utf-8"), *chain[1]])
+    return None
+
+
+def extract_value_aliases(
+    root_node: Node,
+    usage_node_types: dict,
+    is_type_name: Callable[[str], bool],
+) -> list[TypedAlias]:
+    """Traverse the AST to find the variables given an object of a tracked type.
+
+    e = Engine() (Python) and const e = new Engine() (JS / TS) make e stand for Engine
+    from the line of the assignment to the end of the innermost scope_types node around
+    it (a function). A later assignment of any other value to the same variable ends
+    that: it gives a TypedAlias without a type for its own lines. An assignment outside
+    every scope_types node is not read.
+
+    Settings read:
+        typed_alias_value_dict: node type -> (field of the variable, field of the value;
+            "" for the first named child)
+        typed_alias_new_dict:   node type of a value that makes an object -> field
+            naming its type
+
+    Args:
+        root_node: The AST root node covering the entire file.
+        usage_node_types: The EXT_TO_USAGE_NODE_TYPE_DICT entry of the language.
+        is_type_name: Returns whether a name written as the type names a tracked type.
+
+    Returns:
+        The TypedAlias of every assignment to a variable that is given an object of a
+        tracked type somewhere in its scope, in no particular order.
+    """
+    value_dict = usage_node_types.get("typed_alias_value_dict", {})
+    if not value_dict or not usage_node_types.get("typed_alias_new_dict"):
+        return []
+    scope_types = usage_node_types.get("scope_types", set())
+
+    alias_list: list[TypedAlias] = []
+    stack = [root_node]
+    while stack:
+        node = stack.pop()
+        stack.extend(node.children)
+        field_tuple = value_dict.get(node.type)
+        if field_tuple is None:
+            continue
+        name_field, value_field = field_tuple
+        name_node = node.child_by_field_name(name_field)
+        value_node = (
+            node.child_by_field_name(value_field) if value_field
+            else next(iter(node.named_children), None)
+        )
+        # Python: with Engine() as e holds the name in an as_pattern_target
+        if name_node is not None and name_node.type != "identifier" and name_node.named_child_count == 1:
+            name_node = name_node.named_children[0]
+        if name_node is None or name_node.type != "identifier" or value_node is None:
+            continue
+        scope_node = _scope_node(
+            node, scope_types, root_node, usage_node_types.get("opaque_types", set()),
+        )
+        if scope_node is None or scope_node is root_node:
+            continue
+        type_name = _new_type_name(value_node, usage_node_types)
+        if type_name is not None and not is_type_name(type_name):
+            type_name = None
+        alias_list.append(TypedAlias(
+            name_node.text.decode("utf-8"), type_name,
+            node.start_point[0] + 1, scope_node.end_point[0] + 1,
+        ))
+
+    typed_key_set = {
+        (alias.name, alias.end_line) for alias in alias_list if alias.type_name is not None
+    }
+    return [alias for alias in alias_list if (alias.name, alias.end_line) in typed_key_set]
+
+
+def typed_alias(alias_list: list[TypedAlias], name: str, line: int) -> TypedAlias | None:
+    """Return the alias a variable name counts under on a line.
+
+    Args:
+        alias_list: The aliases of a file (extract_typed_aliases, extract_value_aliases).
         name: A variable name.
         line: Line the name is written on (1-based).
 
     Returns:
-        The type of the alias of that name whose lines hold the line; of several, the
-        one with the fewest lines. None when no alias of that name counts for the line.
+        The alias of that name whose lines hold the line; of several, the one with the
+        fewest lines. None when no alias of that name counts for the line.
     """
     match_list = [
         alias for alias in alias_list
@@ -840,7 +969,22 @@ def typed_alias_type(alias_list: list[TypedAlias], name: str, line: int) -> str 
     ]
     if not match_list:
         return None
-    return min(match_list, key=lambda alias: alias.end_line - alias.start_line).type_name
+    return min(match_list, key=lambda alias: alias.end_line - alias.start_line)
+
+
+def typed_alias_type(alias_list: list[TypedAlias], name: str, line: int) -> str | None:
+    """Return the type a variable name stands for on a line.
+
+    Args:
+        alias_list: The aliases of a file (extract_typed_aliases, extract_value_aliases).
+        name: A variable name.
+        line: Line the name is written on (1-based).
+
+    Returns:
+        The type of typed_alias(); None when there is no such alias or it has no type.
+    """
+    alias = typed_alias(alias_list, name, line)
+    return alias.type_name if alias is not None else None
 
 
 def _type_name(type_node: Node) -> str | None:
@@ -851,6 +995,7 @@ def _type_name(type_node: Node) -> str | None:
         struct node        -> "node"
         geo::Shape         -> "Shape"
         Box<int>           -> "Box"
+        core.Engine        -> "core.Engine" (Python)
 
     Args:
         type_node: The type node of a declaration.
@@ -862,12 +1007,38 @@ def _type_name(type_node: Node) -> str | None:
     while current is not None:
         if current.type in ("type_identifier", "identifier"):
             return current.text.decode("utf-8")
+        if current.type == "attribute":
+            # Python: a type written with its module (core.Engine)
+            text = current.text.decode("utf-8")
+            return text if _DOTTED_NAME_RE.fullmatch(text) else None
         name_node = current.child_by_field_name("name")
-        if name_node is None and current.type == "user_type":
-            # Kotlin: user_type holds the type name as a plain child
+        if name_node is None and current.type in _TYPE_WRAP_NODE_TYPE_SET:
+            # Kotlin: user_type holds the type name as a plain child; Python and TS wrap
+            # an annotation in a node of its own
             name_node = next(iter(current.named_children), None)
         current = name_node
     return None
+
+
+def _field_type_and_var(node: Node, name_field: str) -> tuple[str | None, list[str]]:
+    """Extract the type name and the variable name from a declaration that names both in fields.
+
+    Args:
+        node: A node whose type is a key of typed_alias_name_field_dict.
+        name_field: The field holding the variable; "" for the first named child.
+
+    Returns:
+        (type name of the field "type", [variable name]); (None, []) when the node has
+        no type or its variable is not a plain name.
+    """
+    type_node = node.child_by_field_name("type")
+    name_node = (
+        node.child_by_field_name(name_field) if name_field
+        else next(iter(node.named_children), None)
+    )
+    if type_node is None or name_node is None or name_node.type != "identifier":
+        return None, []
+    return _type_name(type_node), [name_node.text.decode("utf-8")]
 
 
 def _extract_type_and_var(node: Node) -> tuple[str | None, list[str]]:

@@ -1,143 +1,562 @@
 {
   "file": "codetwine/codetwine/extractors/dependency_graph_py/dependency_graph.py",
+  "language": "py",
+  "detected_encoding": null,
   "definitions": [
     {
       "name": "logger",
       "type": "expression_statement",
-      "start_line": 20,
-      "end_line": 20,
+      "start_line": 38,
+      "end_line": 38,
       "context": "logger = logging.getLogger(__name__)"
     },
     {
-      "name": "_is_inside_import",
+      "name": "_is_own_file",
       "type": "function_definition",
-      "start_line": 23,
-      "end_line": 42,
-      "context": "def _is_inside_import(node) -> bool:\n    \"\"\"Determine whether an AST node is inside an import/include statement.\n\n    Traverse ancestors from the node to the root using tree-sitter's Node.parent,\n    and check for import-related node types (import_statement, import_from_statement,\n    import_declaration, preproc_include, etc.).\n\n    Args:\n        node: The tree-sitter AST node to check.\n\n    Returns:\n        True if the node is inside an import/include statement.\n    \"\"\"\n    current = node.parent\n    while current is not None:\n        node_type = current.type\n        if \"import\" in node_type or node_type == \"preproc_include\":\n            return True\n        current = current.parent\n    return False"
+      "start_line": 41,
+      "end_line": 54,
+      "context": "def _is_own_file(project_dir: str, file_path: str) -> bool:\n    \"\"\"Return whether a path is a file of the project itself rather than a link to one.\n\n    Args:\n        project_dir: Root directory of the project to analyze.\n        file_path: Absolute path of a file under project_dir.\n\n    Returns:\n        False for a symbolic link and for a path under a linked directory of the\n        project, True otherwise.\n    \"\"\"\n    rel_path = os.path.relpath(os.path.abspath(file_path), os.path.abspath(project_dir))\n    own_path = os.path.join(os.path.realpath(project_dir), rel_path)\n    return os.path.normcase(os.path.realpath(file_path)) == os.path.normcase(own_path)"
     },
     {
-      "name": "_DEFINITION_NAME_NODE_TYPES",
-      "type": "expression_statement",
-      "start_line": 45,
-      "end_line": 45,
-      "context": "_DEFINITION_NAME_NODE_TYPES = {\"identifier\", \"type_identifier\", \"namespace_identifier\"}"
+      "name": "_collect_text_file_list",
+      "type": "function_definition",
+      "start_line": 57,
+      "end_line": 88,
+      "context": "def _collect_text_file_list(project_dir: str) -> list[str]:\n    \"\"\"Walk the project and return the absolute paths of its non-empty text files.\n\n    Directories and files matching EXCLUDE_PATTERNS are left out, and so are symbolic\n    links (_is_own_file) and empty, binary and unreadable files (is_text_file). Linked\n    directories are not entered. The number of skipped files is logged.\n\n    Args:\n        project_dir: Root directory of the project to analyze.\n\n    Returns:\n        Absolute file paths in os.walk order.\n    \"\"\"\n    text_file_list: list[str] = []\n    skip_count = 0\n    for dir_path, dir_name_list, file_name_list in os.walk(project_dir):\n        # Remove directories matching exclude patterns from the traversal targets\n        # Modifying dir_names in-place causes os.walk to skip those subtrees\n        dir_name_list[:] = [d for d in dir_name_list if not any(fnmatch.fnmatch(d, p) for p in EXCLUDE_PATTERNS)]\n        for file_name in file_name_list:\n            if any(fnmatch.fnmatch(file_name, p) for p in EXCLUDE_PATTERNS):\n                continue\n            file_path = os.path.join(dir_path, file_name)\n            if not _is_own_file(project_dir, file_path):\n                continue\n            if is_text_file(file_path):\n                text_file_list.append(file_path)\n            else:\n                skip_count += 1\n    if skip_count:\n        logger.info(f\"Skipped {skip_count} empty, binary or unreadable files\")\n    return text_file_list"
     },
     {
-      "name": "_find_definition_node",
+      "name": "_filter_text_file_list",
       "type": "function_definition",
-      "start_line": 48,
-      "end_line": 73,
-      "context": "def _find_definition_node(root_node, definition_name: str):\n    \"\"\"Search the AST by breadth-first search (BFS) and return the definition node with the specified name.\n\n    Target node types for the search:\n        identifier           - Function names, variable names, class names (Python/Java/Kotlin/JS)\n        type_identifier      - Type names (C/C++ struct/class/enum, TS interface/type alias)\n        namespace_identifier - Namespace names (C++ namespace)\n\n    Nodes inside import statements are skipped (they are references, not definitions).\n\n    Args:\n        root_node: The AST root node covering the entire file.\n        definition_name: The definition name to search for (e.g. \"parse_file\", \"Point\", \"geometry\").\n\n    Returns:\n        The parent node containing the definition. None if not found.\n    \"\"\"\n    queue = deque((child, root_node) for child in root_node.children)\n    while queue:\n        node, parent = queue.popleft()\n        if node.type in _DEFINITION_NAME_NODE_TYPES and node.text.decode(\"utf-8\") == definition_name:\n            if not _is_inside_import(node):\n                return parent\n        for child in node.children:\n            queue.append((child, node))\n    return None"
+      "start_line": 91,
+      "end_line": 125,
+      "context": "def _filter_text_file_list(project_dir: str, file_list: list[str]) -> list[str]:\n    \"\"\"Return the absolute paths of the non-empty text files among the given files.\n\n    The same files are left out as in _collect_text_file_list: a path with a directory\n    or file name matching EXCLUDE_PATTERNS, symbolic links and paths under a linked\n    directory (_is_own_file), and empty, binary and unreadable files (is_text_file). A\n    path outside project_dir is left out too. The number of skipped files is logged.\n\n    Args:\n        project_dir: Root directory of the project to analyze.\n        file_list: File paths relative to project_dir.\n\n    Returns:\n        Absolute file paths in the order given, without duplicates.\n    \"\"\"\n    text_file_list: list[str] = []\n    known_path_set: set[str] = set()\n    skip_count = 0\n    for file_rel in file_list:\n        file_path = os.path.normpath(os.path.join(project_dir, file_rel))\n        part_list = os.path.relpath(file_path, project_dir).replace(\"\\\\\", \"/\").split(\"/\")\n        if part_list[0] == \"..\" or file_path in known_path_set:\n            continue\n        known_path_set.add(file_path)\n        if any(fnmatch.fnmatch(part, p) for part in part_list for p in EXCLUDE_PATTERNS):\n            continue\n        if not _is_own_file(project_dir, file_path):\n            continue\n        if is_text_file(file_path):\n            text_file_list.append(file_path)\n        else:\n            skip_count += 1\n    if skip_count:\n        logger.info(f\"Skipped {skip_count} empty, binary or unreadable files\")\n    return text_file_list"
     },
     {
-      "name": "extract_callee_source",
+      "name": "_to_rel",
       "type": "function_definition",
-      "start_line": 76,
-      "end_line": 116,
-      "context": "def extract_callee_source(\n    callee_file_path: str,\n    callee_name: str,\n    project_dir: str,\n) -> str | None:\n    \"\"\"Retrieve the definition source code for a specified name from the dependency target file.\n\n    Search the AST by breadth-first search (BFS) to find an identifier matching callee_name,\n    then return the entire source code of its parent node (function_definition / class_definition /\n    assignment, etc.).\n\n    Parse results are reused via the module-level cache in ts_parser.py.\n\n    Args:\n        callee_file_path: Path of the dependency target file (relative to project root, e.g. \"src/foo.py\").\n        callee_name: Name of the definition to retrieve (e.g. \"parse_file\", \"helper.process\").\n        project_dir: Absolute path to the project root.\n\n    Returns:\n        The source code string. None if the definition is not found.\n    \"\"\"\n\n    absolute_path = os.path.join(project_dir, callee_file_path)\n\n    callee_root = parse_file(absolute_path)[0]\n\n    # For attribute access like \"helper.process\", the trailing \"process\" is the actual definition name.\n    # For cases like \"TEMPLATE.format\" where the trailing part is a built-in method,\n    # the leading \"TEMPLATE\" is the definition name.\n    # If not found by the trailing part, re-search by the leading part.\n    parts = callee_name.split(\".\")\n    search_names = [parts[-1]]\n    if len(parts) > 1:\n        search_names.append(parts[0])\n\n    for definition_name in search_names:\n        parent_node = _find_definition_node(callee_root, definition_name)\n        if parent_node is not None:\n            return parent_node.text.decode(\"utf-8\")\n\n    return None"
+      "start_line": 128,
+      "end_line": 130,
+      "context": "def _to_rel(path: str, project_dir: str) -> str:\n    \"\"\"Return a path relative to project_dir with \"/\" separators.\"\"\"\n    return os.path.relpath(path, project_dir).replace(\"\\\\\", \"/\")"
+    },
+    {
+      "name": "_no_chunk_document_list",
+      "type": "function_definition",
+      "start_line": 133,
+      "end_line": 153,
+      "context": "def _no_chunk_document_list(project_dir: str, all_file_list: list[str]) -> list[str]:\n    \"\"\"Return the R Markdown and Quarto files that have no R code chunk.\n\n    Args:\n        project_dir: Root directory of the project to analyze.\n        all_file_list: Absolute paths of the text files of the project.\n\n    Returns:\n        Paths relative to project_dir. A file that cannot be read is not returned.\n    \"\"\"\n    document_list: list[str] = []\n    for file_path in all_file_list:\n        if os.path.splitext(file_path)[1].lstrip(\".\").lower() not in R_MARKDOWN_EXT_SET:\n            continue\n        try:\n            content = lone_cr_to_lf(read_source(file_path)[0]).encode(\"utf-8\")\n        except OSError:\n            continue\n        if not has_r_chunk(content):\n            document_list.append(_to_rel(file_path, project_dir))\n    return document_list"
+    },
+    {
+      "name": "_import_callee_rel_set",
+      "type": "function_definition",
+      "start_line": 156,
+      "end_line": 191,
+      "context": "def _import_callee_rel_set(\n    file_path: str, file_rel: str, project_file_set: set[str], project_dir: str,\n) -> set[str]:\n    \"\"\"Return the project files the import statements of a file resolve to.\n\n    For a file whose references are resolved through its import statements these are\n    the files its ImportBinder gives; for a COBOL file, the files its COPY and CALL\n    statements resolve to.\n\n    Args:\n        file_path: Absolute path of the file.\n        file_rel: Relative path of the file.\n        project_file_set: Relative paths of the files that have a language.\n        project_dir: Root directory of the project to analyze.\n\n    Returns:\n        Relative paths. Empty for a file without import statements, and for a file of\n        a language without module resolve settings (EXT_TO_IMPORT_RESOLVE_DICT), which\n        is not parsed.\n    \"\"\"\n    if reference_kind(file_path) == \"import\":\n        return import_binder(project_dir, project_file_set).import_file_set(file_rel)\n\n    file_ext = language_ext(file_path)\n    language, import_query_str = get_import_params(file_ext)\n    if not language or file_ext not in EXT_TO_IMPORT_RESOLVE_DICT:\n        return set()\n    root_node = parse_file(file_path)[0]\n    callee_rel_set: set[str] = set()\n    for import_info in extract_imports(root_node, language, import_query_str):\n        resolved = resolve_module_to_project_path(\n            import_info.module, file_rel, project_file_set, None, project_dir,\n        )\n        if resolved:\n            callee_rel_set.add(resolved)\n    return callee_rel_set"
+    },
+    {
+      "name": "_log_graph_failure",
+      "type": "function_definition",
+      "start_line": 194,
+      "end_line": 199,
+      "context": "def _log_graph_failure(file_rel: str, error: Exception) -> None:\n    \"\"\"Log that a file is analyzed without its dependencies in the dependency graph.\"\"\"\n    logger.warning(\n        f\"{file_rel} has no dependencies in the dependency graph: \"\n        f\"{type(error).__name__}: {error}\"\n    )"
+    },
+    {
+      "name": "_reference_callee_rel_list",
+      "type": "function_definition",
+      "start_line": 202,
+      "end_line": 226,
+      "context": "def _reference_callee_rel_list(\n    file_path: str, file_rel: str, project_file_set: set[str], project_dir: str,\n) -> list[str]:\n    \"\"\"Return the files the references of a file resolve to.\n\n    For an R file the scripts it reads with source() and box::use are returned as well,\n    whether or not it uses a name of them.\n\n    Args:\n        file_path: Absolute path of the file.\n        file_rel: Relative path of the file.\n        project_file_set: Relative paths of the files that have a language.\n        project_dir: Root directory of the project to analyze.\n\n    Returns:\n        Relative paths, the file itself among them when it refers to its own\n        definitions.\n    \"\"\"\n    callee_rel_list = [\n        target.file_rel\n        for target in reference_target_list(file_rel, project_file_set, project_dir)\n    ]\n    if language_ext(file_path) in R_EXT_SET:\n        callee_rel_list += r_import_file_list(file_rel, project_file_set, project_dir)\n    return callee_rel_list"
+    },
+    {
+      "name": "_collect_callee_dict",
+      "type": "function_definition",
+      "start_line": 229,
+      "end_line": 272,
+      "context": "def _collect_callee_dict(\n    language_file_list: list[str],\n    project_dir: str,\n    project_file_set: set[str],\n) -> dict[str, set[str]]:\n    \"\"\"Map each file to the project files it depends on.\n\n    These are the files its import statements resolve to, and the files whose\n    definitions it uses: through an import statement, without one (Java / Kotlin: same\n    package, SQL: whole project), by name (C#, R), or through a copybook that includes\n    the file (COBOL). Both are read for one file before the next file is read, so the\n    syntax tree of the file is read while it is in parse_cache.\n\n    Args:\n        language_file_list: Absolute paths of the files that have a language.\n        project_dir: Root directory of the project to analyze.\n        project_file_set: Relative paths of the files that have a language.\n\n    Returns:\n        A {file absolute path: set of callee absolute paths} dict, one entry per file.\n        A file whose import statements raise an exception has no callees of them, and\n        one whose references raise an exception none of those; the exception is logged.\n    \"\"\"\n    file_callee_dict: dict[str, set[str]] = {}\n    for file_path in language_file_list:\n        file_rel = _to_rel(file_path, project_dir)\n        callee_rel_set: set[str] = set()\n        try:\n            callee_rel_set.update(_import_callee_rel_set(\n                file_path, file_rel, project_file_set, project_dir,\n            ))\n        except Exception as e:\n            _log_graph_failure(file_rel, e)\n        try:\n            callee_rel_set.update(_reference_callee_rel_list(\n                file_path, file_rel, project_file_set, project_dir,\n            ))\n        except Exception as e:\n            _log_graph_failure(file_rel, e)\n        file_callee_dict[os.path.abspath(file_path)] = {\n            os.path.abspath(os.path.join(project_dir, callee_rel))\n            for callee_rel in callee_rel_set if callee_rel != file_rel\n        }\n    return file_callee_dict"
+    },
+    {
+      "name": "_to_output_entry_list",
+      "type": "function_definition",
+      "start_line": 275,
+      "end_line": 309,
+      "context": "def _to_output_entry_list(\n    all_file_list: list[str],\n    project_dir: str,\n    file_caller_dict: dict[str, list[str]],\n    file_callee_dict: dict[str, set[str]],\n) -> list[dict]:\n    \"\"\"Build one {\"file\", \"callers\", \"callees\"} entry per file with \"project_name/copy_path\" paths.\n\n    copy_path is the {parent_dir}/{stem}_{ext}/{filename} path of the file in the output\n    directory. A file without a language has no entry in the two dicts and gets empty lists.\n\n    Args:\n        all_file_list: Absolute paths of every analyzed file, in output order.\n        project_dir: Root directory of the project to analyze.\n        file_caller_dict: {file absolute path: caller absolute paths}.\n        file_callee_dict: {file absolute path: callee absolute paths}.\n\n    Returns:\n        The entries in the order of all_file_list.\n    \"\"\"\n    project_name = os.path.basename(project_dir)\n\n    def to_output(path: str) -> str:\n        \"\"\"Convert an absolute path to \"project_name/copy_path\".\"\"\"\n        return f\"{project_name}/{rel_to_copy_path(_to_rel(path, project_dir))}\"\n\n    file_info_list = []\n    for file_path in all_file_list:\n        abs_path = os.path.abspath(file_path)\n        file_info_list.append({\n            \"file\":    to_output(abs_path),\n            \"callers\": sorted(to_output(caller) for caller in file_caller_dict.get(abs_path, [])),\n            \"callees\": sorted(to_output(callee) for callee in file_callee_dict.get(abs_path, ())),\n        })\n    return file_info_list"
     },
     {
       "name": "build_project_dependencies",
       "type": "function_definition",
-      "start_line": 119,
-      "end_line": 248,
-      "context": "def build_project_dependencies(project_dir: str) -> list[dict]:\n    \"\"\"Analyze inter-file dependencies within the project and build a dependency graph in memory.\n\n    Return value structure (array):\n        [\n          {\n            \"file\":    \"project_name/src/foo.py/foo.py\",\n            \"callers\": [\"project_name/src/bar.py/bar.py\"],\n            \"callees\": [\"project_name/src/baz.py/baz.py\"],\n          },\n          ...\n        ]\n\n    Paths use the \"project_name/copy_path\" format.\n    Import analysis is performed on all supported language files to build the dependency graph.\n\n    Args:\n        project_dir: Root directory of the project to analyze.\n\n    Returns:\n        A list of file dependency information dicts.\n    \"\"\"\n    supported_ext_set = set(DEFINITION_DICTS.keys())\n\n    # == Step 1: Collect all files with supported extensions ======================\n    all_file_list: list[str] = []\n    for dir_path, dir_names, file_name_list in os.walk(project_dir):\n        # Remove directories matching exclude patterns from the traversal targets\n        # Modifying dir_names in-place causes os.walk to skip those subtrees\n        dir_names[:] = [d for d in dir_names if not any(fnmatch.fnmatch(d, p) for p in EXCLUDE_PATTERNS)]\n        for file_name in file_name_list:\n            if any(fnmatch.fnmatch(file_name, p) for p in EXCLUDE_PATTERNS):\n                continue\n            if os.path.splitext(file_name)[1].lstrip(\".\") in supported_ext_set:\n                all_file_list.append(os.path.join(dir_path, file_name))\n\n    # == Step 2: Build the set of relative paths for project files ============\n    # A lookup set used to determine whether a module is within the project during import resolution\n    project_file_set: set[str] = set()\n    for file_path in all_file_list:\n        project_file_set.add(os.path.relpath(file_path, project_dir).replace(\"\\\\\", \"/\"))\n\n    # Detect source root prefixes (e.g. \"src/main/java/\") present in the project\n    source_root_set = detect_source_roots(project_file_set)\n\n    # == Step 3: Collect files imported by each file (callees) ======\n    file_callee_map: dict[str, set[str]] = {}\n    for file_path in all_file_list:\n        callee_set: set[str] = set()\n        file_ext = os.path.splitext(file_path)[1].lstrip(\".\")\n        language, import_query_str = get_import_params(file_ext)\n        file_rel = os.path.relpath(file_path, project_dir).replace(\"\\\\\", \"/\")\n\n        # Parse import statements and add those resolvable to project files as callees\n        if language and import_query_str:\n            root_node = parse_file(file_path)[0]\n            for import_info in extract_imports(root_node, language, import_query_str):\n                resolved = resolve_module_to_project_path(\n                    import_info.module,\n                    file_rel,\n                    project_file_set,\n                    source_root_set,\n                )\n                if resolved:\n                    abs_resolved = os.path.abspath(os.path.join(project_dir, resolved))\n                    callee_set.add(abs_resolved)\n\n        file_callee_map[os.path.abspath(file_path)] = callee_set\n\n    # == Step 3.5: Add same-package files as implicit callees (Java/Kotlin) ==\n    # In Java/Kotlin, classes in the same package (same directory) can be referenced without imports.\n    # Add as a unidirectional dependency only when the class name (= filename without extension)\n    # appears in the source code.\n    dir_ext_groups: dict[tuple[str, str], list[str]] = {}\n    for file_path in all_file_list:\n        file_ext = os.path.splitext(file_path)[1].lstrip(\".\")\n        if not SAME_PACKAGE_VISIBLE.get(file_ext):\n            continue\n        abs_path = os.path.abspath(file_path)\n        key = (os.path.dirname(abs_path), file_ext)\n        dir_ext_groups.setdefault(key, []).append(abs_path)\n\n    # Check within the same group whether source code references class names from other files\n    for group in dir_ext_groups.values():\n        # Pre-build class names and regex patterns for each file in the group\n        class_names: dict[str, str] = {}\n        class_patterns: dict[str, re.Pattern[str]] = {}\n        for abs_path in group:\n            name = os.path.splitext(os.path.basename(abs_path))[0]\n            class_names[abs_path] = name\n            class_patterns[abs_path] = re.compile(r\"\\b\" + re.escape(name) + r\"\\b\")\n\n        for abs_path in group:\n            try:\n                with open(abs_path, \"r\", encoding=\"utf-8\") as f:\n                    source = f.read()\n            except (OSError, UnicodeDecodeError):\n                continue\n            for other_path in group:\n                if other_path == abs_path:\n                    continue\n                if class_patterns[other_path].search(source):\n                    file_callee_map[abs_path].add(other_path)\n\n    # == Step 4: Build the callers (reverse lookup) index ==================\n    file_caller_map: dict[str, list[str]] = {os.path.abspath(f): [] for f in all_file_list}\n    for caller_path, callee_set in file_callee_map.items():\n        for callee_path in callee_set:\n            if callee_path in file_caller_map:\n                file_caller_map[callee_path].append(caller_path)\n\n    # == Step 5: Convert to relative paths and write to JSON ====================\n    # Paths use the \"project_name/copy_path\" format.\n    # copy_path = {parent_dir}/{file_stem}/{filename} structure.\n    # This matches the actual file paths within the output folder,\n    # keeping all paths valid even when the folder is moved to another environment.\n    project_name = os.path.basename(project_dir)\n    file_info_list = []\n    for file_path in all_file_list:\n        abs_path = os.path.abspath(file_path)\n        rel = os.path.relpath(abs_path, project_dir).replace(\"\\\\\", \"/\")\n        caller_rels = [os.path.relpath(p, project_dir).replace(\"\\\\\", \"/\") for p in file_caller_map[abs_path]]\n        callee_rels = [os.path.relpath(p, project_dir).replace(\"\\\\\", \"/\") for p in file_callee_map[abs_path]]\n        file_info_list.append({\n            \"file\":    f\"{project_name}/{rel_to_copy_path(rel)}\",\n            \"callers\": [f\"{project_name}/{rel_to_copy_path(r)}\" for r in caller_rels],\n            \"callees\": [f\"{project_name}/{rel_to_copy_path(r)}\" for r in callee_rels],\n        })\n\n    return file_info_list"
+      "start_line": 312,
+      "end_line": 399,
+      "context": "def build_project_dependencies(\n    project_dir: str,\n    file_list: list[str] | None = None,\n) -> list[dict]:\n    \"\"\"Analyze inter-file dependencies within the project and build a dependency graph in memory.\n\n    Return value structure (array):\n        [\n          {\n            \"file\":    \"project_name/src/foo.py/foo.py\",\n            \"callers\": [\"project_name/src/bar.py/bar.py\"],\n            \"callees\": [\"project_name/src/baz.py/baz.py\"],\n          },\n          ...\n        ]\n\n    Paths use the \"project_name/copy_path\" format.\n    Every non-empty text file that passes EXCLUDE_PATTERNS is listed. Import analysis\n    runs on the files with a language (has_language); every other file is listed with\n    empty callers and callees. A file without a language that a COBOL COPY statement\n    names is analyzed as a COBOL copybook, and keeps that language until the next call\n    for the project (register_copy_target). An R Markdown or Quarto file without an R\n    code chunk is analyzed without a language, until the next call for the project\n    (set_no_language_file).\n    The indexes built from the files of a project and the references resolved with\n    them are cleared: the Rust module trees (module_tree_cache), the C# namespace\n    indexes (namespace_index_cache, csharp_target_cache), the R name indexes\n    (r_name_index_cache, r_target_cache), the COBOL file indexes (file_index_cache,\n    reference_target_cache) and the names and references resolved through import\n    statements (clear_import_reference_cache, clear_import_binder_cache,\n    clear_import_path_cache), the definitions read for a definition's source\n    (clear_definition_source_cache) and the path settings of the JS/TS config files\n    (path_config_cache, the package and alias caches). The parse results (parse_cache) are kept.\n\n    Args:\n        project_dir: Root directory of the project to analyze.\n        file_list: File paths relative to project_dir. When given, only these files\n            are analyzed instead of walking project_dir.\n\n    Returns:\n        A list of file dependency information dicts.\n    \"\"\"\n    # == Step 1: Collect every non-empty text file ==============================\n    if file_list is None:\n        all_file_list = _collect_text_file_list(project_dir)\n    else:\n        all_file_list = _filter_text_file_list(project_dir, file_list)\n\n    # Forget the indexes and the resolved references of an earlier analysis\n    module_tree_cache.clear()\n    file_index_cache.clear()\n    namespace_index_cache.clear()\n    r_name_index_cache.clear()\n    reference_target_cache.clear()\n    csharp_target_cache.clear()\n    r_target_cache.clear()\n    clear_import_reference_cache()\n    clear_import_binder_cache()\n    clear_import_path_cache()\n    clear_definition_source_cache()\n    path_config_cache.clear()\n    clear_package_path_cache()\n    clear_alias_path_cache()\n\n    # R Markdown and Quarto files without an R code chunk are analyzed without a language,\n    # and files without a language that COBOL COPY statements name are analyzed as COBOL\n    set_no_language_file(project_dir, _no_chunk_document_list(project_dir, all_file_list))\n    register_copy_target(project_dir, [_to_rel(f, project_dir) for f in all_file_list])\n\n    # Only the files with a language take part in import resolution and dependency edges\n    language_file_list = [f for f in all_file_list if has_language(f)]\n\n    # == Step 2: Build the set of relative paths for project files ============\n    # A lookup set used to determine whether a module is within the project during import resolution\n    project_file_set = {_to_rel(file_path, project_dir) for file_path in language_file_list}\n\n    # == Step 3: Collect the files each file imports and refers to (callees) ==\n    file_callee_dict = _collect_callee_dict(language_file_list, project_dir, project_file_set)\n\n    # == Step 4: Build the callers (reverse lookup) index ==================\n    file_caller_dict: dict[str, list[str]] = {os.path.abspath(f): [] for f in language_file_list}\n    for caller_path, callee_set in file_callee_dict.items():\n        for callee_path in callee_set:\n            if callee_path in file_caller_dict:\n                file_caller_dict[callee_path].append(caller_path)\n\n    # == Step 5: Convert to \"project_name/copy_path\" paths ====================\n    return _to_output_entry_list(all_file_list, project_dir, file_caller_dict, file_callee_dict)"
     }
   ],
   "callee_usages": [
     {
       "lines": [
-        100,
-        174
-      ],
-      "name": "parse_file",
-      "from": "codetwine/codetwine/parsers/ts_parser_py/ts_parser.py",
-      "target_context": "def parse_file(file_path: str) -> tuple[Node, bytes]:\n    \"\"\"Read a file, parse it with tree-sitter, and return (AST root node, byte content).\n\n    Parse results are cached at module level to avoid re-parsing the same file.\n    The cache holds at most PARSE_CACHE_MAX_FILES entries; when it is full, the least\n    recently used entry is discarded and that file is parsed again the next time it is\n    requested. PARSE_CACHE_MAX_FILES = 0 disables the limit.\n\n    Args:\n        file_path: Absolute path of the file to parse.\n\n    Returns:\n        A (root_node, content) tuple.\n    \"\"\"\n    # Return from cache if available, marking the entry as most recently used\n    cached = parse_cache.get(file_path)\n    if cached is not None:\n        parse_cache.move_to_end(file_path)\n        return cached\n\n    # Get the corresponding language from the file extension\n    ext = os.path.splitext(file_path)[1].lstrip(\".\")\n\n    # Initialize the Parser with the Language object for this extension\n    parser = Parser(_language_map[ext])\n\n    # Read the file content in binary mode\n    with open(file_path, \"rb\") as f:\n        content = f.read()\n\n    # Parse with tree-sitter to generate the AST\n    tree = parser.parse(content)\n    result = (tree.root_node, content)\n\n    # Store in cache and drop the oldest entries once the limit is exceeded\n    parse_cache[file_path] = result\n    if PARSE_CACHE_MAX_FILES > 0:\n        while len(parse_cache) > PARSE_CACHE_MAX_FILES:\n            parse_cache.popitem(last=False)\n    return result"
-    },
-    {
-      "lines": [
-        141
-      ],
-      "name": "DEFINITION_DICTS.keys",
-      "from": "codetwine/codetwine/config/settings_py/settings.py",
-      "target_context": "DEFINITION_DICTS: dict[str, dict[str, str]] = _expand_ext_aliases(\n    {ext: cfg.definition_dict for ext, cfg in _LANG_REGISTRY.items()}\n)"
-    },
-    {
-      "lines": [
-        148,
-        150
+        75,
+        77,
+        115
       ],
       "name": "EXCLUDE_PATTERNS",
       "from": "codetwine/codetwine/config/settings_py/settings.py",
-      "target_context": "EXCLUDE_PATTERNS: list[str] = (\n    [p.strip() for p in _EXCLUDE_PATTERNS_ENV.split(\",\") if p.strip()]\n    if _EXCLUDE_PATTERNS_ENV\n    else [\n        \"__pycache__\",\n        \".git\",\n        \".github\",\n        \".venv\",\n        \"node_modules\",\n    ]\n)"
+      "target_context": "EXCLUDE_PATTERNS: list[str] = (\n    [p.strip() for p in _EXCLUDE_PATTERNS_ENV.split(\",\") if p.strip()]\n    if _EXCLUDE_PATTERNS_ENV\n    else [\n        \"__pycache__\",\n        \".git\",\n        \".github\",\n        \".venv\",\n        \"node_modules\",\n    ]\n)",
+      "target_name": "EXCLUDE_PATTERNS",
+      "target_start_line": 140
     },
     {
       "lines": [
-        162
+        82,
+        119
       ],
-      "name": "detect_source_roots",
-      "from": "codetwine/codetwine/import_to_path_py/import_to_path.py",
-      "target_context": "def detect_source_roots(project_file_set: set[str]) -> set[str]:\n    \"\"\"Detect source root prefixes that actually exist in the project file set.\n\n    Checks each known source root pattern (e.g. \"src/main/java/\") against\n    the project file paths to find which prefixes are actually in use.\n    Only patterns that appear as a prefix of at least one file are returned.\n\n    Args:\n        project_file_set: Set of relative file paths within the project.\n\n    Returns:\n        A set of source root prefix strings that exist in the project.\n        Empty set if no known source root patterns are found.\n    \"\"\"\n    source_root_set: set[str] = set()\n    for pattern in SOURCE_ROOT_PATTERNS:\n        for file_path in project_file_set:\n            if file_path.startswith(pattern):\n                source_root_set.add(pattern)\n                break\n    return source_root_set"
+      "name": "is_text_file",
+      "from": "codetwine/codetwine/utils/file_utils_py/file_utils.py",
+      "target_context": "def is_text_file(file_path: str) -> bool:\n    \"\"\"Return whether a file is non-empty text, judged from its first _TEXT_PROBE_SIZE bytes.\n\n    A file that starts with a UTF-8, UTF-16 or UTF-32 BOM is text when the probe,\n    decoded with that codec, is not all whitespace. Any other file is text when the\n    probe holds no NUL byte and is not all whitespace. A file that cannot be read\n    counts as not text.\n\n    Args:\n        file_path: Absolute path of the file to probe.\n\n    Returns:\n        True for a non-empty text file, False for an empty, binary or unreadable one.\n    \"\"\"\n    try:\n        with open(file_path, \"rb\") as f:\n            head = f.read(_TEXT_PROBE_SIZE)\n    except OSError:\n        return False\n    bom_codec = _bom_codec(head)\n    if bom_codec is not None:\n        return bool(head.decode(bom_codec, errors=\"ignore\").strip())\n    return b\"\\0\" not in head and bool(head.strip())",
+      "target_name": "is_text_file",
+      "target_start_line": 36
     },
     {
       "lines": [
-        169
+        145
       ],
-      "name": "get_import_params",
-      "from": "codetwine/codetwine/import_to_path_py/import_to_path.py",
-      "target_context": "def get_import_params(file_ext: str) -> tuple[Language, str] | tuple[None, None]:\n    \"\"\"Retrieve the Language object and query string needed for import analysis from a file extension.\n\n    For unsupported languages (extensions not defined in IMPORT_QUERIES), returns (None, None)\n    to let the caller skip import analysis.\n\n    Args:\n        file_ext: File extension (without \".\", e.g. \"py\", \"java\").\n\n    Returns:\n        A (Language, import_query_str) tuple. (None, None) if unsupported.\n    \"\"\"\n    # Get the import query string for this extension\n    import_query_str = IMPORT_QUERIES.get(file_ext)\n    if not import_query_str:\n        return None, None\n\n    # Get the tree-sitter Language object for this extension\n    try:\n        language = TREE_SITTER_LANGUAGES[file_ext]\n    except KeyError:\n        return None, None\n    return language, import_query_str"
+      "name": "R_MARKDOWN_EXT_SET",
+      "from": "codetwine/codetwine/config/settings_py/settings.py",
+      "target_context": "R_MARKDOWN_EXT_SET: set[str] = {\"rmd\", \"qmd\"}",
+      "target_name": "R_MARKDOWN_EXT_SET",
+      "target_start_line": 1184
     },
     {
       "lines": [
-        175
+        148
       ],
-      "name": "extract_imports",
-      "from": "codetwine/codetwine/extractors/imports_py/imports.py",
-      "target_context": "def extract_imports(\n    root_node: Node,\n    language: Language,\n    import_query_str: str | None,\n) -> list[ImportInfo]:\n    \"\"\"Extract import statements from the AST and return them.\n\n    Uses tree-sitter queries (S-expression pattern matching) to uniformly\n    handle import syntax that differs across languages.\n\n    Query capture names:\n        @module      -> Import source (module name, path, header name, etc.)\n        @name        -> Individually imported name (the Y in \"from X import Y\")\n        @import_node -> The entire import statement node (for line number retrieval)\n\n    When the same import statement has multiple @name captures (from X import Y, Z),\n    they are consolidated into a single ImportInfo.\n\n    Args:\n        root_node: The AST root node covering the entire file.\n        language: tree-sitter Language object (required for Query creation).\n        import_query_str: tree-sitter query string (obtained from IMPORT_QUERIES in config.py).\n                          Returns an empty list when None (for languages with no import query defined).\n\n    Returns:\n        A list of ImportInfo.\n    \"\"\"\n    if not import_query_str:\n        return []\n\n    # Create a tree-sitter query and scan the AST with a cursor\n    query = Query(language, import_query_str)\n    cursor = QueryCursor(query)\n\n    # Key: (module string, line number) -> ImportInfo\n    # Groups multiple @name captures from the same import statement into one entry\n    grouped: dict[tuple[str, int], ImportInfo] = {}\n\n    # Retrieve query match results\n    for _, captures in cursor.matches(root_node):\n        # CommonJS require() pattern filtering:\n        # If a @_require_func capture exists and the function name is not \"require\", skip it\n        require_func_nodes = captures.get(\"_require_func\", [])\n        if require_func_nodes:\n            if require_func_nodes[0].text.decode(\"utf-8\") != \"require\":\n                continue\n\n        # Retrieve @module, @name, and @import_node captures\n        module_nodes = captures.get(\"module\", [])\n        name_nodes = captures.get(\"name\", [])\n        import_nodes = captures.get(\"import_node\", [])\n\n        if not module_nodes:\n            continue\n\n        # Get the module name from the @module capture and strip quotes\n        raw_module = module_nodes[0].text.decode(\"utf-8\")\n        module = _strip_quotes(raw_module)\n\n        # Get line number from the entire import statement node (fallback to module node)\n        if import_nodes:\n            line = import_nodes[0].start_point[0] + 1\n        else:\n            line = module_nodes[0].start_point[0] + 1\n\n        # Create the grouping key\n        group_key = (module, line)\n\n        # Create a new entry if the group does not exist yet\n        if group_key not in grouped:\n            grouped[group_key] = ImportInfo(module=module, names=[], line=line)\n\n        # Detect import X as Y alias\n        module_alias = _detect_module_alias(module_nodes[0], import_nodes)\n        if module_alias:\n            grouped[group_key].module_alias = module_alias\n\n        # If @name captures exist, add them to the names list (excluding duplicates)\n        # When an alias is present, register the alias name and record the mapping to the original name in alias_map\n        for name_node in name_nodes:\n            alias_name = _resolve_imported_name(name_node)\n            original_name = _get_original_name(name_node)\n            if alias_name and alias_name not in grouped[group_key].names:\n                grouped[group_key].names.append(alias_name)\n                if original_name and original_name != alias_name:\n                    if grouped[group_key].alias_map is None:\n                        grouped[group_key].alias_map = {}\n                    grouped[group_key].alias_map[alias_name] = original_name\n\n        # Java/Kotlin wildcard import detection:\n        # If an import_node's child contains asterisk (Java) or * (Kotlin), add \"*\" to names\n        if import_nodes and \"*\" not in grouped[group_key].names:\n            for child in import_nodes[0].children:\n                if child.type in (\"asterisk\", \"*\"):\n                    grouped[group_key].names.append(\"*\")\n                    break\n\n    return list(grouped.values())"
+      "name": "lone_cr_to_lf",
+      "from": "codetwine/codetwine/utils/file_utils_py/file_utils.py",
+      "target_context": "def lone_cr_to_lf(text: str) -> str:\n    \"\"\"Return a text with every lone \"\\\\r\" turned into \"\\\\n\".\n\n    The text keeps its length and the position of every character, and \"\\\\r\\\\n\" stays.\n    Each \"\\\\n\" of the result ends one line as line_list_of() splits the text.\n\n    Args:\n        text: The text to change.\n\n    Returns:\n        The changed text.\n    \"\"\"\n    return _LONE_CR_RE.sub(\"\\n\", text)",
+      "target_name": "lone_cr_to_lf",
+      "target_start_line": 153
+    },
+    {
+      "lines": [
+        148
+      ],
+      "name": "read_source",
+      "from": "codetwine/codetwine/utils/file_utils_py/file_utils.py",
+      "target_context": "def read_source(file_path: str) -> tuple[str, str]:\n    \"\"\"Read a text file and return its contents decoded, with the encoding used.\n\n    The encoding is chosen in this order:\n    1. The codec named by a BOM at the start of the file (the BOM is dropped)\n    2. UTF-8\n    3. The encodings of SOURCE_ENCODING, in order\n    4. The encoding charset-normalizer detects\n    5. UTF-8 with each invalid byte replaced by U+FFFD\n    Steps 1 to 3 take the first codec that decodes the whole file without error.\n    Line breaks are kept as they are; line numbers match the file.\n\n    Args:\n        file_path: Absolute path of the file to read.\n\n    Returns:\n        A (text, encoding) tuple. encoding is the codec name that decoded the file,\n        or \"\" when step 5 decoded it.\n\n    Raises:\n        OSError: When the file cannot be read.\n    \"\"\"\n    with open(file_path, \"rb\") as f:\n        text, encoding, _ = _decode_source(f.read())\n    return text, encoding",
+      "target_name": "read_source",
+      "target_start_line": 107
+    },
+    {
+      "lines": [
+        151
+      ],
+      "name": "has_r_chunk",
+      "from": "codetwine/codetwine/parsers/r_markdown_py/r_markdown.py",
+      "target_context": "def has_r_chunk(content: bytes) -> bool:\n    \"\"\"Return whether the text of an R Markdown or Quarto file has an R code chunk.\n\n    Args:\n        content: The file's text as UTF-8 bytes.\n\n    Returns:\n        True when a line of the text starts an R chunk (```{r ...}).\n    \"\"\"\n    return any(_CHUNK_START_RE.match(line) for line in content.split(b\"\\n\"))",
+      "target_name": "has_r_chunk",
+      "target_start_line": 16
     },
     {
       "lines": [
         176
       ],
+      "name": "reference_kind",
+      "from": "codetwine/codetwine/reference_target_py/reference_target.py",
+      "target_context": "def reference_kind(file_abs: str) -> str | None:\n    \"\"\"Return how the references of a file are resolved.\n\n    Args:\n        file_abs: Absolute path of the file.\n\n    Returns:\n        \"cobol\", \"csharp\", \"r\" or \"import\" (EXT_TO_REFERENCE_KIND_DICT), None for a\n        file without a language.\n    \"\"\"\n    return EXT_TO_REFERENCE_KIND_DICT.get(language_ext(file_abs))",
+      "target_name": "reference_kind",
+      "target_start_line": 24
+    },
+    {
+      "lines": [
+        177
+      ],
+      "name": "import_binder",
+      "from": "codetwine/codetwine/import_binding_py/import_binding.py",
+      "target_context": "def import_binder(project_dir: str, project_file_set: set[str]) -> \"ImportBinder\":\n    \"\"\"Return the binder of a project, built once per project file set.\n\n    Args:\n        project_dir: Absolute path to the project root.\n        project_file_set: Relative paths of the project files that have a language.\n\n    Returns:\n        The ImportBinder, kept until the project file set changes or\n        clear_import_binder_cache() is called.\n    \"\"\"\n    binder = project_cache_value(_binder_cache, project_dir, project_file_set)\n    if binder is not None:\n        return binder\n    binder = ImportBinder(project_dir, project_file_set)\n    _binder_cache[project_dir] = (project_file_set, binder)\n    return binder",
+      "target_name": "import_binder",
+      "target_start_line": 156
+    },
+    {
+      "lines": [
+        179,
+        224
+      ],
+      "name": "language_ext",
+      "from": "codetwine/codetwine/config/settings_py/settings.py",
+      "target_context": "def language_ext(path: str) -> str:\n    \"\"\"Return the extension whose language settings a file is analyzed with.\n\n    A file recorded by set_copy_target_ext() gets the extension recorded for it, and a\n    file recorded by set_no_language_file() none. Every other file gets its own\n    extension when it is a key of EXT_TO_DEFINITION_DICT; the extensions of the\n    languages with ignore_ext_case are matched in any case.\n\n    Examples:\n        \"src/app.py\"          -> \"py\"\n        \"src/MAIN.Cbl\"        -> \"cbl\"\n        \"R/utils.R\"           -> \"r\"\n        \"config.yaml\"         -> \"\"\n        \"dcl/DCLCUST.dcl\"     -> \"cpy\" (when a COPY statement names it)\n        \"docs/notes.qmd\"      -> \"\" (when it has no R code chunk)\n\n    Args:\n        path: A file path. A relative path is taken from the current directory when\n            it is looked up among the recorded files.\n\n    Returns:\n        The extension (without the dot, a key of EXT_TO_DEFINITION_DICT), or \"\" for a\n        file without a language.\n    \"\"\"\n    path_abs = os.path.abspath(path)\n    copy_target_ext = _copy_target_ext_dict.get(path_abs)\n    if copy_target_ext:\n        return copy_target_ext\n    if path_abs in _no_language_path_set:\n        return \"\"\n    ext = os.path.splitext(path)[1].lstrip(\".\")\n    if ext in EXT_TO_DEFINITION_DICT:\n        return ext\n    if ext.lower() in _IGNORE_CASE_EXT_SET:\n        return ext.lower()\n    return \"\"",
+      "target_name": "language_ext",
+      "target_start_line": 1241
+    },
+    {
+      "lines": [
+        180
+      ],
+      "name": "get_import_params",
+      "from": "codetwine/codetwine/import_to_path_py/import_to_path.py",
+      "target_context": "def get_import_params(file_ext: str) -> tuple[Language, str | None] | tuple[None, None]:\n    \"\"\"Retrieve the Language object and query string needed for import analysis from a file extension.\n\n    For an extension without a tree-sitter language, returns (None, None) to let the\n    caller skip the analysis. For a language without import statements (SQL), the query\n    string is None and extract_imports returns no imports.\n\n    Args:\n        file_ext: File extension (without \".\", e.g. \"py\", \"java\").\n\n    Returns:\n        A (Language, import_query_str) tuple. (None, None) if unsupported.\n    \"\"\"\n    language = EXT_TO_LANGUAGE_DICT.get(file_ext)\n    if language is None:\n        return None, None\n    return language, EXT_TO_IMPORT_QUERY_DICT.get(file_ext)",
+      "target_name": "get_import_params",
+      "target_start_line": 463
+    },
+    {
+      "lines": [
+        181
+      ],
+      "name": "EXT_TO_IMPORT_RESOLVE_DICT",
+      "from": "codetwine/codetwine/config/settings_py/settings.py",
+      "target_context": "EXT_TO_IMPORT_RESOLVE_DICT: dict[str, dict] = _expand_ext_aliases(\n    {ext: lang_config.import_resolve_dict for ext, lang_config in _LANG_REGISTRY.items()\n     if lang_config.import_resolve_dict is not None}\n)",
+      "target_name": "EXT_TO_IMPORT_RESOLVE_DICT",
+      "target_start_line": 1323
+    },
+    {
+      "lines": [
+        183
+      ],
+      "name": "parse_file",
+      "from": "codetwine/codetwine/parsers/ts_parser_py/ts_parser.py",
+      "target_context": "def parse_file(file_path: str) -> tuple[Node | CobolSource, bytes]:\n    \"\"\"Read a file, parse it with tree-sitter, and return (AST root node, byte content).\n\n    The file is decoded by read_source() and parsed as UTF-8, whatever encoding it is\n    stored in; the byte content is that UTF-8 text, and the text of every node decodes\n    as UTF-8. Line numbers are those of line_list_of() over the file.\n\n    For a COBOL file the first element is a CobolSource (read_cobol_source) in place of\n    the root node, and for a BMS source the CobolSource of its symbolic maps\n    (read_bms_source); extract_definitions(), extract_imports() and extract_usages()\n    take it as they take a root node. The language is the one language_ext() gives.\n\n    For an R Markdown or Quarto file the root node is the tree of its R code chunks\n    (r_chunk_code), each node at the position its code has in the file; the byte content\n    is the whole file. A chunk whose code does not end inside the chunk (an open \"{\", an\n    operator at its end) is left out of the tree.\n\n    For a C or C++ file a macro name written between a class keyword and a class name\n    (class EXPORT Shape { ... }) is read as spaces (_parse_c_family); the byte content\n    is the whole file, and class_macro_cache holds those names and their lines.\n\n    Parse results are cached at module level; a file found in the cache is not parsed again.\n    The cache holds at most PARSE_CACHE_MAX_FILES entries; when it is full, the least\n    recently used entry is discarded and that file is parsed again the next time it is\n    requested. PARSE_CACHE_MAX_FILES = 0 disables the limit.\n\n    Args:\n        file_path: Absolute path of the file to parse.\n\n    Returns:\n        A (root_node, content) tuple.\n    \"\"\"\n    # Return from cache if available, marking the entry as most recently used\n    cache_entry = parse_cache.get(file_path)\n    if cache_entry is not None:\n        parse_cache.move_to_end(file_path)\n        return cache_entry\n\n    # Get the corresponding language from the file extension\n    ext = language_ext(file_path)\n\n    # Read the file as UTF-8 bytes\n    content = read_utf8_content(file_path)\n\n    if ext in COBOL_EXT_SET:\n        # Split the COBOL text into statements and parse each of them\n        cobol_source = read_cobol_source(content.decode(\"utf-8\"), EXT_TO_LANGUAGE_DICT[ext])\n        parse_result = (cobol_source, content)\n    elif ext in BMS_EXT_SET:\n        # Read the maps of the BMS macros\n        parse_result = (read_bms_source(content.decode(\"utf-8\")), content)\n    elif ext in R_MARKDOWN_EXT_SET:\n        # Parse the R code chunks of the document, everything else blanked; a chunk\n        # whose code runs on past its end is blanked as well\n        language = EXT_TO_LANGUAGE_DICT[ext]\n        chunk_code = r_chunk_code(content, lambda code: _is_whole_code(code, language))\n        tree = Parser(language).parse(chunk_code)\n        parse_result = (tree.root_node, content)\n    elif ext in C_FAMILY_EXT_SET:\n        # Parse with the macro names in front of class names blanked\n        root_node, class_macro_cache[file_path] = _parse_c_family(content, EXT_TO_LANGUAGE_DICT[ext])\n        parse_result = (root_node, content)\n    else:\n        # Parse with tree-sitter to generate the AST\n        tree = Parser(EXT_TO_LANGUAGE_DICT[ext]).parse(content)\n        parse_result = (tree.root_node, content)\n\n    # Store in cache and drop the oldest entries once the limit is exceeded\n    parse_cache[file_path] = parse_result\n    if PARSE_CACHE_MAX_FILES > 0:\n        while len(parse_cache) > PARSE_CACHE_MAX_FILES:\n            parse_cache.popitem(last=False)\n    return parse_result",
+      "target_name": "parse_file",
+      "target_start_line": 167
+    },
+    {
+      "lines": [
+        185
+      ],
+      "name": "extract_imports",
+      "from": "codetwine/codetwine/extractors/imports_py/imports.py",
+      "target_context": "def extract_imports(\n    root_node: Node | CobolSource,\n    language: Language,\n    import_query_str: str | None,\n    scope_types: set[str] | None = None,\n) -> list[ImportInfo]:\n    \"\"\"Extract import statements from the AST and return them.\n\n    Uses tree-sitter queries (S-expression pattern matching) to uniformly\n    handle import syntax that differs across languages.\n\n    Query capture names:\n        @module      -> Import source (module name, path, header name, etc.)\n        @name        -> Individually imported name (the Y in \"from X import Y\")\n        @default_name   -> Name bound to the default export of the module (JS/TS)\n        @namespace_name -> Name bound to the module as a whole (JS/TS)\n        @member_name -> Member of the module the @name of the statement is bound to\n                        (JS: const X = require(\"module\").Y)\n        @import_node -> The entire import statement node (for line number retrieval)\n        @path_item   -> A Rust node naming a module path; expanded by rust_import_list\n                        into one import per name\n\n    When the same import statement has multiple @name captures (from X import Y, Z),\n    they are consolidated into a single ImportInfo.\n\n    For a CobolSource its COPY and CALL statements are returned, without a query.\n\n    Args:\n        root_node: The AST root node covering the entire file, or the CobolSource of a COBOL file.\n        language: tree-sitter Language object (required for Query creation).\n        import_query_str: tree-sitter query string (obtained from EXT_TO_IMPORT_QUERY_DICT in config.py).\n                          Returns an empty list when None (for languages with no import query defined).\n        scope_types: AST node types that open a scope (functions, lambdas). An import\n                     statement written inside one binds its names for the lines of the\n                     innermost one (ImportInfo.scope_line_tuple). None reads every\n                     statement as binding for the whole file.\n\n    Returns:\n        A list of ImportInfo. A JS/TS export statement with a source has is_export set\n        and binds its names on its own lines.\n    \"\"\"\n    if isinstance(root_node, CobolSource):\n        return _cobol_import_list(root_node)\n    if not import_query_str:\n        return []\n\n    # Scan the AST with a cursor of the query, compiled once per language and query string\n    query_key = (id(language), import_query_str)\n    query = _query_cache.get(query_key)\n    if query is None:\n        query = Query(language, import_query_str)\n        _query_cache[query_key] = query\n    cursor = QueryCursor(query)\n\n    # Key: (module string, line number), for Rust with the lines the names are bound\n    # for -> ImportInfo\n    # Groups multiple @name captures from the same import statement into one entry\n    import_by_key_dict: dict[tuple, ImportInfo] = {}\n    # Rust: the use declarations of the blocks and inline modules of the file\n    use_cache_dict: UseCacheDict = {}\n\n    # Retrieve query match results\n    for _, captures in cursor.matches(root_node):\n        # CommonJS require() pattern filtering:\n        # If a @_require_func capture exists and the function name is not \"require\", skip it\n        require_func_node_list = captures.get(\"_require_func\", [])\n        if require_func_node_list:\n            if require_func_node_list[0].text.decode(\"utf-8\") != \"require\":\n                continue\n\n        # Rust: one node can bring several paths into use (use a::{b, c as d})\n        path_item_node_list = captures.get(\"path_item\", [])\n        if path_item_node_list:\n            path_item_node = path_item_node_list[0]\n            line = path_item_node.start_point[0] + 1\n            for module, name, original, scope_line_tuple in rust_import_list(\n                path_item_node, use_cache_dict,\n            ):\n                import_info = import_by_key_dict.setdefault(\n                    (module, line, scope_line_tuple),\n                    ImportInfo(\n                        module=module, names=[], line=line, scope_line_tuple=scope_line_tuple,\n                    ),\n                )\n                if name and name not in import_info.names:\n                    import_info.names.append(name)\n                    if original:\n                        if import_info.alias_map is None:\n                            import_info.alias_map = {}\n                        import_info.alias_map[name] = original\n            continue\n\n        # Retrieve @module, @name, and @import_node captures\n        module_node_list = captures.get(\"module\", [])\n        name_node_list = captures.get(\"name\", [])\n        import_node_list = captures.get(\"import_node\", [])\n\n        if not module_node_list:\n            continue\n\n        # Get the module name from the @module capture and strip quotes\n        raw_module = module_node_list[0].text.decode(\"utf-8\")\n        module = _strip_quotes(raw_module)\n\n        # A member read where its module is required, and the callback given a module:\n        # each binds its names for its own lines\n        member_use_node_list = captures.get(\"member_use\", [])\n        callback_node_list = captures.get(\"callback\", [])\n        if member_use_node_list or callback_node_list:\n            special_import: ImportInfo | None = None\n            if member_use_node_list and import_node_list:\n                special_import = _member_use_import(module, member_use_node_list[0], import_node_list[0])\n            elif callback_node_list:\n                then_node_list = captures.get(\"_then_func\", [])\n                if then_node_list and then_node_list[0].text.decode(\"utf-8\") == \"then\":\n                    special_import = _callback_import(module, callback_node_list[0])\n            if special_import is not None:\n                special_key = (module, special_import.line, special_import.scope_line_tuple, special_import.is_use)\n                known_import = import_by_key_dict.setdefault(special_key, special_import)\n                if known_import is not special_import:\n                    known_import.names.extend(\n                        name for name in special_import.names if name not in known_import.names\n                    )\n            continue\n\n        # Get line number from the entire import statement node (fallback to module node)\n        if import_node_list:\n            line = import_node_list[0].start_point[0] + 1\n        else:\n            line = module_node_list[0].start_point[0] + 1\n\n        # Create the grouping key\n        group_key = (module, line)\n\n        # Create a new entry if the group does not exist yet\n        if group_key not in import_by_key_dict:\n            import_node = import_node_list[0] if import_node_list else module_node_list[0]\n            import_by_key_dict[group_key] = ImportInfo(\n                module=module, names=[], line=line,\n                scope_line_tuple=_scope_line_tuple(import_node, scope_types or set()),\n                is_export=import_node.type == _EXPORT_STATEMENT_TYPE,\n            )\n\n        # Detect import X as Y alias, and the name bound to the whole module\n        module_alias = _detect_module_alias(module_node_list[0], import_node_list)\n        for namespace_node in captures.get(\"namespace_name\", []):\n            module_alias = namespace_node.text.decode(\"utf-8\")\n        if module_alias:\n            import_by_key_dict[group_key].module_alias = module_alias\n\n        # A default import binds its name to the default export of the module\n        for default_node in captures.get(\"default_name\", []):\n            default_name = default_node.text.decode(\"utf-8\")\n            if default_name not in import_by_key_dict[group_key].names:\n                import_by_key_dict[group_key].names.append(default_name)\n                if import_by_key_dict[group_key].alias_map is None:\n                    import_by_key_dict[group_key].alias_map = {}\n                import_by_key_dict[group_key].alias_map[default_name] = DEFAULT_EXPORT_NAME\n\n        # If @name captures exist, add them to the names list (excluding duplicates)\n        # When an alias is present, register the alias name and record the mapping to the original name in alias_map\n        member_node_list = captures.get(\"member_name\", [])\n        for name_node in name_node_list:\n            alias_name = _resolve_imported_name(name_node)\n            original_name = (\n                member_node_list[0].text.decode(\"utf-8\") if member_node_list\n                else _get_original_name(name_node)\n            )\n            if alias_name and alias_name not in import_by_key_dict[group_key].names:\n                import_by_key_dict[group_key].names.append(alias_name)\n                if original_name and original_name != alias_name:\n                    if import_by_key_dict[group_key].alias_map is None:\n                        import_by_key_dict[group_key].alias_map = {}\n                    import_by_key_dict[group_key].alias_map[alias_name] = original_name\n\n        # Wildcard import detection: a child of the statement in _WILDCARD_NODE_TYPE_SET\n        # adds \"*\" to names (import a.b.*, from m import *, export * from \"./m\")\n        if import_node_list and \"*\" not in import_by_key_dict[group_key].names:\n            for child in import_node_list[0].children:\n                if child.type in _WILDCARD_NODE_TYPE_SET:\n                    import_by_key_dict[group_key].names.append(\"*\")\n                    break\n\n    return list(import_by_key_dict.values())",
+      "target_name": "extract_imports",
+      "target_start_line": 206
+    },
+    {
+      "lines": [
+        186
+      ],
       "name": "resolve_module_to_project_path",
       "from": "codetwine/codetwine/import_to_path_py/import_to_path.py",
-      "target_context": "def resolve_module_to_project_path(\n    module: str,\n    current_file_rel: str,\n    project_file_set: set[str],\n    source_root_set: set[str] | None = None,\n) -> str | None:\n    \"\"\"Resolve an import statement's module name to a file path within the project.\n\n    The module names passed to this function include not only project-internal modules\n    but also standard library modules (os, json, etc.) and external packages (requests, etc.).\n    This function generates file path candidates from the module name and checks them\n    against project_file_set to determine whether the module is a project-internal file.\n    Returns None if no matching file exists within the project.\n\n    The internal processing consists of 3 steps, each delegated to a dedicated function:\n    1. resolve_relative_import: Parse relative/absolute imports to determine path_part_list.\n    2. generate_candidate_path_list: Generate candidate file paths from path_part_list.\n    3. Match against project_file_set and return the first matching candidate.\n       If no exact match is found and source_root_set is provided, retry with\n       each source root prefix prepended to the candidate path.\n       (e.g. \"com/example/Foo.java\" -> \"src/main/java/com/example/Foo.java\")\n\n    Args:\n        module: The module name from the import statement. Both project-internal and external\n                modules are passed (e.g. \"..utils\", \"os\", \"requests\", \"com.example.Foo\",\n                \"./helper\", \"stdio.h\").\n        current_file_rel: Relative path of the current file from the project root.\n        project_file_set: Set of file paths within the project (\"path/to/file.ext\" format).\n        source_root_set: Set of source root prefixes detected in the project\n                         (e.g. {\"src/main/java/\", \"src/test/java/\"}). None or empty to skip.\n\n    Returns:\n        A project-internal file path (\"path/to/file.ext\" format).\n        None if no matching file exists within the project.\n    \"\"\"\n    # Get the current file's extension and resolve config\n    src_ext_with_dot = os.path.splitext(current_file_rel)[1]\n    src_ext = src_ext_with_dot.lstrip(\".\")\n\n    # Get the module resolve config for this extension\n    resolve_config = IMPORT_RESOLVE_CONFIG.get(src_ext)\n    if not resolve_config:\n        return None\n\n    separator = resolve_config[\"separator\"]\n    # Split the current file's directory path into components\n    current_dir_part_list = current_file_rel.replace(\"\\\\\", \"/\").split(\"/\")[:-1]\n\n    # Step 1: Convert the module name to path components\n    path_part_list = resolve_relative_import(\n        module, separator, current_dir_part_list\n    )\n    base_path = \"/\".join(path_part_list)\n\n    # Step 2: Generate file candidates\n    candidate_path_list = generate_candidate_path_list(\n        base_path, src_ext_with_dot, resolve_config, current_dir_part_list\n    )\n\n    # Step 3: Match against project_file_set and return the first matching candidate\n    for candidate_path in candidate_path_list:\n        if candidate_path in project_file_set:\n            return candidate_path\n\n    # Step 3 fallback: Prepend source root prefixes and retry.\n    # Java import \"com.example.Foo\" generates candidate \"com/example/Foo.java\",\n    # but the actual file may be at \"src/main/java/com/example/Foo.java\".\n    if source_root_set:\n        for candidate_path in candidate_path_list:\n            for source_root in source_root_set:\n                prefixed = source_root + candidate_path\n                if prefixed in project_file_set:\n                    return prefixed\n\n    return None"
+      "target_context": "def resolve_module_to_project_path(\n    module: str,\n    current_file_rel: str,\n    project_file_set: set[str],\n    source_root_set: set[str] | None = None,\n    project_dir: str | None = None,\n) -> str | None:\n    \"\"\"Resolve an import statement's module name to a file path within the project.\n\n    The module names passed to this function include not only project-internal modules\n    but also standard library modules (os, json, etc.) and external packages (requests, etc.).\n    This function generates file path candidates from the module name and checks them\n    against project_file_set to determine whether the module is a project-internal file.\n    Returns None if no matching file exists within the project.\n\n    The internal processing consists of 3 steps, each delegated to a dedicated function:\n    1. resolve_relative_import: Parse relative/absolute imports to determine path_part_list.\n    2. generate_candidate_path_list: Generate candidate file paths from path_part_list.\n    3. Match against project_file_set and return the first matching candidate.\n       If no exact match is found and source_root_set is provided, retry with\n       each source root prefix prepended to the candidate path.\n       (e.g. \"com/example/Foo.java\" -> \"src/main/java/com/example/Foo.java\")\n    4. If still unmatched and the resolve config has min_path_end_part, a module that\n       is not relative and has at least that many parts is matched against the end of\n       the project file paths (_find_by_path_end).\n       (e.g. #include \"geo/shape.hpp\" -> \"include/geo/shape.hpp\")\n\n    A language whose resolve config has path_config_name_list (JS/TS) resolves a module\n    that is not relative through, in order: the \"imports\" of the package.json around\n    the current file (package_import_path_list), the \"paths\" and \"baseUrl\" of the config\n    file that counts for the current file (path_config), the aliases of the bundler\n    config around it (alias_path_list) and the packages of the project by their names\n    (package_name_path_list). The paths they give are matched against project_file_set;\n    when none matches and the file has such a config file, or the module is one of\n    \"imports\", nothing else is tried. Otherwise the steps above apply.\n\n    The current file itself is never returned.\n\n    A language whose resolve config has module_tree (Rust) is resolved by\n    resolve_rust_module_path instead, which reads the project files under project_dir.\n    A language whose resolve config has name_index (COBOL) is resolved by\n    resolve_cobol_module_path, which reads them as well.\n\n    Args:\n        module: The module name from the import statement. Both project-internal and external\n                modules are passed (e.g. \"..utils\", \"os\", \"requests\", \"com.example.Foo\",\n                \"./helper\", \"stdio.h\").\n        current_file_rel: Relative path of the current file from the project root.\n        project_file_set: Set of file paths within the project (\"path/to/file.ext\" format).\n        source_root_set: Set of source root prefixes detected in the project\n                         (e.g. {\"src/main/java/\", \"src/test/java/\"}). None or empty to skip.\n        project_dir: Absolute path to the project root. Required for module_tree and\n                     name_index languages; None makes them unresolvable.\n\n    Returns:\n        A project-internal file path (\"path/to/file.ext\" format).\n        None if no matching file exists within the project.\n    \"\"\"\n    # Get the current file's extension and resolve config\n    src_ext_with_dot = os.path.splitext(current_file_rel)[1]\n    src_ext = language_ext(\n        os.path.join(project_dir, current_file_rel) if project_dir else current_file_rel\n    )\n\n    # Get the module resolve config for this extension\n    resolve_config = EXT_TO_IMPORT_RESOLVE_DICT.get(src_ext)\n    if not resolve_config:\n        return None\n\n    if resolve_config.get(\"module_tree\"):\n        if project_dir is None:\n            return None\n        return resolve_rust_module_path(module, current_file_rel, project_file_set, project_dir)\n\n    if resolve_config.get(\"name_index\"):\n        if project_dir is None:\n            return None\n        return resolve_cobol_module_path(module, current_file_rel, project_file_set, project_dir)\n\n    separator = resolve_config[\"separator\"]\n    # Split the current file's directory path into components\n    current_dir_part_list = current_file_rel.replace(\"\\\\\", \"/\").split(\"/\")[:-1]\n\n    # Step 1: Convert the module name to path components\n    path_part_list = resolve_relative_import(\n        module, separator, current_dir_part_list\n    )\n    base_path = \"/\".join(path_part_list)\n    is_relative = module.startswith(\".\")\n\n    # A module that is not relative is looked up through the path settings of the\n    # config file that counts for the current file, when there is one\n    config_name_list = resolve_config.get(\"path_config_name_list\")\n    if config_name_list and project_dir and not is_relative:\n        config = path_config(current_file_rel, project_dir, config_name_list)\n        package_file_name = resolve_config[\"package_file_name\"]\n        import_path_list = package_import_path_list(\n            module, current_file_rel, project_dir, package_file_name,\n        )\n        module_path_list = [\n            *import_path_list,\n            *(config.module_path_list(module) if config is not None else []),\n            *alias_path_list(\n                module, current_file_rel, project_dir, resolve_config[\"alias_config_name_list\"],\n            ),\n            *package_name_path_list(module, project_dir, project_file_set, package_file_name),\n        ]\n        for module_path in module_path_list:\n            for candidate_path in generate_candidate_path_list(\n                module_path, src_ext_with_dot, resolve_config, [],\n            ):\n                if candidate_path in project_file_set and candidate_path != current_file_rel:\n                    return candidate_path\n        if config is not None or import_path_list:\n            return None\n\n    # Step 2: Generate file candidates. An import that is not relative is not looked up\n    # from the current directory when that directory is a package\n    package_file = resolve_config.get(\"package_file\")\n    is_in_package = bool(\n        package_file and project_dir and not is_relative\n        and os.path.isfile(os.path.join(project_dir, *current_dir_part_list, package_file))\n    )\n    candidate_path_list = generate_candidate_path_list(\n        base_path, src_ext_with_dot, resolve_config,\n        [] if is_in_package else current_dir_part_list,\n    )\n\n    # Step 3: Match against project_file_set and return the first matching candidate\n    for candidate_path in candidate_path_list:\n        if candidate_path in project_file_set and candidate_path != current_file_rel:\n            return candidate_path\n\n    # Step 3 fallback: Prepend source root prefixes and retry, the roots nearest to the\n    # current file first.\n    # Java import \"com.example.Foo\" generates candidate \"com/example/Foo.java\",\n    # but the actual file may be at \"src/main/java/com/example/Foo.java\".\n    if source_root_set:\n        source_root_list = nearest_first(list(source_root_set), current_file_rel)\n        for candidate_path in candidate_path_list:\n            for source_root in source_root_list:\n                path_with_root = source_root + candidate_path\n                if path_with_root in project_file_set and path_with_root != current_file_rel:\n                    return path_with_root\n\n    # Step 4: A module written with enough parts is looked up by the end of the path\n    min_path_end_part = resolve_config.get(\"min_path_end_part\")\n    if min_path_end_part and not is_relative and len(path_part_list) >= min_path_end_part:\n        for candidate_path in candidate_path_list:\n            path_match = _find_by_path_end(candidate_path, current_file_rel, project_file_set)\n            if path_match is not None and path_match != current_file_rel:\n                return path_match\n\n    return None",
+      "target_name": "resolve_module_to_project_path",
+      "target_start_line": 276
     },
     {
       "lines": [
-        195
+        222
       ],
-      "name": "SAME_PACKAGE_VISIBLE.get",
-      "from": "codetwine/codetwine/config/settings_py/settings.py",
-      "target_context": "SAME_PACKAGE_VISIBLE: dict[str, bool] = _expand_ext_aliases(\n    {ext: cfg.same_package_visible for ext, cfg in _LANG_REGISTRY.items()\n     if cfg.same_package_visible}\n)"
+      "name": "reference_target_list",
+      "from": "codetwine/codetwine/reference_target_py/reference_target.py",
+      "target_context": "def reference_target_list(\n    file_rel: str, project_file_set: set[str], project_dir: str,\n) -> list[ReferenceTarget]:\n    \"\"\"Resolve each reference of a file to the definition it names.\n\n    The references are resolved the way the language of the file names things: a COBOL\n    file or a BMS source with OF / IN qualification (cobol_reference_target_list), a C#\n    file through its namespaces and using directives (csharp_reference_target_list), an\n    R file through the names it sees (r_reference_target_list), a file of any other\n    language through its import statements (import_reference_target_list).\n\n    Args:\n        file_rel: Relative path of the file.\n        project_file_set: Relative paths of the project files that have a language.\n        project_dir: Absolute path to the project root.\n\n    Returns:\n        The resolved references; each has name, line and file_rel. A target whose\n        file_rel is the file itself is a reference to a definition of the file. Empty\n        for a file without a language.\n    \"\"\"\n    file_kind = reference_kind(os.path.join(project_dir, file_rel))\n    if file_kind is None:\n        return []\n    return _TARGET_LIST_FUNCTION_DICT[file_kind](file_rel, project_file_set, project_dir)",
+      "target_name": "reference_target_list",
+      "target_start_line": 37
     },
     {
       "lines": [
-        243,
-        244,
-        245
+        224
+      ],
+      "name": "R_EXT_SET",
+      "from": "codetwine/codetwine/config/settings_py/settings.py",
+      "target_context": "R_EXT_SET: set[str] = {\n    ext for ext, definition_dict in EXT_TO_DEFINITION_DICT.items()\n    if definition_dict is R_DEFINITION_DICT\n}",
+      "target_name": "R_EXT_SET",
+      "target_start_line": 1178
+    },
+    {
+      "lines": [
+        225
+      ],
+      "name": "r_import_file_list",
+      "from": "codetwine/codetwine/r_name_index_py/r_name_index.py",
+      "target_context": "def r_import_file_list(\n    file_rel: str,\n    project_file_set: set[str],\n    project_dir: str,\n) -> list[str]:\n    \"\"\"Return the scripts an R file reads with source() / sys.source() and box::use.\n\n    Args:\n        file_rel: Relative path of the file.\n        project_file_set: Relative paths of the project files that have a language.\n        project_dir: Absolute path to the project root.\n\n    Returns:\n        The relative paths of the scripts the calls of the file lead to, in line order,\n        without duplicates and without the file itself.\n    \"\"\"\n    name_index = _get_name_index(project_dir, project_file_set)\n    r_source = name_index.source_dict.get(file_rel)\n    if r_source is None:\n        return []\n    import_file_list: list[str] = []\n    for r_import in r_source.import_list:\n        import_rel = _import_file(name_index, file_rel, r_import)\n        if import_rel and import_rel != file_rel and import_rel not in import_file_list:\n            import_file_list.append(import_rel)\n    return import_file_list",
+      "target_name": "r_import_file_list",
+      "target_start_line": 878
+    },
+    {
+      "lines": [
+        299
       ],
       "name": "rel_to_copy_path",
       "from": "codetwine/codetwine/utils/file_utils_py/file_utils.py",
-      "target_context": "def rel_to_copy_path(rel_path: str) -> str:\n    \"\"\"Convert a project-relative path to a copy-destination directory structure path.\n\n    Matches the path structure used by process_single_file when copying source code.\n    The destination follows the format {parent_dir}/{stem}_{ext}/{filename}.\n    By appending the extension as a suffix, output destinations for files with the\n    same name but different extensions (e.g. utils.c and utils.h) do not collide.\n\n    Examples:\n        \"config.py\"                    -> \"config_py/config.py\"\n        \"repo_graphrag/prompts.py\"     -> \"repo_graphrag/prompts_py/prompts.py\"\n        \"repo_graphrag/llm/client.py\"  -> \"repo_graphrag/llm/client_py/client.py\"\n        \"Makefile\"                     -> \"Makefile/Makefile\"\n\n    Args:\n        rel_path: Relative path from the project root.\n\n    Returns:\n        A path matching the copy-destination directory structure.\n    \"\"\"\n    # Separate the filename and parent directory\n    parent_dir = os.path.dirname(rel_path)\n    filename = os.path.basename(rel_path)\n    dir_name = _to_dir_name(filename)\n    # Include the parent directory in the path if present\n    if parent_dir:\n        return f\"{parent_dir}/{dir_name}/{filename}\"\n    # For top-level files\n    return f\"{dir_name}/{filename}\""
+      "target_context": "def rel_to_copy_path(rel_path: str) -> str:\n    \"\"\"Convert a project-relative path to a copy-destination directory structure path.\n\n    The destination follows the format {parent_dir}/{stem}_{ext}/{filename}, the path at\n    which the pipeline copies each source file into the output directory. Files with the\n    same stem and different extensions (e.g. utils.c and utils.h) get different directories.\n\n    Examples:\n        \"config.py\"                    -> \"config_py/config.py\"\n        \"repo_graphrag/prompts.py\"     -> \"repo_graphrag/prompts_py/prompts.py\"\n        \"repo_graphrag/llm/client.py\"  -> \"repo_graphrag/llm/client_py/client.py\"\n        \"Makefile\"                     -> \"Makefile/Makefile\"\n\n    Args:\n        rel_path: Relative path from the project root.\n\n    Returns:\n        A path matching the copy-destination directory structure.\n    \"\"\"\n    # Separate the filename and parent directory\n    parent_dir = os.path.dirname(rel_path)\n    filename = os.path.basename(rel_path)\n    dir_name = _to_dir_name(filename)\n    # Include the parent directory in the path if present\n    if parent_dir:\n        return f\"{parent_dir}/{dir_name}/{filename}\"\n    # For top-level files\n    return f\"{dir_name}/{filename}\"",
+      "target_name": "rel_to_copy_path",
+      "target_start_line": 235
+    },
+    {
+      "lines": [
+        361
+      ],
+      "name": "module_tree_cache.clear",
+      "from": "codetwine/codetwine/rust_module_tree_py/rust_module_tree.py",
+      "target_context": "module_tree_cache: dict[str, tuple[set[str], \"RustModuleTree\"]] = {}",
+      "target_name": "module_tree_cache",
+      "target_start_line": 25
+    },
+    {
+      "lines": [
+        362
+      ],
+      "name": "file_index_cache.clear",
+      "from": "codetwine/codetwine/cobol_file_index_py/cobol_file_index.py",
+      "target_context": "file_index_cache: dict[str, tuple[set[str], \"CobolFileIndex\"]] = {}",
+      "target_name": "file_index_cache",
+      "target_start_line": 38
+    },
+    {
+      "lines": [
+        363
+      ],
+      "name": "namespace_index_cache.clear",
+      "from": "codetwine/codetwine/csharp_namespace_index_py/csharp_namespace_index.py",
+      "target_context": "namespace_index_cache: dict[str, tuple[set[str], \"CsharpNamespaceIndex\"]] = {}",
+      "target_name": "namespace_index_cache",
+      "target_start_line": 47
+    },
+    {
+      "lines": [
+        364
+      ],
+      "name": "r_name_index_cache.clear",
+      "from": "codetwine/codetwine/r_name_index_py/r_name_index.py",
+      "target_context": "r_name_index_cache: dict[str, tuple[set[str], \"RNameIndex\"]] = {}",
+      "target_name": "r_name_index_cache",
+      "target_start_line": 59
+    },
+    {
+      "lines": [
+        365
+      ],
+      "name": "reference_target_cache.clear",
+      "from": "codetwine/codetwine/cobol_file_index_py/cobol_file_index.py",
+      "target_context": "reference_target_cache: dict[str, tuple[set[str], list[\"CobolReferenceTarget\"]]] = {}",
+      "target_name": "reference_target_cache",
+      "target_start_line": 42
+    },
+    {
+      "lines": [
+        366
+      ],
+      "name": "csharp_target_cache.clear",
+      "from": "codetwine/codetwine/csharp_namespace_index_py/csharp_namespace_index.py",
+      "target_context": "csharp_target_cache: dict[str, tuple[set[str], list[\"CsharpReferenceTarget\"]]] = {}",
+      "target_name": "csharp_target_cache",
+      "target_start_line": 51
+    },
+    {
+      "lines": [
+        367
+      ],
+      "name": "r_target_cache.clear",
+      "from": "codetwine/codetwine/r_name_index_py/r_name_index.py",
+      "target_context": "r_target_cache: dict[str, tuple[set[str], list[\"RReferenceTarget\"]]] = {}",
+      "target_name": "r_target_cache",
+      "target_start_line": 63
+    },
+    {
+      "lines": [
+        368
+      ],
+      "name": "clear_import_reference_cache",
+      "from": "codetwine/codetwine/import_reference_py/import_reference.py",
+      "target_context": "def clear_import_reference_cache() -> None:\n    \"\"\"Forget the resolved references of every project.\"\"\"\n    import_target_cache.clear()",
+      "target_name": "clear_import_reference_cache",
+      "target_start_line": 354
+    },
+    {
+      "lines": [
+        369
+      ],
+      "name": "clear_import_binder_cache",
+      "from": "codetwine/codetwine/import_binding_py/import_binding.py",
+      "target_context": "def clear_import_binder_cache() -> None:\n    \"\"\"Forget the binders of every project.\"\"\"\n    _binder_cache.clear()",
+      "target_name": "clear_import_binder_cache",
+      "target_start_line": 151
+    },
+    {
+      "lines": [
+        370
+      ],
+      "name": "clear_import_path_cache",
+      "from": "codetwine/codetwine/import_to_path_py/import_to_path.py",
+      "target_context": "def clear_import_path_cache() -> None:\n    \"\"\"Forget the file name indexes of every project.\"\"\"\n    _file_name_index_cache.clear()",
+      "target_name": "clear_import_path_cache",
+      "target_start_line": 30
+    },
+    {
+      "lines": [
+        371
+      ],
+      "name": "clear_definition_source_cache",
+      "from": "codetwine/codetwine/extractors/definition_source_py/definition_source.py",
+      "target_context": "def clear_definition_source_cache() -> None:\n    \"\"\"Forget the definitions and text of every file.\"\"\"\n    _definition_cache.clear()\n    _definition_list_cache.clear()",
+      "target_name": "clear_definition_source_cache",
+      "target_start_line": 31
+    },
+    {
+      "lines": [
+        372
+      ],
+      "name": "path_config_cache.clear",
+      "from": "codetwine/codetwine/path_config_py/path_config.py",
+      "target_context": "path_config_cache: dict[str, \"_ProjectCache\"] = {}",
+      "target_name": "path_config_cache",
+      "target_start_line": 12
+    },
+    {
+      "lines": [
+        373
+      ],
+      "name": "clear_package_path_cache",
+      "from": "codetwine/codetwine/package_path_py/package_path.py",
+      "target_context": "def clear_package_path_cache() -> None:\n    \"\"\"Forget the package.json files of every project.\"\"\"\n    package_file_cache.clear()\n    package_name_cache.clear()",
+      "target_name": "clear_package_path_cache",
+      "target_start_line": 24
+    },
+    {
+      "lines": [
+        374
+      ],
+      "name": "clear_alias_path_cache",
+      "from": "codetwine/codetwine/alias_path_py/alias_path.py",
+      "target_context": "def clear_alias_path_cache() -> None:\n    \"\"\"Forget the aliases of every project.\"\"\"\n    alias_cache.clear()",
+      "target_name": "clear_alias_path_cache",
+      "target_start_line": 31
+    },
+    {
+      "lines": [
+        378
+      ],
+      "name": "set_no_language_file",
+      "from": "codetwine/codetwine/config/settings_py/settings.py",
+      "target_context": "def set_no_language_file(project_dir: str, file_rel_list: list[str]) -> None:\n    \"\"\"Record the files of a project that are analyzed without a language whatever their extension.\n\n    The files recorded before for the same project are forgotten.\n\n    Args:\n        project_dir: Root directory of the project.\n        file_rel_list: Paths relative to project_dir.\n    \"\"\"\n    project_prefix = os.path.join(os.path.abspath(project_dir), \"\")\n    for path in [path for path in _no_language_path_set if path.startswith(project_prefix)]:\n        _no_language_path_set.discard(path)\n    for file_rel in file_rel_list:\n        _no_language_path_set.add(os.path.abspath(os.path.join(project_dir, file_rel)))",
+      "target_name": "set_no_language_file",
+      "target_start_line": 1225
+    },
+    {
+      "lines": [
+        379
+      ],
+      "name": "register_copy_target",
+      "from": "codetwine/codetwine/cobol_file_index_py/cobol_file_index.py",
+      "target_context": "def register_copy_target(project_dir: str, file_rel_list: list[str]) -> dict[str, str]:\n    \"\"\"Find the files without a language that COPY statements name, and record them as COBOL.\n\n    A COPY statement or EXEC SQL INCLUDE of a COBOL file that resolves to a file without\n    a language (_copybook_path, with those files as candidates too) makes that file a\n    COBOL copybook, whatever its extension, when the statement names it with its whole\n    file name, or when its text read as COBOL holds a data item, the description of a\n    file or a statement of the procedure division (_is_cobol_text); otherwise the\n    statement is resolved again without that file. The COPY statements of such a file\n    are followed as well. The files are recorded with set_copy_target_ext(), replacing\n    the ones recorded before for the project.\n\n    Processing flow:\n    1. Parse the COBOL files and BMS sources once: index them and keep the COPY\n       statements of the COBOL files\n    2. Index the files without a language by their file name as well\n    3. Follow the COPY statements, recording and parsing each file without a language\n       they lead to\n    4. Keep the index of the files with a language in file_index_cache\n\n    Args:\n        project_dir: Absolute path to the project root.\n        file_rel_list: Relative paths of the project files.\n\n    Returns:\n        {relative path: \"cpy\"} of the files recorded.\n    \"\"\"\n    set_copy_target_ext(project_dir, {})\n    other_file_set = {\n        file_rel for file_rel in file_rel_list\n        if not has_language(os.path.join(project_dir, file_rel))\n    }\n    if not other_file_set:\n        return {}\n    language_file_set = set(file_rel_list) - other_file_set\n\n    # == Step 1: COBOL files and BMS sources ==================================\n    file_index = CobolFileIndex()\n    # Relative path of a COBOL file -> (copybook name, library name) of its COPY statements\n    copy_name_dict: dict[str, list[tuple[str, str]]] = {}\n    for file_rel in _source_file_list(project_dir, language_file_set):\n        cobol_source = _cobol_source(file_rel, project_dir)\n        if cobol_source is None:\n            continue\n        _add_source(file_index, file_rel, cobol_source)\n        if _is_cobol_file(file_rel, project_dir):\n            copy_name_dict[file_rel] = _copy_name_list(cobol_source)\n\n    # == Step 2: Files without a language =====================================\n    lookup_index = CobolFileIndex(\n        file_name_dict={\n            name: list(file_list) for name, file_list in file_index.file_name_dict.items()\n        },\n        program_dict=file_index.program_dict,\n        program_file_set=file_index.program_file_set,\n    )\n    for file_rel in other_file_set:\n        _add_file_name(lookup_index, file_rel, [])\n    _sort_file_index(lookup_index)\n\n    # == Step 3: COPY statements ==============================================\n    copy_target_ext_dict: dict[str, str] = {}\n    # Relative path of a file without a language -> whether its text is read as COBOL\n    is_cobol_text_dict: dict[str, bool] = {}\n\n    def is_copy_target(name: str, file_rel: str) -> bool:\n        \"\"\"Return whether a file without a language is the copybook a COPY statement names.\"\"\"\n        if file_rel not in is_cobol_text_dict:\n            is_cobol_text_dict[file_rel] = _is_cobol_text(file_rel, project_dir)\n        return _is_named_whole(name, file_rel) or is_cobol_text_dict[file_rel]\n\n    queue = sorted(copy_name_dict)\n    while queue:\n        file_rel = queue.pop(0)\n        for name, library in copy_name_dict[file_rel]:\n            skip_file_set: set[str] = set()\n            resolved = _copybook_path(name, library, file_rel, lookup_index)\n            while (\n                resolved in other_file_set\n                and resolved not in copy_target_ext_dict\n                and not is_copy_target(name, resolved)\n            ):\n                skip_file_set.add(resolved)\n                resolved = _copybook_path(name, library, file_rel, lookup_index, skip_file_set)\n            if resolved not in other_file_set or resolved in copy_target_ext_dict:\n                continue\n            copy_target_ext_dict[resolved] = _COPYBOOK_EXT\n            set_copy_target_ext(project_dir, copy_target_ext_dict)\n            cobol_source = _cobol_source(resolved, project_dir)\n            if cobol_source is not None:\n                _add_source(file_index, resolved, cobol_source)\n                copy_name_dict[resolved] = _copy_name_list(cobol_source)\n                queue.append(resolved)\n\n    # == Step 4: Index of the files with a language ===========================\n    _sort_file_index(file_index)\n    file_index_cache[project_dir] = (language_file_set | set(copy_target_ext_dict), file_index)\n    return copy_target_ext_dict",
+      "target_name": "register_copy_target",
+      "target_start_line": 361
+    },
+    {
+      "lines": [
+        382
+      ],
+      "name": "has_language",
+      "from": "codetwine/codetwine/config/settings_py/settings.py",
+      "target_context": "def has_language(path: str) -> bool:\n    \"\"\"Return whether a file is analyzed with a language of the registry.\n\n    Only such files get definitions, dependencies and design documents; every other\n    text file is carried through the analysis with those left empty.\n\n    Examples:\n        \"src/app.py\"    -> True\n        \"config.yaml\"   -> False\n        \"Makefile\"      -> False\n\n    Args:\n        path: A file path. A file recorded by set_copy_target_ext() is known by its\n            absolute path.\n\n    Returns:\n        True when language_ext() gives an extension.\n    \"\"\"\n    return language_ext(path) != \"\"",
+      "target_name": "has_language",
+      "target_start_line": 1279
+    }
+  ],
+  "same_file_usages": [
+    {
+      "lines": [
+        80,
+        117
+      ],
+      "name": "_is_own_file",
+      "target_name": "_is_own_file",
+      "target_start_line": 41
+    },
+    {
+      "lines": [
+        87,
+        124
+      ],
+      "name": "logger.info",
+      "target_name": "logger",
+      "target_start_line": 38
+    },
+    {
+      "lines": [
+        152,
+        254,
+        299,
+        379,
+        386
+      ],
+      "name": "_to_rel",
+      "target_name": "_to_rel",
+      "target_start_line": 128
+    },
+    {
+      "lines": [
+        196
+      ],
+      "name": "logger.warning",
+      "target_name": "logger",
+      "target_start_line": 38
+    },
+    {
+      "lines": [
+        257
+      ],
+      "name": "_import_callee_rel_set",
+      "target_name": "_import_callee_rel_set",
+      "target_start_line": 156
+    },
+    {
+      "lines": [
+        261,
+        267
+      ],
+      "name": "_log_graph_failure",
+      "target_name": "_log_graph_failure",
+      "target_start_line": 194
+    },
+    {
+      "lines": [
+        263
+      ],
+      "name": "_reference_callee_rel_list",
+      "target_name": "_reference_callee_rel_list",
+      "target_start_line": 202
+    },
+    {
+      "lines": [
+        356
+      ],
+      "name": "_collect_text_file_list",
+      "target_name": "_collect_text_file_list",
+      "target_start_line": 57
+    },
+    {
+      "lines": [
+        358
+      ],
+      "name": "_filter_text_file_list",
+      "target_name": "_filter_text_file_list",
+      "target_start_line": 91
+    },
+    {
+      "lines": [
+        378
+      ],
+      "name": "_no_chunk_document_list",
+      "target_name": "_no_chunk_document_list",
+      "target_start_line": 133
+    },
+    {
+      "lines": [
+        389
+      ],
+      "name": "_collect_callee_dict",
+      "target_name": "_collect_callee_dict",
+      "target_start_line": 229
+    },
+    {
+      "lines": [
+        399
+      ],
+      "name": "_to_output_entry_list",
+      "target_name": "_to_output_entry_list",
+      "target_start_line": 275
     }
   ],
   "caller_usages": [
     {
       "lines": [
-        194
+        269
       ],
       "name": "build_project_dependencies",
       "file": "codetwine/codetwine/pipeline_py/pipeline.py",
-      "usage_context": "    # == Step 1: Build the project-wide dependency graph ====================\n    print(\"Analyzing project dependencies...\")\n    logger.info(\"Analyzing project dependencies...\")\n    project_dep_list_raw = build_project_dependencies(project_dir)\n    project_dep_list = _convert_dep_list_to_internal_paths(project_dep_list_raw, project_name)\n\n    all_file_list = [info[\"file\"] for info in project_dep_list]"
-    },
-    {
-      "lines": [
-        92
-      ],
-      "name": "extract_callee_source",
-      "file": "codetwine/codetwine/extractors/usage_analysis_py/usage_analysis.py",
-      "usage_context": "                search_name = original + remapped_name[len(root_symbol):]\n\n            # First occurrence of this name: retrieve source code from the definition file within the project\n            source_code = extract_callee_source(\n                source_file,\n                search_name,\n                project_dir,"
+      "usage_context": "\n    # == Step 1: Build the project-wide dependency graph ====================\n    log_progress(logger, \"Analyzing project dependencies...\")\n    project_dep_list_raw = build_project_dependencies(project_dir, file_list)\n    project_dep_list = _to_internal_dep_list(project_dep_list_raw)\n\n    all_file_list = [info[\"file\"] for info in project_dep_list]"
     }
   ]
 }

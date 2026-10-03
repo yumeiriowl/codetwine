@@ -4,36 +4,58 @@
 
 **Overview**
 
-Configures application-wide logging by attaching a console handler and a rotating file handler to the root logger.
+Configure logging for the application with both console and file output, supporting rotating log files and filtered output levels.
 
-- Call `setup_logging` once at process startup to initialize both console and file logging before any other code emits log messages.
-- Use `_SkipBlankFormatter` indirectly (it is wired in automatically by `setup_logging`) whenever log output should omit records whose message body is empty or whitespace-only.
-- Rely on the module-level constants (`_LOG_DIR`, `_LOG_FORMAT`, `_MAX_BYTES`, `_BACKUP_COUNT`) if inspecting or adjusting where logs are stored, how they are formatted, or how large/how many rotated log files are kept.
+- Call `setup_logging()` at application startup to initialize the root logger with console output for warnings and errors, and file output for all messages at the specified level.
+- Call `log_progress()` to print a progress message to the console and simultaneously record it in the log file at INFO level, used by `doc_creator.py` and `pipeline.py` during dependency analysis and document generation.
 
-This file has no dependencies on other project-internal files; it only relies on the standard library. It is used by `main.py`, which calls `setup_logging` at the very beginning of `main()` before parsing arguments or resolving directories, ensuring logging is active for the rest of the entry point's execution.
+This file is used by `main.py` to initialize logging at the entry point and by `doc_creator.py` and `pipeline.py` to report progress during file processing and analysis operations. No project-internal files are imported or relied upon.
 
-Design decisions worth knowing: console output is intentionally restricted to WARNING and above while the file handler records everything at the configured level (default INFO), so detailed logs are only available in `logs/codetwine.log`; the log file rotates automatically once it reaches 1 MB, keeping up to 5 backups; and noisy third-party loggers (`httpx`, `httpcore`, `LiteLLM`) are forced to WARNING to reduce log clutter. The log directory path is computed relative to this file's location (two levels up, i.e., repository root) rather than the current working directory, ensuring consistent log placement regardless of where the process is launched.
+The logger restricts external library output (httpx, httpcore, LiteLLM) to WARNING level to reduce noise, and uses a custom formatter that skips blank-line messages to keep log files clean. The file handler uses rotation with a 1 MB size limit and keeps 5 backup files.
 
 **Definitions**
 
-## `_LOG_DIR`
-Defines the absolute path to the `logs/` directory at the repository root, computed relative to this module's own file location rather than the working directory. `setup_logging` uses this constant both to create the directory (if missing) and to determine where the rotating log file (`codetwine.log`) is written.
-
-## `_LOG_FORMAT`
-Specifies the log line template (timestamp, level, logger name, message) shared by both the console and file handlers via the formatter. Used only as an argument to construct `_SkipBlankFormatter` inside `setup_logging`.
-
-## `_MAX_BYTES`
-Sets the maximum size (1,048,576 bytes / 1 MB) a single log file can reach before `RotatingFileHandler` rotates it. Read by `setup_logging` when constructing the file handler.
-
-## `_BACKUP_COUNT`
-Sets the number of rotated backup log files (5) that `RotatingFileHandler` retains after rotation. Read by `setup_logging` when constructing the file handler.
-
 ## `_SkipBlankFormatter`
-A `logging.Formatter` subclass whose `format` method suppresses output for records whose message, after stripping whitespace, is empty or equals a newline, returning an empty string in that case and delegating to the base formatter otherwise. It exists to prevent blank or whitespace-only log calls (e.g., logging an empty line for spacing) from producing empty formatted lines in the console or log file; both handlers in `setup_logging` share a single instance of this formatter.
+
+A custom logging formatter that filters out messages containing only whitespace or newlines, preventing empty lines from cluttering log files and console output. It extends the standard formatter to check message content before rendering.
+
+## `_SkipBlankFormatter.format`
+
+Formats a log record by returning an empty string for whitespace-only messages, otherwise delegating to the parent formatter to produce the standard log output.
 
 ## `setup_logging`
-Initializes application-wide logging by setting the root logger's level, attaching a `StreamHandler` for console output (fixed at WARNING and above) and a `RotatingFileHandler` writing to `codetwine.log` under `_LOG_DIR` (at the level passed in, INFO by default), both using `_SkipBlankFormatter` with `_LOG_FORMAT`. It also creates the log directory if it does not exist and lowers the log level of the `httpx`, `httpcore`, and `LiteLLM` loggers to WARNING to reduce noise from external libraries; callers such as `main.py` invoke it once at startup so that all subsequent logging calls in the process are captured to both console and file.
+
+Initializes the root logger with both console and file handlers, setting the console to WARNING level and file to the specified level, creating the logs directory if needed, and suppressing verbose output from external libraries (httpx, httpcore, LiteLLM). Call this once at the start of `main.py` before any other logging occurs.
+
+## `log_progress`
+
+Outputs a progress message to both the console via print and the log file via INFO-level logging, used by the pipeline and document generator to report status during long-running operations.
+
+## `_LOG_DIR`
+
+The directory path where rotating log files are stored, constructed as a `logs/` subdirectory under the repository root.
+
+## `_LOG_FORMAT`
+
+The logging format string specifying that each log line includes the timestamp, log level, logger name, and message.
+
+## `_MAX_BYTE`
+
+The maximum size in bytes (1,048,576) of each individual log file before rotation occurs.
+
+## `_BACKUP_COUNT`
+
+The number of old log files (5) retained after rotation before the oldest is deleted.
 
 # Summary
 
-This module (codetwine/config/logger.py) has the single responsibility of configuring application-wide logging via `setup_logging`, which attaches a console handler (WARNING+) and a rotating file handler (INFO+ default) writing to logs/codetwine.log at the repository root, both sharing a `_SkipBlankFormatter` that suppresses blank/whitespace-only messages. Module constants `_LOG_DIR`, `_LOG_FORMAT`, `_MAX_BYTES`, `_BACKUP_COUNT` control log location, format, and rotation (1MB, 5 backups). Also silences noisy third-party loggers (httpx, httpcore, LiteLLM). Stdlib-only; called once by main.py at startup.
+# Logger Configuration Summary
+
+**Single Responsibility:** Initialize and manage application-wide logging with console and rotating file output, supporting filtered output levels and progress reporting during long-running operations.
+
+**Public Definitions:**
+- `setup_logging()` – Initialize root logger with console (WARNING) and file handlers, suppress external library noise
+- `log_progress()` – Output status messages to console and log file simultaneously
+
+**Key Characteristics:**
+Configures dual-channel logging: console displays warnings and errors only, while rotating log files capture all messages at a specified level. Implements a custom formatter that skips blank-line messages to reduce clutter. Log files rotate at 1 MB with five backups retained. Suppresses verbose output from httpx, httpcore, and LiteLLM. Used at application startup and during file processing and dependency analysis operations.

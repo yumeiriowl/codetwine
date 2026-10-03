@@ -1,0 +1,1362 @@
+{
+  "file": "codetwine/codetwine/csharp_namespace_index_py/csharp_namespace_index.py",
+  "language": "py",
+  "detected_encoding": null,
+  "definitions": [
+    {
+      "name": "logger",
+      "type": "expression_statement",
+      "start_line": 25,
+      "end_line": 25,
+      "context": "logger = logging.getLogger(__name__)"
+    },
+    {
+      "name": "_ANY_TYPE_SET",
+      "type": "expression_statement",
+      "start_line": 28,
+      "end_line": 28,
+      "context": "_ANY_TYPE_SET = {\"object\", \"dynamic\"}"
+    },
+    {
+      "name": "_WIDER_TYPE_DICT",
+      "type": "expression_statement",
+      "start_line": 31,
+      "end_line": 38,
+      "context": "_WIDER_TYPE_DICT = {\n    \"char\": {\"int\", \"uint\", \"long\", \"ulong\", \"float\", \"double\", \"decimal\"},\n    \"int\": {\"long\", \"float\", \"double\", \"decimal\"},\n    \"uint\": {\"long\", \"ulong\", \"float\", \"double\", \"decimal\"},\n    \"long\": {\"float\", \"double\", \"decimal\"},\n    \"ulong\": {\"float\", \"double\", \"decimal\"},\n    \"float\": {\"double\"},\n}"
+    },
+    {
+      "name": "_PROJECT_FILE_EXT",
+      "type": "expression_statement",
+      "start_line": 41,
+      "end_line": 41,
+      "context": "_PROJECT_FILE_EXT = \".csproj\""
+    },
+    {
+      "name": "_ATTRIBUTE_SUFFIX",
+      "type": "expression_statement",
+      "start_line": 44,
+      "end_line": 44,
+      "context": "_ATTRIBUTE_SUFFIX = \"Attribute\""
+    },
+    {
+      "name": "namespace_index_cache",
+      "type": "expression_statement",
+      "start_line": 47,
+      "end_line": 47,
+      "context": "namespace_index_cache: dict[str, tuple[set[str], \"CsharpNamespaceIndex\"]] = {}"
+    },
+    {
+      "name": "csharp_target_cache",
+      "type": "expression_statement",
+      "start_line": 51,
+      "end_line": 51,
+      "context": "csharp_target_cache: dict[str, tuple[set[str], list[\"CsharpReferenceTarget\"]]] = {}"
+    },
+    {
+      "name": "CsharpReferenceTarget",
+      "type": "class_definition",
+      "start_line": 54,
+      "end_line": 62,
+      "context": "@dataclass\nclass CsharpReferenceTarget:\n    \"\"\"The definition one reference of a C# file resolves to.\"\"\"\n\n    name: str               # Name of the usage as the referring file writes it\n    line: int               # Line of the reference (1-based)\n    file_rel: str           # Relative path of the file with the definition\n    definition_name: str    # Name the definition is looked up by in file_rel (Type.Member)\n    definition_line: int    # First line of the declaration in file_rel the reference names"
+    },
+    {
+      "name": "name",
+      "type": "expression_statement",
+      "start_line": 58,
+      "end_line": 58,
+      "context": "    name: str               # Name of the usage as the referring file writes it"
+    },
+    {
+      "name": "line",
+      "type": "expression_statement",
+      "start_line": 59,
+      "end_line": 59,
+      "context": "    line: int               # Line of the reference (1-based)"
+    },
+    {
+      "name": "file_rel",
+      "type": "expression_statement",
+      "start_line": 60,
+      "end_line": 60,
+      "context": "    file_rel: str           # Relative path of the file with the definition"
+    },
+    {
+      "name": "definition_name",
+      "type": "expression_statement",
+      "start_line": 61,
+      "end_line": 61,
+      "context": "    definition_name: str    # Name the definition is looked up by in file_rel (Type.Member)"
+    },
+    {
+      "name": "definition_line",
+      "type": "expression_statement",
+      "start_line": 62,
+      "end_line": 62,
+      "context": "    definition_line: int    # First line of the declaration in file_rel the reference names"
+    },
+    {
+      "name": "_TypeEntry",
+      "type": "class_definition",
+      "start_line": 65,
+      "end_line": 70,
+      "context": "@dataclass\nclass _TypeEntry:\n    \"\"\"One declaration of a type and the file it is written in.\"\"\"\n\n    file_rel: str\n    csharp_type: CsharpType"
+    },
+    {
+      "name": "file_rel",
+      "type": "expression_statement",
+      "start_line": 69,
+      "end_line": 69,
+      "context": "    file_rel: str"
+    },
+    {
+      "name": "csharp_type",
+      "type": "expression_statement",
+      "start_line": 70,
+      "end_line": 70,
+      "context": "    csharp_type: CsharpType"
+    },
+    {
+      "name": "CsharpNamespaceIndex",
+      "type": "class_definition",
+      "start_line": 73,
+      "end_line": 88,
+      "context": "@dataclass\nclass CsharpNamespaceIndex:\n    \"\"\"The namespaces, types and extension methods of the C# files of a project.\"\"\"\n\n    # Relative path -> declarations of the file\n    declaration_dict: dict[str, CsharpDeclaration] = field(default_factory=dict)\n    # (namespace, type path) -> declarations of the type, in path order\n    type_dict: dict[tuple[str, str], list[_TypeEntry]] = field(default_factory=dict)\n    # Every namespace of the project and each of its leading parts (A.B.C -> A, A.B, A.B.C)\n    namespace_set: set[str] = field(default_factory=set)\n    # Extension method name -> declarations of the types that define it, in path order\n    extension_dict: dict[str, list[_TypeEntry]] = field(default_factory=dict)\n    # Relative path -> directory of the nearest .csproj file above the file (\"\" for none)\n    project_dir_dict: dict[str, str] = field(default_factory=dict)\n    # Directory of a .csproj file -> global using directives of the files under it\n    global_using_dict: dict[str, list[CsharpUsing]] = field(default_factory=dict)"
+    },
+    {
+      "name": "declaration_dict",
+      "type": "expression_statement",
+      "start_line": 78,
+      "end_line": 78,
+      "context": "    declaration_dict: dict[str, CsharpDeclaration] = field(default_factory=dict)"
+    },
+    {
+      "name": "type_dict",
+      "type": "expression_statement",
+      "start_line": 80,
+      "end_line": 80,
+      "context": "    type_dict: dict[tuple[str, str], list[_TypeEntry]] = field(default_factory=dict)"
+    },
+    {
+      "name": "namespace_set",
+      "type": "expression_statement",
+      "start_line": 82,
+      "end_line": 82,
+      "context": "    namespace_set: set[str] = field(default_factory=set)"
+    },
+    {
+      "name": "extension_dict",
+      "type": "expression_statement",
+      "start_line": 84,
+      "end_line": 84,
+      "context": "    extension_dict: dict[str, list[_TypeEntry]] = field(default_factory=dict)"
+    },
+    {
+      "name": "project_dir_dict",
+      "type": "expression_statement",
+      "start_line": 86,
+      "end_line": 86,
+      "context": "    project_dir_dict: dict[str, str] = field(default_factory=dict)"
+    },
+    {
+      "name": "global_using_dict",
+      "type": "expression_statement",
+      "start_line": 88,
+      "end_line": 88,
+      "context": "    global_using_dict: dict[str, list[CsharpUsing]] = field(default_factory=dict)"
+    },
+    {
+      "name": "_LookupStep",
+      "type": "class_definition",
+      "start_line": 91,
+      "end_line": 96,
+      "context": "@dataclass\nclass _LookupStep:\n    \"\"\"One namespace a name is looked up in, with the using directives written for it.\"\"\"\n\n    namespace: str\n    using_list: list[CsharpUsing] = field(default_factory=list)"
+    },
+    {
+      "name": "namespace",
+      "type": "expression_statement",
+      "start_line": 95,
+      "end_line": 95,
+      "context": "    namespace: str"
+    },
+    {
+      "name": "using_list",
+      "type": "expression_statement",
+      "start_line": 96,
+      "end_line": 96,
+      "context": "    using_list: list[CsharpUsing] = field(default_factory=list)"
+    },
+    {
+      "name": "_Match",
+      "type": "class_definition",
+      "start_line": 99,
+      "end_line": 108,
+      "context": "@dataclass\nclass _Match:\n    \"\"\"The type, or member of a type, the leading parts of a reference name.\"\"\"\n\n    entry_list: list[_TypeEntry]    # Declarations of the type\n    name: str                       # The parts of the reference that name it, joined with \".\"\n    definition_name: str            # Type path, with the member name when one is named\n    part_count: int                 # Number of leading parts of the reference the name takes\n    member_name: str = \"\"           # Name of the member; \"\" when the name is the type\n    is_type_first: bool = False     # Whether the first part of the reference names the type"
+    },
+    {
+      "name": "entry_list",
+      "type": "expression_statement",
+      "start_line": 103,
+      "end_line": 103,
+      "context": "    entry_list: list[_TypeEntry]    # Declarations of the type"
+    },
+    {
+      "name": "name",
+      "type": "expression_statement",
+      "start_line": 104,
+      "end_line": 104,
+      "context": "    name: str                       # The parts of the reference that name it, joined with \".\""
+    },
+    {
+      "name": "definition_name",
+      "type": "expression_statement",
+      "start_line": 105,
+      "end_line": 105,
+      "context": "    definition_name: str            # Type path, with the member name when one is named"
+    },
+    {
+      "name": "part_count",
+      "type": "expression_statement",
+      "start_line": 106,
+      "end_line": 106,
+      "context": "    part_count: int                 # Number of leading parts of the reference the name takes"
+    },
+    {
+      "name": "member_name",
+      "type": "expression_statement",
+      "start_line": 107,
+      "end_line": 107,
+      "context": "    member_name: str = \"\"           # Name of the member; \"\" when the name is the type"
+    },
+    {
+      "name": "is_type_first",
+      "type": "expression_statement",
+      "start_line": 108,
+      "end_line": 108,
+      "context": "    is_type_first: bool = False     # Whether the first part of the reference names the type"
+    },
+    {
+      "name": "_project_dir_dict",
+      "type": "function_definition",
+      "start_line": 111,
+      "end_line": 146,
+      "context": "def _project_dir_dict(project_dir: str, file_rel_list: list[str]) -> dict[str, str]:\n    \"\"\"Map each file to the directory of the nearest .csproj file above it.\n\n    Examples:\n        \"src/App/Services/Order.cs\" with src/App/App.csproj -> \"src/App\"\n        \"tools/Gen.cs\" with no .csproj above it              -> \"\"\n\n    Args:\n        project_dir: Absolute path to the project root.\n        file_rel_list: Relative paths of the C# files.\n\n    Returns:\n        A {relative path: relative directory} dict; \"\" is the project root, and the\n        directory of a file with no .csproj file above it.\n    \"\"\"\n    has_project_dict: dict[str, bool] = {}\n\n    def has_project(directory: str) -> bool:\n        \"\"\"Return whether a directory holds a .csproj file.\"\"\"\n        if directory not in has_project_dict:\n            try:\n                name_list = os.listdir(os.path.join(project_dir, directory))\n            except OSError:\n                name_list = []\n            has_project_dict[directory] = any(\n                name.lower().endswith(_PROJECT_FILE_EXT) for name in name_list\n            )\n        return has_project_dict[directory]\n\n    project_dir_dict: dict[str, str] = {}\n    for file_rel in file_rel_list:\n        directory = os.path.dirname(file_rel)\n        while directory and not has_project(directory):\n            directory = os.path.dirname(directory)\n        project_dir_dict[file_rel] = directory\n    return project_dir_dict"
+    },
+    {
+      "name": "_add_declaration",
+      "type": "function_definition",
+      "start_line": 149,
+      "end_line": 168,
+      "context": "def _add_declaration(\n    namespace_index: CsharpNamespaceIndex, file_rel: str, declaration: CsharpDeclaration,\n) -> None:\n    \"\"\"Index the namespaces, types, extension methods and global using directives of a file.\"\"\"\n    namespace_index.declaration_dict[file_rel] = declaration\n    for scope in declaration.scope_list:\n        part_list = scope.namespace.split(\".\") if scope.namespace else []\n        for part_count in range(1, len(part_list) + 1):\n            namespace_index.namespace_set.add(\".\".join(part_list[:part_count]))\n        project_dir = namespace_index.project_dir_dict.get(file_rel, \"\")\n        namespace_index.global_using_dict.setdefault(project_dir, []).extend(\n            using for using in scope.using_list if using.is_global\n        )\n    for csharp_type in declaration.type_list:\n        entry = _TypeEntry(file_rel, csharp_type)\n        namespace_index.type_dict.setdefault(\n            (csharp_type.namespace, csharp_type.path), [],\n        ).append(entry)\n        for name in csharp_type.extension_dict:\n            namespace_index.extension_dict.setdefault(name, []).append(entry)"
+    },
+    {
+      "name": "_build_namespace_index",
+      "type": "function_definition",
+      "start_line": 171,
+      "end_line": 197,
+      "context": "def _build_namespace_index(project_dir: str, project_file_set: set[str]) -> CsharpNamespaceIndex:\n    \"\"\"Parse the C# files of a project and build their index.\n\n    Args:\n        project_dir: Absolute path to the project root.\n        project_file_set: Relative paths of the project files that have a language.\n\n    Returns:\n        The CsharpNamespaceIndex of the C# files in project_file_set. A file that\n        cannot be read or parsed is not in it; the exception is logged.\n    \"\"\"\n    file_rel_list = sorted(\n        file_rel for file_rel in project_file_set\n        if language_ext(os.path.join(project_dir, file_rel)) in CSHARP_EXT_SET\n    )\n    namespace_index = CsharpNamespaceIndex(\n        project_dir_dict=_project_dir_dict(project_dir, file_rel_list),\n    )\n    for file_rel in file_rel_list:\n        try:\n            root_node = parse_file(os.path.join(project_dir, file_rel))[0]\n            declaration = read_csharp_declaration(root_node)\n        except Exception as e:\n            logger.warning(f\"{file_rel} is not read as C#: {type(e).__name__}: {e}\")\n            continue\n        _add_declaration(namespace_index, file_rel, declaration)\n    return namespace_index"
+    },
+    {
+      "name": "_get_namespace_index",
+      "type": "function_definition",
+      "start_line": 200,
+      "end_line": 219,
+      "context": "def _get_namespace_index(project_dir: str, project_file_set: set[str]) -> CsharpNamespaceIndex:\n    \"\"\"Return the namespace index of the project, building it on the first call.\n\n    The index is kept in namespace_index_cache until the project file set changes or\n    the cache is cleared.\n\n    Args:\n        project_dir: Absolute path to the project root.\n        project_file_set: Relative paths of the project files that have a language.\n\n    Returns:\n        The CsharpNamespaceIndex of the C# files in project_file_set.\n    \"\"\"\n    namespace_index = project_cache_value(namespace_index_cache, project_dir, project_file_set)\n    if namespace_index is not None:\n        return namespace_index\n\n    namespace_index = _build_namespace_index(project_dir, project_file_set)\n    namespace_index_cache[project_dir] = (project_file_set, namespace_index)\n    return namespace_index"
+    },
+    {
+      "name": "_find_type",
+      "type": "function_definition",
+      "start_line": 222,
+      "end_line": 262,
+      "context": "def _find_type(\n    namespace_index: CsharpNamespaceIndex,\n    namespace: str,\n    part_tuple: tuple[str, ...],\n    is_namespace_part: bool = True,\n) -> tuple[str, str, int, int] | None:\n    \"\"\"Follow the parts of a name from a namespace to a type.\n\n    The leading parts are taken as namespaces inside the namespace until a part names a\n    type of the namespace reached; the parts after it are taken as types inside that\n    type as long as they name one.\n\n    Examples (from \"App\", with the type App.Models.Customer and Address inside it):\n        (Models, Customer, Address, City) -> (\"App.Models\", \"Customer.Address\", 1, 3)\n        (Models, Customer)                -> (\"App.Models\", \"Customer\", 1, 2)\n        (Models,)                         -> None\n\n    Args:\n        namespace_index: The namespace index of the project.\n        namespace: Full name of the namespace to start from; \"\" for the global one.\n        part_tuple: Parts of the name.\n        is_namespace_part: False takes the first part as a type only.\n\n    Returns:\n        (namespace of the type, type path, index of the first part of the type, index\n        after its last part). None when the parts lead to no type.\n    \"\"\"\n    for position, name in enumerate(part_tuple):\n        if (namespace, name) in namespace_index.type_dict:\n            path = name\n            end = position + 1\n            while end < len(part_tuple) and (\n                (namespace, f\"{path}.{part_tuple[end]}\") in namespace_index.type_dict\n            ):\n                path = f\"{path}.{part_tuple[end]}\"\n                end += 1\n            return namespace, path, position, end\n        namespace = join_name(namespace, name)\n        if not is_namespace_part or namespace not in namespace_index.namespace_set:\n            return None\n    return None"
+    },
+    {
+      "name": "_is_constructor_match",
+      "type": "function_definition",
+      "start_line": 265,
+      "end_line": 277,
+      "context": "def _is_constructor_match(match: _Match) -> bool:\n    \"\"\"Return whether a match is the constructors of a type and nothing else.\n\n    Returns:\n        True when the member the match names is declared, and every declaration of it\n        is a constructor.\n    \"\"\"\n    member_list = [\n        member\n        for entry in match.entry_list\n        for member in entry.csharp_type.member_list_dict.get(match.member_name, [])\n    ]\n    return bool(member_list) and all(member.is_constructor for member in member_list)"
+    },
+    {
+      "name": "_is_static_name",
+      "type": "function_definition",
+      "start_line": 280,
+      "end_line": 296,
+      "context": "def _is_static_name(match: _Match) -> bool:\n    \"\"\"Return whether a match is a name written through a type.\n\n    Returns:\n        True when the first part of the reference names the type and the match is the\n        type itself, or a member of it that at least one of its declarations declares\n        as static, const or an enum member.\n    \"\"\"\n    if not match.is_type_first:\n        return False\n    if not match.member_name:\n        return True\n    return any(\n        member.is_static\n        for entry in match.entry_list\n        for member in entry.csharp_type.member_list_dict.get(match.member_name, [])\n    )"
+    },
+    {
+      "name": "_is_type_fit",
+      "type": "function_definition",
+      "start_line": 299,
+      "end_line": 323,
+      "context": "def _is_type_fit(\n    member: CsharpMember, argument_type_tuple: tuple[str | None, ...], is_extension: bool,\n) -> bool:\n    \"\"\"Return whether the arguments of a call can be the parameters of a method declaration.\n\n    An argument without a known type, a parameter without a type name and a parameter\n    of a type in _ANY_TYPE_SET fit anything; an argument past the last parameter\n    (params) fits. A number fits a wider number type (_WIDER_TYPE_DICT).\n\n    Args:\n        member: The declaration.\n        argument_type_tuple: Type name of each argument of the call, None where unknown.\n        is_extension: Whether the call is written on a value, which is the argument of\n            the first parameter.\n    \"\"\"\n    offset = 1 if is_extension else 0\n    for index, argument_type in enumerate(argument_type_tuple):\n        if argument_type is None or index + offset >= len(member.parameter_type_tuple):\n            continue\n        parameter_type = member.parameter_type_tuple[index + offset]\n        if parameter_type is None or parameter_type in _ANY_TYPE_SET:\n            continue\n        if parameter_type != argument_type and parameter_type not in _WIDER_TYPE_DICT.get(argument_type, ()):\n            return False\n    return True"
+    },
+    {
+      "name": "_declaration_line",
+      "type": "function_definition",
+      "start_line": 326,
+      "end_line": 380,
+      "context": "def _declaration_line(\n    csharp_type: CsharpType,\n    member_name: str,\n    argument_count: int | None,\n    is_extension: bool = False,\n    argument_type_tuple: tuple[str | None, ...] = (),\n) -> int:\n    \"\"\"Return the first line of the declaration of a type, or of a member of it.\n\n    Examples (Twice(int a, int b) on line 4 and Twice(string s) on line 5 of a type\n    that starts on line 2):\n        \"Twice\", 1      -> 5\n        \"Twice\", None   -> 4\n        \"Twice\", 3      -> 4\n        \"\", None        -> 2\n\n    Args:\n        csharp_type: The declaration of the type.\n        member_name: Name of the member; \"\" for the type itself.\n        argument_count: Number of arguments of the call when the member is called;\n            None when it is not.\n        is_extension: Whether the call is written on a value, which is the argument of\n            the first parameter.\n        argument_type_tuple: Type name of each argument of the call, None where the\n            file does not tell it.\n\n    Returns:\n        The line of the one method declaration of the name that takes that number of\n        arguments, or of the one among several of them whose parameter types the\n        arguments fit (_is_type_fit); the line of the first declaration of the name\n        when the member is not called or the call fits none or several; the line of\n        the type when it declares no member of the name.\n    \"\"\"\n    member_list = csharp_type.member_list_dict.get(member_name, [])\n    if not member_list:\n        return csharp_type.start_line\n    if argument_count is not None:\n        # Number of arguments with the value an extension method is called on\n        full_count = argument_count + 1 if is_extension else argument_count\n        fit_list = [\n            member for member in member_list\n            if member.argument_range is not None\n            and (member.is_extension or not is_extension)\n            and member.argument_range[0] <= full_count\n            and (member.argument_range[1] is None or full_count <= member.argument_range[1])\n        ]\n        if len(fit_list) > 1:\n            type_fit_list = [\n                member for member in fit_list\n                if _is_type_fit(member, argument_type_tuple, is_extension)\n            ]\n            fit_list = type_fit_list if len(type_fit_list) == 1 else fit_list\n        if len(fit_list) == 1:\n            return fit_list[0].start_line\n    return member_list[0].start_line"
+    },
+    {
+      "name": "_ReferenceResolver",
+      "type": "class_definition",
+      "start_line": 383,
+      "end_line": 910,
+      "context": "class _ReferenceResolver:\n    \"\"\"Resolves the references of one C# file through the namespace index of its project.\"\"\"\n\n    def __init__(\n        self, namespace_index: CsharpNamespaceIndex, file_rel: str, declaration: CsharpDeclaration,\n    ) -> None:\n        \"\"\"Keep the index and the declarations of the file.\n\n        Args:\n            namespace_index: The namespace index of the project.\n            file_rel: Relative path of the referring file.\n            declaration: The declarations of the referring file.\n        \"\"\"\n        self.namespace_index = namespace_index\n        self.file_rel = file_rel\n        self.declaration = declaration\n        self.project_dir = namespace_index.project_dir_dict.get(file_rel, \"\")\n        # Index of the innermost scope -> lookup steps from that scope\n        self._step_list_dict: dict[int, list[_LookupStep]] = {}\n        # (reference without its line, innermost scope, types around it) -> match\n        self._match_dict: dict[tuple, _Match | None] = {}\n\n    def _scope_index(self, line: int) -> int:\n        \"\"\"Return the index in scope_list of the innermost scope that holds a line.\"\"\"\n        scope_list = self.declaration.scope_list\n        index_list = [\n            index for index, scope in enumerate(scope_list)\n            if scope.start_line <= line <= scope.end_line\n        ]\n        return max(index_list, key=lambda index: scope_list[index].depth, default=0)\n\n    def _step_list(self, scope_index: int) -> list[_LookupStep]:\n        \"\"\"Return the namespaces a name written in a scope is looked up in, innermost first.\n\n        Examples (namespace A.B.C { using X; } in a file with using Y;):\n            A.B.C with using X -> A.B -> A -> \"\" with using Y and the global using\n            directives of the project\n\n        Args:\n            scope_index: Index in scope_list of the innermost scope around the name.\n\n        Returns:\n            The lookup steps. The last one is the global namespace.\n        \"\"\"\n        if scope_index in self._step_list_dict:\n            return self._step_list_dict[scope_index]\n\n        innermost = self.declaration.scope_list[scope_index]\n        scope_list = sorted(\n            (\n                scope for scope in self.declaration.scope_list\n                if scope.start_line <= innermost.start_line\n                and innermost.end_line <= scope.end_line\n                and scope.depth <= innermost.depth\n            ),\n            key=lambda scope: scope.depth,\n            reverse=True,\n        )\n        step_list: list[_LookupStep] = []\n        for position, scope in enumerate(scope_list):\n            is_file_scope = position + 1 == len(scope_list)\n            outer_namespace = \"\" if is_file_scope else scope_list[position + 1].namespace\n            namespace = scope.namespace\n            using_list = [self._absolute_using(using, namespace) for using in scope.using_list]\n            if is_file_scope:\n                using_list += self.namespace_index.global_using_dict.get(self.project_dir, [])\n            while True:\n                step_list.append(_LookupStep(namespace, using_list))\n                using_list = []\n                if not namespace:\n                    break\n                namespace = namespace.rpartition(\".\")[0]\n                if namespace == outer_namespace and not is_file_scope:\n                    break\n        self._step_list_dict[scope_index] = step_list\n        return step_list\n\n    def _absolute_using(self, using: CsharpUsing, namespace: str) -> CsharpUsing:\n        \"\"\"Return a using directive with the full name of what it names.\n\n        The name is looked up from the namespace the directive is written in, then\n        from each namespace around that one, then from the global namespace.\n\n        Examples (written in namespace App.Services):\n            using Models;         -> using App.Models;        (App.Models is a namespace)\n            using System.Text;    -> using System.Text;\n\n        Args:\n            using: The using directive.\n            namespace: Full name of the namespace the directive is written in.\n\n        Returns:\n            The directive with the first name that is a namespace of the project or\n            leads to a type of it; the directive itself when no name is.\n        \"\"\"\n        while namespace:\n            part_tuple = tuple(namespace.split(\".\")) + using.part_tuple\n            if (\n                \".\".join(part_tuple) in self.namespace_index.namespace_set\n                or _find_type(self.namespace_index, \"\", part_tuple) is not None\n            ):\n                return replace(using, part_tuple=part_tuple)\n            namespace = namespace.rpartition(\".\")[0]\n        return using\n\n    def _outer_type_list(self, line: int) -> list[CsharpType]:\n        \"\"\"Return the types of the file whose declaration holds a line, innermost first.\"\"\"\n        return sorted(\n            (\n                csharp_type for csharp_type in self.declaration.type_list\n                if csharp_type.start_line <= line <= csharp_type.end_line\n            ),\n            key=lambda csharp_type: (csharp_type.start_line, -csharp_type.end_line),\n            reverse=True,\n        )\n\n    def _select_entry_list(\n        self, entry_list: list[_TypeEntry], is_own_first: bool,\n    ) -> list[_TypeEntry]:\n        \"\"\"Choose among the declarations a name leads to.\n\n        Args:\n            entry_list: The declarations.\n            is_own_first: Whether the declarations of the referring file come before\n                any other.\n\n        Returns:\n            The declarations in the referring file when is_own_first and there are\n            any; else the ones under the .csproj directory of the referring file;\n            else all of them.\n        \"\"\"\n        if is_own_first:\n            own_entry_list = [entry for entry in entry_list if entry.file_rel == self.file_rel]\n            if own_entry_list:\n                return own_entry_list\n        project_entry_list = [\n            entry for entry in entry_list\n            if self.namespace_index.project_dir_dict.get(entry.file_rel, \"\") == self.project_dir\n        ]\n        return project_entry_list or entry_list\n\n    def _match_name(\n        self,\n        reference: CsharpReference,\n        namespace: str,\n        prefix_tuple: tuple[str, ...] = (),\n        prefix_arity: int = 0,\n        skip_count: int = 0,\n        is_member_need: bool = False,\n        is_namespace_part: bool = True,\n        is_any_arity: bool = False,\n    ) -> _Match | None:\n        \"\"\"Look up the name of a reference from a namespace.\n\n        The name looked up is prefix_tuple followed by the parts of the reference\n        without the first skip_count ones. A type is found with _find_type; the part\n        after the type is taken as a member of it. The match is named with the parts\n        the reference writes, except that a name written with an alias of a type is\n        named with the type.\n\n        Examples (reference -> prefix_tuple, skip_count -> name, definition_name):\n            Models.Customer.Parse()                   -> Customer.Parse, Customer.Parse\n            Json.Write() with using Json = App.Text.Serializer;\n                -> (App, Text, Serializer), 1         -> Serializer.Write, Serializer.Write\n            Sq() with using static App.MathEx;\n                -> (App, MathEx), 0                   -> Sq, MathEx.Sq\n\n        Args:\n            reference: The reference.\n            namespace: Full name of the namespace to start from.\n            prefix_tuple: Parts the reference does not write (the name a using\n                directive gives, the type the reference is written in).\n            prefix_arity: Number of type parameters of the type prefix_tuple names.\n            skip_count: Number of leading parts of the reference prefix_tuple stands for.\n            is_member_need: Whether a name that ends with the type prefix_tuple names\n                must go on with a member that type defines.\n            is_namespace_part: False takes the first part as a type only.\n            is_any_arity: True takes the declarations of the type with another number\n                of type parameters when none has the number the name is written with.\n\n        Returns:\n            The match. None when the name leads to no type, when the type ends before\n            the parts of the reference, when the reference needs a type\n            (TYPE_REFERENCE, ATTRIBUTE_REFERENCE) and the name ends with a member, or\n            when no declaration of the type has the number of type parameters the name\n            is written with and is_any_arity is False.\n        \"\"\"\n        prefix_count = len(prefix_tuple)\n        part_tuple = prefix_tuple + reference.part_tuple[skip_count:]\n        arity_tuple = (\n            (0,) * max(prefix_count - 1, 0) + (prefix_arity,) * min(prefix_count, 1)\n            + reference.arity_tuple[skip_count:]\n        )\n        type_match = _find_type(self.namespace_index, namespace, part_tuple, is_namespace_part)\n        if type_match is None:\n            return None\n        type_namespace, path, type_start, type_end = type_match\n\n        is_member = type_end < len(part_tuple)\n        name_end = type_end + 1 if is_member else type_end\n        write_start = max(type_start - prefix_count + skip_count, 0)\n        write_end = name_end - prefix_count + skip_count\n        type_write_end = type_end - prefix_count + skip_count\n        if write_end <= write_start or write_end < 1:\n            return None\n        is_type_need = reference.kind not in (NAME_REFERENCE, THIS_REFERENCE)\n        if is_type_need and is_member:\n            return None\n\n        entry_list = self.namespace_index.type_dict[(type_namespace, path)]\n        arity_entry_list = [\n            entry for entry in entry_list\n            if entry.csharp_type.arity == arity_tuple[type_end - 1]\n        ]\n        if not arity_entry_list and not is_any_arity:\n            return None\n        entry_list = arity_entry_list or entry_list\n        if is_member:\n            member_entry_list = [\n                entry for entry in entry_list\n                if part_tuple[type_end] in entry.csharp_type.member_name_set\n            ]\n            if is_member_need and type_end <= prefix_count and not member_entry_list:\n                return None\n            entry_list = member_entry_list or entry_list\n\n        name_part_tuple = reference.part_tuple[write_start:write_end]\n        if write_start < skip_count:\n            name_part_tuple = part_tuple[type_start:name_end]\n        return _Match(\n            entry_list=self._select_entry_list(entry_list, is_own_first=True),\n            name=\".\".join(name_part_tuple),\n            definition_name=join_name(path, part_tuple[type_end] if is_member else \"\"),\n            part_count=write_end,\n            member_name=part_tuple[type_end] if is_member else \"\",\n            is_type_first=write_start == 0 and type_write_end >= 1,\n        )\n\n    def _match_outer_type(\n        self, reference: CsharpReference, line: int, is_any_arity: bool,\n    ) -> _Match | None:\n        \"\"\"Look up the first part of a reference among the members of the types around it.\n\n        The members are the ones the declarations of the type define, in the file\n        itself and in the other files that declare the same type (partial).\n\n        Args:\n            reference: The reference.\n            line: Line of the reference.\n            is_any_arity: Passed to _match_name.\n\n        Returns:\n            The match of the innermost type that defines the first part. None when\n            none of the types around the line defines it.\n        \"\"\"\n        for csharp_type in self._outer_type_list(line):\n            prefix_tuple = tuple(\n                join_name(csharp_type.namespace, csharp_type.path).split(\".\")\n            )\n            match = self._match_name(\n                reference, \"\", prefix_tuple, csharp_type.arity, is_member_need=True,\n                is_any_arity=is_any_arity,\n            )\n            if match is not None and match.part_count >= 1:\n                return match\n        return None\n\n    def _match_step(\n        self, reference: CsharpReference, step: _LookupStep, is_any_arity: bool,\n    ) -> _Match | None:\n        \"\"\"Look up a reference in one namespace and the using directives written for it.\n\n        The first of these that leads to a type is taken: the namespace itself, an\n        alias named like the first part, the namespaces of the using directives (the\n        first part is a type of the namespace), the types of the using static\n        directives (the first part is a member of the type). The type an alias or a\n        using static directive names has the number of type arguments the directive\n        writes.\n\n        Args:\n            reference: The reference.\n            step: The namespace and its using directives.\n            is_any_arity: Passed to _match_name.\n\n        Returns:\n            The match; the declarations of every namespace of the using directives\n            that has the type are in it. None when nothing leads to a type.\n        \"\"\"\n        match = self._match_name(reference, step.namespace, is_any_arity=is_any_arity)\n        if match is not None:\n            return match\n\n        for using in step.using_list:\n            if using.kind == ALIAS_USING and using.alias == reference.part_tuple[0]:\n                match = self._match_name(\n                    reference, \"\", using.part_tuple, using.arity, skip_count=1,\n                    is_any_arity=is_any_arity,\n                )\n                if match is not None:\n                    return match\n\n        match_list = [\n            self._match_name(\n                reference, \".\".join(using.part_tuple), is_namespace_part=False,\n                is_any_arity=is_any_arity,\n            )\n            for using in step.using_list if using.kind == NAMESPACE_USING\n        ]\n        match_list = [match for match in match_list if match is not None]\n        if match_list:\n            match = match_list[0]\n            entry_dict = {\n                id(entry): entry for other in match_list for entry in other.entry_list\n            }\n            match.entry_list = self._select_entry_list(\n                list(entry_dict.values()), is_own_first=True,\n            )\n            return match\n\n        for using in step.using_list:\n            if using.kind == STATIC_USING:\n                match = self._match_name(\n                    reference, \"\", using.part_tuple, using.arity, is_member_need=True,\n                    is_any_arity=is_any_arity,\n                )\n                if match is not None:\n                    return match\n        return None\n\n    def _match_reference(self, reference: CsharpReference, line: int) -> _Match | None:\n        \"\"\"Return the type or member the leading parts of a reference name.\n\n        A chain that starts with \"global::\" is looked up from the global namespace.\n        Any other chain is looked up among the members of the types around it, then in\n        the namespaces around it from the innermost (_step_list, _match_step). A chain\n        after \"this.\" is looked up among the members only. The name of an attribute is\n        looked up as written, then with the suffix \"Attribute\"; the match of the second\n        lookup names the attribute with the suffix ([Audit] -> AuditAttribute).\n        A type is looked up with the number of type arguments it is written with\n        (Result<int> is not Result); when that leads to nothing, the whole lookup is\n        done again with the types of any number of type parameters.\n\n        Args:\n            reference: A reference whose kind is not MEMBER_REFERENCE.\n            line: Line of the reference.\n\n        Returns:\n            The match, or None when the chain leads to no type of the project.\n        \"\"\"\n        for is_any_arity in (False, True):\n            match = self._match_written(reference, line, is_any_arity)\n            if match is None and reference.kind == ATTRIBUTE_REFERENCE:\n                part_tuple = (\n                    reference.part_tuple[:-1] + (reference.part_tuple[-1] + _ATTRIBUTE_SUFFIX,)\n                )\n                match = self._match_written(\n                    replace(reference, part_tuple=part_tuple), line, is_any_arity,\n                )\n            if match is not None:\n                return match\n        return None\n\n    def _match_written(\n        self, reference: CsharpReference, line: int, is_any_arity: bool,\n    ) -> _Match | None:\n        \"\"\"Look up a chain with the names it writes: from the global namespace when it\n        starts with \"global::\" (_match_name), else from where it is written (_match_chain).\"\"\"\n        if reference.is_absolute:\n            return self._match_name(reference, \"\", is_any_arity=is_any_arity)\n        return self._match_chain(reference, line, is_any_arity)\n\n    def _match_namespace(\n        self, reference: CsharpReference, line: int, is_any_arity: bool,\n    ) -> _Match | None:\n        \"\"\"Return the match of the first namespace around a line that has one (_match_step).\"\"\"\n        for step in self._step_list(self._scope_index(line)):\n            match = self._match_step(reference, step, is_any_arity)\n            if match is not None:\n                return match\n        return None\n\n    def _match_chain(\n        self, reference: CsharpReference, line: int, is_any_arity: bool,\n    ) -> _Match | None:\n        \"\"\"Look up a chain that does not start with \"global::\" with the names it writes.\n\n        Examples (in a type with the property Status of the enum Status):\n            Status              -> the property\n            Status.Closed       -> the member Closed of the enum\n            Status.ToString()   -> the property\n\n        Args:\n            reference: The reference.\n            line: Line of the reference.\n            is_any_arity: Passed to _match_name.\n\n        Returns:\n            The match among the members of the types around the line\n            (_match_outer_type); without one, and for a chain that is not after\n            \"this.\", the match of the first namespace around the line that has one\n            (_match_namespace). When a member takes only the first part of a chain of\n            several parts, the match of the namespaces comes before it when it is a\n            name written through a type (_is_static_name) or the member is the\n            constructors of the type (_is_constructor_match). None when the chain\n            leads to no type of the project.\n        \"\"\"\n        member_match = self._match_outer_type(reference, line, is_any_arity)\n        if reference.kind == THIS_REFERENCE:\n            return member_match\n        if member_match is None:\n            return self._match_namespace(reference, line, is_any_arity)\n        if member_match.part_count == 1 and len(reference.part_tuple) > 1:\n            type_match = self._match_namespace(reference, line, is_any_arity)\n            if type_match is not None and (\n                _is_static_name(type_match) or _is_constructor_match(member_match)\n            ):\n                return type_match\n        return member_match\n\n    def _extension_entry_list(\n        self, name: str, line: int, argument_count: int,\n    ) -> list[_TypeEntry]:\n        \"\"\"Return the declarations of the types whose extension method a call names.\n\n        The types are looked up in the namespaces around the line from the innermost:\n        the types of the namespace itself, of the namespaces of its using directives,\n        and the types its using static directives name. The first namespace with such\n        a type is taken.\n\n        Args:\n            name: Name of the method.\n            line: Line of the call.\n            argument_count: Number of arguments of the call.\n\n        Returns:\n            The declarations, chosen with _select_entry_list. Empty when no type that\n            the line sees defines an extension method of that name that takes that\n            number of arguments.\n        \"\"\"\n        candidate_list = [\n            entry for entry in self.namespace_index.extension_dict.get(name, [])\n            if any(\n                least <= argument_count and (most is None or argument_count <= most)\n                for least, most in entry.csharp_type.extension_dict[name]\n            )\n        ]\n        if not candidate_list:\n            return []\n        for step in self._step_list(self._scope_index(line)):\n            namespace_set = {step.namespace}\n            type_name_set: set[str] = set()\n            for using in step.using_list:\n                if using.kind == NAMESPACE_USING:\n                    namespace_set.add(\".\".join(using.part_tuple))\n                elif using.kind == STATIC_USING:\n                    type_name_set.add(\".\".join(using.part_tuple))\n            entry_list = [\n                entry for entry in candidate_list\n                if entry.csharp_type.namespace in namespace_set\n                or join_name(entry.csharp_type.namespace, entry.csharp_type.path) in type_name_set\n            ]\n            if entry_list:\n                return self._select_entry_list(entry_list, is_own_first=False)\n        return []\n\n    def resolve(self, reference: CsharpReference) -> list[CsharpReferenceTarget]:\n        \"\"\"Resolve one reference to the definitions it refers to.\n\n        The leading parts are resolved to a type or a member of a type\n        (_match_reference). The last part of a call is resolved to an extension method\n        (_extension_entry_list) when the leading parts do not take it and the call is\n        written on a value: a chain of two or more parts, a chain after \"this.\", or a\n        member of another expression.\n\n        Args:\n            reference: A reference of the file.\n\n        Returns:\n            One target per file a definition is in, with the line of the declaration\n            in that file (_declaration_line). Empty when the reference leads to no\n            definition of the project.\n        \"\"\"\n        line = reference.line\n        match = None\n        if reference.kind != MEMBER_REFERENCE:\n            match_key = (\n                reference.kind, reference.part_tuple, reference.arity_tuple,\n                reference.is_absolute, self._scope_index(line),\n                tuple(csharp_type.start_line for csharp_type in self._outer_type_list(line)),\n            )\n            if match_key not in self._match_dict:\n                self._match_dict[match_key] = self._match_reference(reference, line)\n            match = self._match_dict[match_key]\n\n        target_list: list[CsharpReferenceTarget] = []\n        part_count = 0\n        if match is not None:\n            part_count = match.part_count\n            is_member_call = reference.is_call and part_count == len(reference.part_tuple)\n            argument_count = reference.argument_count if is_member_call else None\n            target_list.extend(\n                CsharpReferenceTarget(\n                    match.name, line, entry.file_rel, match.definition_name,\n                    _declaration_line(\n                        entry.csharp_type, match.member_name, argument_count,\n                        argument_type_tuple=reference.argument_type_tuple,\n                    ),\n                )\n                for entry in match.entry_list\n            )\n\n        is_value_call = reference.is_call and (\n            len(reference.part_tuple) >= 2\n            or reference.kind in (THIS_REFERENCE, MEMBER_REFERENCE)\n        )\n        if is_value_call and part_count < len(reference.part_tuple):\n            name = reference.part_tuple[-1]\n            target_list.extend(\n                CsharpReferenceTarget(\n                    name, line, entry.file_rel, join_name(entry.csharp_type.path, name),\n                    _declaration_line(\n                        entry.csharp_type, name, reference.argument_count, is_extension=True,\n                        argument_type_tuple=reference.argument_type_tuple,\n                    ),\n                )\n                for entry in self._extension_entry_list(name, line, reference.argument_count)\n            )\n        return target_list"
+    },
+    {
+      "name": "__init__",
+      "type": "function_definition",
+      "start_line": 386,
+      "end_line": 403,
+      "context": "    def __init__(\n        self, namespace_index: CsharpNamespaceIndex, file_rel: str, declaration: CsharpDeclaration,\n    ) -> None:\n        \"\"\"Keep the index and the declarations of the file.\n\n        Args:\n            namespace_index: The namespace index of the project.\n            file_rel: Relative path of the referring file.\n            declaration: The declarations of the referring file.\n        \"\"\"\n        self.namespace_index = namespace_index\n        self.file_rel = file_rel\n        self.declaration = declaration\n        self.project_dir = namespace_index.project_dir_dict.get(file_rel, \"\")\n        # Index of the innermost scope -> lookup steps from that scope\n        self._step_list_dict: dict[int, list[_LookupStep]] = {}\n        # (reference without its line, innermost scope, types around it) -> match\n        self._match_dict: dict[tuple, _Match | None] = {}"
+    },
+    {
+      "name": "_scope_index",
+      "type": "function_definition",
+      "start_line": 405,
+      "end_line": 412,
+      "context": "    def _scope_index(self, line: int) -> int:\n        \"\"\"Return the index in scope_list of the innermost scope that holds a line.\"\"\"\n        scope_list = self.declaration.scope_list\n        index_list = [\n            index for index, scope in enumerate(scope_list)\n            if scope.start_line <= line <= scope.end_line\n        ]\n        return max(index_list, key=lambda index: scope_list[index].depth, default=0)"
+    },
+    {
+      "name": "_step_list",
+      "type": "function_definition",
+      "start_line": 414,
+      "end_line": 458,
+      "context": "    def _step_list(self, scope_index: int) -> list[_LookupStep]:\n        \"\"\"Return the namespaces a name written in a scope is looked up in, innermost first.\n\n        Examples (namespace A.B.C { using X; } in a file with using Y;):\n            A.B.C with using X -> A.B -> A -> \"\" with using Y and the global using\n            directives of the project\n\n        Args:\n            scope_index: Index in scope_list of the innermost scope around the name.\n\n        Returns:\n            The lookup steps. The last one is the global namespace.\n        \"\"\"\n        if scope_index in self._step_list_dict:\n            return self._step_list_dict[scope_index]\n\n        innermost = self.declaration.scope_list[scope_index]\n        scope_list = sorted(\n            (\n                scope for scope in self.declaration.scope_list\n                if scope.start_line <= innermost.start_line\n                and innermost.end_line <= scope.end_line\n                and scope.depth <= innermost.depth\n            ),\n            key=lambda scope: scope.depth,\n            reverse=True,\n        )\n        step_list: list[_LookupStep] = []\n        for position, scope in enumerate(scope_list):\n            is_file_scope = position + 1 == len(scope_list)\n            outer_namespace = \"\" if is_file_scope else scope_list[position + 1].namespace\n            namespace = scope.namespace\n            using_list = [self._absolute_using(using, namespace) for using in scope.using_list]\n            if is_file_scope:\n                using_list += self.namespace_index.global_using_dict.get(self.project_dir, [])\n            while True:\n                step_list.append(_LookupStep(namespace, using_list))\n                using_list = []\n                if not namespace:\n                    break\n                namespace = namespace.rpartition(\".\")[0]\n                if namespace == outer_namespace and not is_file_scope:\n                    break\n        self._step_list_dict[scope_index] = step_list\n        return step_list"
+    },
+    {
+      "name": "_absolute_using",
+      "type": "function_definition",
+      "start_line": 460,
+      "end_line": 486,
+      "context": "    def _absolute_using(self, using: CsharpUsing, namespace: str) -> CsharpUsing:\n        \"\"\"Return a using directive with the full name of what it names.\n\n        The name is looked up from the namespace the directive is written in, then\n        from each namespace around that one, then from the global namespace.\n\n        Examples (written in namespace App.Services):\n            using Models;         -> using App.Models;        (App.Models is a namespace)\n            using System.Text;    -> using System.Text;\n\n        Args:\n            using: The using directive.\n            namespace: Full name of the namespace the directive is written in.\n\n        Returns:\n            The directive with the first name that is a namespace of the project or\n            leads to a type of it; the directive itself when no name is.\n        \"\"\"\n        while namespace:\n            part_tuple = tuple(namespace.split(\".\")) + using.part_tuple\n            if (\n                \".\".join(part_tuple) in self.namespace_index.namespace_set\n                or _find_type(self.namespace_index, \"\", part_tuple) is not None\n            ):\n                return replace(using, part_tuple=part_tuple)\n            namespace = namespace.rpartition(\".\")[0]\n        return using"
+    },
+    {
+      "name": "_outer_type_list",
+      "type": "function_definition",
+      "start_line": 488,
+      "end_line": 497,
+      "context": "    def _outer_type_list(self, line: int) -> list[CsharpType]:\n        \"\"\"Return the types of the file whose declaration holds a line, innermost first.\"\"\"\n        return sorted(\n            (\n                csharp_type for csharp_type in self.declaration.type_list\n                if csharp_type.start_line <= line <= csharp_type.end_line\n            ),\n            key=lambda csharp_type: (csharp_type.start_line, -csharp_type.end_line),\n            reverse=True,\n        )"
+    },
+    {
+      "name": "_select_entry_list",
+      "type": "function_definition",
+      "start_line": 499,
+      "end_line": 522,
+      "context": "    def _select_entry_list(\n        self, entry_list: list[_TypeEntry], is_own_first: bool,\n    ) -> list[_TypeEntry]:\n        \"\"\"Choose among the declarations a name leads to.\n\n        Args:\n            entry_list: The declarations.\n            is_own_first: Whether the declarations of the referring file come before\n                any other.\n\n        Returns:\n            The declarations in the referring file when is_own_first and there are\n            any; else the ones under the .csproj directory of the referring file;\n            else all of them.\n        \"\"\"\n        if is_own_first:\n            own_entry_list = [entry for entry in entry_list if entry.file_rel == self.file_rel]\n            if own_entry_list:\n                return own_entry_list\n        project_entry_list = [\n            entry for entry in entry_list\n            if self.namespace_index.project_dir_dict.get(entry.file_rel, \"\") == self.project_dir\n        ]\n        return project_entry_list or entry_list"
+    },
+    {
+      "name": "_match_name",
+      "type": "function_definition",
+      "start_line": 524,
+      "end_line": 619,
+      "context": "    def _match_name(\n        self,\n        reference: CsharpReference,\n        namespace: str,\n        prefix_tuple: tuple[str, ...] = (),\n        prefix_arity: int = 0,\n        skip_count: int = 0,\n        is_member_need: bool = False,\n        is_namespace_part: bool = True,\n        is_any_arity: bool = False,\n    ) -> _Match | None:\n        \"\"\"Look up the name of a reference from a namespace.\n\n        The name looked up is prefix_tuple followed by the parts of the reference\n        without the first skip_count ones. A type is found with _find_type; the part\n        after the type is taken as a member of it. The match is named with the parts\n        the reference writes, except that a name written with an alias of a type is\n        named with the type.\n\n        Examples (reference -> prefix_tuple, skip_count -> name, definition_name):\n            Models.Customer.Parse()                   -> Customer.Parse, Customer.Parse\n            Json.Write() with using Json = App.Text.Serializer;\n                -> (App, Text, Serializer), 1         -> Serializer.Write, Serializer.Write\n            Sq() with using static App.MathEx;\n                -> (App, MathEx), 0                   -> Sq, MathEx.Sq\n\n        Args:\n            reference: The reference.\n            namespace: Full name of the namespace to start from.\n            prefix_tuple: Parts the reference does not write (the name a using\n                directive gives, the type the reference is written in).\n            prefix_arity: Number of type parameters of the type prefix_tuple names.\n            skip_count: Number of leading parts of the reference prefix_tuple stands for.\n            is_member_need: Whether a name that ends with the type prefix_tuple names\n                must go on with a member that type defines.\n            is_namespace_part: False takes the first part as a type only.\n            is_any_arity: True takes the declarations of the type with another number\n                of type parameters when none has the number the name is written with.\n\n        Returns:\n            The match. None when the name leads to no type, when the type ends before\n            the parts of the reference, when the reference needs a type\n            (TYPE_REFERENCE, ATTRIBUTE_REFERENCE) and the name ends with a member, or\n            when no declaration of the type has the number of type parameters the name\n            is written with and is_any_arity is False.\n        \"\"\"\n        prefix_count = len(prefix_tuple)\n        part_tuple = prefix_tuple + reference.part_tuple[skip_count:]\n        arity_tuple = (\n            (0,) * max(prefix_count - 1, 0) + (prefix_arity,) * min(prefix_count, 1)\n            + reference.arity_tuple[skip_count:]\n        )\n        type_match = _find_type(self.namespace_index, namespace, part_tuple, is_namespace_part)\n        if type_match is None:\n            return None\n        type_namespace, path, type_start, type_end = type_match\n\n        is_member = type_end < len(part_tuple)\n        name_end = type_end + 1 if is_member else type_end\n        write_start = max(type_start - prefix_count + skip_count, 0)\n        write_end = name_end - prefix_count + skip_count\n        type_write_end = type_end - prefix_count + skip_count\n        if write_end <= write_start or write_end < 1:\n            return None\n        is_type_need = reference.kind not in (NAME_REFERENCE, THIS_REFERENCE)\n        if is_type_need and is_member:\n            return None\n\n        entry_list = self.namespace_index.type_dict[(type_namespace, path)]\n        arity_entry_list = [\n            entry for entry in entry_list\n            if entry.csharp_type.arity == arity_tuple[type_end - 1]\n        ]\n        if not arity_entry_list and not is_any_arity:\n            return None\n        entry_list = arity_entry_list or entry_list\n        if is_member:\n            member_entry_list = [\n                entry for entry in entry_list\n                if part_tuple[type_end] in entry.csharp_type.member_name_set\n            ]\n            if is_member_need and type_end <= prefix_count and not member_entry_list:\n                return None\n            entry_list = member_entry_list or entry_list\n\n        name_part_tuple = reference.part_tuple[write_start:write_end]\n        if write_start < skip_count:\n            name_part_tuple = part_tuple[type_start:name_end]\n        return _Match(\n            entry_list=self._select_entry_list(entry_list, is_own_first=True),\n            name=\".\".join(name_part_tuple),\n            definition_name=join_name(path, part_tuple[type_end] if is_member else \"\"),\n            part_count=write_end,\n            member_name=part_tuple[type_end] if is_member else \"\",\n            is_type_first=write_start == 0 and type_write_end >= 1,\n        )"
+    },
+    {
+      "name": "_match_outer_type",
+      "type": "function_definition",
+      "start_line": 621,
+      "end_line": 648,
+      "context": "    def _match_outer_type(\n        self, reference: CsharpReference, line: int, is_any_arity: bool,\n    ) -> _Match | None:\n        \"\"\"Look up the first part of a reference among the members of the types around it.\n\n        The members are the ones the declarations of the type define, in the file\n        itself and in the other files that declare the same type (partial).\n\n        Args:\n            reference: The reference.\n            line: Line of the reference.\n            is_any_arity: Passed to _match_name.\n\n        Returns:\n            The match of the innermost type that defines the first part. None when\n            none of the types around the line defines it.\n        \"\"\"\n        for csharp_type in self._outer_type_list(line):\n            prefix_tuple = tuple(\n                join_name(csharp_type.namespace, csharp_type.path).split(\".\")\n            )\n            match = self._match_name(\n                reference, \"\", prefix_tuple, csharp_type.arity, is_member_need=True,\n                is_any_arity=is_any_arity,\n            )\n            if match is not None and match.part_count >= 1:\n                return match\n        return None"
+    },
+    {
+      "name": "_match_step",
+      "type": "function_definition",
+      "start_line": 650,
+      "end_line": 710,
+      "context": "    def _match_step(\n        self, reference: CsharpReference, step: _LookupStep, is_any_arity: bool,\n    ) -> _Match | None:\n        \"\"\"Look up a reference in one namespace and the using directives written for it.\n\n        The first of these that leads to a type is taken: the namespace itself, an\n        alias named like the first part, the namespaces of the using directives (the\n        first part is a type of the namespace), the types of the using static\n        directives (the first part is a member of the type). The type an alias or a\n        using static directive names has the number of type arguments the directive\n        writes.\n\n        Args:\n            reference: The reference.\n            step: The namespace and its using directives.\n            is_any_arity: Passed to _match_name.\n\n        Returns:\n            The match; the declarations of every namespace of the using directives\n            that has the type are in it. None when nothing leads to a type.\n        \"\"\"\n        match = self._match_name(reference, step.namespace, is_any_arity=is_any_arity)\n        if match is not None:\n            return match\n\n        for using in step.using_list:\n            if using.kind == ALIAS_USING and using.alias == reference.part_tuple[0]:\n                match = self._match_name(\n                    reference, \"\", using.part_tuple, using.arity, skip_count=1,\n                    is_any_arity=is_any_arity,\n                )\n                if match is not None:\n                    return match\n\n        match_list = [\n            self._match_name(\n                reference, \".\".join(using.part_tuple), is_namespace_part=False,\n                is_any_arity=is_any_arity,\n            )\n            for using in step.using_list if using.kind == NAMESPACE_USING\n        ]\n        match_list = [match for match in match_list if match is not None]\n        if match_list:\n            match = match_list[0]\n            entry_dict = {\n                id(entry): entry for other in match_list for entry in other.entry_list\n            }\n            match.entry_list = self._select_entry_list(\n                list(entry_dict.values()), is_own_first=True,\n            )\n            return match\n\n        for using in step.using_list:\n            if using.kind == STATIC_USING:\n                match = self._match_name(\n                    reference, \"\", using.part_tuple, using.arity, is_member_need=True,\n                    is_any_arity=is_any_arity,\n                )\n                if match is not None:\n                    return match\n        return None"
+    },
+    {
+      "name": "_match_reference",
+      "type": "function_definition",
+      "start_line": 712,
+      "end_line": 743,
+      "context": "    def _match_reference(self, reference: CsharpReference, line: int) -> _Match | None:\n        \"\"\"Return the type or member the leading parts of a reference name.\n\n        A chain that starts with \"global::\" is looked up from the global namespace.\n        Any other chain is looked up among the members of the types around it, then in\n        the namespaces around it from the innermost (_step_list, _match_step). A chain\n        after \"this.\" is looked up among the members only. The name of an attribute is\n        looked up as written, then with the suffix \"Attribute\"; the match of the second\n        lookup names the attribute with the suffix ([Audit] -> AuditAttribute).\n        A type is looked up with the number of type arguments it is written with\n        (Result<int> is not Result); when that leads to nothing, the whole lookup is\n        done again with the types of any number of type parameters.\n\n        Args:\n            reference: A reference whose kind is not MEMBER_REFERENCE.\n            line: Line of the reference.\n\n        Returns:\n            The match, or None when the chain leads to no type of the project.\n        \"\"\"\n        for is_any_arity in (False, True):\n            match = self._match_written(reference, line, is_any_arity)\n            if match is None and reference.kind == ATTRIBUTE_REFERENCE:\n                part_tuple = (\n                    reference.part_tuple[:-1] + (reference.part_tuple[-1] + _ATTRIBUTE_SUFFIX,)\n                )\n                match = self._match_written(\n                    replace(reference, part_tuple=part_tuple), line, is_any_arity,\n                )\n            if match is not None:\n                return match\n        return None"
+    },
+    {
+      "name": "_match_written",
+      "type": "function_definition",
+      "start_line": 745,
+      "end_line": 752,
+      "context": "    def _match_written(\n        self, reference: CsharpReference, line: int, is_any_arity: bool,\n    ) -> _Match | None:\n        \"\"\"Look up a chain with the names it writes: from the global namespace when it\n        starts with \"global::\" (_match_name), else from where it is written (_match_chain).\"\"\"\n        if reference.is_absolute:\n            return self._match_name(reference, \"\", is_any_arity=is_any_arity)\n        return self._match_chain(reference, line, is_any_arity)"
+    },
+    {
+      "name": "_match_namespace",
+      "type": "function_definition",
+      "start_line": 754,
+      "end_line": 762,
+      "context": "    def _match_namespace(\n        self, reference: CsharpReference, line: int, is_any_arity: bool,\n    ) -> _Match | None:\n        \"\"\"Return the match of the first namespace around a line that has one (_match_step).\"\"\"\n        for step in self._step_list(self._scope_index(line)):\n            match = self._match_step(reference, step, is_any_arity)\n            if match is not None:\n                return match\n        return None"
+    },
+    {
+      "name": "_match_chain",
+      "type": "function_definition",
+      "start_line": 764,
+      "end_line": 800,
+      "context": "    def _match_chain(\n        self, reference: CsharpReference, line: int, is_any_arity: bool,\n    ) -> _Match | None:\n        \"\"\"Look up a chain that does not start with \"global::\" with the names it writes.\n\n        Examples (in a type with the property Status of the enum Status):\n            Status              -> the property\n            Status.Closed       -> the member Closed of the enum\n            Status.ToString()   -> the property\n\n        Args:\n            reference: The reference.\n            line: Line of the reference.\n            is_any_arity: Passed to _match_name.\n\n        Returns:\n            The match among the members of the types around the line\n            (_match_outer_type); without one, and for a chain that is not after\n            \"this.\", the match of the first namespace around the line that has one\n            (_match_namespace). When a member takes only the first part of a chain of\n            several parts, the match of the namespaces comes before it when it is a\n            name written through a type (_is_static_name) or the member is the\n            constructors of the type (_is_constructor_match). None when the chain\n            leads to no type of the project.\n        \"\"\"\n        member_match = self._match_outer_type(reference, line, is_any_arity)\n        if reference.kind == THIS_REFERENCE:\n            return member_match\n        if member_match is None:\n            return self._match_namespace(reference, line, is_any_arity)\n        if member_match.part_count == 1 and len(reference.part_tuple) > 1:\n            type_match = self._match_namespace(reference, line, is_any_arity)\n            if type_match is not None and (\n                _is_static_name(type_match) or _is_constructor_match(member_match)\n            ):\n                return type_match\n        return member_match"
+    },
+    {
+      "name": "_extension_entry_list",
+      "type": "function_definition",
+      "start_line": 802,
+      "end_line": 846,
+      "context": "    def _extension_entry_list(\n        self, name: str, line: int, argument_count: int,\n    ) -> list[_TypeEntry]:\n        \"\"\"Return the declarations of the types whose extension method a call names.\n\n        The types are looked up in the namespaces around the line from the innermost:\n        the types of the namespace itself, of the namespaces of its using directives,\n        and the types its using static directives name. The first namespace with such\n        a type is taken.\n\n        Args:\n            name: Name of the method.\n            line: Line of the call.\n            argument_count: Number of arguments of the call.\n\n        Returns:\n            The declarations, chosen with _select_entry_list. Empty when no type that\n            the line sees defines an extension method of that name that takes that\n            number of arguments.\n        \"\"\"\n        candidate_list = [\n            entry for entry in self.namespace_index.extension_dict.get(name, [])\n            if any(\n                least <= argument_count and (most is None or argument_count <= most)\n                for least, most in entry.csharp_type.extension_dict[name]\n            )\n        ]\n        if not candidate_list:\n            return []\n        for step in self._step_list(self._scope_index(line)):\n            namespace_set = {step.namespace}\n            type_name_set: set[str] = set()\n            for using in step.using_list:\n                if using.kind == NAMESPACE_USING:\n                    namespace_set.add(\".\".join(using.part_tuple))\n                elif using.kind == STATIC_USING:\n                    type_name_set.add(\".\".join(using.part_tuple))\n            entry_list = [\n                entry for entry in candidate_list\n                if entry.csharp_type.namespace in namespace_set\n                or join_name(entry.csharp_type.namespace, entry.csharp_type.path) in type_name_set\n            ]\n            if entry_list:\n                return self._select_entry_list(entry_list, is_own_first=False)\n        return []"
+    },
+    {
+      "name": "resolve",
+      "type": "function_definition",
+      "start_line": 848,
+      "end_line": 910,
+      "context": "    def resolve(self, reference: CsharpReference) -> list[CsharpReferenceTarget]:\n        \"\"\"Resolve one reference to the definitions it refers to.\n\n        The leading parts are resolved to a type or a member of a type\n        (_match_reference). The last part of a call is resolved to an extension method\n        (_extension_entry_list) when the leading parts do not take it and the call is\n        written on a value: a chain of two or more parts, a chain after \"this.\", or a\n        member of another expression.\n\n        Args:\n            reference: A reference of the file.\n\n        Returns:\n            One target per file a definition is in, with the line of the declaration\n            in that file (_declaration_line). Empty when the reference leads to no\n            definition of the project.\n        \"\"\"\n        line = reference.line\n        match = None\n        if reference.kind != MEMBER_REFERENCE:\n            match_key = (\n                reference.kind, reference.part_tuple, reference.arity_tuple,\n                reference.is_absolute, self._scope_index(line),\n                tuple(csharp_type.start_line for csharp_type in self._outer_type_list(line)),\n            )\n            if match_key not in self._match_dict:\n                self._match_dict[match_key] = self._match_reference(reference, line)\n            match = self._match_dict[match_key]\n\n        target_list: list[CsharpReferenceTarget] = []\n        part_count = 0\n        if match is not None:\n            part_count = match.part_count\n            is_member_call = reference.is_call and part_count == len(reference.part_tuple)\n            argument_count = reference.argument_count if is_member_call else None\n            target_list.extend(\n                CsharpReferenceTarget(\n                    match.name, line, entry.file_rel, match.definition_name,\n                    _declaration_line(\n                        entry.csharp_type, match.member_name, argument_count,\n                        argument_type_tuple=reference.argument_type_tuple,\n                    ),\n                )\n                for entry in match.entry_list\n            )\n\n        is_value_call = reference.is_call and (\n            len(reference.part_tuple) >= 2\n            or reference.kind in (THIS_REFERENCE, MEMBER_REFERENCE)\n        )\n        if is_value_call and part_count < len(reference.part_tuple):\n            name = reference.part_tuple[-1]\n            target_list.extend(\n                CsharpReferenceTarget(\n                    name, line, entry.file_rel, join_name(entry.csharp_type.path, name),\n                    _declaration_line(\n                        entry.csharp_type, name, reference.argument_count, is_extension=True,\n                        argument_type_tuple=reference.argument_type_tuple,\n                    ),\n                )\n                for entry in self._extension_entry_list(name, line, reference.argument_count)\n            )\n        return target_list"
+    },
+    {
+      "name": "csharp_reference_target_list",
+      "type": "function_definition",
+      "start_line": 913,
+      "end_line": 982,
+      "context": "def csharp_reference_target_list(\n    file_rel: str,\n    project_file_set: set[str],\n    project_dir: str,\n) -> list[CsharpReferenceTarget]:\n    \"\"\"Resolve each reference of a C# file to the definition it refers to.\n\n    A name is looked up as the language does: among the members of the types the name\n    is written in (the other files of a partial type included), then in each namespace\n    around it from the innermost, with the alias, namespace and static using directives\n    written for that namespace; the global using directives of the files under the same\n    .csproj directory count for the file. A name written with namespaces\n    (App.Models.Customer, Models.Customer) is followed through them. The part after a\n    type is taken as a member of it. A type is looked up with the number of type\n    arguments it is written with, and with any number when that leads to nothing. A\n    method called on a value is resolved by its name and its number of arguments to\n    the extension methods of the types the line sees.\n    A type declared in several files leads to the file itself when it declares the\n    type, else to the files under the .csproj directory of the file, else to all of\n    them; with a member named, only the files that define the member count.\n\n    Processing flow:\n    1. Return the targets of csharp_target_cache when they were resolved with the same\n       project file set\n    2. Read the references of the file\n    3. Resolve each reference\n\n    Args:\n        file_rel: Relative path of the file.\n        project_file_set: Relative paths of the project files that have a language.\n        project_dir: Absolute path to the project root.\n\n    Returns:\n        One target per reference and file a definition is in, in line order, without\n        duplicates. A target whose file_rel is the file itself is a reference to a\n        definition of the file. definition_line is the first line of the declaration\n        of the type or member; of several declarations of a called method, the one\n        that takes the number of arguments of the call (_declaration_line). The\n        targets are kept in csharp_target_cache until the project file set changes or\n        the cache is cleared.\n    \"\"\"\n    # == Step 1: Cache ========================================================\n    cache_key = os.path.abspath(os.path.join(project_dir, file_rel))\n    target_list = project_cache_value(csharp_target_cache, cache_key, project_file_set)\n    if target_list is not None:\n        return target_list\n\n    # == Step 2: References ===================================================\n    namespace_index = _get_namespace_index(project_dir, project_file_set)\n    declaration = namespace_index.declaration_dict.get(file_rel)\n    if declaration is None:\n        return []\n    resolver = _ReferenceResolver(namespace_index, file_rel, declaration)\n\n    # == Step 3: Targets ======================================================\n    # Two calls of one line that write the same name lead to two declarations when\n    # they call two overloads\n    target_dict: dict[tuple[str, int, str, int], CsharpReferenceTarget] = {}\n    root_node = parse_file(os.path.join(project_dir, file_rel))[0]\n    for reference in csharp_reference_list(root_node):\n        for target in resolver.resolve(reference):\n            target_dict.setdefault(\n                (target.name, target.line, target.file_rel, target.definition_line), target,\n            )\n\n    target_list = sorted(\n        target_dict.values(), key=lambda target: (target.line, target.name, target.file_rel),\n    )\n    csharp_target_cache[cache_key] = (project_file_set, target_list)\n    return target_list"
+    }
+  ],
+  "callee_usages": [
+    {
+      "lines": [
+        70,
+        327,
+        488
+      ],
+      "name": "CsharpType",
+      "from": "codetwine/codetwine/extractors/csharp_source_py/csharp_source.py",
+      "target_context": "@dataclass\nclass CsharpType:\n    \"\"\"One type declaration.\"\"\"\n\n    namespace: str      # Full name of the namespace the type is in; \"\" for none\n    path: str           # Name of the type, after the names of the types around it (Outer.Inner)\n    arity: int          # Number of type parameters\n    start_line: int     # First line (1-based)\n    end_line: int       # Last line\n    # Names of the definitions written in the body, types included\n    member_name_set: set[str] = field(default_factory=set)\n    # Name of a member that is not a type -> its declarations in line order\n    member_list_dict: dict[str, list[CsharpMember]] = field(default_factory=dict)\n    # Name of a method whose first parameter is written with \"this\" -> (least, most)\n    # number of arguments a call of each declaration of it takes, without the one\n    # \"this\" stands for; most is None for a declaration with \"params\"\n    extension_dict: dict[str, list[tuple[int, int | None]]] = field(default_factory=dict)",
+      "target_name": "CsharpType",
+      "target_start_line": 111
+    },
+    {
+      "lines": [
+        78,
+        150,
+        153,
+        387,
+        398
+      ],
+      "name": "CsharpDeclaration",
+      "from": "codetwine/codetwine/extractors/csharp_source_py/csharp_source.py",
+      "target_context": "@dataclass\nclass CsharpDeclaration:\n    \"\"\"The namespaces, using directives and types of one C# file.\"\"\"\n\n    # The file itself, then each namespace declaration in line order\n    scope_list: list[CsharpScope] = field(default_factory=list)\n    # Type declarations in line order\n    type_list: list[CsharpType] = field(default_factory=list)",
+      "target_name": "CsharpDeclaration",
+      "target_start_line": 130
+    },
+    {
+      "lines": [
+        88,
+        96,
+        460,
+        484,
+        486
+      ],
+      "name": "CsharpUsing",
+      "from": "codetwine/codetwine/extractors/csharp_source_py/csharp_source.py",
+      "target_context": "@dataclass\nclass CsharpUsing:\n    \"\"\"One using directive.\"\"\"\n\n    kind: str                     # NAMESPACE_USING / STATIC_USING / ALIAS_USING\n    part_tuple: tuple[str, ...]   # Parts of the namespace or type name (A.B.Type -> A, B, Type)\n    alias: str = \"\"               # Name of an ALIAS_USING; \"\" for the other kinds\n    is_global: bool = False       # Whether the directive is written with \"global\"\n    arity: int = 0                # Number of type arguments of the last part (A.Result<int> -> 1)",
+      "target_name": "CsharpUsing",
+      "target_start_line": 72
+    },
+    {
+      "lines": [
+        154
+      ],
+      "name": "CsharpDeclaration.scope_list",
+      "from": "codetwine/codetwine/extractors/csharp_source_py/csharp_source.py",
+      "target_context": "scope_list: list[CsharpScope] = field(default_factory=list)",
+      "target_name": "scope_list",
+      "target_start_line": 135
+    },
+    {
+      "lines": [
+        162
+      ],
+      "name": "CsharpDeclaration.type_list",
+      "from": "codetwine/codetwine/extractors/csharp_source_py/csharp_source.py",
+      "target_context": "type_list: list[CsharpType] = field(default_factory=list)",
+      "target_name": "type_list",
+      "target_start_line": 137
+    },
+    {
+      "lines": [
+        184
+      ],
+      "name": "CSHARP_EXT_SET",
+      "from": "codetwine/codetwine/config/settings_py/settings.py",
+      "target_context": "CSHARP_EXT_SET: set[str] = {\n    ext for ext, definition_dict in EXT_TO_DEFINITION_DICT.items()\n    if definition_dict is CSHARP_DEFINITION_DICT\n}",
+      "target_name": "CSHARP_EXT_SET",
+      "target_start_line": 1172
+    },
+    {
+      "lines": [
+        184
+      ],
+      "name": "language_ext",
+      "from": "codetwine/codetwine/config/settings_py/settings.py",
+      "target_context": "def language_ext(path: str) -> str:\n    \"\"\"Return the extension whose language settings a file is analyzed with.\n\n    A file recorded by set_copy_target_ext() gets the extension recorded for it, and a\n    file recorded by set_no_language_file() none. Every other file gets its own\n    extension when it is a key of EXT_TO_DEFINITION_DICT; the extensions of the\n    languages with ignore_ext_case are matched in any case.\n\n    Examples:\n        \"src/app.py\"          -> \"py\"\n        \"src/MAIN.Cbl\"        -> \"cbl\"\n        \"R/utils.R\"           -> \"r\"\n        \"config.yaml\"         -> \"\"\n        \"dcl/DCLCUST.dcl\"     -> \"cpy\" (when a COPY statement names it)\n        \"docs/notes.qmd\"      -> \"\" (when it has no R code chunk)\n\n    Args:\n        path: A file path. A relative path is taken from the current directory when\n            it is looked up among the recorded files.\n\n    Returns:\n        The extension (without the dot, a key of EXT_TO_DEFINITION_DICT), or \"\" for a\n        file without a language.\n    \"\"\"\n    path_abs = os.path.abspath(path)\n    copy_target_ext = _copy_target_ext_dict.get(path_abs)\n    if copy_target_ext:\n        return copy_target_ext\n    if path_abs in _no_language_path_set:\n        return \"\"\n    ext = os.path.splitext(path)[1].lstrip(\".\")\n    if ext in EXT_TO_DEFINITION_DICT:\n        return ext\n    if ext.lower() in _IGNORE_CASE_EXT_SET:\n        return ext.lower()\n    return \"\"",
+      "target_name": "language_ext",
+      "target_start_line": 1241
+    },
+    {
+      "lines": [
+        191,
+        971
+      ],
+      "name": "parse_file",
+      "from": "codetwine/codetwine/parsers/ts_parser_py/ts_parser.py",
+      "target_context": "def parse_file(file_path: str) -> tuple[Node | CobolSource, bytes]:\n    \"\"\"Read a file, parse it with tree-sitter, and return (AST root node, byte content).\n\n    The file is decoded by read_source() and parsed as UTF-8, whatever encoding it is\n    stored in; the byte content is that UTF-8 text, and the text of every node decodes\n    as UTF-8. Line numbers are those of line_list_of() over the file.\n\n    For a COBOL file the first element is a CobolSource (read_cobol_source) in place of\n    the root node, and for a BMS source the CobolSource of its symbolic maps\n    (read_bms_source); extract_definitions(), extract_imports() and extract_usages()\n    take it as they take a root node. The language is the one language_ext() gives.\n\n    For an R Markdown or Quarto file the root node is the tree of its R code chunks\n    (r_chunk_code), each node at the position its code has in the file; the byte content\n    is the whole file. A chunk whose code does not end inside the chunk (an open \"{\", an\n    operator at its end) is left out of the tree.\n\n    For a C or C++ file a macro name written between a class keyword and a class name\n    (class EXPORT Shape { ... }) is read as spaces (_parse_c_family); the byte content\n    is the whole file, and class_macro_cache holds those names and their lines.\n\n    Parse results are cached at module level; a file found in the cache is not parsed again.\n    The cache holds at most PARSE_CACHE_MAX_FILES entries; when it is full, the least\n    recently used entry is discarded and that file is parsed again the next time it is\n    requested. PARSE_CACHE_MAX_FILES = 0 disables the limit.\n\n    Args:\n        file_path: Absolute path of the file to parse.\n\n    Returns:\n        A (root_node, content) tuple.\n    \"\"\"\n    # Return from cache if available, marking the entry as most recently used\n    cache_entry = parse_cache.get(file_path)\n    if cache_entry is not None:\n        parse_cache.move_to_end(file_path)\n        return cache_entry\n\n    # Get the corresponding language from the file extension\n    ext = language_ext(file_path)\n\n    # Read the file as UTF-8 bytes\n    content = read_utf8_content(file_path)\n\n    if ext in COBOL_EXT_SET:\n        # Split the COBOL text into statements and parse each of them\n        cobol_source = read_cobol_source(content.decode(\"utf-8\"), EXT_TO_LANGUAGE_DICT[ext])\n        parse_result = (cobol_source, content)\n    elif ext in BMS_EXT_SET:\n        # Read the maps of the BMS macros\n        parse_result = (read_bms_source(content.decode(\"utf-8\")), content)\n    elif ext in R_MARKDOWN_EXT_SET:\n        # Parse the R code chunks of the document, everything else blanked; a chunk\n        # whose code runs on past its end is blanked as well\n        language = EXT_TO_LANGUAGE_DICT[ext]\n        chunk_code = r_chunk_code(content, lambda code: _is_whole_code(code, language))\n        tree = Parser(language).parse(chunk_code)\n        parse_result = (tree.root_node, content)\n    elif ext in C_FAMILY_EXT_SET:\n        # Parse with the macro names in front of class names blanked\n        root_node, class_macro_cache[file_path] = _parse_c_family(content, EXT_TO_LANGUAGE_DICT[ext])\n        parse_result = (root_node, content)\n    else:\n        # Parse with tree-sitter to generate the AST\n        tree = Parser(EXT_TO_LANGUAGE_DICT[ext]).parse(content)\n        parse_result = (tree.root_node, content)\n\n    # Store in cache and drop the oldest entries once the limit is exceeded\n    parse_cache[file_path] = parse_result\n    if PARSE_CACHE_MAX_FILES > 0:\n        while len(parse_cache) > PARSE_CACHE_MAX_FILES:\n            parse_cache.popitem(last=False)\n    return parse_result",
+      "target_name": "parse_file",
+      "target_start_line": 167
+    },
+    {
+      "lines": [
+        192
+      ],
+      "name": "read_csharp_declaration",
+      "from": "codetwine/codetwine/extractors/csharp_source_py/csharp_source.py",
+      "target_context": "def read_csharp_declaration(root_node: Node) -> CsharpDeclaration:\n    \"\"\"Read the namespaces, using directives and types of a C# file.\n\n    Declarations inside #if / #elif / #else are read as the ones outside.\n\n    Args:\n        root_node: The AST root node of the file.\n\n    Returns:\n        The CsharpDeclaration. scope_list[0] is the file itself.\n    \"\"\"\n    declaration = CsharpDeclaration()\n    file_scope = CsharpScope(\n        namespace=\"\", start_line=1, end_line=root_node.end_point[0] + 1, depth=0,\n    )\n    declaration.scope_list.append(file_scope)\n    _read_declaration_list(root_node, file_scope, None, declaration)\n    return declaration",
+      "target_name": "read_csharp_declaration",
+      "target_start_line": 764
+    },
+    {
+      "lines": [
+        213,
+        956
+      ],
+      "name": "project_cache_value",
+      "from": "codetwine/codetwine/utils/project_cache_py/project_cache.py",
+      "target_context": "def project_cache_value(\n    cache_dict: dict[str, tuple[set[str], CacheValue]],\n    cache_key: str,\n    project_file_set: set[str],\n) -> CacheValue | None:\n    \"\"\"Return the value a cache keeps under a key for a project file set.\n\n    A value kept with an equal set that is another object is kept with\n    project_file_set from then on.\n\n    Args:\n        cache_dict: A {key: (project file set the value was built for, value)} cache.\n        cache_key: The key of the value.\n        project_file_set: Relative paths of the project files that have a language.\n\n    Returns:\n        The value, None when the cache has none under the key or it was built for\n        another project file set.\n    \"\"\"\n    cache_entry = cache_dict.get(cache_key)\n    if cache_entry is None:\n        return None\n    cache_file_set, value = cache_entry\n    if cache_file_set is project_file_set:\n        return value\n    if cache_file_set == project_file_set:\n        cache_dict[cache_key] = (project_file_set, value)\n        return value\n    return None",
+      "target_name": "project_cache_value",
+      "target_start_line": 6
+    },
+    {
+      "lines": [
+        259,
+        615,
+        640,
+        842,
+        902
+      ],
+      "name": "join_name",
+      "from": "codetwine/codetwine/extractors/csharp_source_py/csharp_source.py",
+      "target_context": "def join_name(*part_tuple: str) -> str:\n    \"\"\"Join the parts of a dotted name, leaving out the empty ones.\n\n    Examples:\n        (\"App.Models\", \"Customer\")  -> \"App.Models.Customer\"\n        (\"\", \"Customer\")            -> \"Customer\"\n    \"\"\"\n    return \".\".join(part for part in part_tuple if part)",
+      "target_name": "join_name",
+      "target_start_line": 406
+    },
+    {
+      "lines": [
+        300
+      ],
+      "name": "CsharpMember",
+      "from": "codetwine/codetwine/extractors/csharp_source_py/csharp_source.py",
+      "target_context": "@dataclass\nclass CsharpMember:\n    \"\"\"One declaration of a member of a type.\"\"\"\n\n    start_line: int     # First line (1-based)\n    # Whether the member is named through the type: a static or const member, an enum member\n    is_static: bool = False\n    # (least, most) number of arguments a call of a method takes; most is None for a\n    # declaration with \"params\"; None for a member that is not a method\n    argument_range: tuple[int, int | None] | None = None\n    is_extension: bool = False  # Whether the first parameter is written with \"this\"\n    is_constructor: bool = False  # Whether the declaration is a constructor\n    # Type name of each parameter of a method (type_name); None for a type parameter and\n    # for a type without a name. Empty for a member that is not a method\n    parameter_type_tuple: tuple[str | None, ...] = ()",
+      "target_name": "CsharpMember",
+      "target_start_line": 94
+    },
+    {
+      "lines": [
+        316,
+        318
+      ],
+      "name": "CsharpMember.parameter_type_tuple",
+      "from": "codetwine/codetwine/extractors/csharp_source_py/csharp_source.py",
+      "target_context": "parameter_type_tuple: tuple[str | None, ...] = ()",
+      "target_name": "parameter_type_tuple",
+      "target_start_line": 108
+    },
+    {
+      "lines": [
+        359
+      ],
+      "name": "CsharpType.member_list_dict.get",
+      "from": "codetwine/codetwine/extractors/csharp_source_py/csharp_source.py",
+      "target_context": "member_list_dict: dict[str, list[CsharpMember]] = field(default_factory=dict)",
+      "target_name": "member_list_dict",
+      "target_start_line": 123
+    },
+    {
+      "lines": [
+        361
+      ],
+      "name": "CsharpType.start_line",
+      "from": "codetwine/codetwine/extractors/csharp_source_py/csharp_source.py",
+      "target_context": "start_line: int",
+      "target_name": "start_line",
+      "target_start_line": 118
+    },
+    {
+      "lines": [
+        479
+      ],
+      "name": "CsharpUsing.part_tuple",
+      "from": "codetwine/codetwine/extractors/csharp_source_py/csharp_source.py",
+      "target_context": "part_tuple: tuple[str, ...]",
+      "target_name": "part_tuple",
+      "target_start_line": 77
+    },
+    {
+      "lines": [
+        526,
+        622,
+        643,
+        651,
+        671,
+        678,
+        686,
+        705,
+        712,
+        733,
+        739,
+        746,
+        751,
+        752,
+        755,
+        759,
+        765,
+        789,
+        793,
+        795,
+        848,
+        874
+      ],
+      "name": "CsharpReference",
+      "from": "codetwine/codetwine/extractors/csharp_source_py/csharp_source.py",
+      "target_context": "@dataclass(frozen=True)\nclass CsharpReference:\n    \"\"\"One name chain of a C# file that is not the name of a declaration.\"\"\"\n\n    kind: str                       # NAME_REFERENCE / TYPE_REFERENCE / ...\n    part_tuple: tuple[str, ...]     # Names of the chain (Helper.Make<T> -> Helper, Make)\n    arity_tuple: tuple[int, ...]    # Number of type arguments of each name\n    line: int                       # Line the chain starts on (1-based)\n    is_call: bool = False           # Whether the chain is what an invocation calls\n    is_absolute: bool = False       # Whether the chain starts with \"global::\"\n    argument_count: int = 0         # Number of arguments of the invocation; 0 without is_call\n    # Type name of each argument of the invocation where the file tells it\n    # (argument_type), None where it does not\n    argument_type_tuple: tuple[str | None, ...] = ()",
+      "target_name": "CsharpReference",
+      "target_start_line": 172
+    },
+    {
+      "lines": [
+        571,
+        609,
+        676,
+        736,
+        794,
+        869,
+        881,
+        895,
+        898,
+        899
+      ],
+      "name": "CsharpReference.part_tuple",
+      "from": "codetwine/codetwine/extractors/csharp_source_py/csharp_source.py",
+      "target_context": "part_tuple: tuple[str, ...]",
+      "target_name": "part_tuple",
+      "target_start_line": 177
+    },
+    {
+      "lines": [
+        574,
+        869
+      ],
+      "name": "CsharpReference.arity_tuple",
+      "from": "codetwine/codetwine/extractors/csharp_source_py/csharp_source.py",
+      "target_context": "arity_tuple: tuple[int, ...]",
+      "target_name": "arity_tuple",
+      "target_start_line": 178
+    },
+    {
+      "lines": [
+        588,
+        790,
+        896
+      ],
+      "name": "THIS_REFERENCE",
+      "from": "codetwine/codetwine/extractors/csharp_source_py/csharp_source.py",
+      "target_context": "THIS_REFERENCE = \"this\"",
+      "target_name": "THIS_REFERENCE",
+      "target_start_line": 15
+    },
+    {
+      "lines": [
+        588
+      ],
+      "name": "NAME_REFERENCE",
+      "from": "codetwine/codetwine/extractors/csharp_source_py/csharp_source.py",
+      "target_context": "NAME_REFERENCE = \"name\"",
+      "target_name": "NAME_REFERENCE",
+      "target_start_line": 12
+    },
+    {
+      "lines": [
+        588,
+        734,
+        790,
+        867,
+        869,
+        896
+      ],
+      "name": "CsharpReference.kind",
+      "from": "codetwine/codetwine/extractors/csharp_source_py/csharp_source.py",
+      "target_context": "kind: str",
+      "target_name": "kind",
+      "target_start_line": 176
+    },
+    {
+      "lines": [
+        676
+      ],
+      "name": "ALIAS_USING",
+      "from": "codetwine/codetwine/extractors/csharp_source_py/csharp_source.py",
+      "target_context": "ALIAS_USING = \"alias\"",
+      "target_name": "ALIAS_USING",
+      "target_start_line": 9
+    },
+    {
+      "lines": [
+        689,
+        835
+      ],
+      "name": "NAMESPACE_USING",
+      "from": "codetwine/codetwine/extractors/csharp_source_py/csharp_source.py",
+      "target_context": "NAMESPACE_USING = \"namespace\"",
+      "target_name": "NAMESPACE_USING",
+      "target_start_line": 7
+    },
+    {
+      "lines": [
+        703,
+        837
+      ],
+      "name": "STATIC_USING",
+      "from": "codetwine/codetwine/extractors/csharp_source_py/csharp_source.py",
+      "target_context": "STATIC_USING = \"static\"",
+      "target_name": "STATIC_USING",
+      "target_start_line": 8
+    },
+    {
+      "lines": [
+        734
+      ],
+      "name": "ATTRIBUTE_REFERENCE",
+      "from": "codetwine/codetwine/extractors/csharp_source_py/csharp_source.py",
+      "target_context": "ATTRIBUTE_REFERENCE = \"attribute\"",
+      "target_name": "ATTRIBUTE_REFERENCE",
+      "target_start_line": 14
+    },
+    {
+      "lines": [
+        750,
+        870
+      ],
+      "name": "CsharpReference.is_absolute",
+      "from": "codetwine/codetwine/extractors/csharp_source_py/csharp_source.py",
+      "target_context": "is_absolute: bool = False",
+      "target_name": "is_absolute",
+      "target_start_line": 181
+    },
+    {
+      "lines": [
+        865
+      ],
+      "name": "CsharpReference.line",
+      "from": "codetwine/codetwine/extractors/csharp_source_py/csharp_source.py",
+      "target_context": "line: int",
+      "target_name": "line",
+      "target_start_line": 179
+    },
+    {
+      "lines": [
+        867,
+        896
+      ],
+      "name": "MEMBER_REFERENCE",
+      "from": "codetwine/codetwine/extractors/csharp_source_py/csharp_source.py",
+      "target_context": "MEMBER_REFERENCE = \"member\"",
+      "target_name": "MEMBER_REFERENCE",
+      "target_start_line": 16
+    },
+    {
+      "lines": [
+        881,
+        894
+      ],
+      "name": "CsharpReference.is_call",
+      "from": "codetwine/codetwine/extractors/csharp_source_py/csharp_source.py",
+      "target_context": "is_call: bool = False",
+      "target_name": "is_call",
+      "target_start_line": 180
+    },
+    {
+      "lines": [
+        882,
+        904,
+        908
+      ],
+      "name": "CsharpReference.argument_count",
+      "from": "codetwine/codetwine/extractors/csharp_source_py/csharp_source.py",
+      "target_context": "argument_count: int = 0",
+      "target_name": "argument_count",
+      "target_start_line": 182
+    },
+    {
+      "lines": [
+        888,
+        905
+      ],
+      "name": "CsharpReference.argument_type_tuple",
+      "from": "codetwine/codetwine/extractors/csharp_source_py/csharp_source.py",
+      "target_context": "argument_type_tuple: tuple[str | None, ...] = ()",
+      "target_name": "argument_type_tuple",
+      "target_start_line": 185
+    },
+    {
+      "lines": [
+        972
+      ],
+      "name": "csharp_reference_list",
+      "from": "codetwine/codetwine/extractors/csharp_source_py/csharp_source.py",
+      "target_context": "def csharp_reference_list(root_node: Node) -> list[CsharpReference]:\n    \"\"\"Read the name chains of a C# file that are not names of declarations.\n\n    Left out: the names declarations give (types, members, parameters, variables,\n    labels), the names of namespace declarations, the names of using directives\n    (the types written inside them are read: using L = List<Order>; -> Order), the\n    names of named arguments and of members set in an initializer, a chain that starts\n    with a type parameter of a declaration around it, and the name of a member of a\n    value that is not called. The conditions of #if / #elif and the other preprocessor\n    directives are not read.\n\n    Args:\n        root_node: The AST root node of the file.\n\n    Returns:\n        The references in the order they are found, without duplicates.\n    \"\"\"\n    return _ReferenceWalker().walk(root_node)",
+      "target_name": "csharp_reference_list",
+      "target_start_line": 1107
+    }
+  ],
+  "same_file_usages": [
+    {
+      "lines": [
+        80,
+        84,
+        103,
+        163,
+        166,
+        168,
+        500,
+        501,
+        804
+      ],
+      "name": "_TypeEntry",
+      "target_name": "_TypeEntry",
+      "target_start_line": 65
+    },
+    {
+      "lines": [
+        136
+      ],
+      "name": "_PROJECT_FILE_EXT",
+      "target_name": "_PROJECT_FILE_EXT",
+      "target_start_line": 41
+    },
+    {
+      "lines": [
+        150,
+        171,
+        186,
+        196,
+        197,
+        200,
+        223,
+        387,
+        396
+      ],
+      "name": "CsharpNamespaceIndex",
+      "target_name": "CsharpNamespaceIndex",
+      "target_start_line": 73
+    },
+    {
+      "lines": [
+        153
+      ],
+      "name": "CsharpNamespaceIndex.declaration_dict",
+      "target_name": "declaration_dict",
+      "target_start_line": 78
+    },
+    {
+      "lines": [
+        157
+      ],
+      "name": "CsharpNamespaceIndex.namespace_set.add",
+      "target_name": "namespace_set",
+      "target_start_line": 82
+    },
+    {
+      "lines": [
+        158,
+        399
+      ],
+      "name": "CsharpNamespaceIndex.project_dir_dict.get",
+      "target_name": "project_dir_dict",
+      "target_start_line": 86
+    },
+    {
+      "lines": [
+        159
+      ],
+      "name": "CsharpNamespaceIndex.global_using_dict.setdefault",
+      "target_name": "global_using_dict",
+      "target_start_line": 88
+    },
+    {
+      "lines": [
+        164
+      ],
+      "name": "CsharpNamespaceIndex.type_dict.setdefault",
+      "target_name": "type_dict",
+      "target_start_line": 80
+    },
+    {
+      "lines": [
+        168
+      ],
+      "name": "CsharpNamespaceIndex.extension_dict.setdefault",
+      "target_name": "extension_dict",
+      "target_start_line": 84
+    },
+    {
+      "lines": [
+        187
+      ],
+      "name": "_project_dir_dict",
+      "target_name": "_project_dir_dict",
+      "target_start_line": 111
+    },
+    {
+      "lines": [
+        194
+      ],
+      "name": "logger.warning",
+      "target_name": "logger",
+      "target_start_line": 25
+    },
+    {
+      "lines": [
+        196
+      ],
+      "name": "_add_declaration",
+      "target_name": "_add_declaration",
+      "target_start_line": 149
+    },
+    {
+      "lines": [
+        213,
+        218
+      ],
+      "name": "namespace_index_cache",
+      "target_name": "namespace_index_cache",
+      "target_start_line": 47
+    },
+    {
+      "lines": [
+        217
+      ],
+      "name": "_build_namespace_index",
+      "target_name": "_build_namespace_index",
+      "target_start_line": 171
+    },
+    {
+      "lines": [
+        250,
+        254
+      ],
+      "name": "CsharpNamespaceIndex.type_dict",
+      "target_name": "type_dict",
+      "target_start_line": 80
+    },
+    {
+      "lines": [
+        260
+      ],
+      "name": "CsharpNamespaceIndex.namespace_set",
+      "target_name": "namespace_set",
+      "target_start_line": 82
+    },
+    {
+      "lines": [
+        265,
+        280,
+        403,
+        534,
+        612,
+        623,
+        652,
+        712,
+        747,
+        756,
+        766
+      ],
+      "name": "_Match",
+      "target_name": "_Match",
+      "target_start_line": 99
+    },
+    {
+      "lines": [
+        274,
+        294
+      ],
+      "name": "_Match.entry_list",
+      "target_name": "entry_list",
+      "target_start_line": 103
+    },
+    {
+      "lines": [
+        275,
+        290,
+        295
+      ],
+      "name": "_Match.member_name",
+      "target_name": "member_name",
+      "target_start_line": 107
+    },
+    {
+      "lines": [
+        288
+      ],
+      "name": "_Match.is_type_first",
+      "target_name": "is_type_first",
+      "target_start_line": 108
+    },
+    {
+      "lines": [
+        319
+      ],
+      "name": "_ANY_TYPE_SET",
+      "target_name": "_ANY_TYPE_SET",
+      "target_start_line": 28
+    },
+    {
+      "lines": [
+        321
+      ],
+      "name": "_WIDER_TYPE_DICT.get",
+      "target_name": "_WIDER_TYPE_DICT",
+      "target_start_line": 31
+    },
+    {
+      "lines": [
+        375
+      ],
+      "name": "_is_type_fit",
+      "target_name": "_is_type_fit",
+      "target_start_line": 299
+    },
+    {
+      "lines": [
+        397,
+        515
+      ],
+      "name": "file_rel",
+      "target_name": "file_rel",
+      "target_start_line": 60
+    },
+    {
+      "lines": [
+        401,
+        414,
+        441,
+        450,
+        651
+      ],
+      "name": "_LookupStep",
+      "target_name": "_LookupStep",
+      "target_start_line": 91
+    },
+    {
+      "lines": [
+        446
+      ],
+      "name": "_absolute_using",
+      "target_name": "_absolute_using",
+      "target_start_line": 460
+    },
+    {
+      "lines": [
+        482,
+        576
+      ],
+      "name": "_find_type",
+      "target_name": "_find_type",
+      "target_start_line": 222
+    },
+    {
+      "lines": [
+        613,
+        697,
+        845
+      ],
+      "name": "_select_entry_list",
+      "target_name": "_select_entry_list",
+      "target_start_line": 499
+    },
+    {
+      "lines": [
+        638,
+        871
+      ],
+      "name": "_outer_type_list",
+      "target_name": "_outer_type_list",
+      "target_start_line": 488
+    },
+    {
+      "lines": [
+        642,
+        671,
+        677,
+        685,
+        704,
+        751
+      ],
+      "name": "_match_name",
+      "target_name": "_match_name",
+      "target_start_line": 524
+    },
+    {
+      "lines": [
+        671
+      ],
+      "name": "_LookupStep.namespace",
+      "target_name": "namespace",
+      "target_start_line": 95
+    },
+    {
+      "lines": [
+        675,
+        689,
+        702
+      ],
+      "name": "_LookupStep.using_list",
+      "target_name": "using_list",
+      "target_start_line": 96
+    },
+    {
+      "lines": [
+        733,
+        738
+      ],
+      "name": "_match_written",
+      "target_name": "_match_written",
+      "target_start_line": 745
+    },
+    {
+      "lines": [
+        736
+      ],
+      "name": "_ATTRIBUTE_SUFFIX",
+      "target_name": "_ATTRIBUTE_SUFFIX",
+      "target_start_line": 44
+    },
+    {
+      "lines": [
+        752
+      ],
+      "name": "_match_chain",
+      "target_name": "_match_chain",
+      "target_start_line": 764
+    },
+    {
+      "lines": [
+        758,
+        831
+      ],
+      "name": "_step_list",
+      "target_name": "_step_list",
+      "target_start_line": 414
+    },
+    {
+      "lines": [
+        758,
+        831,
+        870
+      ],
+      "name": "_scope_index",
+      "target_name": "_scope_index",
+      "target_start_line": 405
+    },
+    {
+      "lines": [
+        759
+      ],
+      "name": "_match_step",
+      "target_name": "_match_step",
+      "target_start_line": 650
+    },
+    {
+      "lines": [
+        789
+      ],
+      "name": "_match_outer_type",
+      "target_name": "_match_outer_type",
+      "target_start_line": 621
+    },
+    {
+      "lines": [
+        793,
+        795
+      ],
+      "name": "_match_namespace",
+      "target_name": "_match_namespace",
+      "target_start_line": 754
+    },
+    {
+      "lines": [
+        797
+      ],
+      "name": "_is_constructor_match",
+      "target_name": "_is_constructor_match",
+      "target_start_line": 265
+    },
+    {
+      "lines": [
+        797
+      ],
+      "name": "_is_static_name",
+      "target_name": "_is_static_name",
+      "target_start_line": 280
+    },
+    {
+      "lines": [
+        848,
+        877,
+        884,
+        901,
+        917,
+        970
+      ],
+      "name": "CsharpReferenceTarget",
+      "target_name": "CsharpReferenceTarget",
+      "target_start_line": 54
+    },
+    {
+      "lines": [
+        874
+      ],
+      "name": "_match_reference",
+      "target_name": "_match_reference",
+      "target_start_line": 712
+    },
+    {
+      "lines": [
+        886,
+        903
+      ],
+      "name": "_declaration_line",
+      "target_name": "_declaration_line",
+      "target_start_line": 326
+    },
+    {
+      "lines": [
+        908
+      ],
+      "name": "_extension_entry_list",
+      "target_name": "_extension_entry_list",
+      "target_start_line": 802
+    },
+    {
+      "lines": [
+        956,
+        981
+      ],
+      "name": "csharp_target_cache",
+      "target_name": "csharp_target_cache",
+      "target_start_line": 51
+    },
+    {
+      "lines": [
+        961
+      ],
+      "name": "_get_namespace_index",
+      "target_name": "_get_namespace_index",
+      "target_start_line": 200
+    },
+    {
+      "lines": [
+        965
+      ],
+      "name": "_ReferenceResolver",
+      "target_name": "_ReferenceResolver",
+      "target_start_line": 383
+    },
+    {
+      "lines": [
+        973
+      ],
+      "name": "_ReferenceResolver.resolve",
+      "target_name": "resolve",
+      "target_start_line": 848
+    }
+  ],
+  "caller_usages": [
+    {
+      "lines": [
+        363
+      ],
+      "name": "namespace_index_cache.clear",
+      "file": "codetwine/codetwine/extractors/dependency_graph_py/dependency_graph.py",
+      "usage_context": "    # Forget the indexes and the resolved references of an earlier analysis\n    module_tree_cache.clear()\n    file_index_cache.clear()\n    namespace_index_cache.clear()\n    r_name_index_cache.clear()\n    reference_target_cache.clear()\n    csharp_target_cache.clear()"
+    },
+    {
+      "lines": [
+        366
+      ],
+      "name": "csharp_target_cache.clear",
+      "file": "codetwine/codetwine/extractors/dependency_graph_py/dependency_graph.py",
+      "usage_context": "    namespace_index_cache.clear()\n    r_name_index_cache.clear()\n    reference_target_cache.clear()\n    csharp_target_cache.clear()\n    r_target_cache.clear()\n    clear_import_reference_cache()\n    clear_import_binder_cache()"
+    },
+    {
+      "lines": [
+        156,
+        167,
+        281,
+        287
+      ],
+      "name": "CsharpReferenceTarget",
+      "file": "codetwine/codetwine/extractors/usage_analysis_py/usage_analysis.py",
+      "usage_context": "\ndef _name_own_range_function(\n    definition_list: list[DefinitionInfo], root_node: Node | CobolSource,\n) -> Callable[[CsharpReferenceTarget | ImportReferenceTarget], list[tuple[int, int]]]:\n    \"\"\"Return the function giving the lines of the definitions the name of a reference names.\n\n    These are the lines of the member a name with several parts names (Cfg.Max -> Max),\n...\n    range_dict = _definition_range_dict(definition_list)\n\n    def name_range_list(\n        target: CsharpReferenceTarget | ImportReferenceTarget,\n    ) -> list[tuple[int, int]]:\n        \"\"\"Return the lines of the definitions the name of a reference names.\"\"\"\n        part_list = symbol_part_list(target.definition_name)"
+    },
+    {
+      "lines": [
+        290
+      ],
+      "name": "CsharpReferenceTarget.definition_line",
+      "file": "codetwine/codetwine/extractors/usage_analysis_py/usage_analysis.py",
+      "usage_context": "    def csharp_definition(target: CsharpReferenceTarget) -> _TargetDefinition:\n        \"\"\"Return the declaration a C# reference resolves to.\"\"\"\n        return _source_target_definition(\n            target.file_rel, target.definition_name, project_dir, target.definition_line,\n        )\n\n    return csharp_definition"
+    },
+    {
+      "lines": [
+        290
+      ],
+      "name": "CsharpReferenceTarget.definition_name",
+      "file": "codetwine/codetwine/extractors/usage_analysis_py/usage_analysis.py",
+      "usage_context": "    def csharp_definition(target: CsharpReferenceTarget) -> _TargetDefinition:\n        \"\"\"Return the declaration a C# reference resolves to.\"\"\"\n        return _source_target_definition(\n            target.file_rel, target.definition_name, project_dir, target.definition_line,\n        )\n\n    return csharp_definition"
+    },
+    {
+      "lines": [
+        290
+      ],
+      "name": "CsharpReferenceTarget.file_rel",
+      "file": "codetwine/codetwine/extractors/usage_analysis_py/usage_analysis.py",
+      "usage_context": "    def csharp_definition(target: CsharpReferenceTarget) -> _TargetDefinition:\n        \"\"\"Return the declaration a C# reference resolves to.\"\"\"\n        return _source_target_definition(\n            target.file_rel, target.definition_name, project_dir, target.definition_line,\n        )\n\n    return csharp_definition"
+    },
+    {
+      "lines": [
+        341
+      ],
+      "name": "namespace_index_cache.clear",
+      "file": "codetwine/codetwine/pipeline_py/pipeline.py",
+      "usage_context": "    module_tree_cache.clear()\n    file_index_cache.clear()\n    reference_target_cache.clear()\n    namespace_index_cache.clear()\n    csharp_target_cache.clear()\n    r_name_index_cache.clear()\n    r_target_cache.clear()"
+    },
+    {
+      "lines": [
+        342
+      ],
+      "name": "csharp_target_cache.clear",
+      "file": "codetwine/codetwine/pipeline_py/pipeline.py",
+      "usage_context": "    file_index_cache.clear()\n    reference_target_cache.clear()\n    namespace_index_cache.clear()\n    csharp_target_cache.clear()\n    r_name_index_cache.clear()\n    r_target_cache.clear()\n"
+    },
+    {
+      "lines": [
+        11
+      ],
+      "name": "CsharpReferenceTarget",
+      "file": "codetwine/codetwine/reference_target_py/reference_target.py",
+      "usage_context": "\n# A reference of a file resolved to its definition\nReferenceTarget = (\n    CobolReferenceTarget | CsharpReferenceTarget | RReferenceTarget | ImportReferenceTarget\n)\n\n# Reference kind of a language (EXT_TO_REFERENCE_KIND_DICT) -> function that resolves the"
+    },
+    {
+      "lines": [
+        18
+      ],
+      "name": "csharp_reference_target_list",
+      "file": "codetwine/codetwine/reference_target_py/reference_target.py",
+      "usage_context": "# references of a file: (file_rel, project_file_set, project_dir) -> targets\n_TARGET_LIST_FUNCTION_DICT: dict[str, Callable[[str, set[str], str], list]] = {\n    \"cobol\":  cobol_reference_target_list,\n    \"csharp\": csharp_reference_target_list,\n    \"r\":      r_reference_target_list,\n    \"import\": import_reference_target_list,\n}"
+    }
+  ]
+}

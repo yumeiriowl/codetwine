@@ -1,0 +1,88 @@
+{
+  "file": "codetwine/codetwine/parsers/r_markdown_py/r_markdown.py",
+  "language": "py",
+  "detected_encoding": null,
+  "definitions": [
+    {
+      "name": "_CHUNK_START_RE",
+      "type": "expression_statement",
+      "start_line": 5,
+      "end_line": 7,
+      "context": "_CHUNK_START_RE = re.compile(\n    rb\"^(?P<prefix>[ \\t>]*)(?P<fence>`{3,}|~{3,})[ \\t]*\\{[ \\t]*[rR](?:[ \\t,].*)?\\}[ \\t]*\\r?$\"\n)"
+    },
+    {
+      "name": "_CHUNK_END_RE",
+      "type": "expression_statement",
+      "start_line": 10,
+      "end_line": 10,
+      "context": "_CHUNK_END_RE = re.compile(rb\"^[ \\t>]*(?P<fence>`{3,}|~{3,})[ \\t]*\\r?$\")"
+    },
+    {
+      "name": "_QUOTE_PREFIX_RE",
+      "type": "expression_statement",
+      "start_line": 13,
+      "end_line": 13,
+      "context": "_QUOTE_PREFIX_RE = re.compile(rb\"^[ \\t>]*\")"
+    },
+    {
+      "name": "has_r_chunk",
+      "type": "function_definition",
+      "start_line": 16,
+      "end_line": 25,
+      "context": "def has_r_chunk(content: bytes) -> bool:\n    \"\"\"Return whether the text of an R Markdown or Quarto file has an R code chunk.\n\n    Args:\n        content: The file's text as UTF-8 bytes.\n\n    Returns:\n        True when a line of the text starts an R chunk (```{r ...}).\n    \"\"\"\n    return any(_CHUNK_START_RE.match(line) for line in content.split(b\"\\n\"))"
+    },
+    {
+      "name": "r_chunk_code",
+      "type": "function_definition",
+      "start_line": 28,
+      "end_line": 87,
+      "context": "def r_chunk_code(content: bytes, is_chunk_kept: Callable[[bytes], bool] | None = None) -> bytes:\n    \"\"\"Return the text of an R Markdown or Quarto file with only its R code chunks kept.\n\n    A chunk starts at a fence line of three or more backticks or tildes followed by\n    {r ...} and ends at the next line of the same fence character, at least as many of\n    them, alone. Every byte outside the chunks, and the fence lines themselves, becomes\n    a space; line breaks stay. In a chunk whose fence line starts with blockquote marks\n    (> ```{r}), the marks before the code of each line become spaces as well. The\n    result has the length and the lines of content, so a position in it is the same\n    position in the file.\n\n    Examples:\n        b\"# Title\\\\n```{r}\\\\nx <- 1\\\\n```\\\\n\"   -> b\"       \\\\n      \\\\nx <- 1\\\\n   \\\\n\"\n        b\"> ```{r}\\\\n> x <- 1\\\\n> ```\\\\n\"         -> b\"        \\\\n  x <- 1\\\\n     \\\\n\"\n\n    Args:\n        content: The file's text as UTF-8 bytes.\n        is_chunk_kept: Called with the code of each chunk; a chunk it returns False for\n            is blanked like the text outside the chunks. None keeps every chunk.\n\n    Returns:\n        The bytes with everything but the code of the R chunks blanked. A chunk without\n        an end line runs to the end of the file. Chunks of other languages ({python})\n        are blanked.\n    \"\"\"\n    code_line_list: list[bytes] = []\n    chunk_start: int | None = None\n    fence: bytes | None = None\n    is_quote = False\n\n    def close_chunk() -> None:\n        \"\"\"Blank the lines of the chunk that ends here when is_chunk_kept rejects its code.\"\"\"\n        chunk_line_list = code_line_list[chunk_start:]\n        if is_chunk_kept is not None and not is_chunk_kept(b\"\\n\".join(chunk_line_list)):\n            code_line_list[chunk_start:] = [b\" \" * len(line) for line in chunk_line_list]\n\n    for line in content.split(b\"\\n\"):\n        if fence is None:\n            start_match = _CHUNK_START_RE.match(line)\n            if start_match:\n                fence = start_match.group(\"fence\")\n                is_quote = b\">\" in start_match.group(\"prefix\")\n                chunk_start = len(code_line_list) + 1\n            code_line_list.append(b\" \" * len(line))\n            continue\n\n        end_match = _CHUNK_END_RE.match(line)\n        end_fence = end_match.group(\"fence\") if end_match else b\"\"\n        if end_fence[:1] == fence[:1] and len(end_fence) >= len(fence):\n            close_chunk()\n            fence = None\n            code_line_list.append(b\" \" * len(line))\n            continue\n        if is_quote:\n            prefix_length = _QUOTE_PREFIX_RE.match(line).end()\n            line = b\" \" * prefix_length + line[prefix_length:]\n        code_line_list.append(line)\n    if fence is not None:\n        close_chunk()\n    return b\"\\n\".join(code_line_list)"
+    }
+  ],
+  "callee_usages": [],
+  "same_file_usages": [
+    {
+      "lines": [
+        25,
+        66
+      ],
+      "name": "_CHUNK_START_RE.match",
+      "target_name": "_CHUNK_START_RE",
+      "target_start_line": 5
+    },
+    {
+      "lines": [
+        74
+      ],
+      "name": "_CHUNK_END_RE.match",
+      "target_name": "_CHUNK_END_RE",
+      "target_start_line": 10
+    },
+    {
+      "lines": [
+        82
+      ],
+      "name": "_QUOTE_PREFIX_RE.match",
+      "target_name": "_QUOTE_PREFIX_RE",
+      "target_start_line": 13
+    }
+  ],
+  "caller_usages": [
+    {
+      "lines": [
+        151
+      ],
+      "name": "has_r_chunk",
+      "file": "codetwine/codetwine/extractors/dependency_graph_py/dependency_graph.py",
+      "usage_context": "            content = lone_cr_to_lf(read_source(file_path)[0]).encode(\"utf-8\")\n        except OSError:\n            continue\n        if not has_r_chunk(content):\n            document_list.append(_to_rel(file_path, project_dir))\n    return document_list\n"
+    },
+    {
+      "lines": [
+        222
+      ],
+      "name": "r_chunk_code",
+      "file": "codetwine/codetwine/parsers/ts_parser_py/ts_parser.py",
+      "usage_context": "        # Parse the R code chunks of the document, everything else blanked; a chunk\n        # whose code runs on past its end is blanked as well\n        language = EXT_TO_LANGUAGE_DICT[ext]\n        chunk_code = r_chunk_code(content, lambda code: _is_whole_code(code, language))\n        tree = Parser(language).parse(chunk_code)\n        parse_result = (tree.root_node, content)\n    elif ext in C_FAMILY_EXT_SET:"
+    }
+  ]
+}

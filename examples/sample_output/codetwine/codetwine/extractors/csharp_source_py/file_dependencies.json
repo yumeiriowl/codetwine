@@ -1,0 +1,2014 @@
+{
+  "file": "codetwine/codetwine/extractors/csharp_source_py/csharp_source.py",
+  "language": "py",
+  "detected_encoding": null,
+  "definitions": [
+    {
+      "name": "NAMESPACE_USING",
+      "type": "expression_statement",
+      "start_line": 7,
+      "end_line": 7,
+      "context": "NAMESPACE_USING = \"namespace\"   # using A.B;"
+    },
+    {
+      "name": "STATIC_USING",
+      "type": "expression_statement",
+      "start_line": 8,
+      "end_line": 8,
+      "context": "STATIC_USING = \"static\"         # using static A.B.Type;"
+    },
+    {
+      "name": "ALIAS_USING",
+      "type": "expression_statement",
+      "start_line": 9,
+      "end_line": 9,
+      "context": "ALIAS_USING = \"alias\"           # using Name = A.B.Type;"
+    },
+    {
+      "name": "NAME_REFERENCE",
+      "type": "expression_statement",
+      "start_line": 12,
+      "end_line": 12,
+      "context": "NAME_REFERENCE = \"name\"             # a name chain in an expression (Helper.Make, order)"
+    },
+    {
+      "name": "TYPE_REFERENCE",
+      "type": "expression_statement",
+      "start_line": 13,
+      "end_line": 13,
+      "context": "TYPE_REFERENCE = \"type\"             # a name chain written where a type is (Order, Models.Customer)"
+    },
+    {
+      "name": "ATTRIBUTE_REFERENCE",
+      "type": "expression_statement",
+      "start_line": 14,
+      "end_line": 14,
+      "context": "ATTRIBUTE_REFERENCE = \"attribute\"   # the name of an attribute ([Route] -> Route)"
+    },
+    {
+      "name": "THIS_REFERENCE",
+      "type": "expression_statement",
+      "start_line": 15,
+      "end_line": 15,
+      "context": "THIS_REFERENCE = \"this\"             # a name chain after \"this.\" (this.list -> list)"
+    },
+    {
+      "name": "MEMBER_REFERENCE",
+      "type": "expression_statement",
+      "start_line": 16,
+      "end_line": 16,
+      "context": "MEMBER_REFERENCE = \"member\"         # the name of a method called on a value (a.b().Run() -> Run)"
+    },
+    {
+      "name": "_TYPE_DECLARATION_TYPE_SET",
+      "type": "expression_statement",
+      "start_line": 19,
+      "end_line": 26,
+      "context": "_TYPE_DECLARATION_TYPE_SET = {\n    \"class_declaration\",\n    \"struct_declaration\",\n    \"interface_declaration\",\n    \"enum_declaration\",\n    \"record_declaration\",\n    \"delegate_declaration\",\n}"
+    },
+    {
+      "name": "_NAMESPACE_TYPE_SET",
+      "type": "expression_statement",
+      "start_line": 29,
+      "end_line": 29,
+      "context": "_NAMESPACE_TYPE_SET = {\"namespace_declaration\", \"file_scoped_namespace_declaration\"}"
+    },
+    {
+      "name": "_PASS_NODE_TYPE_SET",
+      "type": "expression_statement",
+      "start_line": 32,
+      "end_line": 34,
+      "context": "_PASS_NODE_TYPE_SET = {\n    \"preproc_if\", \"preproc_elif\", \"preproc_else\", \"declaration_list\", \"ERROR\",\n}"
+    },
+    {
+      "name": "_CHAIN_NODE_TYPE_SET",
+      "type": "expression_statement",
+      "start_line": 37,
+      "end_line": 40,
+      "context": "_CHAIN_NODE_TYPE_SET = {\n    \"identifier\", \"generic_name\", \"qualified_name\", \"alias_qualified_name\",\n    \"member_access_expression\",\n}"
+    },
+    {
+      "name": "_TYPE_FIELD_NAME_SET",
+      "type": "expression_statement",
+      "start_line": 43,
+      "end_line": 43,
+      "context": "_TYPE_FIELD_NAME_SET = {\"type\", \"returns\"}"
+    },
+    {
+      "name": "_TYPE_PARENT_TYPE_SET",
+      "type": "expression_statement",
+      "start_line": 46,
+      "end_line": 46,
+      "context": "_TYPE_PARENT_TYPE_SET = {\"base_list\", \"type_argument_list\", \"explicit_interface_specifier\"}"
+    },
+    {
+      "name": "_TYPE_RIGHT_PARENT_TYPE_SET",
+      "type": "expression_statement",
+      "start_line": 49,
+      "end_line": 49,
+      "context": "_TYPE_RIGHT_PARENT_TYPE_SET = {\"as_expression\", \"is_expression\"}"
+    },
+    {
+      "name": "_LABEL_PARENT_TYPE_SET",
+      "type": "expression_statement",
+      "start_line": 52,
+      "end_line": 52,
+      "context": "_LABEL_PARENT_TYPE_SET = {\"labeled_statement\", \"goto_statement\"}"
+    },
+    {
+      "name": "_MEMBER_NAME_TOKEN_DICT",
+      "type": "expression_statement",
+      "start_line": 56,
+      "end_line": 60,
+      "context": "_MEMBER_NAME_TOKEN_DICT = {\n    \"anonymous_object_creation_expression\": \"=\",\n    \"with_initializer\": \"=\",\n    \"subpattern\": \":\",\n}"
+    },
+    {
+      "name": "_STATIC_MODIFIER_TUPLE",
+      "type": "expression_statement",
+      "start_line": 63,
+      "end_line": 63,
+      "context": "_STATIC_MODIFIER_TUPLE = (\"static\", \"const\")"
+    },
+    {
+      "name": "_PREPROC_PREFIX",
+      "type": "expression_statement",
+      "start_line": 66,
+      "end_line": 66,
+      "context": "_PREPROC_PREFIX = \"preproc_\""
+    },
+    {
+      "name": "_PREPROC_CODE_TYPE_SET",
+      "type": "expression_statement",
+      "start_line": 69,
+      "end_line": 69,
+      "context": "_PREPROC_CODE_TYPE_SET = {\"preproc_if\", \"preproc_elif\", \"preproc_else\"}"
+    },
+    {
+      "name": "CsharpUsing",
+      "type": "class_definition",
+      "start_line": 72,
+      "end_line": 80,
+      "context": "@dataclass\nclass CsharpUsing:\n    \"\"\"One using directive.\"\"\"\n\n    kind: str                     # NAMESPACE_USING / STATIC_USING / ALIAS_USING\n    part_tuple: tuple[str, ...]   # Parts of the namespace or type name (A.B.Type -> A, B, Type)\n    alias: str = \"\"               # Name of an ALIAS_USING; \"\" for the other kinds\n    is_global: bool = False       # Whether the directive is written with \"global\"\n    arity: int = 0                # Number of type arguments of the last part (A.Result<int> -> 1)"
+    },
+    {
+      "name": "kind",
+      "type": "expression_statement",
+      "start_line": 76,
+      "end_line": 76,
+      "context": "    kind: str                     # NAMESPACE_USING / STATIC_USING / ALIAS_USING"
+    },
+    {
+      "name": "part_tuple",
+      "type": "expression_statement",
+      "start_line": 77,
+      "end_line": 77,
+      "context": "    part_tuple: tuple[str, ...]   # Parts of the namespace or type name (A.B.Type -> A, B, Type)"
+    },
+    {
+      "name": "alias",
+      "type": "expression_statement",
+      "start_line": 78,
+      "end_line": 78,
+      "context": "    alias: str = \"\"               # Name of an ALIAS_USING; \"\" for the other kinds"
+    },
+    {
+      "name": "is_global",
+      "type": "expression_statement",
+      "start_line": 79,
+      "end_line": 79,
+      "context": "    is_global: bool = False       # Whether the directive is written with \"global\""
+    },
+    {
+      "name": "arity",
+      "type": "expression_statement",
+      "start_line": 80,
+      "end_line": 80,
+      "context": "    arity: int = 0                # Number of type arguments of the last part (A.Result<int> -> 1)"
+    },
+    {
+      "name": "CsharpScope",
+      "type": "class_definition",
+      "start_line": 83,
+      "end_line": 91,
+      "context": "@dataclass\nclass CsharpScope:\n    \"\"\"A place using directives are written in: the file, or one namespace declaration.\"\"\"\n\n    namespace: str      # Full name of the namespace; \"\" for the file\n    start_line: int     # First line (1-based)\n    end_line: int       # Last line\n    depth: int          # Number of scopes around it\n    using_list: list[CsharpUsing] = field(default_factory=list)"
+    },
+    {
+      "name": "namespace",
+      "type": "expression_statement",
+      "start_line": 87,
+      "end_line": 87,
+      "context": "    namespace: str      # Full name of the namespace; \"\" for the file"
+    },
+    {
+      "name": "start_line",
+      "type": "expression_statement",
+      "start_line": 88,
+      "end_line": 88,
+      "context": "    start_line: int     # First line (1-based)"
+    },
+    {
+      "name": "end_line",
+      "type": "expression_statement",
+      "start_line": 89,
+      "end_line": 89,
+      "context": "    end_line: int       # Last line"
+    },
+    {
+      "name": "depth",
+      "type": "expression_statement",
+      "start_line": 90,
+      "end_line": 90,
+      "context": "    depth: int          # Number of scopes around it"
+    },
+    {
+      "name": "using_list",
+      "type": "expression_statement",
+      "start_line": 91,
+      "end_line": 91,
+      "context": "    using_list: list[CsharpUsing] = field(default_factory=list)"
+    },
+    {
+      "name": "CsharpMember",
+      "type": "class_definition",
+      "start_line": 94,
+      "end_line": 108,
+      "context": "@dataclass\nclass CsharpMember:\n    \"\"\"One declaration of a member of a type.\"\"\"\n\n    start_line: int     # First line (1-based)\n    # Whether the member is named through the type: a static or const member, an enum member\n    is_static: bool = False\n    # (least, most) number of arguments a call of a method takes; most is None for a\n    # declaration with \"params\"; None for a member that is not a method\n    argument_range: tuple[int, int | None] | None = None\n    is_extension: bool = False  # Whether the first parameter is written with \"this\"\n    is_constructor: bool = False  # Whether the declaration is a constructor\n    # Type name of each parameter of a method (type_name); None for a type parameter and\n    # for a type without a name. Empty for a member that is not a method\n    parameter_type_tuple: tuple[str | None, ...] = ()"
+    },
+    {
+      "name": "start_line",
+      "type": "expression_statement",
+      "start_line": 98,
+      "end_line": 98,
+      "context": "    start_line: int     # First line (1-based)"
+    },
+    {
+      "name": "is_static",
+      "type": "expression_statement",
+      "start_line": 100,
+      "end_line": 100,
+      "context": "    is_static: bool = False"
+    },
+    {
+      "name": "argument_range",
+      "type": "expression_statement",
+      "start_line": 103,
+      "end_line": 103,
+      "context": "    argument_range: tuple[int, int | None] | None = None"
+    },
+    {
+      "name": "is_extension",
+      "type": "expression_statement",
+      "start_line": 104,
+      "end_line": 104,
+      "context": "    is_extension: bool = False  # Whether the first parameter is written with \"this\""
+    },
+    {
+      "name": "is_constructor",
+      "type": "expression_statement",
+      "start_line": 105,
+      "end_line": 105,
+      "context": "    is_constructor: bool = False  # Whether the declaration is a constructor"
+    },
+    {
+      "name": "parameter_type_tuple",
+      "type": "expression_statement",
+      "start_line": 108,
+      "end_line": 108,
+      "context": "    parameter_type_tuple: tuple[str | None, ...] = ()"
+    },
+    {
+      "name": "CsharpType",
+      "type": "class_definition",
+      "start_line": 111,
+      "end_line": 127,
+      "context": "@dataclass\nclass CsharpType:\n    \"\"\"One type declaration.\"\"\"\n\n    namespace: str      # Full name of the namespace the type is in; \"\" for none\n    path: str           # Name of the type, after the names of the types around it (Outer.Inner)\n    arity: int          # Number of type parameters\n    start_line: int     # First line (1-based)\n    end_line: int       # Last line\n    # Names of the definitions written in the body, types included\n    member_name_set: set[str] = field(default_factory=set)\n    # Name of a member that is not a type -> its declarations in line order\n    member_list_dict: dict[str, list[CsharpMember]] = field(default_factory=dict)\n    # Name of a method whose first parameter is written with \"this\" -> (least, most)\n    # number of arguments a call of each declaration of it takes, without the one\n    # \"this\" stands for; most is None for a declaration with \"params\"\n    extension_dict: dict[str, list[tuple[int, int | None]]] = field(default_factory=dict)"
+    },
+    {
+      "name": "namespace",
+      "type": "expression_statement",
+      "start_line": 115,
+      "end_line": 115,
+      "context": "    namespace: str      # Full name of the namespace the type is in; \"\" for none"
+    },
+    {
+      "name": "path",
+      "type": "expression_statement",
+      "start_line": 116,
+      "end_line": 116,
+      "context": "    path: str           # Name of the type, after the names of the types around it (Outer.Inner)"
+    },
+    {
+      "name": "arity",
+      "type": "expression_statement",
+      "start_line": 117,
+      "end_line": 117,
+      "context": "    arity: int          # Number of type parameters"
+    },
+    {
+      "name": "start_line",
+      "type": "expression_statement",
+      "start_line": 118,
+      "end_line": 118,
+      "context": "    start_line: int     # First line (1-based)"
+    },
+    {
+      "name": "end_line",
+      "type": "expression_statement",
+      "start_line": 119,
+      "end_line": 119,
+      "context": "    end_line: int       # Last line"
+    },
+    {
+      "name": "member_name_set",
+      "type": "expression_statement",
+      "start_line": 121,
+      "end_line": 121,
+      "context": "    member_name_set: set[str] = field(default_factory=set)"
+    },
+    {
+      "name": "member_list_dict",
+      "type": "expression_statement",
+      "start_line": 123,
+      "end_line": 123,
+      "context": "    member_list_dict: dict[str, list[CsharpMember]] = field(default_factory=dict)"
+    },
+    {
+      "name": "extension_dict",
+      "type": "expression_statement",
+      "start_line": 127,
+      "end_line": 127,
+      "context": "    extension_dict: dict[str, list[tuple[int, int | None]]] = field(default_factory=dict)"
+    },
+    {
+      "name": "CsharpDeclaration",
+      "type": "class_definition",
+      "start_line": 130,
+      "end_line": 137,
+      "context": "@dataclass\nclass CsharpDeclaration:\n    \"\"\"The namespaces, using directives and types of one C# file.\"\"\"\n\n    # The file itself, then each namespace declaration in line order\n    scope_list: list[CsharpScope] = field(default_factory=list)\n    # Type declarations in line order\n    type_list: list[CsharpType] = field(default_factory=list)"
+    },
+    {
+      "name": "scope_list",
+      "type": "expression_statement",
+      "start_line": 135,
+      "end_line": 135,
+      "context": "    scope_list: list[CsharpScope] = field(default_factory=list)"
+    },
+    {
+      "name": "type_list",
+      "type": "expression_statement",
+      "start_line": 137,
+      "end_line": 137,
+      "context": "    type_list: list[CsharpType] = field(default_factory=list)"
+    },
+    {
+      "name": "_LOCAL_SCOPE_TYPE_SET",
+      "type": "expression_statement",
+      "start_line": 141,
+      "end_line": 146,
+      "context": "_LOCAL_SCOPE_TYPE_SET = {\n    \"method_declaration\", \"constructor_declaration\", \"destructor_declaration\",\n    \"operator_declaration\", \"conversion_operator_declaration\", \"indexer_declaration\",\n    \"accessor_declaration\", \"local_function_statement\", \"lambda_expression\",\n    \"anonymous_method_expression\",\n}"
+    },
+    {
+      "name": "_TYPE_BODY_TYPE_SET",
+      "type": "expression_statement",
+      "start_line": 149,
+      "end_line": 149,
+      "context": "_TYPE_BODY_TYPE_SET = {\"declaration_list\"}"
+    },
+    {
+      "name": "_LITERAL_TYPE_DICT",
+      "type": "expression_statement",
+      "start_line": 152,
+      "end_line": 156,
+      "context": "_LITERAL_TYPE_DICT = {\n    \"string_literal\": \"string\", \"verbatim_string_literal\": \"string\",\n    \"raw_string_literal\": \"string\", \"interpolated_string_expression\": \"string\",\n    \"character_literal\": \"char\", \"boolean_literal\": \"bool\",\n}"
+    },
+    {
+      "name": "_NUMBER_SUFFIX_TYPE_DICT",
+      "type": "expression_statement",
+      "start_line": 159,
+      "end_line": 162,
+      "context": "_NUMBER_SUFFIX_TYPE_DICT = {\n    \"l\": \"long\", \"u\": \"uint\", \"ul\": \"ulong\", \"lu\": \"ulong\",\n    \"f\": \"float\", \"d\": \"double\", \"m\": \"decimal\",\n}"
+    },
+    {
+      "name": "_LOCAL_DECLARE_TYPE_SET",
+      "type": "expression_statement",
+      "start_line": 165,
+      "end_line": 169,
+      "context": "_LOCAL_DECLARE_TYPE_SET = {\n    \"parameter\", \"variable_declarator\", \"catch_declaration\", \"declaration_pattern\",\n    \"declaration_expression\", \"local_function_statement\", \"from_clause\", \"join_clause\",\n    \"tuple_pattern\",\n}"
+    },
+    {
+      "name": "CsharpReference",
+      "type": "class_definition",
+      "start_line": 172,
+      "end_line": 185,
+      "context": "@dataclass(frozen=True)\nclass CsharpReference:\n    \"\"\"One name chain of a C# file that is not the name of a declaration.\"\"\"\n\n    kind: str                       # NAME_REFERENCE / TYPE_REFERENCE / ...\n    part_tuple: tuple[str, ...]     # Names of the chain (Helper.Make<T> -> Helper, Make)\n    arity_tuple: tuple[int, ...]    # Number of type arguments of each name\n    line: int                       # Line the chain starts on (1-based)\n    is_call: bool = False           # Whether the chain is what an invocation calls\n    is_absolute: bool = False       # Whether the chain starts with \"global::\"\n    argument_count: int = 0         # Number of arguments of the invocation; 0 without is_call\n    # Type name of each argument of the invocation where the file tells it\n    # (argument_type), None where it does not\n    argument_type_tuple: tuple[str | None, ...] = ()"
+    },
+    {
+      "name": "kind",
+      "type": "expression_statement",
+      "start_line": 176,
+      "end_line": 176,
+      "context": "    kind: str                       # NAME_REFERENCE / TYPE_REFERENCE / ..."
+    },
+    {
+      "name": "part_tuple",
+      "type": "expression_statement",
+      "start_line": 177,
+      "end_line": 177,
+      "context": "    part_tuple: tuple[str, ...]     # Names of the chain (Helper.Make<T> -> Helper, Make)"
+    },
+    {
+      "name": "arity_tuple",
+      "type": "expression_statement",
+      "start_line": 178,
+      "end_line": 178,
+      "context": "    arity_tuple: tuple[int, ...]    # Number of type arguments of each name"
+    },
+    {
+      "name": "line",
+      "type": "expression_statement",
+      "start_line": 179,
+      "end_line": 179,
+      "context": "    line: int                       # Line the chain starts on (1-based)"
+    },
+    {
+      "name": "is_call",
+      "type": "expression_statement",
+      "start_line": 180,
+      "end_line": 180,
+      "context": "    is_call: bool = False           # Whether the chain is what an invocation calls"
+    },
+    {
+      "name": "is_absolute",
+      "type": "expression_statement",
+      "start_line": 181,
+      "end_line": 181,
+      "context": "    is_absolute: bool = False       # Whether the chain starts with \"global::\""
+    },
+    {
+      "name": "argument_count",
+      "type": "expression_statement",
+      "start_line": 182,
+      "end_line": 182,
+      "context": "    argument_count: int = 0         # Number of arguments of the invocation; 0 without is_call"
+    },
+    {
+      "name": "argument_type_tuple",
+      "type": "expression_statement",
+      "start_line": 185,
+      "end_line": 185,
+      "context": "    argument_type_tuple: tuple[str | None, ...] = ()"
+    },
+    {
+      "name": "_Chain",
+      "type": "class_definition",
+      "start_line": 188,
+      "end_line": 199,
+      "context": "@dataclass\nclass _Chain:\n    \"\"\"A name chain read from the tree.\"\"\"\n\n    part_list: list[str] = field(default_factory=list)\n    arity_list: list[int] = field(default_factory=list)\n    # What the chain is written after: \"\" (nothing), \"this\", \"base\", \"global\",\n    # \"builtin\" (a type written with a keyword: string, int), or \"value\" (any other\n    # expression that is not a name chain)\n    head: str = \"\"\n    # Nodes inside the chain that hold references of their own\n    inner_node_list: list[Node] = field(default_factory=list)"
+    },
+    {
+      "name": "part_list",
+      "type": "expression_statement",
+      "start_line": 192,
+      "end_line": 192,
+      "context": "    part_list: list[str] = field(default_factory=list)"
+    },
+    {
+      "name": "arity_list",
+      "type": "expression_statement",
+      "start_line": 193,
+      "end_line": 193,
+      "context": "    arity_list: list[int] = field(default_factory=list)"
+    },
+    {
+      "name": "head",
+      "type": "expression_statement",
+      "start_line": 197,
+      "end_line": 197,
+      "context": "    head: str = \"\""
+    },
+    {
+      "name": "inner_node_list",
+      "type": "expression_statement",
+      "start_line": 199,
+      "end_line": 199,
+      "context": "    inner_node_list: list[Node] = field(default_factory=list)"
+    },
+    {
+      "name": "_node_text",
+      "type": "function_definition",
+      "start_line": 202,
+      "end_line": 204,
+      "context": "def _node_text(node: Node) -> str:\n    \"\"\"Return the text of a name node without the verbatim prefix (@class -> class).\"\"\"\n    return node.text.decode(\"utf-8\").removeprefix(\"@\")"
+    },
+    {
+      "name": "_root_node",
+      "type": "function_definition",
+      "start_line": 207,
+      "end_line": 211,
+      "context": "def _root_node(node: Node) -> Node:\n    \"\"\"Return the root node of the tree a node is in.\"\"\"\n    while node.parent is not None:\n        node = node.parent\n    return node"
+    },
+    {
+      "name": "_has_modifier",
+      "type": "function_definition",
+      "start_line": 214,
+      "end_line": 219,
+      "context": "def _has_modifier(node: Node, modifier: str) -> bool:\n    \"\"\"Return whether a declaration or parameter node is written with a modifier.\"\"\"\n    return any(\n        child.type == \"modifier\" and child.text.decode(\"utf-8\") == modifier\n        for child in node.children\n    )"
+    },
+    {
+      "name": "_type_parameter_name_list",
+      "type": "function_definition",
+      "start_line": 222,
+      "end_line": 235,
+      "context": "def _type_parameter_name_list(node: Node) -> list[str]:\n    \"\"\"Return the names of the type parameters a declaration node declares.\"\"\"\n    type_parameter_list = next(\n        (child for child in node.children if child.type == \"type_parameter_list\"), None,\n    )\n    if type_parameter_list is None:\n        return []\n    name_list: list[str] = []\n    for child in type_parameter_list.children:\n        if child.type == \"type_parameter\":\n            name_node = child.child_by_field_name(\"name\")\n            if name_node is not None:\n                name_list.append(_node_text(name_node))\n    return name_list"
+    },
+    {
+      "name": "_local_name_list",
+      "type": "function_definition",
+      "start_line": 238,
+      "end_line": 273,
+      "context": "def _local_name_list(node: Node) -> list[str]:\n    \"\"\"Return the names declared inside a method, accessor, local function or lambda.\n\n    These are its parameters, local variables, loop and catch variables, pattern and\n    out variables, local functions, and the range variables of a query.\n\n    Args:\n        node: A node whose type is in _LOCAL_SCOPE_TYPE_SET.\n\n    Returns:\n        The names, those of the lambdas and local functions inside it included.\n    \"\"\"\n    name_list: list[str] = []\n    node_stack = [node]\n    while node_stack:\n        current = node_stack.pop()\n        if current.type in _LOCAL_DECLARE_TYPE_SET and current is not node:\n            name_list.extend(\n                _node_text(name_node)\n                for name_node in current.children_by_field_name(\"name\")\n                if name_node.type == \"identifier\"\n            )\n        elif current.type == \"implicit_parameter\":\n            name_list.append(_node_text(current))\n        elif current.type == \"foreach_statement\":\n            left_node = current.child_by_field_name(\"left\")\n            if left_node is not None and left_node.type == \"identifier\":\n                name_list.append(_node_text(left_node))\n        elif current.type == \"let_clause\":\n            name_node = next(\n                (child for child in current.children if child.type == \"identifier\"), None,\n            )\n            if name_node is not None:\n                name_list.append(_node_text(name_node))\n        node_stack.extend(current.children)\n    return name_list"
+    },
+    {
+      "name": "_type_argument_count",
+      "type": "function_definition",
+      "start_line": 276,
+      "end_line": 284,
+      "context": "def _type_argument_count(node: Node) -> int:\n    \"\"\"Return the number of type arguments of a type_argument_list node.\n\n    Examples:\n        <Order>      -> 1\n        <string, T>  -> 2\n        <,>          -> 2\n    \"\"\"\n    return sum(1 for child in node.children if child.type == \",\") + 1"
+    },
+    {
+      "name": "_read_chain",
+      "type": "function_definition",
+      "start_line": 287,
+      "end_line": 347,
+      "context": "def _read_chain(node: Node) -> _Chain:\n    \"\"\"Read a name chain node into its names.\n\n    Examples:\n        Helper.Make<Order>          -> parts Helper, Make; arities 0, 1\n        global::App.Util.Run        -> head \"global\"; parts App, Util, Run\n        this.list.Count             -> head \"this\"; parts list, Count\n        repo.Find(id).Total         -> head \"value\"; parts Total\n\n    Args:\n        node: A node whose type is in _CHAIN_NODE_TYPE_SET.\n\n    Returns:\n        The _Chain. The type argument lists of the chain, and the expression a chain\n        with the head \"value\" is written after, are in inner_node_list.\n    \"\"\"\n    chain = _Chain()\n    if node.type == \"identifier\":\n        chain.part_list.append(_node_text(node))\n        chain.arity_list.append(0)\n    elif node.type == \"generic_name\":\n        for child in node.children:\n            if child.type == \"identifier\":\n                chain.part_list.append(_node_text(child))\n            elif child.type == \"type_argument_list\":\n                chain.arity_list.append(_type_argument_count(child))\n                chain.inner_node_list.append(child)\n        if len(chain.arity_list) < len(chain.part_list):\n            chain.arity_list.append(0)\n    elif node.type == \"alias_qualified_name\":\n        alias_node = node.child_by_field_name(\"alias\")\n        name_node = node.child_by_field_name(\"name\")\n        if alias_node is not None and _node_text(alias_node) == \"global\":\n            chain.head = \"global\"\n        elif alias_node is not None:\n            chain.part_list.append(_node_text(alias_node))\n            chain.arity_list.append(0)\n        if name_node is not None:\n            _append_chain(chain, _read_chain(name_node))\n    elif node.type == \"qualified_name\":\n        for field_name in (\"qualifier\", \"name\"):\n            part_node = node.child_by_field_name(field_name)\n            if part_node is not None and part_node.type in _CHAIN_NODE_TYPE_SET:\n                _append_chain(chain, _read_chain(part_node))\n    elif node.type == \"member_access_expression\":\n        expression_node = node.child_by_field_name(\"expression\")\n        name_node = node.child_by_field_name(\"name\")\n        if expression_node is None:\n            chain.head = \"value\"\n        elif expression_node.type in (\"this\", \"base\"):\n            chain.head = expression_node.type\n        elif expression_node.type == \"predefined_type\":\n            chain.head = \"builtin\"\n        elif expression_node.type in _CHAIN_NODE_TYPE_SET:\n            _append_chain(chain, _read_chain(expression_node))\n        else:\n            chain.head = \"value\"\n            chain.inner_node_list.append(expression_node)\n        if name_node is not None and name_node.type in _CHAIN_NODE_TYPE_SET:\n            _append_chain(chain, _read_chain(name_node))\n    return chain"
+    },
+    {
+      "name": "_append_chain",
+      "type": "function_definition",
+      "start_line": 350,
+      "end_line": 356,
+      "context": "def _append_chain(chain: _Chain, part_chain: _Chain) -> None:\n    \"\"\"Add the names of a part of a chain to the chain; the head of the first part is kept.\"\"\"\n    if not chain.part_list and not chain.head:\n        chain.head = part_chain.head\n    chain.part_list.extend(part_chain.part_list)\n    chain.arity_list.extend(part_chain.arity_list)\n    chain.inner_node_list.extend(part_chain.inner_node_list)"
+    },
+    {
+      "name": "_using_directive",
+      "type": "function_definition",
+      "start_line": 359,
+      "end_line": 403,
+      "context": "def _using_directive(node: Node) -> CsharpUsing | None:\n    \"\"\"Read a using_directive node.\n\n    Examples:\n        using System.Text;                  -> NAMESPACE_USING, (System, Text)\n        global using static App.MathEx;     -> STATIC_USING, (App, MathEx), is_global\n        using Json = App.Text.Serializer;   -> ALIAS_USING, (App, Text, Serializer), alias Json\n        using Ints = App.Result<int>;       -> ALIAS_USING, (App, Result), alias Ints, arity 1\n\n    Args:\n        node: A using_directive node.\n\n    Returns:\n        The CsharpUsing. None when the directive names no namespace or type by a name\n        chain (a tuple type, an array type, etc.).\n    \"\"\"\n    alias_node = node.child_by_field_name(\"name\")\n    target_node = next(\n        (\n            child for child in node.children\n            if child.type in _CHAIN_NODE_TYPE_SET\n            and (alias_node is None or child.id != alias_node.id)\n        ),\n        None,\n    )\n    if target_node is None:\n        return None\n    chain = _read_chain(target_node)\n    if not chain.part_list or chain.head not in (\"\", \"global\"):\n        return None\n\n    child_type_set = {child.type for child in node.children}\n    if alias_node is not None:\n        kind = ALIAS_USING\n    elif \"static\" in child_type_set:\n        kind = STATIC_USING\n    else:\n        kind = NAMESPACE_USING\n    return CsharpUsing(\n        kind=kind,\n        part_tuple=tuple(chain.part_list),\n        alias=_node_text(alias_node) if alias_node is not None else \"\",\n        is_global=\"global\" in child_type_set,\n        arity=chain.arity_list[-1],\n    )"
+    },
+    {
+      "name": "join_name",
+      "type": "function_definition",
+      "start_line": 406,
+      "end_line": 413,
+      "context": "def join_name(*part_tuple: str) -> str:\n    \"\"\"Join the parts of a dotted name, leaving out the empty ones.\n\n    Examples:\n        (\"App.Models\", \"Customer\")  -> \"App.Models.Customer\"\n        (\"\", \"Customer\")            -> \"Customer\"\n    \"\"\"\n    return \".\".join(part for part in part_tuple if part)"
+    },
+    {
+      "name": "type_name",
+      "type": "function_definition",
+      "start_line": 416,
+      "end_line": 444,
+      "context": "def type_name(type_node: Node | None) -> str | None:\n    \"\"\"Return the name a type is compared by: its last name, without type arguments.\n\n    Examples:\n        int               -> \"int\"\n        int?              -> \"int\"\n        List<Customer>    -> \"List\"\n        App.Models.Order  -> \"Order\"\n        string[]          -> None\n\n    Args:\n        type_node: A type node, or None.\n\n    Returns:\n        The name; None for an array, a tuple, a pointer, \"var\" and no node.\n    \"\"\"\n    current = type_node\n    while current is not None:\n        if current.type in (\"predefined_type\", \"identifier\"):\n            return current.text.decode(\"utf-8\")\n        if current.type == \"nullable_type\":\n            current = current.child_by_field_name(\"type\")\n        elif current.type == \"generic_name\":\n            current = next(iter(current.named_children), None)\n        elif current.type == \"qualified_name\":\n            current = current.child_by_field_name(\"name\")\n        else:\n            return None\n    return None"
+    },
+    {
+      "name": "_type_parameter_name_set",
+      "type": "function_definition",
+      "start_line": 447,
+      "end_line": 459,
+      "context": "def _type_parameter_name_set(node: Node) -> set[str]:\n    \"\"\"Return the names of the type parameters a declaration and the types around it declare.\"\"\"\n    name_set: set[str] = set()\n    current: Node | None = node\n    while current is not None:\n        parameter_list = current.child_by_field_name(\"type_parameters\")\n        if parameter_list is not None:\n            for parameter in parameter_list.named_children:\n                name_node = parameter.child_by_field_name(\"name\")\n                if name_node is not None:\n                    name_set.add(name_node.text.decode(\"utf-8\"))\n        current = current.parent\n    return name_set"
+    },
+    {
+      "name": "_parameter_type_tuple",
+      "type": "function_definition",
+      "start_line": 462,
+      "end_line": 473,
+      "context": "def _parameter_type_tuple(node: Node) -> tuple[str | None, ...]:\n    \"\"\"Return the type name of each parameter of a method_declaration node (type_name).\n\n    A parameter whose type is a type parameter of the method or of a type around it\n    gives None.\n    \"\"\"\n    type_parameter_name_set = _type_parameter_name_set(node)\n    name_list: list[str | None] = []\n    for parameter in _parameter_node_list(node):\n        name = type_name(parameter.child_by_field_name(\"type\"))\n        name_list.append(None if name in type_parameter_name_set else name)\n    return tuple(name_list)"
+    },
+    {
+      "name": "_declared_type",
+      "type": "function_definition",
+      "start_line": 476,
+      "end_line": 533,
+      "context": "def _declared_type(name: str, node: Node) -> str | None:\n    \"\"\"Return the type a name is declared with around a node.\n\n    The parameters and local variables of the methods, lambdas and local functions\n    around the node are looked up first, innermost first, then the fields and\n    properties of the types around it. A variable declared with \"var\" has the type\n    of the object its declaration makes (var b = new Box();).\n\n    Args:\n        name: The name.\n        node: The node the name is written at.\n\n    Returns:\n        The type name (type_name); None when no declaration of the name is found or\n        its type has no name.\n    \"\"\"\n    current = node.parent\n    while current is not None:\n        if current.type in _LOCAL_SCOPE_TYPE_SET or current.type in _TYPE_BODY_TYPE_SET:\n            is_type_body = current.type in _TYPE_BODY_TYPE_SET\n            node_stack = list(current.children)\n            while node_stack:\n                declare_node = node_stack.pop()\n                if declare_node.type in (\"parameter\", \"property_declaration\"):\n                    name_node = declare_node.child_by_field_name(\"name\")\n                    if name_node is not None and name_node.text.decode(\"utf-8\") == name:\n                        return type_name(declare_node.child_by_field_name(\"type\"))\n                elif declare_node.type == \"variable_declaration\":\n                    for declarator in declare_node.named_children:\n                        name_node = declarator.child_by_field_name(\"name\")\n                        if (\n                            declarator.type != \"variable_declarator\" or name_node is None\n                            or name_node.text.decode(\"utf-8\") != name\n                        ):\n                            continue\n                        declared_name = type_name(declare_node.child_by_field_name(\"type\"))\n                        if declared_name is not None:\n                            return declared_name\n                        return next(\n                            (\n                                type_name(child.child_by_field_name(\"type\"))\n                                for child in declarator.named_children\n                                if child.type == \"object_creation_expression\"\n                            ),\n                            None,\n                        )\n                # The members of a type are read without the bodies of its methods;\n                # the declarations of a method without the lambdas and local functions in it\n                if is_type_body and declare_node.type in _LOCAL_SCOPE_TYPE_SET:\n                    continue\n                if not is_type_body and (\n                    declare_node.type in _LOCAL_SCOPE_TYPE_SET\n                    and declare_node.type != \"parameter_list\"\n                ):\n                    continue\n                node_stack.extend(declare_node.children)\n        current = current.parent\n    return None"
+    },
+    {
+      "name": "argument_type",
+      "type": "function_definition",
+      "start_line": 536,
+      "end_line": 572,
+      "context": "def argument_type(node: Node) -> str | None:\n    \"\"\"Return the type name of an argument of an invocation where the file tells it.\n\n    Examples:\n        1 / 2L / 2.5 / 2.5f / 1m      -> \"int\" / \"long\" / \"double\" / \"float\" / \"decimal\"\n        \"a\" / 'a' / true              -> \"string\" / \"char\" / \"bool\"\n        new Box(1)                    -> \"Box\"\n        (long)value                   -> \"long\"\n        name (declared Box name;)     -> \"Box\"\n\n    Args:\n        node: An argument node.\n\n    Returns:\n        The type name; None for any other expression and for null.\n    \"\"\"\n    value_node = next(iter(node.named_children), None)\n    # A named argument (width: 2) holds its value after the name\n    if node.child_by_field_name(\"name\") is not None and node.named_child_count >= 2:\n        value_node = node.named_children[-1]\n    if value_node is None:\n        return None\n    literal_type = _LITERAL_TYPE_DICT.get(value_node.type)\n    if literal_type is not None:\n        return literal_type\n    if value_node.type in (\"integer_literal\", \"real_literal\"):\n        text = value_node.text.decode(\"utf-8\").lower()\n        if value_node.type == \"integer_literal\" and not text.startswith(\"0x\"):\n            return _NUMBER_SUFFIX_TYPE_DICT.get(text.lstrip(\"0123456789_\"), \"int\")\n        if value_node.type == \"integer_literal\":\n            return \"int\"\n        return _NUMBER_SUFFIX_TYPE_DICT.get(text[-1], \"double\")\n    if value_node.type in (\"object_creation_expression\", \"cast_expression\"):\n        return type_name(value_node.child_by_field_name(\"type\"))\n    if value_node.type == \"identifier\":\n        return _declared_type(value_node.text.decode(\"utf-8\"), node)\n    return None"
+    },
+    {
+      "name": "_parameter_node_list",
+      "type": "function_definition",
+      "start_line": 575,
+      "end_line": 580,
+      "context": "def _parameter_node_list(node: Node) -> list[Node]:\n    \"\"\"Return the parameter nodes of a method_declaration node, without a \"params\" one.\"\"\"\n    parameter_list = node.child_by_field_name(\"parameters\")\n    if parameter_list is None:\n        return []\n    return [child for child in parameter_list.children if child.type == \"parameter\"]"
+    },
+    {
+      "name": "_argument_range",
+      "type": "function_definition",
+      "start_line": 583,
+      "end_line": 607,
+      "context": "def _argument_range(node: Node) -> tuple[int, int | None] | None:\n    \"\"\"Return the number of arguments a call of a method takes.\n\n    Examples:\n        Twice(int v)                              -> (1, 1)\n        Pad(string s, int width, char fill = ' ') -> (2, 3)\n        Join(string s, params object[] rest)      -> (1, None)\n\n    Args:\n        node: A method_declaration node.\n\n    Returns:\n        (least, most) number of arguments; most is None for a declaration with\n        \"params\". None when the declaration has no parameter list.\n    \"\"\"\n    parameter_list = node.child_by_field_name(\"parameters\")\n    if parameter_list is None:\n        return None\n    parameter_node_list = _parameter_node_list(node)\n    least = sum(\n        1 for parameter in parameter_node_list\n        if not any(child.type == \"=\" for child in parameter.children)\n    )\n    has_params = any(child.type == \"params\" for child in parameter_list.children)\n    return least, None if has_params else len(parameter_node_list)"
+    },
+    {
+      "name": "_is_extension",
+      "type": "function_definition",
+      "start_line": 610,
+      "end_line": 613,
+      "context": "def _is_extension(node: Node) -> bool:\n    \"\"\"Return whether the first parameter of a method_declaration node is written with \"this\".\"\"\"\n    parameter_node_list = _parameter_node_list(node)\n    return bool(parameter_node_list) and _has_modifier(parameter_node_list[0], \"this\")"
+    },
+    {
+      "name": "_extension_argument_range",
+      "type": "function_definition",
+      "start_line": 616,
+      "end_line": 636,
+      "context": "def _extension_argument_range(node: Node) -> tuple[int, int | None] | None:\n    \"\"\"Return the number of arguments a call of an extension method takes.\n\n    Examples:\n        Twice(this int v)                              -> (0, 0)\n        Pad(this string s, int width, char fill = ' ') -> (1, 2)\n        Join(this string s, params object[] rest)      -> (0, None)\n        Parse(string s)                                -> None\n\n    Args:\n        node: A method_declaration node.\n\n    Returns:\n        (least, most) number of arguments, without the one the first parameter stands\n        for; most is None for a declaration with \"params\". None when the first\n        parameter is not written with \"this\".\n    \"\"\"\n    if not _is_extension(node):\n        return None\n    least, most = _argument_range(node)\n    return least - 1, None if most is None else most - 1"
+    },
+    {
+      "name": "_read_type",
+      "type": "function_definition",
+      "start_line": 639,
+      "end_line": 666,
+      "context": "def _read_type(\n    node: Node, scope: CsharpScope, owner: CsharpType | None, declaration: CsharpDeclaration,\n) -> None:\n    \"\"\"Add a type declaration and the types written in its body to a CsharpDeclaration.\n\n    Args:\n        node: A node whose type is in _TYPE_DECLARATION_TYPE_SET.\n        scope: The scope the declaration is written in.\n        owner: The type the declaration is written in the body of; None for none.\n        declaration: The CsharpDeclaration of the file; modified in place.\n    \"\"\"\n    name_node = node.child_by_field_name(\"name\")\n    if name_node is None:\n        return\n    name = _node_text(name_node)\n    csharp_type = CsharpType(\n        namespace=scope.namespace,\n        path=join_name(owner.path if owner else \"\", name),\n        arity=len(_type_parameter_name_list(node)),\n        start_line=node.start_point[0] + 1,\n        end_line=node.end_point[0] + 1,\n    )\n    if owner is not None:\n        owner.member_name_set.add(name)\n    declaration.type_list.append(csharp_type)\n    body_node = node.child_by_field_name(\"body\")\n    if body_node is not None:\n        _read_declaration_list(body_node, scope, csharp_type, declaration)"
+    },
+    {
+      "name": "_read_declaration_list",
+      "type": "function_definition",
+      "start_line": 669,
+      "end_line": 716,
+      "context": "def _read_declaration_list(\n    node: Node, scope: CsharpScope, owner: CsharpType | None, declaration: CsharpDeclaration,\n) -> CsharpScope:\n    \"\"\"Read the declarations among the children of a node into a CsharpDeclaration.\n\n    A file scoped namespace declaration (namespace A.B;) starts a scope that holds the\n    declarations after it, up to the last line of the file.\n\n    Args:\n        node: The root node, the body of a namespace or type declaration, or a node\n            whose type is in _PASS_NODE_TYPE_SET.\n        scope: The scope the node is written in.\n        owner: The type whose body the node is; None outside a type.\n        declaration: The CsharpDeclaration of the file; modified in place.\n\n    Returns:\n        The scope at the end of the node.\n    \"\"\"\n    for child in node.children:\n        if child.type == \"using_directive\":\n            using = _using_directive(child)\n            if using is not None:\n                scope.using_list.append(using)\n        elif child.type in _NAMESPACE_TYPE_SET:\n            name_node = child.child_by_field_name(\"name\")\n            if name_node is None:\n                continue\n            is_file_scope = child.type == \"file_scoped_namespace_declaration\"\n            inner_scope = CsharpScope(\n                namespace=join_name(scope.namespace, *_read_chain(name_node).part_list),\n                start_line=child.start_point[0] + 1,\n                end_line=(_root_node(node) if is_file_scope else child).end_point[0] + 1,\n                depth=scope.depth + 1,\n            )\n            declaration.scope_list.append(inner_scope)\n            if is_file_scope:\n                scope = _read_declaration_list(child, inner_scope, owner, declaration)\n            else:\n                body_node = child.child_by_field_name(\"body\")\n                if body_node is not None:\n                    _read_declaration_list(body_node, inner_scope, owner, declaration)\n        elif child.type in _TYPE_DECLARATION_TYPE_SET:\n            _read_type(child, scope, owner, declaration)\n        elif child.type in _PASS_NODE_TYPE_SET:\n            scope = _read_declaration_list(child, scope, owner, declaration)\n        elif owner is not None and child.type in CSHARP_DEFINITION_DICT:\n            _add_member(owner, child)\n    return scope"
+    },
+    {
+      "name": "_member_name_list",
+      "type": "function_definition",
+      "start_line": 719,
+      "end_line": 733,
+      "context": "def _member_name_list(node: Node) -> list[str]:\n    \"\"\"Return the names a member declaration gives, without the verbatim prefix.\n\n    Examples:\n        int a, b = 1;             -> [\"a\", \"b\"]\n        public void @event() {}   -> [\"event\"]\n\n    Args:\n        node: A node whose type is in CSHARP_DEFINITION_DICT.\n\n    Returns:\n        Every variable of a declaration of fields; the name of any other declaration.\n        Empty when the declaration has no name.\n    \"\"\"\n    return definition_name_list(node, CSHARP_DEFINITION_DICT)"
+    },
+    {
+      "name": "_add_member",
+      "type": "function_definition",
+      "start_line": 736,
+      "end_line": 761,
+      "context": "def _add_member(owner: CsharpType, node: Node) -> None:\n    \"\"\"Add the names a member declaration gives to its type, with the declaration, and\n    its extension method.\n\n    Args:\n        owner: The type whose body the declaration is written in; modified in place.\n        node: A node whose type is in CSHARP_DEFINITION_DICT.\n    \"\"\"\n    member = CsharpMember(\n        start_line=node.start_point[0] + 1,\n        is_static=node.type == \"enum_member_declaration\" or any(\n            _has_modifier(node, modifier) for modifier in _STATIC_MODIFIER_TUPLE\n        ),\n    )\n    member.is_constructor = node.type == \"constructor_declaration\"\n    argument_range = None\n    if node.type == \"method_declaration\":\n        member.argument_range = _argument_range(node)\n        member.is_extension = _is_extension(node)\n        member.parameter_type_tuple = _parameter_type_tuple(node)\n        argument_range = _extension_argument_range(node)\n    for name in _member_name_list(node):\n        owner.member_name_set.add(name)\n        owner.member_list_dict.setdefault(name, []).append(member)\n        if argument_range is not None:\n            owner.extension_dict.setdefault(name, []).append(argument_range)"
+    },
+    {
+      "name": "read_csharp_declaration",
+      "type": "function_definition",
+      "start_line": 764,
+      "end_line": 781,
+      "context": "def read_csharp_declaration(root_node: Node) -> CsharpDeclaration:\n    \"\"\"Read the namespaces, using directives and types of a C# file.\n\n    Declarations inside #if / #elif / #else are read as the ones outside.\n\n    Args:\n        root_node: The AST root node of the file.\n\n    Returns:\n        The CsharpDeclaration. scope_list[0] is the file itself.\n    \"\"\"\n    declaration = CsharpDeclaration()\n    file_scope = CsharpScope(\n        namespace=\"\", start_line=1, end_line=root_node.end_point[0] + 1, depth=0,\n    )\n    declaration.scope_list.append(file_scope)\n    _read_declaration_list(root_node, file_scope, None, declaration)\n    return declaration"
+    },
+    {
+      "name": "_is_type_position",
+      "type": "function_definition",
+      "start_line": 784,
+      "end_line": 804,
+      "context": "def _is_type_position(node: Node, field_name: str | None) -> bool:\n    \"\"\"Return whether a name chain node is written where a type is.\n\n    Args:\n        node: A node whose type is in _CHAIN_NODE_TYPE_SET.\n        field_name: Name of the field the node is in its parent; None for none.\n\n    Returns:\n        True for a qualified name, a child in a field of _TYPE_FIELD_NAME_SET, a child\n        of a node in _TYPE_PARENT_TYPE_SET, and the right side of \"as\" / \"is\".\n    \"\"\"\n    if node.type in (\"qualified_name\", \"alias_qualified_name\"):\n        return True\n    if field_name in _TYPE_FIELD_NAME_SET:\n        return True\n    parent = node.parent\n    if parent is None:\n        return False\n    if parent.type in _TYPE_PARENT_TYPE_SET:\n        return True\n    return parent.type in _TYPE_RIGHT_PARENT_TYPE_SET and field_name == \"right\""
+    },
+    {
+      "name": "_chain_reference",
+      "type": "function_definition",
+      "start_line": 807,
+      "end_line": 851,
+      "context": "def _chain_reference(\n    chain: _Chain, kind: str, line: int, call_node: Node | None = None,\n) -> CsharpReference | None:\n    \"\"\"Return the reference of a name chain.\n\n    Args:\n        chain: The chain.\n        kind: NAME_REFERENCE, TYPE_REFERENCE or ATTRIBUTE_REFERENCE; the kind of a\n            chain with the head \"\" or \"global\".\n        line: Line the chain starts on (1-based).\n        call_node: The invocation_expression node that calls the chain; None when\n            the chain is not called.\n\n    Returns:\n        The reference. A chain after \"this.\" is a THIS_REFERENCE. A chain after a value\n        is a MEMBER_REFERENCE of its last name when it is a call. None for a chain\n        without a name, a chain after \"base.\" or after a type written with a keyword,\n        and a chain after a value that is not a call.\n    \"\"\"\n    if not chain.part_list or chain.head in (\"base\", \"builtin\"):\n        return None\n    is_call = call_node is not None\n    argument_count = 0\n    argument_type_tuple: tuple[str | None, ...] = ()\n    if call_node is not None:\n        argument_list = call_node.child_by_field_name(\"arguments\")\n        if argument_list is not None:\n            argument_type_tuple = tuple(\n                argument_type(child) for child in argument_list.children\n                if child.type == \"argument\"\n            )\n            argument_count = len(argument_type_tuple)\n    if chain.head == \"value\":\n        if not is_call:\n            return None\n        return CsharpReference(\n            MEMBER_REFERENCE, (chain.part_list[-1],), (chain.arity_list[-1],), line, True,\n            argument_count=argument_count, argument_type_tuple=argument_type_tuple,\n        )\n    if chain.head == \"this\":\n        kind = THIS_REFERENCE\n    return CsharpReference(\n        kind, tuple(chain.part_list), tuple(chain.arity_list), line, is_call,\n        chain.head == \"global\", argument_count, argument_type_tuple,\n    )"
+    },
+    {
+      "name": "_local_value_reference",
+      "type": "function_definition",
+      "start_line": 854,
+      "end_line": 875,
+      "context": "def _local_value_reference(reference: CsharpReference) -> CsharpReference | None:\n    \"\"\"Turn a chain that starts with a local name into the member it calls on that value.\n\n    Examples (items is a local variable):\n        items.Where(x => ...)   -> MEMBER_REFERENCE Where\n        items.Count             -> None\n        items                   -> None\n\n    Args:\n        reference: A reference whose first name is a local name.\n\n    Returns:\n        A MEMBER_REFERENCE of the last name when the chain is a call with two or more\n        names, else None.\n    \"\"\"\n    if not reference.is_call or len(reference.part_tuple) < 2:\n        return None\n    return CsharpReference(\n        MEMBER_REFERENCE, (reference.part_tuple[-1],), (reference.arity_tuple[-1],),\n        reference.line, True, argument_count=reference.argument_count,\n        argument_type_tuple=reference.argument_type_tuple,\n    )"
+    },
+    {
+      "name": "_declare_name_id",
+      "type": "function_definition",
+      "start_line": 878,
+      "end_line": 900,
+      "context": "def _declare_name_id(node: Node) -> int | None:\n    \"\"\"Return the id of the child of a node that is a name the node declares or sets.\n\n    Args:\n        node: A node whose type is not in _CHAIN_NODE_TYPE_SET.\n\n    Returns:\n        The id of the loop variable of a foreach statement, or of the member name on\n        the left side of an assignment inside an initializer. None when the node has\n        none of them.\n    \"\"\"\n    if node.type == \"foreach_statement\":\n        left_node = node.child_by_field_name(\"left\")\n        return left_node.id if left_node is not None else None\n    if (\n        node.type == \"assignment_expression\"\n        and node.parent is not None\n        and node.parent.type == \"initializer_expression\"\n    ):\n        left_node = node.child_by_field_name(\"left\")\n        if left_node is not None and left_node.type == \"identifier\":\n            return left_node.id\n    return None"
+    },
+    {
+      "name": "_is_member_name",
+      "type": "function_definition",
+      "start_line": 903,
+      "end_line": 922,
+      "context": "def _is_member_name(node: Node, child_index: int) -> bool:\n    \"\"\"Return whether a child of a node is the name of a member the node sets or matches.\n\n    Examples:\n        new { Name = value }        -> Name\n        x with { Name = value }     -> Name\n        x is { Customer.Name: \"a\" } -> Customer.Name\n\n    Args:\n        node: A node.\n        child_index: Index of the child among node.children.\n\n    Returns:\n        True for the child right before the token _MEMBER_NAME_TOKEN_DICT gives for\n        the type of the node.\n    \"\"\"\n    token = _MEMBER_NAME_TOKEN_DICT.get(node.type)\n    if token is None or child_index + 1 >= len(node.children):\n        return False\n    return node.children[child_index + 1].type == token"
+    },
+    {
+      "name": "_call_member_chain",
+      "type": "function_definition",
+      "start_line": 925,
+      "end_line": 946,
+      "context": "def _call_member_chain(function_node: Node) -> _Chain | None:\n    \"\"\"Read the member an invocation calls through a conditional access (a?.Run()).\n\n    Args:\n        function_node: The node an invocation calls; its type is not in\n            _CHAIN_NODE_TYPE_SET.\n\n    Returns:\n        The chain of the member name, with the head \"value\". None when the node is\n        not a conditional access that ends with a member.\n    \"\"\"\n    member_node = function_node\n    if function_node.type == \"conditional_access_expression\" and function_node.named_children:\n        member_node = function_node.named_children[-1]\n    if member_node.type != \"member_binding_expression\":\n        return None\n    name_node = member_node.child_by_field_name(\"name\")\n    if name_node is None or name_node.type not in _CHAIN_NODE_TYPE_SET:\n        return None\n    chain = _read_chain(name_node)\n    chain.head = \"value\"\n    return chain"
+    },
+    {
+      "name": "_ReferenceWalker",
+      "type": "class_definition",
+      "start_line": 949,
+      "end_line": 1104,
+      "context": "class _ReferenceWalker:\n    \"\"\"Walks the tree of a C# file and collects its references (csharp_reference_list).\"\"\"\n\n    def __init__(self) -> None:\n        \"\"\"Start with no references and an empty stack.\"\"\"\n        self.reference_dict: dict[CsharpReference, None] = {}\n        # (node, name of the field the node is in its parent, names of the type\n        # parameters and local names of the declarations around the node)\n        self.node_stack: list[tuple[Node, str | None, frozenset[str]]] = []\n\n    def walk(self, root_node: Node) -> list[CsharpReference]:\n        \"\"\"Visit every node under root_node and return the references found.\n\n        Args:\n            root_node: The AST root node of the file.\n\n        Returns:\n            The references in the order they are found, without duplicates.\n        \"\"\"\n        self.node_stack.append((root_node, None, frozenset()))\n        while self.node_stack:\n            node, field_name, local_name_set = self.node_stack.pop()\n            if node.type == \"using_directive\":\n                self._visit_using(node, local_name_set)\n            elif node.type in _CHAIN_NODE_TYPE_SET:\n                kind = TYPE_REFERENCE if _is_type_position(node, field_name) else NAME_REFERENCE\n                self._add_chain(_read_chain(node), kind, node, local_name_set)\n            elif node.type == \"attribute\":\n                self._visit_attribute(node, local_name_set)\n            elif node.type == \"invocation_expression\":\n                self._visit_invocation(node, local_name_set)\n            elif node.type.startswith(_PREPROC_PREFIX):\n                self._visit_preproc(node, local_name_set)\n            else:\n                self._visit_other(node, local_name_set)\n        return list(self.reference_dict)\n\n    def _push(self, node_list: list[Node], local_name_set: frozenset[str]) -> None:\n        \"\"\"Put nodes on the stack without the name of their field.\"\"\"\n        self.node_stack.extend((node, None, local_name_set) for node in node_list)\n\n    def _add_chain(\n        self,\n        chain: _Chain,\n        kind: str,\n        node: Node,\n        local_name_set: frozenset[str],\n        call_node: Node | None = None,\n    ) -> None:\n        \"\"\"Keep the reference of a chain and put the nodes inside the chain on the stack.\n\n        A chain whose first name is a type parameter or a local name of a declaration\n        around it is not a name of a type or member: only the member it calls is kept\n        (_local_value_reference).\n\n        Args:\n            chain: The chain.\n            kind: Kind of the reference (_chain_reference).\n            node: The node the chain starts at.\n            local_name_set: Names of the type parameters and local names around the node.\n            call_node: The invocation_expression node that calls the chain; None when\n                the chain is not called.\n        \"\"\"\n        reference = _chain_reference(chain, kind, node.start_point[0] + 1, call_node)\n        if (\n            reference is not None\n            and reference.kind not in (MEMBER_REFERENCE, THIS_REFERENCE)\n            and not reference.is_absolute\n            and reference.part_tuple[0] in local_name_set\n        ):\n            reference = _local_value_reference(reference)\n        if reference is not None:\n            self.reference_dict.setdefault(reference)\n        self._push(chain.inner_node_list, local_name_set)\n\n    def _visit_using(self, node: Node, local_name_set: frozenset[str]) -> None:\n        \"\"\"Walk the types written inside the name a using directive gives.\n\n        The type arguments of a name chain (using L = List<Order>;) and a type that is\n        not a name chain (using P = (Order, int);) are walked; the name chain itself\n        and the alias are not kept.\n        \"\"\"\n        for child in node.children:\n            if child.type in _CHAIN_NODE_TYPE_SET:\n                self._push(_read_chain(child).inner_node_list, local_name_set)\n            elif child.is_named:\n                self._push([child], local_name_set)\n\n    def _visit_attribute(self, node: Node, local_name_set: frozenset[str]) -> None:\n        \"\"\"Keep the name of an attribute and walk its arguments.\"\"\"\n        name_node = node.child_by_field_name(\"name\")\n        if name_node is not None and name_node.type in _CHAIN_NODE_TYPE_SET:\n            self._add_chain(_read_chain(name_node), ATTRIBUTE_REFERENCE, node, local_name_set)\n        self._push(\n            [child for child in node.children if name_node is None or child.id != name_node.id],\n            local_name_set,\n        )\n\n    def _visit_invocation(self, node: Node, local_name_set: frozenset[str]) -> None:\n        \"\"\"Keep what an invocation calls and walk the rest of it.\n\n        A name chain that is called is kept with its number of arguments; a member\n        called through a conditional access (a?.Run()) is kept as a MEMBER_REFERENCE.\n        \"\"\"\n        function_node = node.child_by_field_name(\"function\")\n        skip_id = None\n        if function_node is not None and function_node.type in _CHAIN_NODE_TYPE_SET:\n            self._add_chain(\n                _read_chain(function_node), NAME_REFERENCE, node, local_name_set, node,\n            )\n            skip_id = function_node.id\n        elif function_node is not None:\n            chain = _call_member_chain(function_node)\n            if chain is not None:\n                self._add_chain(chain, NAME_REFERENCE, node, local_name_set, node)\n        self._push([child for child in node.children if child.id != skip_id], local_name_set)\n\n    def _visit_preproc(self, node: Node, local_name_set: frozenset[str]) -> None:\n        \"\"\"Walk the code of #if / #elif / #else; the other directives are not read.\"\"\"\n        if node.type not in _PREPROC_CODE_TYPE_SET:\n            return\n        condition_node = node.child_by_field_name(\"condition\")\n        self._push(\n            [\n                child for child in node.children\n                if condition_node is None or child.id != condition_node.id\n            ],\n            local_name_set,\n        )\n\n    def _visit_other(self, node: Node, local_name_set: frozenset[str]) -> None:\n        \"\"\"Walk the children of a node, leaving out the names it declares.\n\n        Left out: every child in the field \"name\" (the names a declaration gives, the\n        names of named arguments, the member of a conditional access), the child\n        _declare_name_id gives, labels, and the names of members the node sets or\n        matches (_is_member_name). The type parameters the node declares, and the\n        local names declared inside a node in _LOCAL_SCOPE_TYPE_SET, are added to the\n        ones around its children.\n        \"\"\"\n        declare_name_list = _type_parameter_name_list(node)\n        if node.type in _LOCAL_SCOPE_TYPE_SET:\n            declare_name_list += _local_name_list(node)\n        if declare_name_list:\n            local_name_set = local_name_set | frozenset(declare_name_list)\n\n        skip_id = _declare_name_id(node)\n        for child_index, child in enumerate(node.children):\n            field_name = node.field_name_for_child(child_index)\n            if field_name == \"name\" or child.id == skip_id:\n                continue\n            if node.type in _LABEL_PARENT_TYPE_SET and child.type == \"identifier\":\n                continue\n            if _is_member_name(node, child_index):\n                continue\n            self.node_stack.append((child, field_name, local_name_set))"
+    },
+    {
+      "name": "__init__",
+      "type": "function_definition",
+      "start_line": 952,
+      "end_line": 957,
+      "context": "    def __init__(self) -> None:\n        \"\"\"Start with no references and an empty stack.\"\"\"\n        self.reference_dict: dict[CsharpReference, None] = {}\n        # (node, name of the field the node is in its parent, names of the type\n        # parameters and local names of the declarations around the node)\n        self.node_stack: list[tuple[Node, str | None, frozenset[str]]] = []"
+    },
+    {
+      "name": "walk",
+      "type": "function_definition",
+      "start_line": 959,
+      "end_line": 984,
+      "context": "    def walk(self, root_node: Node) -> list[CsharpReference]:\n        \"\"\"Visit every node under root_node and return the references found.\n\n        Args:\n            root_node: The AST root node of the file.\n\n        Returns:\n            The references in the order they are found, without duplicates.\n        \"\"\"\n        self.node_stack.append((root_node, None, frozenset()))\n        while self.node_stack:\n            node, field_name, local_name_set = self.node_stack.pop()\n            if node.type == \"using_directive\":\n                self._visit_using(node, local_name_set)\n            elif node.type in _CHAIN_NODE_TYPE_SET:\n                kind = TYPE_REFERENCE if _is_type_position(node, field_name) else NAME_REFERENCE\n                self._add_chain(_read_chain(node), kind, node, local_name_set)\n            elif node.type == \"attribute\":\n                self._visit_attribute(node, local_name_set)\n            elif node.type == \"invocation_expression\":\n                self._visit_invocation(node, local_name_set)\n            elif node.type.startswith(_PREPROC_PREFIX):\n                self._visit_preproc(node, local_name_set)\n            else:\n                self._visit_other(node, local_name_set)\n        return list(self.reference_dict)"
+    },
+    {
+      "name": "_push",
+      "type": "function_definition",
+      "start_line": 986,
+      "end_line": 988,
+      "context": "    def _push(self, node_list: list[Node], local_name_set: frozenset[str]) -> None:\n        \"\"\"Put nodes on the stack without the name of their field.\"\"\"\n        self.node_stack.extend((node, None, local_name_set) for node in node_list)"
+    },
+    {
+      "name": "_add_chain",
+      "type": "function_definition",
+      "start_line": 990,
+      "end_line": 1022,
+      "context": "    def _add_chain(\n        self,\n        chain: _Chain,\n        kind: str,\n        node: Node,\n        local_name_set: frozenset[str],\n        call_node: Node | None = None,\n    ) -> None:\n        \"\"\"Keep the reference of a chain and put the nodes inside the chain on the stack.\n\n        A chain whose first name is a type parameter or a local name of a declaration\n        around it is not a name of a type or member: only the member it calls is kept\n        (_local_value_reference).\n\n        Args:\n            chain: The chain.\n            kind: Kind of the reference (_chain_reference).\n            node: The node the chain starts at.\n            local_name_set: Names of the type parameters and local names around the node.\n            call_node: The invocation_expression node that calls the chain; None when\n                the chain is not called.\n        \"\"\"\n        reference = _chain_reference(chain, kind, node.start_point[0] + 1, call_node)\n        if (\n            reference is not None\n            and reference.kind not in (MEMBER_REFERENCE, THIS_REFERENCE)\n            and not reference.is_absolute\n            and reference.part_tuple[0] in local_name_set\n        ):\n            reference = _local_value_reference(reference)\n        if reference is not None:\n            self.reference_dict.setdefault(reference)\n        self._push(chain.inner_node_list, local_name_set)"
+    },
+    {
+      "name": "_visit_using",
+      "type": "function_definition",
+      "start_line": 1024,
+      "end_line": 1035,
+      "context": "    def _visit_using(self, node: Node, local_name_set: frozenset[str]) -> None:\n        \"\"\"Walk the types written inside the name a using directive gives.\n\n        The type arguments of a name chain (using L = List<Order>;) and a type that is\n        not a name chain (using P = (Order, int);) are walked; the name chain itself\n        and the alias are not kept.\n        \"\"\"\n        for child in node.children:\n            if child.type in _CHAIN_NODE_TYPE_SET:\n                self._push(_read_chain(child).inner_node_list, local_name_set)\n            elif child.is_named:\n                self._push([child], local_name_set)"
+    },
+    {
+      "name": "_visit_attribute",
+      "type": "function_definition",
+      "start_line": 1037,
+      "end_line": 1045,
+      "context": "    def _visit_attribute(self, node: Node, local_name_set: frozenset[str]) -> None:\n        \"\"\"Keep the name of an attribute and walk its arguments.\"\"\"\n        name_node = node.child_by_field_name(\"name\")\n        if name_node is not None and name_node.type in _CHAIN_NODE_TYPE_SET:\n            self._add_chain(_read_chain(name_node), ATTRIBUTE_REFERENCE, node, local_name_set)\n        self._push(\n            [child for child in node.children if name_node is None or child.id != name_node.id],\n            local_name_set,\n        )"
+    },
+    {
+      "name": "_visit_invocation",
+      "type": "function_definition",
+      "start_line": 1047,
+      "end_line": 1064,
+      "context": "    def _visit_invocation(self, node: Node, local_name_set: frozenset[str]) -> None:\n        \"\"\"Keep what an invocation calls and walk the rest of it.\n\n        A name chain that is called is kept with its number of arguments; a member\n        called through a conditional access (a?.Run()) is kept as a MEMBER_REFERENCE.\n        \"\"\"\n        function_node = node.child_by_field_name(\"function\")\n        skip_id = None\n        if function_node is not None and function_node.type in _CHAIN_NODE_TYPE_SET:\n            self._add_chain(\n                _read_chain(function_node), NAME_REFERENCE, node, local_name_set, node,\n            )\n            skip_id = function_node.id\n        elif function_node is not None:\n            chain = _call_member_chain(function_node)\n            if chain is not None:\n                self._add_chain(chain, NAME_REFERENCE, node, local_name_set, node)\n        self._push([child for child in node.children if child.id != skip_id], local_name_set)"
+    },
+    {
+      "name": "_visit_preproc",
+      "type": "function_definition",
+      "start_line": 1066,
+      "end_line": 1077,
+      "context": "    def _visit_preproc(self, node: Node, local_name_set: frozenset[str]) -> None:\n        \"\"\"Walk the code of #if / #elif / #else; the other directives are not read.\"\"\"\n        if node.type not in _PREPROC_CODE_TYPE_SET:\n            return\n        condition_node = node.child_by_field_name(\"condition\")\n        self._push(\n            [\n                child for child in node.children\n                if condition_node is None or child.id != condition_node.id\n            ],\n            local_name_set,\n        )"
+    },
+    {
+      "name": "_visit_other",
+      "type": "function_definition",
+      "start_line": 1079,
+      "end_line": 1104,
+      "context": "    def _visit_other(self, node: Node, local_name_set: frozenset[str]) -> None:\n        \"\"\"Walk the children of a node, leaving out the names it declares.\n\n        Left out: every child in the field \"name\" (the names a declaration gives, the\n        names of named arguments, the member of a conditional access), the child\n        _declare_name_id gives, labels, and the names of members the node sets or\n        matches (_is_member_name). The type parameters the node declares, and the\n        local names declared inside a node in _LOCAL_SCOPE_TYPE_SET, are added to the\n        ones around its children.\n        \"\"\"\n        declare_name_list = _type_parameter_name_list(node)\n        if node.type in _LOCAL_SCOPE_TYPE_SET:\n            declare_name_list += _local_name_list(node)\n        if declare_name_list:\n            local_name_set = local_name_set | frozenset(declare_name_list)\n\n        skip_id = _declare_name_id(node)\n        for child_index, child in enumerate(node.children):\n            field_name = node.field_name_for_child(child_index)\n            if field_name == \"name\" or child.id == skip_id:\n                continue\n            if node.type in _LABEL_PARENT_TYPE_SET and child.type == \"identifier\":\n                continue\n            if _is_member_name(node, child_index):\n                continue\n            self.node_stack.append((child, field_name, local_name_set))"
+    },
+    {
+      "name": "csharp_reference_list",
+      "type": "function_definition",
+      "start_line": 1107,
+      "end_line": 1124,
+      "context": "def csharp_reference_list(root_node: Node) -> list[CsharpReference]:\n    \"\"\"Read the name chains of a C# file that are not names of declarations.\n\n    Left out: the names declarations give (types, members, parameters, variables,\n    labels), the names of namespace declarations, the names of using directives\n    (the types written inside them are read: using L = List<Order>; -> Order), the\n    names of named arguments and of members set in an initializer, a chain that starts\n    with a type parameter of a declaration around it, and the name of a member of a\n    value that is not called. The conditions of #if / #elif and the other preprocessor\n    directives are not read.\n\n    Args:\n        root_node: The AST root node of the file.\n\n    Returns:\n        The references in the order they are found, without duplicates.\n    \"\"\"\n    return _ReferenceWalker().walk(root_node)"
+    }
+  ],
+  "callee_usages": [
+    {
+      "lines": [
+        714,
+        733
+      ],
+      "name": "CSHARP_DEFINITION_DICT",
+      "from": "codetwine/codetwine/config/settings_py/settings.py",
+      "target_context": "CSHARP_DEFINITION_DICT = {\n    \"class_declaration\": \"__name_field__\",\n    \"struct_declaration\": \"__name_field__\",\n    \"interface_declaration\": \"__name_field__\",\n    \"enum_declaration\": \"__name_field__\",\n    \"record_declaration\": \"__name_field__\",\n    \"delegate_declaration\": \"__name_field__\",\n    \"method_declaration\": \"__name_field__\",\n    \"constructor_declaration\": \"__name_field__\",\n    \"property_declaration\": \"__name_field__\",\n    \"event_declaration\": \"__name_field__\",\n    \"enum_member_declaration\": \"__name_field__\",\n    \"field_declaration\": \"__variable_declaration__\",\n    \"event_field_declaration\": \"__variable_declaration__\",\n    \"indexer_declaration\": \"__unnamed_member__\",\n    \"operator_declaration\": \"__unnamed_member__\",\n    \"conversion_operator_declaration\": \"__unnamed_member__\",\n    \"destructor_declaration\": \"__unnamed_member__\",\n}",
+      "target_name": "CSHARP_DEFINITION_DICT",
+      "target_start_line": 279
+    },
+    {
+      "lines": [
+        733
+      ],
+      "name": "definition_name_list",
+      "from": "codetwine/codetwine/extractors/definitions_py/definitions.py",
+      "target_context": "def definition_name_list(node: Node, definition_dict: dict[str, str]) -> list[str]:\n    \"\"\"Return the names a definition node defines.\n\n    When the value definition_dict gives for the node type is a sentinel value (a string\n    starting and ending with \"__\"), a dedicated function reads the names. For a\n    standard value, the name is the first direct child of that node type.\n\n    Args:\n        node: An AST node.\n        definition_dict: Per-language definition node settings.\n\n    Returns:\n        The names, in the order they are written. Empty when the node type is not a\n        definition or no name can be obtained.\n    \"\"\"\n    if node.type == \"decorated_definition\" and node.type in definition_dict:\n        inner_node = _decorated_inner_node(node, definition_dict)\n        return definition_name_list(inner_node, definition_dict) if inner_node else []\n    name_type = definition_dict.get(node.type)\n    if name_type is None:\n        return []\n\n    # Sentinel value: a dedicated extraction function\n    extract_function = _SENTINEL_EXTRACTOR_DICT.get(name_type)\n    if extract_function is not None:\n        return extract_function(node)\n\n    # Standard pattern: search direct children for one matching name_type\n    for child in node.children:\n        if child.type == name_type:\n            return [_node_text(child)]\n    return []",
+      "target_name": "definition_name_list",
+      "target_start_line": 263
+    }
+  ],
+  "same_file_usages": [
+    {
+      "lines": [
+        91,
+        359,
+        397
+      ],
+      "name": "CsharpUsing",
+      "target_name": "CsharpUsing",
+      "target_start_line": 72
+    },
+    {
+      "lines": [
+        123,
+        744,
+        759
+      ],
+      "name": "CsharpMember",
+      "target_name": "CsharpMember",
+      "target_start_line": 94
+    },
+    {
+      "lines": [
+        135,
+        640,
+        666,
+        670,
+        671,
+        697,
+        703,
+        705,
+        709,
+        711,
+        713,
+        716,
+        776,
+        779,
+        780
+      ],
+      "name": "CsharpScope",
+      "target_name": "CsharpScope",
+      "target_start_line": 83
+    },
+    {
+      "lines": [
+        137,
+        640,
+        654,
+        663,
+        666,
+        670,
+        736
+      ],
+      "name": "CsharpType",
+      "target_name": "CsharpType",
+      "target_start_line": 111
+    },
+    {
+      "lines": [
+        234,
+        256,
+        261,
+        265,
+        271,
+        305,
+        310,
+        319,
+        322,
+        400,
+        653
+      ],
+      "name": "_node_text",
+      "target_name": "_node_text",
+      "target_start_line": 202
+    },
+    {
+      "lines": [
+        254
+      ],
+      "name": "_LOCAL_DECLARE_TYPE_SET",
+      "target_name": "_LOCAL_DECLARE_TYPE_SET",
+      "target_start_line": 165
+    },
+    {
+      "lines": [
+        287,
+        303,
+        325,
+        330,
+        341,
+        346,
+        347,
+        350,
+        808,
+        925,
+        992,
+        1012
+      ],
+      "name": "_Chain",
+      "target_name": "_Chain",
+      "target_start_line": 188
+    },
+    {
+      "lines": [
+        305,
+        310,
+        322
+      ],
+      "name": "_Chain.part_list.append",
+      "target_name": "part_list",
+      "target_start_line": 192
+    },
+    {
+      "lines": [
+        306,
+        312,
+        315,
+        323
+      ],
+      "name": "_Chain.arity_list.append",
+      "target_name": "arity_list",
+      "target_start_line": 193
+    },
+    {
+      "lines": [
+        312
+      ],
+      "name": "_type_argument_count",
+      "target_name": "_type_argument_count",
+      "target_start_line": 276
+    },
+    {
+      "lines": [
+        313,
+        344
+      ],
+      "name": "_Chain.inner_node_list.append",
+      "target_name": "inner_node_list",
+      "target_start_line": 199
+    },
+    {
+      "lines": [
+        314,
+        352,
+        826,
+        843,
+        849
+      ],
+      "name": "_Chain.part_list",
+      "target_name": "part_list",
+      "target_start_line": 192
+    },
+    {
+      "lines": [
+        314,
+        843,
+        849
+      ],
+      "name": "_Chain.arity_list",
+      "target_name": "arity_list",
+      "target_start_line": 193
+    },
+    {
+      "lines": [
+        320,
+        335,
+        337,
+        339,
+        343,
+        352,
+        353,
+        826,
+        839,
+        846,
+        850
+      ],
+      "name": "_Chain.head",
+      "target_name": "head",
+      "target_start_line": 197
+    },
+    {
+      "lines": [
+        325,
+        330,
+        341,
+        346
+      ],
+      "name": "_append_chain",
+      "target_name": "_append_chain",
+      "target_start_line": 350
+    },
+    {
+      "lines": [
+        329,
+        340,
+        345,
+        379,
+        942,
+        973,
+        1032,
+        1040,
+        1055
+      ],
+      "name": "_CHAIN_NODE_TYPE_SET",
+      "target_name": "_CHAIN_NODE_TYPE_SET",
+      "target_start_line": 37
+    },
+    {
+      "lines": [
+        354
+      ],
+      "name": "_Chain.part_list.extend",
+      "target_name": "part_list",
+      "target_start_line": 192
+    },
+    {
+      "lines": [
+        355
+      ],
+      "name": "_Chain.arity_list.extend",
+      "target_name": "arity_list",
+      "target_start_line": 193
+    },
+    {
+      "lines": [
+        356
+      ],
+      "name": "_Chain.inner_node_list.extend",
+      "target_name": "inner_node_list",
+      "target_start_line": 199
+    },
+    {
+      "lines": [
+        386,
+        698,
+        944,
+        975,
+        1033,
+        1041,
+        1057
+      ],
+      "name": "_read_chain",
+      "target_name": "_read_chain",
+      "target_start_line": 287
+    },
+    {
+      "lines": [
+        392
+      ],
+      "name": "ALIAS_USING",
+      "target_name": "ALIAS_USING",
+      "target_start_line": 9
+    },
+    {
+      "lines": [
+        394
+      ],
+      "name": "STATIC_USING",
+      "target_name": "STATIC_USING",
+      "target_start_line": 8
+    },
+    {
+      "lines": [
+        396
+      ],
+      "name": "NAMESPACE_USING",
+      "target_name": "NAMESPACE_USING",
+      "target_start_line": 7
+    },
+    {
+      "lines": [
+        468
+      ],
+      "name": "_type_parameter_name_set",
+      "target_name": "_type_parameter_name_set",
+      "target_start_line": 447
+    },
+    {
+      "lines": [
+        470,
+        601,
+        612
+      ],
+      "name": "_parameter_node_list",
+      "target_name": "_parameter_node_list",
+      "target_start_line": 575
+    },
+    {
+      "lines": [
+        471,
+        502,
+        511,
+        516,
+        569
+      ],
+      "name": "type_name",
+      "target_name": "type_name",
+      "target_start_line": 416
+    },
+    {
+      "lines": [
+        494,
+        495
+      ],
+      "name": "_TYPE_BODY_TYPE_SET",
+      "target_name": "_TYPE_BODY_TYPE_SET",
+      "target_start_line": 149
+    },
+    {
+      "lines": [
+        494,
+        524,
+        527,
+        1090
+      ],
+      "name": "_LOCAL_SCOPE_TYPE_SET",
+      "target_name": "_LOCAL_SCOPE_TYPE_SET",
+      "target_start_line": 141
+    },
+    {
+      "lines": [
+        558
+      ],
+      "name": "_LITERAL_TYPE_DICT.get",
+      "target_name": "_LITERAL_TYPE_DICT",
+      "target_start_line": 152
+    },
+    {
+      "lines": [
+        564,
+        567
+      ],
+      "name": "_NUMBER_SUFFIX_TYPE_DICT.get",
+      "target_name": "_NUMBER_SUFFIX_TYPE_DICT",
+      "target_start_line": 159
+    },
+    {
+      "lines": [
+        571
+      ],
+      "name": "_declared_type",
+      "target_name": "_declared_type",
+      "target_start_line": 476
+    },
+    {
+      "lines": [
+        613,
+        747
+      ],
+      "name": "_has_modifier",
+      "target_name": "_has_modifier",
+      "target_start_line": 214
+    },
+    {
+      "lines": [
+        633,
+        754
+      ],
+      "name": "_is_extension",
+      "target_name": "_is_extension",
+      "target_start_line": 610
+    },
+    {
+      "lines": [
+        635,
+        753
+      ],
+      "name": "_argument_range",
+      "target_name": "_argument_range",
+      "target_start_line": 583
+    },
+    {
+      "lines": [
+        640,
+        666,
+        670,
+        705,
+        709,
+        711,
+        713,
+        764,
+        775,
+        780,
+        781
+      ],
+      "name": "CsharpDeclaration",
+      "target_name": "CsharpDeclaration",
+      "target_start_line": 130
+    },
+    {
+      "lines": [
+        655,
+        698
+      ],
+      "name": "CsharpScope.namespace",
+      "target_name": "namespace",
+      "target_start_line": 87
+    },
+    {
+      "lines": [
+        656,
+        698
+      ],
+      "name": "join_name",
+      "target_name": "join_name",
+      "target_start_line": 406
+    },
+    {
+      "lines": [
+        657,
+        1089
+      ],
+      "name": "_type_parameter_name_list",
+      "target_name": "_type_parameter_name_list",
+      "target_start_line": 222
+    },
+    {
+      "lines": [
+        663
+      ],
+      "name": "CsharpDeclaration.type_list.append",
+      "target_name": "type_list",
+      "target_start_line": 137
+    },
+    {
+      "lines": [
+        666,
+        780
+      ],
+      "name": "_read_declaration_list",
+      "target_name": "_read_declaration_list",
+      "target_start_line": 669
+    },
+    {
+      "lines": [
+        689
+      ],
+      "name": "_using_directive",
+      "target_name": "_using_directive",
+      "target_start_line": 359
+    },
+    {
+      "lines": [
+        691
+      ],
+      "name": "CsharpScope.using_list.append",
+      "target_name": "using_list",
+      "target_start_line": 91
+    },
+    {
+      "lines": [
+        692
+      ],
+      "name": "_NAMESPACE_TYPE_SET",
+      "target_name": "_NAMESPACE_TYPE_SET",
+      "target_start_line": 29
+    },
+    {
+      "lines": [
+        700
+      ],
+      "name": "_root_node",
+      "target_name": "_root_node",
+      "target_start_line": 207
+    },
+    {
+      "lines": [
+        701
+      ],
+      "name": "CsharpScope.depth",
+      "target_name": "depth",
+      "target_start_line": 90
+    },
+    {
+      "lines": [
+        703,
+        779
+      ],
+      "name": "CsharpDeclaration.scope_list.append",
+      "target_name": "scope_list",
+      "target_start_line": 135
+    },
+    {
+      "lines": [
+        710
+      ],
+      "name": "_TYPE_DECLARATION_TYPE_SET",
+      "target_name": "_TYPE_DECLARATION_TYPE_SET",
+      "target_start_line": 19
+    },
+    {
+      "lines": [
+        711
+      ],
+      "name": "_read_type",
+      "target_name": "_read_type",
+      "target_start_line": 639
+    },
+    {
+      "lines": [
+        712
+      ],
+      "name": "_PASS_NODE_TYPE_SET",
+      "target_name": "_PASS_NODE_TYPE_SET",
+      "target_start_line": 32
+    },
+    {
+      "lines": [
+        715
+      ],
+      "name": "_add_member",
+      "target_name": "_add_member",
+      "target_start_line": 736
+    },
+    {
+      "lines": [
+        747
+      ],
+      "name": "_STATIC_MODIFIER_TUPLE",
+      "target_name": "_STATIC_MODIFIER_TUPLE",
+      "target_start_line": 63
+    },
+    {
+      "lines": [
+        750
+      ],
+      "name": "CsharpMember.is_constructor",
+      "target_name": "is_constructor",
+      "target_start_line": 105
+    },
+    {
+      "lines": [
+        753
+      ],
+      "name": "CsharpMember.argument_range",
+      "target_name": "argument_range",
+      "target_start_line": 103
+    },
+    {
+      "lines": [
+        754
+      ],
+      "name": "CsharpMember.is_extension",
+      "target_name": "is_extension",
+      "target_start_line": 104
+    },
+    {
+      "lines": [
+        755
+      ],
+      "name": "_parameter_type_tuple",
+      "target_name": "_parameter_type_tuple",
+      "target_start_line": 462
+    },
+    {
+      "lines": [
+        755
+      ],
+      "name": "CsharpMember.parameter_type_tuple",
+      "target_name": "parameter_type_tuple",
+      "target_start_line": 108
+    },
+    {
+      "lines": [
+        756
+      ],
+      "name": "_extension_argument_range",
+      "target_name": "_extension_argument_range",
+      "target_start_line": 616
+    },
+    {
+      "lines": [
+        757
+      ],
+      "name": "_member_name_list",
+      "target_name": "_member_name_list",
+      "target_start_line": 719
+    },
+    {
+      "lines": [
+        758
+      ],
+      "name": "CsharpType.member_name_set.add",
+      "target_name": "member_name_set",
+      "target_start_line": 121
+    },
+    {
+      "lines": [
+        759
+      ],
+      "name": "CsharpType.member_list_dict.setdefault",
+      "target_name": "member_list_dict",
+      "target_start_line": 123
+    },
+    {
+      "lines": [
+        761
+      ],
+      "name": "CsharpType.extension_dict.setdefault",
+      "target_name": "extension_dict",
+      "target_start_line": 127
+    },
+    {
+      "lines": [
+        797
+      ],
+      "name": "_TYPE_FIELD_NAME_SET",
+      "target_name": "_TYPE_FIELD_NAME_SET",
+      "target_start_line": 43
+    },
+    {
+      "lines": [
+        802
+      ],
+      "name": "_TYPE_PARENT_TYPE_SET",
+      "target_name": "_TYPE_PARENT_TYPE_SET",
+      "target_start_line": 46
+    },
+    {
+      "lines": [
+        804
+      ],
+      "name": "_TYPE_RIGHT_PARENT_TYPE_SET",
+      "target_name": "_TYPE_RIGHT_PARENT_TYPE_SET",
+      "target_start_line": 49
+    },
+    {
+      "lines": [
+        809,
+        842,
+        848,
+        854,
+        871,
+        954,
+        959,
+        1107
+      ],
+      "name": "CsharpReference",
+      "target_name": "CsharpReference",
+      "target_start_line": 172
+    },
+    {
+      "lines": [
+        835
+      ],
+      "name": "argument_type",
+      "target_name": "argument_type",
+      "target_start_line": 536
+    },
+    {
+      "lines": [
+        843,
+        872,
+        1015
+      ],
+      "name": "MEMBER_REFERENCE",
+      "target_name": "MEMBER_REFERENCE",
+      "target_start_line": 16
+    },
+    {
+      "lines": [
+        847,
+        1015
+      ],
+      "name": "THIS_REFERENCE",
+      "target_name": "THIS_REFERENCE",
+      "target_start_line": 15
+    },
+    {
+      "lines": [
+        869,
+        872
+      ],
+      "name": "CsharpReference.part_tuple",
+      "target_name": "part_tuple",
+      "target_start_line": 177
+    },
+    {
+      "lines": [
+        869
+      ],
+      "name": "CsharpReference.is_call",
+      "target_name": "is_call",
+      "target_start_line": 180
+    },
+    {
+      "lines": [
+        872
+      ],
+      "name": "CsharpReference.arity_tuple",
+      "target_name": "arity_tuple",
+      "target_start_line": 178
+    },
+    {
+      "lines": [
+        873
+      ],
+      "name": "CsharpReference.argument_count",
+      "target_name": "argument_count",
+      "target_start_line": 182
+    },
+    {
+      "lines": [
+        873
+      ],
+      "name": "CsharpReference.line",
+      "target_name": "line",
+      "target_start_line": 179
+    },
+    {
+      "lines": [
+        874
+      ],
+      "name": "CsharpReference.argument_type_tuple",
+      "target_name": "argument_type_tuple",
+      "target_start_line": 185
+    },
+    {
+      "lines": [
+        919
+      ],
+      "name": "_MEMBER_NAME_TOKEN_DICT.get",
+      "target_name": "_MEMBER_NAME_TOKEN_DICT",
+      "target_start_line": 56
+    },
+    {
+      "lines": [
+        972
+      ],
+      "name": "_visit_using",
+      "target_name": "_visit_using",
+      "target_start_line": 1024
+    },
+    {
+      "lines": [
+        974,
+        1057,
+        1063
+      ],
+      "name": "NAME_REFERENCE",
+      "target_name": "NAME_REFERENCE",
+      "target_start_line": 12
+    },
+    {
+      "lines": [
+        974
+      ],
+      "name": "_is_type_position",
+      "target_name": "_is_type_position",
+      "target_start_line": 784
+    },
+    {
+      "lines": [
+        974
+      ],
+      "name": "TYPE_REFERENCE",
+      "target_name": "TYPE_REFERENCE",
+      "target_start_line": 13
+    },
+    {
+      "lines": [
+        975,
+        1041,
+        1056,
+        1063
+      ],
+      "name": "_add_chain",
+      "target_name": "_add_chain",
+      "target_start_line": 990
+    },
+    {
+      "lines": [
+        977
+      ],
+      "name": "_visit_attribute",
+      "target_name": "_visit_attribute",
+      "target_start_line": 1037
+    },
+    {
+      "lines": [
+        979
+      ],
+      "name": "_visit_invocation",
+      "target_name": "_visit_invocation",
+      "target_start_line": 1047
+    },
+    {
+      "lines": [
+        980
+      ],
+      "name": "_PREPROC_PREFIX",
+      "target_name": "_PREPROC_PREFIX",
+      "target_start_line": 66
+    },
+    {
+      "lines": [
+        981
+      ],
+      "name": "_visit_preproc",
+      "target_name": "_visit_preproc",
+      "target_start_line": 1066
+    },
+    {
+      "lines": [
+        983
+      ],
+      "name": "_visit_other",
+      "target_name": "_visit_other",
+      "target_start_line": 1079
+    },
+    {
+      "lines": [
+        1012
+      ],
+      "name": "_chain_reference",
+      "target_name": "_chain_reference",
+      "target_start_line": 807
+    },
+    {
+      "lines": [
+        1019
+      ],
+      "name": "_local_value_reference",
+      "target_name": "_local_value_reference",
+      "target_start_line": 854
+    },
+    {
+      "lines": [
+        1022,
+        1033,
+        1035,
+        1042,
+        1064,
+        1071
+      ],
+      "name": "_push",
+      "target_name": "_push",
+      "target_start_line": 986
+    },
+    {
+      "lines": [
+        1022
+      ],
+      "name": "_Chain.inner_node_list",
+      "target_name": "inner_node_list",
+      "target_start_line": 199
+    },
+    {
+      "lines": [
+        1041
+      ],
+      "name": "ATTRIBUTE_REFERENCE",
+      "target_name": "ATTRIBUTE_REFERENCE",
+      "target_start_line": 14
+    },
+    {
+      "lines": [
+        1061
+      ],
+      "name": "_call_member_chain",
+      "target_name": "_call_member_chain",
+      "target_start_line": 925
+    },
+    {
+      "lines": [
+        1068
+      ],
+      "name": "_PREPROC_CODE_TYPE_SET",
+      "target_name": "_PREPROC_CODE_TYPE_SET",
+      "target_start_line": 69
+    },
+    {
+      "lines": [
+        1091
+      ],
+      "name": "_local_name_list",
+      "target_name": "_local_name_list",
+      "target_start_line": 238
+    },
+    {
+      "lines": [
+        1095
+      ],
+      "name": "_declare_name_id",
+      "target_name": "_declare_name_id",
+      "target_start_line": 878
+    },
+    {
+      "lines": [
+        1100
+      ],
+      "name": "_LABEL_PARENT_TYPE_SET",
+      "target_name": "_LABEL_PARENT_TYPE_SET",
+      "target_start_line": 52
+    },
+    {
+      "lines": [
+        1102
+      ],
+      "name": "_is_member_name",
+      "target_name": "_is_member_name",
+      "target_start_line": 903
+    },
+    {
+      "lines": [
+        1124
+      ],
+      "name": "_ReferenceWalker",
+      "target_name": "_ReferenceWalker",
+      "target_start_line": 949
+    }
+  ],
+  "caller_usages": [
+    {
+      "lines": [
+        70,
+        327,
+        488
+      ],
+      "name": "CsharpType",
+      "file": "codetwine/codetwine/csharp_namespace_index_py/csharp_namespace_index.py",
+      "usage_context": "    \"\"\"One declaration of a type and the file it is written in.\"\"\"\n\n    file_rel: str\n    csharp_type: CsharpType\n\n\n@dataclass\n...\n\n\ndef _declaration_line(\n    csharp_type: CsharpType,\n    member_name: str,\n    argument_count: int | None,\n    is_extension: bool = False,"
+    },
+    {
+      "lines": [
+        78,
+        150,
+        153,
+        387,
+        398
+      ],
+      "name": "CsharpDeclaration",
+      "file": "codetwine/codetwine/csharp_namespace_index_py/csharp_namespace_index.py",
+      "usage_context": "    \"\"\"The namespaces, types and extension methods of the C# files of a project.\"\"\"\n\n    # Relative path -> declarations of the file\n    declaration_dict: dict[str, CsharpDeclaration] = field(default_factory=dict)\n    # (namespace, type path) -> declarations of the type, in path order\n    type_dict: dict[tuple[str, str], list[_TypeEntry]] = field(default_factory=dict)\n    # Every namespace of the project and each of its leading parts (A.B.C -> A, A.B, A.B.C)\n...\n\n\ndef _add_declaration(\n    namespace_index: CsharpNamespaceIndex, file_rel: str, declaration: CsharpDeclaration,\n) -> None:\n    \"\"\"Index the namespaces, types, extension methods and global using directives of a file.\"\"\"\n    namespace_index.declaration_dict[file_rel] = declaration"
+    },
+    {
+      "lines": [
+        88,
+        96,
+        460,
+        484,
+        486
+      ],
+      "name": "CsharpUsing",
+      "file": "codetwine/codetwine/csharp_namespace_index_py/csharp_namespace_index.py",
+      "usage_context": "    # Relative path -> directory of the nearest .csproj file above the file (\"\" for none)\n    project_dir_dict: dict[str, str] = field(default_factory=dict)\n    # Directory of a .csproj file -> global using directives of the files under it\n    global_using_dict: dict[str, list[CsharpUsing]] = field(default_factory=dict)\n\n\n@dataclass\n...\n    \"\"\"One namespace a name is looked up in, with the using directives written for it.\"\"\"\n\n    namespace: str\n    using_list: list[CsharpUsing] = field(default_factory=list)\n\n\n@dataclass"
+    },
+    {
+      "lines": [
+        154
+      ],
+      "name": "CsharpDeclaration.scope_list",
+      "file": "codetwine/codetwine/csharp_namespace_index_py/csharp_namespace_index.py",
+      "usage_context": ") -> None:\n    \"\"\"Index the namespaces, types, extension methods and global using directives of a file.\"\"\"\n    namespace_index.declaration_dict[file_rel] = declaration\n    for scope in declaration.scope_list:\n        part_list = scope.namespace.split(\".\") if scope.namespace else []\n        for part_count in range(1, len(part_list) + 1):\n            namespace_index.namespace_set.add(\".\".join(part_list[:part_count]))"
+    },
+    {
+      "lines": [
+        162
+      ],
+      "name": "CsharpDeclaration.type_list",
+      "file": "codetwine/codetwine/csharp_namespace_index_py/csharp_namespace_index.py",
+      "usage_context": "        namespace_index.global_using_dict.setdefault(project_dir, []).extend(\n            using for using in scope.using_list if using.is_global\n        )\n    for csharp_type in declaration.type_list:\n        entry = _TypeEntry(file_rel, csharp_type)\n        namespace_index.type_dict.setdefault(\n            (csharp_type.namespace, csharp_type.path), [],"
+    },
+    {
+      "lines": [
+        192
+      ],
+      "name": "read_csharp_declaration",
+      "file": "codetwine/codetwine/csharp_namespace_index_py/csharp_namespace_index.py",
+      "usage_context": "    for file_rel in file_rel_list:\n        try:\n            root_node = parse_file(os.path.join(project_dir, file_rel))[0]\n            declaration = read_csharp_declaration(root_node)\n        except Exception as e:\n            logger.warning(f\"{file_rel} is not read as C#: {type(e).__name__}: {e}\")\n            continue"
+    },
+    {
+      "lines": [
+        259,
+        615,
+        640,
+        842,
+        902
+      ],
+      "name": "join_name",
+      "file": "codetwine/codetwine/csharp_namespace_index_py/csharp_namespace_index.py",
+      "usage_context": "                path = f\"{path}.{part_tuple[end]}\"\n                end += 1\n            return namespace, path, position, end\n        namespace = join_name(namespace, name)\n        if not is_namespace_part or namespace not in namespace_index.namespace_set:\n            return None\n    return None\n...\n        return _Match(\n            entry_list=self._select_entry_list(entry_list, is_own_first=True),\n            name=\".\".join(name_part_tuple),\n            definition_name=join_name(path, part_tuple[type_end] if is_member else \"\"),\n            part_count=write_end,\n            member_name=part_tuple[type_end] if is_member else \"\",\n            is_type_first=write_start == 0 and type_write_end >= 1,"
+    },
+    {
+      "lines": [
+        300
+      ],
+      "name": "CsharpMember",
+      "file": "codetwine/codetwine/csharp_namespace_index_py/csharp_namespace_index.py",
+      "usage_context": "\n\ndef _is_type_fit(\n    member: CsharpMember, argument_type_tuple: tuple[str | None, ...], is_extension: bool,\n) -> bool:\n    \"\"\"Return whether the arguments of a call can be the parameters of a method declaration.\n"
+    },
+    {
+      "lines": [
+        316,
+        318
+      ],
+      "name": "CsharpMember.parameter_type_tuple",
+      "file": "codetwine/codetwine/csharp_namespace_index_py/csharp_namespace_index.py",
+      "usage_context": "    \"\"\"\n    offset = 1 if is_extension else 0\n    for index, argument_type in enumerate(argument_type_tuple):\n        if argument_type is None or index + offset >= len(member.parameter_type_tuple):\n            continue\n        parameter_type = member.parameter_type_tuple[index + offset]\n        if parameter_type is None or parameter_type in _ANY_TYPE_SET:\n...\n    for index, argument_type in enumerate(argument_type_tuple):\n        if argument_type is None or index + offset >= len(member.parameter_type_tuple):\n            continue\n        parameter_type = member.parameter_type_tuple[index + offset]\n        if parameter_type is None or parameter_type in _ANY_TYPE_SET:\n            continue\n        if parameter_type != argument_type and parameter_type not in _WIDER_TYPE_DICT.get(argument_type, ()):"
+    },
+    {
+      "lines": [
+        359
+      ],
+      "name": "CsharpType.member_list_dict.get",
+      "file": "codetwine/codetwine/csharp_namespace_index_py/csharp_namespace_index.py",
+      "usage_context": "        when the member is not called or the call fits none or several; the line of\n        the type when it declares no member of the name.\n    \"\"\"\n    member_list = csharp_type.member_list_dict.get(member_name, [])\n    if not member_list:\n        return csharp_type.start_line\n    if argument_count is not None:"
+    },
+    {
+      "lines": [
+        361
+      ],
+      "name": "CsharpType.start_line",
+      "file": "codetwine/codetwine/csharp_namespace_index_py/csharp_namespace_index.py",
+      "usage_context": "    \"\"\"\n    member_list = csharp_type.member_list_dict.get(member_name, [])\n    if not member_list:\n        return csharp_type.start_line\n    if argument_count is not None:\n        # Number of arguments with the value an extension method is called on\n        full_count = argument_count + 1 if is_extension else argument_count"
+    },
+    {
+      "lines": [
+        479
+      ],
+      "name": "CsharpUsing.part_tuple",
+      "file": "codetwine/codetwine/csharp_namespace_index_py/csharp_namespace_index.py",
+      "usage_context": "            leads to a type of it; the directive itself when no name is.\n        \"\"\"\n        while namespace:\n            part_tuple = tuple(namespace.split(\".\")) + using.part_tuple\n            if (\n                \".\".join(part_tuple) in self.namespace_index.namespace_set\n                or _find_type(self.namespace_index, \"\", part_tuple) is not None"
+    },
+    {
+      "lines": [
+        526,
+        622,
+        643,
+        651,
+        671,
+        678,
+        686,
+        705,
+        712,
+        733,
+        739,
+        746,
+        751,
+        752,
+        755,
+        759,
+        765,
+        789,
+        793,
+        795,
+        848,
+        874
+      ],
+      "name": "CsharpReference",
+      "file": "codetwine/codetwine/csharp_namespace_index_py/csharp_namespace_index.py",
+      "usage_context": "\n    def _match_name(\n        self,\n        reference: CsharpReference,\n        namespace: str,\n        prefix_tuple: tuple[str, ...] = (),\n        prefix_arity: int = 0,\n...\n        )\n\n    def _match_outer_type(\n        self, reference: CsharpReference, line: int, is_any_arity: bool,\n    ) -> _Match | None:\n        \"\"\"Look up the first part of a reference among the members of the types around it.\n"
+    },
+    {
+      "lines": [
+        571,
+        609,
+        676,
+        736,
+        794,
+        869,
+        881,
+        895,
+        898,
+        899
+      ],
+      "name": "CsharpReference.part_tuple",
+      "file": "codetwine/codetwine/csharp_namespace_index_py/csharp_namespace_index.py",
+      "usage_context": "            is written with and is_any_arity is False.\n        \"\"\"\n        prefix_count = len(prefix_tuple)\n        part_tuple = prefix_tuple + reference.part_tuple[skip_count:]\n        arity_tuple = (\n            (0,) * max(prefix_count - 1, 0) + (prefix_arity,) * min(prefix_count, 1)\n            + reference.arity_tuple[skip_count:]\n...\n                return None\n            entry_list = member_entry_list or entry_list\n\n        name_part_tuple = reference.part_tuple[write_start:write_end]\n        if write_start < skip_count:\n            name_part_tuple = part_tuple[type_start:name_end]\n        return _Match("
+    },
+    {
+      "lines": [
+        574,
+        869
+      ],
+      "name": "CsharpReference.arity_tuple",
+      "file": "codetwine/codetwine/csharp_namespace_index_py/csharp_namespace_index.py",
+      "usage_context": "        part_tuple = prefix_tuple + reference.part_tuple[skip_count:]\n        arity_tuple = (\n            (0,) * max(prefix_count - 1, 0) + (prefix_arity,) * min(prefix_count, 1)\n            + reference.arity_tuple[skip_count:]\n        )\n        type_match = _find_type(self.namespace_index, namespace, part_tuple, is_namespace_part)\n        if type_match is None:\n...\n        match = None\n        if reference.kind != MEMBER_REFERENCE:\n            match_key = (\n                reference.kind, reference.part_tuple, reference.arity_tuple,\n                reference.is_absolute, self._scope_index(line),\n                tuple(csharp_type.start_line for csharp_type in self._outer_type_list(line)),\n            )"
+    },
+    {
+      "lines": [
+        588,
+        790,
+        896
+      ],
+      "name": "THIS_REFERENCE",
+      "file": "codetwine/codetwine/csharp_namespace_index_py/csharp_namespace_index.py",
+      "usage_context": "        type_write_end = type_end - prefix_count + skip_count\n        if write_end <= write_start or write_end < 1:\n            return None\n        is_type_need = reference.kind not in (NAME_REFERENCE, THIS_REFERENCE)\n        if is_type_need and is_member:\n            return None\n\n...\n            leads to no type of the project.\n        \"\"\"\n        member_match = self._match_outer_type(reference, line, is_any_arity)\n        if reference.kind == THIS_REFERENCE:\n            return member_match\n        if member_match is None:\n            return self._match_namespace(reference, line, is_any_arity)"
+    },
+    {
+      "lines": [
+        588
+      ],
+      "name": "NAME_REFERENCE",
+      "file": "codetwine/codetwine/csharp_namespace_index_py/csharp_namespace_index.py",
+      "usage_context": "        type_write_end = type_end - prefix_count + skip_count\n        if write_end <= write_start or write_end < 1:\n            return None\n        is_type_need = reference.kind not in (NAME_REFERENCE, THIS_REFERENCE)\n        if is_type_need and is_member:\n            return None\n"
+    },
+    {
+      "lines": [
+        588,
+        734,
+        790,
+        867,
+        869,
+        896
+      ],
+      "name": "CsharpReference.kind",
+      "file": "codetwine/codetwine/csharp_namespace_index_py/csharp_namespace_index.py",
+      "usage_context": "        type_write_end = type_end - prefix_count + skip_count\n        if write_end <= write_start or write_end < 1:\n            return None\n        is_type_need = reference.kind not in (NAME_REFERENCE, THIS_REFERENCE)\n        if is_type_need and is_member:\n            return None\n\n...\n        \"\"\"\n        for is_any_arity in (False, True):\n            match = self._match_written(reference, line, is_any_arity)\n            if match is None and reference.kind == ATTRIBUTE_REFERENCE:\n                part_tuple = (\n                    reference.part_tuple[:-1] + (reference.part_tuple[-1] + _ATTRIBUTE_SUFFIX,)\n                )"
+    },
+    {
+      "lines": [
+        676
+      ],
+      "name": "ALIAS_USING",
+      "file": "codetwine/codetwine/csharp_namespace_index_py/csharp_namespace_index.py",
+      "usage_context": "            return match\n\n        for using in step.using_list:\n            if using.kind == ALIAS_USING and using.alias == reference.part_tuple[0]:\n                match = self._match_name(\n                    reference, \"\", using.part_tuple, using.arity, skip_count=1,\n                    is_any_arity=is_any_arity,"
+    },
+    {
+      "lines": [
+        689,
+        835
+      ],
+      "name": "NAMESPACE_USING",
+      "file": "codetwine/codetwine/csharp_namespace_index_py/csharp_namespace_index.py",
+      "usage_context": "                reference, \".\".join(using.part_tuple), is_namespace_part=False,\n                is_any_arity=is_any_arity,\n            )\n            for using in step.using_list if using.kind == NAMESPACE_USING\n        ]\n        match_list = [match for match in match_list if match is not None]\n        if match_list:\n...\n            namespace_set = {step.namespace}\n            type_name_set: set[str] = set()\n            for using in step.using_list:\n                if using.kind == NAMESPACE_USING:\n                    namespace_set.add(\".\".join(using.part_tuple))\n                elif using.kind == STATIC_USING:\n                    type_name_set.add(\".\".join(using.part_tuple))"
+    },
+    {
+      "lines": [
+        703,
+        837
+      ],
+      "name": "STATIC_USING",
+      "file": "codetwine/codetwine/csharp_namespace_index_py/csharp_namespace_index.py",
+      "usage_context": "            return match\n\n        for using in step.using_list:\n            if using.kind == STATIC_USING:\n                match = self._match_name(\n                    reference, \"\", using.part_tuple, using.arity, is_member_need=True,\n                    is_any_arity=is_any_arity,\n...\n            for using in step.using_list:\n                if using.kind == NAMESPACE_USING:\n                    namespace_set.add(\".\".join(using.part_tuple))\n                elif using.kind == STATIC_USING:\n                    type_name_set.add(\".\".join(using.part_tuple))\n            entry_list = [\n                entry for entry in candidate_list"
+    },
+    {
+      "lines": [
+        734
+      ],
+      "name": "ATTRIBUTE_REFERENCE",
+      "file": "codetwine/codetwine/csharp_namespace_index_py/csharp_namespace_index.py",
+      "usage_context": "        \"\"\"\n        for is_any_arity in (False, True):\n            match = self._match_written(reference, line, is_any_arity)\n            if match is None and reference.kind == ATTRIBUTE_REFERENCE:\n                part_tuple = (\n                    reference.part_tuple[:-1] + (reference.part_tuple[-1] + _ATTRIBUTE_SUFFIX,)\n                )"
+    },
+    {
+      "lines": [
+        750,
+        870
+      ],
+      "name": "CsharpReference.is_absolute",
+      "file": "codetwine/codetwine/csharp_namespace_index_py/csharp_namespace_index.py",
+      "usage_context": "    ) -> _Match | None:\n        \"\"\"Look up a chain with the names it writes: from the global namespace when it\n        starts with \"global::\" (_match_name), else from where it is written (_match_chain).\"\"\"\n        if reference.is_absolute:\n            return self._match_name(reference, \"\", is_any_arity=is_any_arity)\n        return self._match_chain(reference, line, is_any_arity)\n\n...\n        if reference.kind != MEMBER_REFERENCE:\n            match_key = (\n                reference.kind, reference.part_tuple, reference.arity_tuple,\n                reference.is_absolute, self._scope_index(line),\n                tuple(csharp_type.start_line for csharp_type in self._outer_type_list(line)),\n            )\n            if match_key not in self._match_dict:"
+    },
+    {
+      "lines": [
+        865
+      ],
+      "name": "CsharpReference.line",
+      "file": "codetwine/codetwine/csharp_namespace_index_py/csharp_namespace_index.py",
+      "usage_context": "            in that file (_declaration_line). Empty when the reference leads to no\n            definition of the project.\n        \"\"\"\n        line = reference.line\n        match = None\n        if reference.kind != MEMBER_REFERENCE:\n            match_key = ("
+    },
+    {
+      "lines": [
+        867,
+        896
+      ],
+      "name": "MEMBER_REFERENCE",
+      "file": "codetwine/codetwine/csharp_namespace_index_py/csharp_namespace_index.py",
+      "usage_context": "        \"\"\"\n        line = reference.line\n        match = None\n        if reference.kind != MEMBER_REFERENCE:\n            match_key = (\n                reference.kind, reference.part_tuple, reference.arity_tuple,\n                reference.is_absolute, self._scope_index(line),\n...\n\n        is_value_call = reference.is_call and (\n            len(reference.part_tuple) >= 2\n            or reference.kind in (THIS_REFERENCE, MEMBER_REFERENCE)\n        )\n        if is_value_call and part_count < len(reference.part_tuple):\n            name = reference.part_tuple[-1]"
+    },
+    {
+      "lines": [
+        881,
+        894
+      ],
+      "name": "CsharpReference.is_call",
+      "file": "codetwine/codetwine/csharp_namespace_index_py/csharp_namespace_index.py",
+      "usage_context": "        part_count = 0\n        if match is not None:\n            part_count = match.part_count\n            is_member_call = reference.is_call and part_count == len(reference.part_tuple)\n            argument_count = reference.argument_count if is_member_call else None\n            target_list.extend(\n                CsharpReferenceTarget(\n...\n                for entry in match.entry_list\n            )\n\n        is_value_call = reference.is_call and (\n            len(reference.part_tuple) >= 2\n            or reference.kind in (THIS_REFERENCE, MEMBER_REFERENCE)\n        )"
+    },
+    {
+      "lines": [
+        882,
+        904,
+        908
+      ],
+      "name": "CsharpReference.argument_count",
+      "file": "codetwine/codetwine/csharp_namespace_index_py/csharp_namespace_index.py",
+      "usage_context": "        if match is not None:\n            part_count = match.part_count\n            is_member_call = reference.is_call and part_count == len(reference.part_tuple)\n            argument_count = reference.argument_count if is_member_call else None\n            target_list.extend(\n                CsharpReferenceTarget(\n                    match.name, line, entry.file_rel, match.definition_name,\n...\n                CsharpReferenceTarget(\n                    name, line, entry.file_rel, join_name(entry.csharp_type.path, name),\n                    _declaration_line(\n                        entry.csharp_type, name, reference.argument_count, is_extension=True,\n                        argument_type_tuple=reference.argument_type_tuple,\n                    ),\n                )"
+    },
+    {
+      "lines": [
+        888,
+        905
+      ],
+      "name": "CsharpReference.argument_type_tuple",
+      "file": "codetwine/codetwine/csharp_namespace_index_py/csharp_namespace_index.py",
+      "usage_context": "                    match.name, line, entry.file_rel, match.definition_name,\n                    _declaration_line(\n                        entry.csharp_type, match.member_name, argument_count,\n                        argument_type_tuple=reference.argument_type_tuple,\n                    ),\n                )\n                for entry in match.entry_list\n...\n                    name, line, entry.file_rel, join_name(entry.csharp_type.path, name),\n                    _declaration_line(\n                        entry.csharp_type, name, reference.argument_count, is_extension=True,\n                        argument_type_tuple=reference.argument_type_tuple,\n                    ),\n                )\n                for entry in self._extension_entry_list(name, line, reference.argument_count)"
+    },
+    {
+      "lines": [
+        972
+      ],
+      "name": "csharp_reference_list",
+      "file": "codetwine/codetwine/csharp_namespace_index_py/csharp_namespace_index.py",
+      "usage_context": "    # they call two overloads\n    target_dict: dict[tuple[str, int, str, int], CsharpReferenceTarget] = {}\n    root_node = parse_file(os.path.join(project_dir, file_rel))[0]\n    for reference in csharp_reference_list(root_node):\n        for target in resolver.resolve(reference):\n            target_dict.setdefault(\n                (target.name, target.line, target.file_rel, target.definition_line), target,"
+    }
+  ]
+}

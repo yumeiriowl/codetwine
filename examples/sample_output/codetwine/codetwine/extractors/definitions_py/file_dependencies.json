@@ -1,140 +1,1239 @@
 {
   "file": "codetwine/codetwine/extractors/definitions_py/definitions.py",
+  "language": "py",
+  "detected_encoding": null,
   "definitions": [
     {
       "name": "_INCLUDE_GUARD_RE",
       "type": "expression_statement",
-      "start_line": 7,
-      "end_line": 7,
+      "start_line": 15,
+      "end_line": 15,
       "context": "_INCLUDE_GUARD_RE = re.compile(r\"^_*[A-Z][A-Z0-9_]*_H(?:PP|XX)?_*(?:INCLUDED)?_*$\")"
+    },
+    {
+      "name": "CONTAINER_DEFINITION_TYPE_SET",
+      "type": "expression_statement",
+      "start_line": 20,
+      "end_line": 41,
+      "context": "CONTAINER_DEFINITION_TYPE_SET = {\n    \"namespace_definition\",        # C++\n    \"class_definition\",            # Python\n    \"class_declaration\",           # Java / Kotlin / JS / TS / C#\n    \"abstract_class_declaration\",  # TS\n    \"class_specifier\",             # C++\n    \"struct_specifier\",            # C / C++\n    \"union_specifier\",             # C / C++\n    \"enum_specifier\",              # C / C++\n    \"interface_declaration\",       # Java / TS / C#\n    \"enum_declaration\",            # Java / TS / C#\n    \"record_declaration\",          # Java / C#\n    \"annotation_type_declaration\", # Java\n    \"struct_declaration\",          # C#\n    \"object_declaration\",          # Kotlin\n    \"companion_object\",            # Kotlin\n    \"internal_module\",             # TS\n    \"export_statement\",            # JS / TS\n    \"impl_item\",                   # Rust\n    \"trait_item\",                  # Rust\n    \"mod_item\",                    # Rust\n}"
+    },
+    {
+      "name": "CLASS_DEFINITION_TYPE_SET",
+      "type": "expression_statement",
+      "start_line": 44,
+      "end_line": 55,
+      "context": "CLASS_DEFINITION_TYPE_SET = {\n    \"class_definition\",            # Python\n    \"class_declaration\",           # Java / Kotlin / JS / TS\n    \"abstract_class_declaration\",  # TS\n    \"class_specifier\",             # C++\n    \"struct_specifier\",            # C / C++\n    \"union_specifier\",             # C / C++\n    \"interface_declaration\",       # Java / TS\n    \"enum_declaration\",            # Java / TS\n    \"record_declaration\",          # Java\n    \"object_declaration\",          # Kotlin\n}"
+    },
+    {
+      "name": "OPEN_DEFINITION_TYPE_SET",
+      "type": "expression_statement",
+      "start_line": 60,
+      "end_line": 60,
+      "context": "OPEN_DEFINITION_TYPE_SET = {\"namespace_definition\", \"enum_specifier\"}"
+    },
+    {
+      "name": "TRANSPARENT_DEFINITION_TYPE_SET",
+      "type": "expression_statement",
+      "start_line": 64,
+      "end_line": 64,
+      "context": "TRANSPARENT_DEFINITION_TYPE_SET = {\"namespace_definition\"}"
+    },
+    {
+      "name": "_TYPE_FIELD_DEFINITION_TYPE_SET",
+      "type": "expression_statement",
+      "start_line": 68,
+      "end_line": 68,
+      "context": "_TYPE_FIELD_DEFINITION_TYPE_SET = {\"declaration\", \"type_definition\", \"field_declaration\"}"
+    },
+    {
+      "name": "BARE_NAME_DEFINITION_TYPE_SET",
+      "type": "expression_statement",
+      "start_line": 73,
+      "end_line": 73,
+      "context": "BARE_NAME_DEFINITION_TYPE_SET = set(COBOL_DEFINITION_DICT)"
+    },
+    {
+      "name": "ATTACHED_DEFINITION_TYPE_SET",
+      "type": "expression_statement",
+      "start_line": 77,
+      "end_line": 77,
+      "context": "ATTACHED_DEFINITION_TYPE_SET = {\"impl_item\"}"
+    },
+    {
+      "name": "DEFAULT_EXPORT_NAME",
+      "type": "expression_statement",
+      "start_line": 80,
+      "end_line": 80,
+      "context": "DEFAULT_EXPORT_NAME = \"default\""
+    },
+    {
+      "name": "_LOCAL_BODY_TYPE_SET",
+      "type": "expression_statement",
+      "start_line": 85,
+      "end_line": 88,
+      "context": "_LOCAL_BODY_TYPE_SET = {\n    \"function_expression\", \"arrow_function\", \"generator_function\", \"class_static_block\",\n    \"lambda_literal\", \"anonymous_function\", \"anonymous_initializer\", \"closure_expression\",\n}"
+    },
+    {
+      "name": "_DECLARATION_TYPE_SET",
+      "type": "expression_statement",
+      "start_line": 91,
+      "end_line": 91,
+      "context": "_DECLARATION_TYPE_SET = {\"declaration\", \"field_declaration\"}"
+    },
+    {
+      "name": "_WRAP_DECLARATOR_TYPE_SET",
+      "type": "expression_statement",
+      "start_line": 94,
+      "end_line": 96,
+      "context": "_WRAP_DECLARATOR_TYPE_SET = {\n    \"pointer_declarator\", \"array_declarator\", \"reference_declarator\", \"parenthesized_declarator\",\n}"
+    },
+    {
+      "name": "_FUNCTION_VALUE_TYPE_SET",
+      "type": "expression_statement",
+      "start_line": 99,
+      "end_line": 101,
+      "context": "_FUNCTION_VALUE_TYPE_SET = {\n    \"function_expression\", \"arrow_function\", \"generator_function\", \"class\",\n}"
+    },
+    {
+      "name": "PATTERN_NAME_TYPE_SET",
+      "type": "expression_statement",
+      "start_line": 104,
+      "end_line": 106,
+      "context": "PATTERN_NAME_TYPE_SET = {\n    \"identifier\", \"shorthand_property_identifier_pattern\", \"shorthand_field_identifier\",\n}"
     },
     {
       "name": "DefinitionInfo",
       "type": "class_definition",
-      "start_line": 10,
-      "end_line": 17,
-      "context": "@dataclass\nclass DefinitionInfo:\n    \"\"\"Data class holding information about a single definition.\"\"\"\n\n    name: str                                     # Definition name (function / class / variable / type, etc.)\n    type: str                                     # AST node type (\"function_definition\" / \"expression_statement\", etc.)\n    start_line: int                               # Start line number of the definition (1-based)\n    end_line: int                                 # End line number of the definition"
+      "start_line": 109,
+      "end_line": 123,
+      "context": "@dataclass\nclass DefinitionInfo:\n    \"\"\"Data class holding information about a single definition.\"\"\"\n\n    name: str                                     # Definition name (function / class / variable / type, etc.)\n    type: str                                     # AST node type (\"function_definition\" / \"expression_statement\", etc.)\n    start_line: int                               # Start line number of the definition (1-based)\n    end_line: int                                 # End line number of the definition\n    name_line: int | None = None                  # Line the name is written on (COBOL, BMS)\n    level: int | None = None                      # Level number of a data item (COBOL, BMS)\n    is_group: bool | None = None                  # Whether a data item is a group item (COBOL, BMS)\n    # Byte range of the definition in the UTF-8 text parse_file() returns; None for a\n    # COBOL, BMS or R definition\n    start_byte: int | None = None\n    end_byte: int | None = None"
+    },
+    {
+      "name": "name",
+      "type": "expression_statement",
+      "start_line": 113,
+      "end_line": 113,
+      "context": "    name: str                                     # Definition name (function / class / variable / type, etc.)"
+    },
+    {
+      "name": "type",
+      "type": "expression_statement",
+      "start_line": 114,
+      "end_line": 114,
+      "context": "    type: str                                     # AST node type (\"function_definition\" / \"expression_statement\", etc.)"
+    },
+    {
+      "name": "start_line",
+      "type": "expression_statement",
+      "start_line": 115,
+      "end_line": 115,
+      "context": "    start_line: int                               # Start line number of the definition (1-based)"
+    },
+    {
+      "name": "end_line",
+      "type": "expression_statement",
+      "start_line": 116,
+      "end_line": 116,
+      "context": "    end_line: int                                 # End line number of the definition"
+    },
+    {
+      "name": "name_line",
+      "type": "expression_statement",
+      "start_line": 117,
+      "end_line": 117,
+      "context": "    name_line: int | None = None                  # Line the name is written on (COBOL, BMS)"
+    },
+    {
+      "name": "level",
+      "type": "expression_statement",
+      "start_line": 118,
+      "end_line": 118,
+      "context": "    level: int | None = None                      # Level number of a data item (COBOL, BMS)"
+    },
+    {
+      "name": "is_group",
+      "type": "expression_statement",
+      "start_line": 119,
+      "end_line": 119,
+      "context": "    is_group: bool | None = None                  # Whether a data item is a group item (COBOL, BMS)"
+    },
+    {
+      "name": "start_byte",
+      "type": "expression_statement",
+      "start_line": 122,
+      "end_line": 122,
+      "context": "    start_byte: int | None = None"
+    },
+    {
+      "name": "end_byte",
+      "type": "expression_statement",
+      "start_line": 123,
+      "end_line": 123,
+      "context": "    end_byte: int | None = None"
     },
     {
       "name": "extract_definitions",
       "type": "function_definition",
-      "start_line": 20,
-      "end_line": 109,
-      "context": "def extract_definitions(\n    root_node: Node,\n    definition_dict: dict[str, str],\n) -> list[DefinitionInfo]:\n    \"\"\"Extract definitions (functions, classes, variables, types, etc.) from the AST and return them in line-number order.\n\n    definition_dict structure:\n        key = AST node type (e.g. \"function_definition\")\n        value = one of the following:\n          - Child node type name (standard pattern): obtains the name from a direct child.\n            e.g. \"identifier\" -> searches node.children for a child with type==\"identifier\"\n          - \"__sentinel__\" format sentinel value (special pattern): the name node is\n            nested two or more levels deep, and a dedicated extraction function is used.\n            e.g. \"__assignment__\" -> expression_statement > assignment > identifier\n\n    If name extraction fails (e.g. a C/C++ declaration is a forward declaration),\n    child nodes are added to the queue and BFS continues. This allows detection of\n    definitions like function_declarator nested inside.\n\n    Args:\n        root_node: The AST root node covering the entire file.\n        definition_dict: Per-language definition node settings.\n\n    Returns:\n        A list of DefinitionInfo sorted by line number in ascending order.\n    \"\"\"\n\n    definition_list: list[DefinitionInfo] = []\n\n    # AST node types for which child node traversal continues even after being recorded as a definition.\n    # e.g. namespace_definition contains class and function definitions inside,\n    # and class bodies contain methods, constructors and fields.\n    _CONTAINER_DEFINITION_TYPES = {\n        \"namespace_definition\",   # C++\n        \"class_definition\",       # Python\n        \"class_declaration\",      # Java / Kotlin / JS / TS\n        \"class_specifier\",        # C++\n        \"struct_specifier\",       # C / C++\n        \"interface_declaration\",  # Java / TS\n        \"enum_declaration\",       # Java / TS\n        \"object_declaration\",     # Kotlin\n    }\n\n    # BFS traversal of the AST using a deque\n    node_queue = deque([root_node])\n\n    while node_queue:\n        node = node_queue.popleft()\n\n        if node.type == \"decorated_definition\" and \"decorated_definition\" in definition_dict:\n            # Process decorated definitions (e.g. @property) with a dedicated parser\n            definition = _parse_decorated_definition(node, definition_dict)\n            if definition:\n                definition_list.append(definition)\n\n        elif node.type in definition_dict and node.type != \"decorated_definition\":\n            # Process a standard definition node\n            name_node_type = definition_dict[node.type]\n            definition = _parse_definition_node(node, name_node_type)\n            if definition:\n                # Exclude #include guard #define directives\n                if node.type == \"preproc_def\" and _INCLUDE_GUARD_RE.match(definition.name):\n                    node_queue.extend(node.children)\n                    continue\n\n                definition_list.append(definition)\n\n                # Continue traversal inside container-type definitions (e.g. namespace)\n                if node.type in _CONTAINER_DEFINITION_TYPES:\n                    node_queue.extend(node.children)\n            else:\n                # For destructuring (destructured assignment), extract multiple names\n                names = _extract_destructured_names(node, name_node_type)\n                if names:\n                    for name in names:\n                        definition_list.append(DefinitionInfo(\n                            name=name,\n                            type=node.type,\n                            start_line=node.start_point[0] + 1,\n                            end_line=node.end_point[0] + 1,\n                        ))\n                else:\n                    # When name extraction fails, descend into child nodes to continue search\n                    node_queue.extend(node.children)\n\n        else:\n            # If not a definition node, add children to the queue to dig deeper\n            node_queue.extend(node.children)\n\n    return sorted(definition_list, key=lambda d: d.start_line)"
+      "start_line": 126,
+      "end_line": 226,
+      "context": "def extract_definitions(\n    root_node: Node | CobolSource,\n    definition_dict: dict[str, str],\n) -> list[DefinitionInfo]:\n    \"\"\"Extract definitions (functions, classes, variables, types, etc.) from the AST and return them in line-number order.\n\n    For a CobolSource its definitions are returned: programs, ENTRY names, sections,\n    paragraphs, data items, index names and descriptions of files, with the line of the\n    name, and the level number and whether it is a group item for a data item.\n\n    For an R file (definition_dict is R_DEFINITION_DICT) the definitions\n    r_definition_list() reads are returned: top-level assignments, the names setClass\n    and the like are given, and the members of R6Class and setRefClass.\n\n    definition_dict structure:\n        key = AST node type (e.g. \"function_definition\")\n        value = one of the following:\n          - Child node type name (standard pattern): obtains the name from a direct child.\n            e.g. \"identifier\" -> searches node.children for a child with type==\"identifier\"\n          - \"__sentinel__\" format sentinel value (special pattern): the names are read by\n            a dedicated extraction function.\n            e.g. \"__assignment__\" -> expression_statement > assignment > identifier\n\n    A node that defines several names (int a, b; / X, Y = 1, 2 / const { a, b } = obj)\n    gives one definition per name, all with the line range of the node.\n\n    If no name is obtained (e.g. a C/C++ declaration is a function prototype),\n    child nodes are added to the queue and BFS continues. This allows detection of\n    definitions like function_declarator nested inside.\n\n    Args:\n        root_node: The AST root node covering the entire file, or the CobolSource of a COBOL file.\n        definition_dict: Per-language definition node settings.\n\n    Returns:\n        A list of DefinitionInfo sorted by line number in ascending order.\n    \"\"\"\n    if isinstance(root_node, CobolSource):\n        return [\n            DefinitionInfo(\n                definition.name, definition.type, definition.start_line, definition.end_line,\n                definition.name_line, definition.level, definition.is_group,\n            )\n            for definition in root_node.definition_list\n        ]\n    if definition_dict is R_DEFINITION_DICT:\n        return [\n            DefinitionInfo(definition.name, definition.type, definition.start_line, definition.end_line)\n            for definition in r_definition_list(root_node)\n        ]\n\n    definition_list: list[DefinitionInfo] = []\n\n    # BFS traversal of the AST using a deque\n    node_queue = deque([root_node])\n\n    while node_queue:\n        node = node_queue.popleft()\n        if node.type not in definition_dict:\n            # If not a definition node, add children to the queue to dig deeper, except\n            # into the body of a function written as a value, whose declarations are local\n            if node.type not in _LOCAL_BODY_TYPE_SET or _is_call_in_place(node):\n                node_queue.extend(node.children)\n            continue\n\n        # A decorated definition (e.g. @property) is named and typed after the\n        # function / class inside it and keeps the line range including the decorator\n        inner_node = _decorated_inner_node(node, definition_dict) if node.type == \"decorated_definition\" else node\n        name_list = definition_name_list(inner_node, definition_dict) if inner_node else []\n        if node.type == \"preproc_def\":\n            # Exclude #include guard #define directives\n            name_list = [name for name in name_list if not _INCLUDE_GUARD_RE.match(name)]\n        if not name_list:\n            # When no name is obtained, descend into child nodes to continue search\n            node_queue.extend(node.children)\n            continue\n\n        # The definition covers the declaration its node is the declarator of\n        extent_node = _extent_node(node, definition_dict)\n        start_line, end_line = _line_range(extent_node)\n        for name in name_list:\n            definition_list.append(DefinitionInfo(\n                name=name, type=inner_node.type, start_line=start_line, end_line=end_line,\n                start_byte=extent_node.start_byte, end_byte=extent_node.end_byte,\n            ))\n\n        # Continue traversal inside container-type definitions (e.g. namespace),\n        # and inside the type a declaration is written with\n        if inner_node.type in CONTAINER_DEFINITION_TYPE_SET:\n            node_queue.extend(inner_node.children)\n        elif inner_node.type in _TYPE_FIELD_DEFINITION_TYPE_SET:\n            type_node = inner_node.child_by_field_name(\"type\")\n            if type_node is not None:\n                node_queue.append(type_node)\n        elif inner_node.type == \"expression_statement\":\n            # The entries of an object a CommonJS module exports\n            export_assignment = commonjs_export_assignment(inner_node)\n            if export_assignment is not None and export_assignment[1].type == \"object\":\n                node_queue.extend(export_assignment[1].children)\n\n    return sorted(definition_list, key=lambda definition: definition.start_line)"
     },
     {
-      "name": "_parse_decorated_definition",
+      "name": "select_top_level_definitions",
       "type": "function_definition",
-      "start_line": 112,
-      "end_line": 148,
-      "context": "def _parse_decorated_definition(\n    node: Node,\n    definition_dict: dict[str, str],\n) -> DefinitionInfo | None:\n    \"\"\"Parse a decorated definition node (decorated_definition).\n\n    Extracts the inner function/class definition and delegates\n    to _parse_definition_node.\n\n    Args:\n        node: A decorated_definition node.\n        definition_dict: Per-language definition node settings.\n\n    Returns:\n        DefinitionInfo, or None if no valid definition is found inside.\n    \"\"\"\n    # Find the inner function/class definition\n    inner_node: Node | None = None\n\n    # Search children of decorated_definition for a definition node\n    for child in node.children:\n        if child.type in definition_dict and child.type != \"decorated_definition\":\n            inner_node = child\n\n    if inner_node is None:\n        return None\n\n    # Extract the name from the inner definition node\n    name_node_type = definition_dict[inner_node.type]\n    definition = _parse_definition_node(inner_node, name_node_type)\n\n    if definition:\n        # Adjust to the full line range including the decorator\n        definition.start_line = node.start_point[0] + 1\n        definition.end_line = node.end_point[0] + 1\n\n    return definition"
+      "start_line": 229,
+      "end_line": 260,
+      "context": "def select_top_level_definitions(\n    definition_list: list[DefinitionInfo],\n) -> list[DefinitionInfo]:\n    \"\"\"Keep only definitions that are not members of another definition.\n\n    Members of a class, an impl block or a trait (methods, constructors, fields) are left out.\n    The definitions inside a container in OPEN_DEFINITION_TYPE_SET (a C++ namespace, a\n    C / C++ enum) are kept, and a definition of a type in BARE_NAME_DEFINITION_TYPE_SET\n    is kept wherever it is.\n\n    Args:\n        definition_list: Definitions of a single file, sorted by start_line.\n\n    Returns:\n        The outermost definitions, sorted by start_line.\n    \"\"\"\n    outer_list: list[DefinitionInfo] = []\n    member_end = 0\n    for definition in definition_list:\n        if definition.type in BARE_NAME_DEFINITION_TYPE_SET:\n            outer_list.append(definition)\n            continue\n        # Skip definitions that start within the range of a container with members\n        if definition.start_line <= member_end:\n            continue\n        outer_list.append(definition)\n        if (\n            definition.type in CONTAINER_DEFINITION_TYPE_SET\n            and definition.type not in OPEN_DEFINITION_TYPE_SET\n        ):\n            member_end = definition.end_line\n    return outer_list"
     },
     {
-      "name": "_parse_definition_node",
+      "name": "definition_name_list",
       "type": "function_definition",
-      "start_line": 151,
-      "end_line": 180,
-      "context": "def _parse_definition_node(\n    node: Node,\n    name_node_type: str,\n) -> DefinitionInfo | None:\n    \"\"\"Convert a definition node into a DefinitionInfo.\n\n    When name_node_type is a standard node type name (e.g. \"identifier\"),\n    the name is looked up among direct children.\n    When it is a \"__sentinel__\" format sentinel value, processing is\n    delegated to a dedicated extraction function via _extract_name.\n\n    Args:\n        node: A definition node (function_definition / class_definition / expression_statement, etc.).\n        name_node_type: A string indicating how to obtain the name.\n\n    Returns:\n        DefinitionInfo, or None if the name cannot be obtained.\n    \"\"\"\n    # Extract the name from the node\n    name = _extract_name(node, name_node_type)\n    if name is None:\n        return None\n\n    # Create and return a DefinitionInfo (convert 0-based line numbers to 1-based)\n    return DefinitionInfo(\n        name=name,\n        type=node.type,\n        start_line=node.start_point[0] + 1,\n        end_line=node.end_point[0] + 1,\n    )"
+      "start_line": 263,
+      "end_line": 294,
+      "context": "def definition_name_list(node: Node, definition_dict: dict[str, str]) -> list[str]:\n    \"\"\"Return the names a definition node defines.\n\n    When the value definition_dict gives for the node type is a sentinel value (a string\n    starting and ending with \"__\"), a dedicated function reads the names. For a\n    standard value, the name is the first direct child of that node type.\n\n    Args:\n        node: An AST node.\n        definition_dict: Per-language definition node settings.\n\n    Returns:\n        The names, in the order they are written. Empty when the node type is not a\n        definition or no name can be obtained.\n    \"\"\"\n    if node.type == \"decorated_definition\" and node.type in definition_dict:\n        inner_node = _decorated_inner_node(node, definition_dict)\n        return definition_name_list(inner_node, definition_dict) if inner_node else []\n    name_type = definition_dict.get(node.type)\n    if name_type is None:\n        return []\n\n    # Sentinel value: a dedicated extraction function\n    extract_function = _SENTINEL_EXTRACTOR_DICT.get(name_type)\n    if extract_function is not None:\n        return extract_function(node)\n\n    # Standard pattern: search direct children for one matching name_type\n    for child in node.children:\n        if child.type == name_type:\n            return [_node_text(child)]\n    return []"
     },
     {
-      "name": "_extract_name",
+      "name": "_node_text",
       "type": "function_definition",
-      "start_line": 183,
-      "end_line": 232,
-      "context": "def _extract_name(node: Node, name_type: str) -> str | None:\n    \"\"\"Dispatcher that extracts the name according to the node type.\n\n    When name_type is a sentinel value (a string starting and ending with \"__\"),\n    a dedicated function is used to obtain the name node located deep in the AST.\n    For standard values, the name is looked up among direct children.\n\n    Args:\n        node: The definition node from which to extract the name.\n        name_type: The value specified in definition_dict of settings.py.\n                   Standard pattern: \"identifier\", \"type_identifier\", etc.\n                   Special pattern: \"__assignment__\", \"__variable_declarator__\",\n                                    \"__function_declarator__\", \"__init_declarator__\",\n                                    \"__declarator_name__\", \"__kotlin_property__\"\n\n    Returns:\n        The definition name string, or None if extraction fails.\n    \"\"\"\n    # Dispatch to a dedicated extraction function for each sentinel value\n\n    # Python: expression_statement > assignment > left-hand identifier\n    if name_type == \"__assignment__\":\n        return _extract_assignment_name(node)\n\n    # JS/TS/Java: lexical_declaration / variable_declaration / field_declaration\n    #             > variable_declarator > identifier\n    if name_type == \"__variable_declarator__\":\n        return _extract_variable_declarator_name(node)\n\n    # C/C++: declaration > init_declarator > identifier\n    if name_type == \"__init_declarator__\":\n        return _extract_init_declarator_name(node)\n\n    # C/C++: function_definition > function_declarator > identifier\n    if name_type == \"__function_declarator__\":\n        return _extract_function_declarator_name(node)\n\n    # C/C++: function_declarator > identifier (free function) / field_identifier (class member)\n    if name_type == \"__declarator_name__\":\n        return _extract_declarator_name(node)\n\n    # Kotlin: property_declaration > variable_declaration > identifier\n    if name_type == \"__kotlin_property__\":\n        return _extract_kotlin_property_name(node)\n\n    # Standard pattern: search direct children for one matching name_type\n    for child in node.children:\n        if child.type == name_type:\n            return child.text.decode(\"utf-8\")\n    return None"
+      "start_line": 297,
+      "end_line": 299,
+      "context": "def _node_text(node: Node) -> str:\n    \"\"\"Return the source text of a node.\"\"\"\n    return node.text.decode(\"utf-8\")"
     },
     {
-      "name": "_extract_assignment_name",
+      "name": "_extent_node",
       "type": "function_definition",
-      "start_line": 235,
-      "end_line": 264,
-      "context": "def _extract_assignment_name(node: Node) -> str | None:\n    \"\"\"Extract the variable name from a Python top-level variable assignment.\n\n    Target AST structure:\n        expression_statement       <- this node is passed as the argument\n          +-- assignment\n               +-- left: identifier \"X\"  <- extract this\n               +-- =\n               +-- right: (value)\n\n    Returns None if the content of expression_statement is not an assignment\n    (e.g. print(\"hello\")) or if the left-hand side is not an identifier\n    (e.g. obj.attr = 1).\n\n    Args:\n        node: An expression_statement node.\n\n    Returns:\n        The variable name string, or None if not applicable.\n    \"\"\"\n    if not node.children:\n        return None\n    inner = node.children[0]\n    if inner.type != \"assignment\":\n        return None\n    # Get the left-hand side from the assignment's left field\n    lhs = inner.child_by_field_name(\"left\")\n    if lhs and lhs.type == \"identifier\":\n        return lhs.text.decode(\"utf-8\")\n    return None"
+      "start_line": 302,
+      "end_line": 330,
+      "context": "def _extent_node(node: Node, definition_dict: dict[str, str]) -> Node:\n    \"\"\"Return the node whose text and lines a definition node is listed with.\n\n    A declarator that is a definition node is listed with the declaration it is\n    written in, when that declaration defines no name itself (C/C++: the\n    function_declarator of int *add(int a, int b); with the whole declaration).\n\n    Args:\n        node: A definition node.\n        definition_dict: Per-language definition node settings.\n\n    Returns:\n        The declaration or field declaration around the node, reached through\n        declarators only, when it gives no name; else the node itself.\n    \"\"\"\n    ancestor = node.parent\n    while ancestor is not None and (\n        ancestor.type in _WRAP_DECLARATOR_TYPE_SET\n        or ancestor.type in (\"init_declarator\", \"function_declarator\")\n    ):\n        ancestor = ancestor.parent\n    if (\n        ancestor is not None\n        and ancestor.type in _DECLARATION_TYPE_SET\n        and ancestor.type in definition_dict\n        and not definition_name_list(ancestor, definition_dict)\n    ):\n        return ancestor\n    return node"
     },
     {
-      "name": "_extract_variable_declarator_name",
+      "name": "_line_range",
       "type": "function_definition",
-      "start_line": 267,
-      "end_line": 295,
-      "context": "def _extract_variable_declarator_name(node: Node) -> str | None:\n    \"\"\"Extract the variable name from a JS/TS variable declaration or a Java field declaration.\n\n    Target AST structure:\n        lexical_declaration              <- this node is passed as the argument\n          +-- const / let\n          +-- variable_declarator\n               +-- name: identifier \"X\"  <- extract this\n               +-- (: type annotation)   <- TS only\n               +-- =\n               +-- (value)\n\n    The same structure applies to variable_declaration (var declarations) and to\n    Java field_declaration (modifiers + type + declarator: variable_declarator).\n    When several variables are declared at once (e.g. int a, b;), the first name is returned.\n\n    Args:\n        node: A lexical_declaration, variable_declaration or field_declaration node.\n\n    Returns:\n        The variable name string, or None if extraction fails.\n    \"\"\"\n    # Get the identifier from the variable_declarator's name field\n    for child in node.children:\n        if child.type == \"variable_declarator\":\n            name_node = child.child_by_field_name(\"name\")\n            if name_node:\n                return name_node.text.decode(\"utf-8\")\n    return None"
+      "start_line": 333,
+      "end_line": 342,
+      "context": "def _line_range(node: Node) -> tuple[int, int]:\n    \"\"\"Return the first and last line of a node (1-based).\n\n    A node that ends at the start of a line (a #define with its line break) ends on\n    the line before.\n    \"\"\"\n    start_line = node.start_point[0] + 1\n    end_row, end_column = node.end_point\n    end_line = end_row + 1 if end_column > 0 else end_row\n    return start_line, max(start_line, end_line)"
     },
     {
-      "name": "_extract_function_declarator_name",
+      "name": "_is_call_in_place",
       "type": "function_definition",
-      "start_line": 298,
-      "end_line": 343,
-      "context": "def _extract_function_declarator_name(node: Node) -> str | None:\n    \"\"\"Extract the function name from a C/C++ function definition.\n\n    Target AST structure:\n        function_definition              <- this node is passed as the argument\n          +-- primitive_type \"double\"\n          +-- declarator: function_declarator\n          |    +-- declarator: identifier \"distance\"  <- extract this\n          |    +-- parameters: parameter_list\n          +-- body: compound_statement { ... }\n\n    function_definition does not have an identifier as a direct child;\n    it is inside function_declarator, so the standard pattern (direct child search)\n    cannot obtain the name.\n\n    For C++ class method implementations, the function_declarator's declarator\n    becomes a qualified_identifier (e.g. \"Shape::get_name\"). In that case,\n    the method name is obtained from the last identifier within the qualified_identifier.\n\n    For methods defined inline in a class or struct body, the declarator is a\n    field_identifier instead of an identifier.\n\n    Args:\n        node: A function_definition node.\n\n    Returns:\n        The function name string, or None if function_declarator is not found.\n    \"\"\"\n    # Get function_declarator from the function_definition's declarator field\n    func_decl = node.child_by_field_name(\"declarator\")\n    if not func_decl or func_decl.type != \"function_declarator\":\n        return None\n    # Get the name node from function_declarator's declarator field\n    name_node = func_decl.child_by_field_name(\"declarator\")\n    if not name_node:\n        return None\n    if name_node.type in (\"identifier\", \"field_identifier\"):\n        return name_node.text.decode(\"utf-8\")\n    # C++ class method implementation: qualified_identifier like Shape::get_name\n    if name_node.type == \"qualified_identifier\":\n        last_id = None\n        for qc in name_node.children:\n            if qc.type == \"identifier\":\n                last_id = qc.text.decode(\"utf-8\")\n        return last_id\n    return None"
+      "start_line": 345,
+      "end_line": 365,
+      "context": "def _is_call_in_place(node: Node) -> bool:\n    \"\"\"Return whether a function written as a value is called where it is written.\n\n    (function () { ... })() and (() => { ... })() wrap the code of a whole file; the\n    declarations inside such a function are read as the definitions of the file.\n\n    Args:\n        node: A node whose type is in _LOCAL_BODY_TYPE_SET.\n\n    Returns:\n        True when the node, with the parentheses around it, is what a call calls.\n    \"\"\"\n    callee_node = node\n    while callee_node.parent is not None and callee_node.parent.type == \"parenthesized_expression\":\n        callee_node = callee_node.parent\n    call_node = callee_node.parent\n    return (\n        call_node is not None\n        and call_node.type == \"call_expression\"\n        and call_node.child_by_field_name(\"function\") == callee_node\n    )"
     },
     {
-      "name": "_extract_declarator_name",
+      "name": "_decorated_inner_node",
       "type": "function_definition",
-      "start_line": 346,
-      "end_line": 369,
-      "context": "def _extract_declarator_name(node: Node) -> str | None:\n    \"\"\"Extract the function name from a C/C++ function_declarator.\n\n    Target AST structure:\n        function_declarator              <- this node is passed as the argument\n          +-- declarator: identifier \"freeFunction\"        <- free function / constructor\n          |   or field_identifier \"m\"                      <- method declared in a class body\n          +-- parameters: parameter_list\n\n    A class member declaration (e.g. int m();) names the method with a\n    field_identifier, while a free function prototype and a C++ constructor\n    declaration use an identifier.\n\n    Args:\n        node: A function_declarator node.\n\n    Returns:\n        The function name string, or None if the name node is of another type\n        (e.g. a pointer or an operator declarator).\n    \"\"\"\n    name_node = node.child_by_field_name(\"declarator\")\n    if name_node and name_node.type in (\"identifier\", \"field_identifier\"):\n        return name_node.text.decode(\"utf-8\")\n    return None"
+      "start_line": 368,
+      "end_line": 382,
+      "context": "def _decorated_inner_node(node: Node, definition_dict: dict[str, str]) -> Node | None:\n    \"\"\"Return the function / class definition inside a decorated definition (Python).\n\n    Args:\n        node: A decorated_definition node.\n        definition_dict: Per-language definition node settings.\n\n    Returns:\n        The inner definition node, or None if there is none.\n    \"\"\"\n    inner_node: Node | None = None\n    for child in node.children:\n        if child.type in definition_dict and child.type != \"decorated_definition\":\n            inner_node = child\n    return inner_node"
     },
     {
-      "name": "_extract_kotlin_property_name",
+      "name": "pattern_name_list",
       "type": "function_definition",
-      "start_line": 372,
-      "end_line": 399,
-      "context": "def _extract_kotlin_property_name(node: Node) -> str | None:\n    \"\"\"Extract the property name from a Kotlin val / var declaration.\n\n    Target AST structure:\n        property_declaration             <- this node is passed as the argument\n          +-- val / var\n          +-- variable_declaration\n          |    +-- identifier \"TOP\"      <- extract this\n          |    +-- (: type)\n          +-- =\n          +-- (value)\n\n    The same structure is used for top-level constants and for properties\n    declared in a class body.\n\n    Args:\n        node: A property_declaration node.\n\n    Returns:\n        The property name string, or None if no variable_declaration is found\n        (e.g. a destructuring declaration such as val (a, b) = pair).\n    \"\"\"\n    for child in node.children:\n        if child.type == \"variable_declaration\":\n            for name_node in child.children:\n                if name_node.type == \"identifier\":\n                    return name_node.text.decode(\"utf-8\")\n    return None"
+      "start_line": 385,
+      "end_line": 421,
+      "context": "def pattern_name_list(\n    node: Node, pattern_type_set: set[str], pattern_field_dict: dict[str, str],\n) -> list[str]:\n    \"\"\"Return the names a binding pattern binds.\n\n    A node in PATTERN_NAME_TYPE_SET is a name. Of a node in pattern_field_dict only the\n    child in that field is read (b = 1 -> b, key: local -> local), its first named\n    child when the field is \"\", and of a node in pattern_type_set every named child.\n    Any other node (an attribute, a subscript, a type) binds nothing.\n\n    Examples:\n        { a, inner: { b }, hp: local = hp, ...rest }  -> [\"a\", \"b\", \"local\", \"rest\"]\n        (x, [y, z], *tail)                            -> [\"x\", \"y\", \"z\", \"tail\"]\n\n    Args:\n        node: A pattern node, or a node holding patterns.\n        pattern_type_set: The pattern_types of the language settings.\n        pattern_field_dict: The pattern_field_dict of the language settings.\n\n    Returns:\n        The bound names, in the order they are written.\n    \"\"\"\n    if node.type in PATTERN_NAME_TYPE_SET:\n        return [_node_text(node)]\n    field_name = pattern_field_dict.get(node.type)\n    if field_name is not None:\n        child_list = (\n            node.children_by_field_name(field_name) if field_name else node.named_children[:1]\n        )\n    elif node.type in pattern_type_set:\n        child_list = node.named_children\n    else:\n        return []\n    name_list: list[str] = []\n    for child in child_list:\n        name_list.extend(pattern_name_list(child, pattern_type_set, pattern_field_dict))\n    return name_list"
     },
     {
-      "name": "_extract_init_declarator_name",
+      "name": "_extract_assignment_name_list",
       "type": "function_definition",
-      "start_line": 402,
-      "end_line": 432,
-      "context": "def _extract_init_declarator_name(node: Node) -> str | None:\n    \"\"\"Extract the variable name from a C/C++ variable/constant declaration.\n\n    Target AST structure:\n        declaration                      <- this node is passed as the argument\n          +-- const (optional)\n          +-- primitive_type \"int\"\n          +-- declarator: init_declarator\n               +-- declarator: identifier \"X\"  <- extract this\n               +-- =\n               +-- number_literal 3\n\n    Forward declarations (e.g. void freeFunction();) do not have an init_declarator,\n    so None is returned. The caller's BFS fallback will extract the function name\n    from the child function_declarator.\n\n    Args:\n        node: A declaration node.\n\n    Returns:\n        The variable name string, or None if no init_declarator is found.\n    \"\"\"\n    # Get the init_declarator from the declaration's declarator field\n    declarator = node.child_by_field_name(\"declarator\")\n    if not declarator or declarator.type != \"init_declarator\":\n        return None\n    # Get the identifier from init_declarator's declarator field\n    name_node = declarator.child_by_field_name(\"declarator\")\n    if name_node and name_node.type == \"identifier\":\n        return name_node.text.decode(\"utf-8\")\n    return None"
+      "start_line": 424,
+      "end_line": 450,
+      "context": "def _extract_assignment_name_list(node: Node) -> list[str]:\n    \"\"\"Extract the variable names from a Python variable assignment.\n\n    Target AST structure:\n        expression_statement       <- this node is passed as the argument\n          +-- assignment\n               +-- left: identifier \"X\"  <- extract this\n               +-- =\n               +-- right: (value)\n\n    The targets of a chain (a = b = 1) and of a destructuring (X, Y = 1, 2) are all\n    returned. A target that is not a name (obj.attr = 1) gives none.\n\n    Args:\n        node: An expression_statement node.\n\n    Returns:\n        The variable names, empty when the statement is not an assignment.\n    \"\"\"\n    name_list: list[str] = []\n    inner_node = node.children[0] if node.children else None\n    while inner_node is not None and inner_node.type == \"assignment\":\n        left_node = inner_node.child_by_field_name(\"left\")\n        if left_node is not None:\n            name_list.extend(pattern_name_list(left_node, PATTERN_TYPE_SET, PATTERN_FIELD_DICT))\n        inner_node = inner_node.child_by_field_name(\"right\")\n    return name_list"
     },
     {
-      "name": "_extract_destructured_names",
+      "name": "_extract_type_alias_name_list",
       "type": "function_definition",
-      "start_line": 435,
-      "end_line": 478,
-      "context": "def _extract_destructured_names(node: Node, name_type: str) -> list[str]:\n    \"\"\"Extract multiple variable names from a destructuring (destructured assignment).\n\n    Called when standard name extraction fails; determines whether the node\n    is a destructuring pattern and collects the names.\n\n    Target patterns:\n        Python:  X, Y = 1, 2    -> collect identifiers from pattern_list\n        JS/TS:   const { a, b } = obj  -> collect names from object_pattern\n        JS/TS:   const [a, b] = arr    -> collect names from array_pattern\n\n    Args:\n        node: A definition node (expression_statement / lexical_declaration, etc.).\n        name_type: The sentinel value specified in definition_dict of settings.py.\n\n    Returns:\n        A list of variable names. Empty list if not a destructuring pattern.\n    \"\"\"\n    if name_type == \"__assignment__\":\n        # Python: collect variable names from pattern_list in X, Y = 1, 2\n        if not node.children:\n            return []\n        inner = node.children[0]\n        if inner.type != \"assignment\":\n            return []\n        lhs = inner.child_by_field_name(\"left\")\n        if not lhs or lhs.type != \"pattern_list\":\n            return []\n        return [\n            child.text.decode(\"utf-8\")\n            for child in lhs.children\n            if child.type == \"identifier\"\n        ]\n\n    if name_type == \"__variable_declarator__\":\n        # JS/TS: const { a, b } = obj / const [a, b] = arr\n        for child in node.children:\n            if child.type == \"variable_declarator\":\n                name_node = child.child_by_field_name(\"name\")\n                if name_node and name_node.type in (\"object_pattern\", \"array_pattern\"):\n                    return _collect_identifiers_from_pattern(name_node)\n        return []\n\n    return []"
+      "start_line": 453,
+      "end_line": 458,
+      "context": "def _extract_type_alias_name_list(node: Node) -> list[str]:\n    \"\"\"Extract the name from a Python type alias statement (type Alias = int).\"\"\"\n    left_node = node.child_by_field_name(\"left\")\n    if left_node is None:\n        return []\n    return [_node_text(child) for child in left_node.children if child.type == \"identifier\"][:1]"
     },
     {
-      "name": "_collect_identifiers_from_pattern",
+      "name": "_extract_variable_declarator_name_list",
       "type": "function_definition",
-      "start_line": 481,
-      "end_line": 509,
-      "context": "def _collect_identifiers_from_pattern(pattern_node: Node) -> list[str]:\n    \"\"\"Collect variable names from an object_pattern / array_pattern.\n\n    Handles nested patterns recursively\n    (e.g. const { a, inner: { b } } = obj).\n\n    Args:\n        pattern_node: An object_pattern or array_pattern node.\n\n    Returns:\n        A list of variable names found in the pattern.\n    \"\"\"\n    names: list[str] = []\n    for child in pattern_node.children:\n        if child.type == \"identifier\":\n            names.append(child.text.decode(\"utf-8\"))\n        elif child.type == \"shorthand_property_identifier_pattern\":\n            # a, b in { a, b }\n            names.append(child.text.decode(\"utf-8\"))\n        elif child.type in (\"object_pattern\", \"array_pattern\"):\n            names.extend(_collect_identifiers_from_pattern(child))\n        elif child.type == \"pair_pattern\":\n            # { key: localName } -> localName (local variable name) is defined\n            value = child.child_by_field_name(\"value\")\n            if value and value.type == \"identifier\":\n                names.append(value.text.decode(\"utf-8\"))\n            elif value and value.type in (\"object_pattern\", \"array_pattern\"):\n                names.extend(_collect_identifiers_from_pattern(value))\n    return names"
+      "start_line": 461,
+      "end_line": 490,
+      "context": "def _extract_variable_declarator_name_list(node: Node) -> list[str]:\n    \"\"\"Extract the variable names from a JS/TS variable declaration or a Java field declaration.\n\n    Target AST structure:\n        lexical_declaration              <- this node is passed as the argument\n          +-- const / let\n          +-- variable_declarator\n               +-- name: identifier \"X\"  <- extract this\n               +-- (: type annotation)   <- TS only\n               +-- =\n               +-- (value)\n\n    The same structure applies to variable_declaration (var declarations) and to\n    Java field_declaration (modifiers + type + declarator: variable_declarator).\n    Every declarator gives its name (int a, b;), and a destructuring pattern every\n    name it binds (const { a, b } = obj).\n\n    Args:\n        node: A lexical_declaration, variable_declaration or field_declaration node.\n\n    Returns:\n        The variable names.\n    \"\"\"\n    name_list: list[str] = []\n    for child in node.children:\n        if child.type == \"variable_declarator\":\n            name_node = child.child_by_field_name(\"name\")\n            if name_node is not None:\n                name_list.extend(pattern_name_list(name_node, PATTERN_TYPE_SET, PATTERN_FIELD_DICT))\n    return name_list"
+    },
+    {
+      "name": "commonjs_export_assignment",
+      "type": "function_definition",
+      "start_line": 493,
+      "end_line": 533,
+      "context": "def commonjs_export_assignment(node: Node) -> tuple[str, Node] | None:\n    \"\"\"Read a CommonJS export assignment (JS / TS).\n\n    Target AST structure:\n        expression_statement             <- this node is passed as the argument\n          +-- assignment_expression\n               +-- left: member_expression \"exports.name\" / \"module.exports.name\" / \"module.exports\"\n               +-- right: (value)\n\n    In a chain (exports = module.exports = value) the first target that is one of\n    these counts.\n\n    Args:\n        node: An expression_statement node.\n\n    Returns:\n        (exported name, value node): the name is the property of exports.name and\n        module.exports.name, and DEFAULT_EXPORT_NAME for module.exports itself. None\n        when the statement is no such assignment.\n    \"\"\"\n    inner_node = node.children[0] if node.children else None\n    while inner_node is not None and inner_node.type == \"assignment_expression\":\n        left_node = inner_node.child_by_field_name(\"left\")\n        right_node = inner_node.child_by_field_name(\"right\")\n        if left_node is None or right_node is None:\n            return None\n        value_node = right_node\n        while value_node.type == \"assignment_expression\":\n            value_node = value_node.child_by_field_name(\"right\") or value_node.children[-1]\n        if left_node.type == \"member_expression\":\n            if _node_text(left_node) == \"module.exports\":\n                return DEFAULT_EXPORT_NAME, value_node\n            object_node = left_node.child_by_field_name(\"object\")\n            property_node = left_node.child_by_field_name(\"property\")\n            if (\n                object_node is not None and property_node is not None\n                and _node_text(object_node) in (\"exports\", \"module.exports\")\n            ):\n                return _node_text(property_node), value_node\n        inner_node = right_node\n    return None"
+    },
+    {
+      "name": "require_module",
+      "type": "function_definition",
+      "start_line": 536,
+      "end_line": 547,
+      "context": "def require_module(node: Node) -> str | None:\n    \"\"\"Return the module string of a require(\"module\") call, None for any other node (JS / TS).\"\"\"\n    if node.type != \"call_expression\":\n        return None\n    function_node = node.child_by_field_name(\"function\")\n    argument_node = node.child_by_field_name(\"arguments\")\n    if function_node is None or argument_node is None or _node_text(function_node) != \"require\":\n        return None\n    string_node_list = [child for child in argument_node.named_children if child.type == \"string\"]\n    if len(string_node_list) != 1:\n        return None\n    return _node_text(string_node_list[0])[1:-1]"
+    },
+    {
+      "name": "_member_function_name",
+      "type": "function_definition",
+      "start_line": 550,
+      "end_line": 580,
+      "context": "def _member_function_name(node: Node) -> str | None:\n    \"\"\"Return the name a top-level statement gives a function it assigns to a member (JS / TS).\n\n    app.init = function () {};         -> \"init\"\n    Foo.prototype.run = () => {};      -> \"run\"\n\n    Args:\n        node: An expression_statement node.\n\n    Returns:\n        The member name, or None when the statement is not written at the top level of\n        the file or does not assign a function or class to a member.\n    \"\"\"\n    inner_node = node.children[0] if node.children else None\n    if (\n        inner_node is None or inner_node.type != \"assignment_expression\"\n        or node.parent is None or node.parent.type != \"program\"\n    ):\n        return None\n    left_node = inner_node.child_by_field_name(\"left\")\n    right_node = inner_node.child_by_field_name(\"right\")\n    if (\n        left_node is None or right_node is None\n        or left_node.type != \"member_expression\"\n        or right_node.type not in _FUNCTION_VALUE_TYPE_SET\n    ):\n        return None\n    property_node = left_node.child_by_field_name(\"property\")\n    if property_node is None or property_node.type != \"property_identifier\":\n        return None\n    return _node_text(property_node)"
+    },
+    {
+      "name": "_member_assignment_name_list",
+      "type": "function_definition",
+      "start_line": 583,
+      "end_line": 608,
+      "context": "def _member_assignment_name_list(node: Node) -> list[str]:\n    \"\"\"Extract the name from an assignment to a member written as a statement (JS / TS).\n\n    exports.name = ... and module.exports.name = ... give the name;\n    module.exports = <unnamed value> gives DEFAULT_EXPORT_NAME, and\n    module.exports = name and module.exports = require(\"./m\") give none (the named\n    definition, or the module, stands for the export). A function assigned to a member\n    of another object at the top level of the file gives the member name\n    (_member_function_name).\n\n    Args:\n        node: An expression_statement node.\n\n    Returns:\n        [name], or empty.\n    \"\"\"\n    export_assignment = commonjs_export_assignment(node)\n    if export_assignment is None:\n        member_name = _member_function_name(node)\n        return [member_name] if member_name else []\n    export_name, value_node = export_assignment\n    if export_name == DEFAULT_EXPORT_NAME and (\n        value_node.type == \"identifier\" or require_module(value_node) is not None\n    ):\n        return []\n    return [export_name]"
+    },
+    {
+      "name": "_extract_export_member_name_list",
+      "type": "function_definition",
+      "start_line": 611,
+      "end_line": 643,
+      "context": "def _extract_export_member_name_list(node: Node) -> list[str]:\n    \"\"\"Extract the key of an entry of an object a module exports (JS / TS).\n\n    module.exports = { run: function () {} };   -> \"run\"\n    export default { run: () => 1 };            -> \"run\"\n    An entry whose value is a name (key: name) gives none (the named definition\n    stands for it), and so does an entry of any other object.\n\n    Args:\n        node: A pair node.\n\n    Returns:\n        [key], or empty.\n    \"\"\"\n    key_node = node.child_by_field_name(\"key\")\n    value_node = node.child_by_field_name(\"value\")\n    object_node = node.parent\n    if (\n        key_node is None or value_node is None or object_node is None\n        or key_node.type != \"property_identifier\" or value_node.type == \"identifier\"\n    ):\n        return []\n    holder_node = object_node.parent\n    is_export_value = holder_node is not None and (\n        (holder_node.type == \"export_statement\" and holder_node.child_by_field_name(\"value\") == object_node)\n        or (\n            holder_node.type == \"assignment_expression\" and holder_node.parent is not None\n            and holder_node.parent.type == \"expression_statement\"\n            and (export_assignment := commonjs_export_assignment(holder_node.parent)) is not None\n            and export_assignment[1] == object_node\n        )\n    )\n    return [_node_text(key_node)] if is_export_value else []"
+    },
+    {
+      "name": "_extract_enum_member_name_list",
+      "type": "function_definition",
+      "start_line": 646,
+      "end_line": 650,
+      "context": "def _extract_enum_member_name_list(node: Node) -> list[str]:\n    \"\"\"Extract the name of a TypeScript enum member written without a value (enum E { A, B }).\"\"\"\n    if node.parent is None or node.parent.type != \"enum_body\":\n        return []\n    return [_node_text(node)]"
+    },
+    {
+      "name": "_default_export_name_list",
+      "type": "function_definition",
+      "start_line": 653,
+      "end_line": 673,
+      "context": "def _default_export_name_list(node: Node) -> list[str]:\n    \"\"\"Return [DEFAULT_EXPORT_NAME] for an export default statement of an unnamed value (JS / TS).\n\n    export default function () {} / class {} / { ... } / call() gives the name;\n    export default name and export default function name() {} give none (the named\n    definition stands for the export).\n\n    Args:\n        node: An export_statement node.\n\n    Returns:\n        [DEFAULT_EXPORT_NAME] or empty.\n    \"\"\"\n    if not any(child.type == \"default\" for child in node.children):\n        return []\n    value_node = node.child_by_field_name(\"value\")\n    if value_node is None or value_node.type == \"identifier\":\n        return []\n    if value_node.child_by_field_name(\"name\") is not None:\n        return []\n    return [DEFAULT_EXPORT_NAME]"
+    },
+    {
+      "name": "declarator_name_node",
+      "type": "function_definition",
+      "start_line": 676,
+      "end_line": 697,
+      "context": "def declarator_name_node(declarator_node: Node | None) -> Node | None:\n    \"\"\"Return the node holding the name of a C/C++ declarator.\n\n    The declarators that wrap another one (pointer, array, reference, parentheses and\n    an initializer) are removed: *names[] = { ... } -> names.\n\n    Args:\n        declarator_node: A declarator node, or None.\n\n    Returns:\n        The innermost node (an identifier, a function_declarator, etc.), or None.\n    \"\"\"\n    while declarator_node is not None and (\n        declarator_node.type in _WRAP_DECLARATOR_TYPE_SET\n        or declarator_node.type == \"init_declarator\"\n    ):\n        inner_node = declarator_node.child_by_field_name(\"declarator\")\n        if inner_node is None:\n            # A parenthesized declarator holds its declarator as a plain child\n            inner_node = next(iter(declarator_node.named_children), None)\n        declarator_node = inner_node\n    return declarator_node"
+    },
+    {
+      "name": "_declarator_name_list",
+      "type": "function_definition",
+      "start_line": 700,
+      "end_line": 715,
+      "context": "def _declarator_name_list(node: Node, name_type_tuple: tuple[str, ...]) -> list[str]:\n    \"\"\"Return the names of the declarators of a C/C++ declaration that are of the given node types.\n\n    Args:\n        node: A declaration, field_declaration or type_definition node.\n        name_type_tuple: Node types of a name (\"identifier\", \"field_identifier\", ...).\n\n    Returns:\n        One name per declarator whose innermost node is of one of the types.\n    \"\"\"\n    name_list: list[str] = []\n    for declarator_node in node.children_by_field_name(\"declarator\"):\n        name_node = declarator_name_node(declarator_node)\n        if name_node is not None and name_node.type in name_type_tuple:\n            name_list.append(_node_text(name_node))\n    return name_list"
+    },
+    {
+      "name": "_function_name",
+      "type": "function_definition",
+      "start_line": 718,
+      "end_line": 743,
+      "context": "def _function_name(function_declarator_node: Node) -> str | None:\n    \"\"\"Return the name a C/C++ function_declarator declares.\n\n    identifier (free function, constructor), field_identifier (method in a class body),\n    operator_name (operator==) and destructor_name (~Shape) are taken as written. A\n    qualified_identifier (a member defined outside its class) is taken with its\n    scopes, without template arguments: Shape::get_name, Box<T>::get -> \"Box::get\".\n\n    Args:\n        function_declarator_node: A function_declarator node.\n\n    Returns:\n        The name, or None for another declarator (a function pointer).\n    \"\"\"\n    name_node = function_declarator_node.child_by_field_name(\"declarator\")\n    scope_list: list[str] = []\n    while name_node is not None and name_node.type == \"qualified_identifier\":\n        scope_node = name_node.child_by_field_name(\"scope\")\n        if scope_node is not None:\n            scope_list.append(_node_text(scope_node.child_by_field_name(\"name\") or scope_node))\n        name_node = name_node.child_by_field_name(\"name\")\n    if name_node is not None and name_node.type in (\n        \"identifier\", \"field_identifier\", \"operator_name\", \"destructor_name\",\n    ):\n        return \"::\".join([*scope_list, _node_text(name_node)])\n    return None"
+    },
+    {
+      "name": "_extract_function_declarator_name_list",
+      "type": "function_definition",
+      "start_line": 746,
+      "end_line": 770,
+      "context": "def _extract_function_declarator_name_list(node: Node) -> list[str]:\n    \"\"\"Extract the function name from a C/C++ function definition.\n\n    Target AST structure:\n        function_definition              <- this node is passed as the argument\n          +-- primitive_type \"double\"\n          +-- declarator: function_declarator\n          |    +-- declarator: identifier \"distance\"  <- extract this\n          |    +-- parameters: parameter_list\n          +-- body: compound_statement { ... }\n\n    The function_declarator may be wrapped in pointer or reference declarators\n    (node_t *list_push(...) { ... }). See _function_name for the forms of the name.\n\n    Args:\n        node: A function_definition node.\n\n    Returns:\n        [name], or empty if no function_declarator is found.\n    \"\"\"\n    function_declarator_node = declarator_name_node(node.child_by_field_name(\"declarator\"))\n    if function_declarator_node is None or function_declarator_node.type != \"function_declarator\":\n        return []\n    name = _function_name(function_declarator_node)\n    return [name] if name else []"
+    },
+    {
+      "name": "_extract_declarator_name_list",
+      "type": "function_definition",
+      "start_line": 773,
+      "end_line": 789,
+      "context": "def _extract_declarator_name_list(node: Node) -> list[str]:\n    \"\"\"Extract the function name from a C/C++ function_declarator (a prototype).\n\n    Target AST structure:\n        function_declarator              <- this node is passed as the argument\n          +-- declarator: identifier \"freeFunction\"        <- free function / constructor\n          |   or field_identifier \"m\"                      <- method declared in a class body\n          +-- parameters: parameter_list\n\n    Args:\n        node: A function_declarator node.\n\n    Returns:\n        [name], or empty if the name node is of another type (e.g. a function pointer).\n    \"\"\"\n    name = _function_name(node)\n    return [name] if name else []"
+    },
+    {
+      "name": "_extract_init_declarator_name_list",
+      "type": "function_definition",
+      "start_line": 792,
+      "end_line": 815,
+      "context": "def _extract_init_declarator_name_list(node: Node) -> list[str]:\n    \"\"\"Extract the variable names from a C/C++ variable declaration.\n\n    Target AST structure:\n        declaration                      <- this node is passed as the argument\n          +-- const (optional)\n          +-- primitive_type \"int\"\n          +-- declarator: init_declarator\n          |    +-- declarator: identifier \"X\"  <- extract this\n          |    +-- =\n          |    +-- number_literal 3\n          +-- declarator: pointer_declarator\n               +-- declarator: identifier \"p\"  <- extract this\n\n    A function prototype (void freeFunction();) gives no name here; the caller's BFS\n    reaches its function_declarator.\n\n    Args:\n        node: A declaration node.\n\n    Returns:\n        The variable names.\n    \"\"\"\n    return _declarator_name_list(node, (\"identifier\",))"
+    },
+    {
+      "name": "_extract_field_declarator_name_list",
+      "type": "function_definition",
+      "start_line": 818,
+      "end_line": 820,
+      "context": "def _extract_field_declarator_name_list(node: Node) -> list[str]:\n    \"\"\"Extract the member names from a C/C++ field declaration (int *p, q;).\"\"\"\n    return _declarator_name_list(node, (\"field_identifier\",))"
+    },
+    {
+      "name": "_extract_type_declarator_name_list",
+      "type": "function_definition",
+      "start_line": 823,
+      "end_line": 842,
+      "context": "def _extract_type_declarator_name_list(node: Node) -> list[str]:\n    \"\"\"Extract the type names from a C/C++ typedef.\n\n    typedef struct node { ... } node_t, *node_p;  -> [\"node_t\", \"node_p\"]\n    typedef int (*cmp_fn)(const void *);          -> [\"cmp_fn\"]\n\n    Args:\n        node: A type_definition node.\n\n    Returns:\n        The names the typedef declares.\n    \"\"\"\n    name_list: list[str] = []\n    for declarator_node in node.children_by_field_name(\"declarator\"):\n        name_node = declarator_name_node(declarator_node)\n        if name_node is not None and name_node.type == \"function_declarator\":\n            name_node = declarator_name_node(name_node.child_by_field_name(\"declarator\"))\n        if name_node is not None and name_node.type in (\"type_identifier\", \"identifier\"):\n            name_list.append(_node_text(name_node))\n    return name_list"
+    },
+    {
+      "name": "_extract_body_name_list",
+      "type": "function_definition",
+      "start_line": 845,
+      "end_line": 860,
+      "context": "def _extract_body_name_list(node: Node) -> list[str]:\n    \"\"\"Extract the name from a C/C++ struct, union, enum or class specifier that has a body.\n\n    struct node { ... } gives the name; struct node written as a type (struct node *p)\n    and a forward declaration (struct node;) give none.\n\n    Args:\n        node: A struct_specifier, union_specifier, enum_specifier or class_specifier node.\n\n    Returns:\n        [name], or empty without a body or a name.\n    \"\"\"\n    name_node = node.child_by_field_name(\"name\")\n    if name_node is None or node.child_by_field_name(\"body\") is None:\n        return []\n    return [_node_text(name_node)]"
+    },
+    {
+      "name": "_extract_kotlin_property_name_list",
+      "type": "function_definition",
+      "start_line": 863,
+      "end_line": 897,
+      "context": "def _extract_kotlin_property_name_list(node: Node) -> list[str]:\n    \"\"\"Extract the property names from a Kotlin val / var declaration.\n\n    Target AST structure:\n        property_declaration             <- this node is passed as the argument\n          +-- val / var\n          +-- variable_declaration\n          |    +-- identifier \"TOP\"      <- extract this\n          |    +-- (: type)\n          +-- =\n          +-- (value)\n\n    The same structure is used for top-level constants and for properties\n    declared in a class body. A destructuring declaration (val (a, b) = pair) holds\n    its variable_declaration nodes in a multi_variable_declaration.\n\n    Args:\n        node: A property_declaration node.\n\n    Returns:\n        The property names.\n    \"\"\"\n    name_list: list[str] = []\n    for child in node.children:\n        declaration_list = (\n            child.children if child.type == \"multi_variable_declaration\" else [child]\n        )\n        for declaration_node in declaration_list:\n            if declaration_node.type != \"variable_declaration\":\n                continue\n            for name_node in declaration_node.children:\n                if name_node.type == \"identifier\":\n                    name_list.append(_node_text(name_node))\n                    break\n    return name_list"
+    },
+    {
+      "name": "_extract_object_reference_name_list",
+      "type": "function_definition",
+      "start_line": 900,
+      "end_line": 923,
+      "context": "def _extract_object_reference_name_list(node: Node) -> list[str]:\n    \"\"\"Extract the object name from a SQL CREATE statement.\n\n    Target AST structure:\n        create_table                     <- this node is passed as the argument\n          +-- object_reference\n          |    +-- schema: identifier \"app\"   (optional)\n          |    +-- name: identifier \"items\"   <- extract this\n          +-- column_definitions\n\n    The same structure applies to create_view, create_materialized_view, create_function,\n    create_procedure, create_type, create_sequence and create_trigger.\n\n    Args:\n        node: A CREATE statement node.\n\n    Returns:\n        [name], or empty if no object_reference is found.\n    \"\"\"\n    for child in node.children:\n        if child.type == \"object_reference\":\n            name_node = child.child_by_field_name(\"name\")\n            return [_node_text(name_node)] if name_node else []\n    return []"
+    },
+    {
+      "name": "_extract_impl_type_name_list",
+      "type": "function_definition",
+      "start_line": 926,
+      "end_line": 959,
+      "context": "def _extract_impl_type_name_list(node: Node) -> list[str]:\n    \"\"\"Extract the name of the type an impl block is written for.\n\n    Target AST structure:\n        impl_item                        <- this node is passed as the argument\n          +-- (trait: type_identifier \"Shape\")   (impl Shape for Circle)\n          +-- type: type_identifier \"Circle\"      <- extract this\n          +-- body: declaration_list\n\n    Generic arguments, a path prefix and a reference are removed:\n    impl<T> Wrapper<T> -> \"Wrapper\", impl fmt::Display for x::Point -> \"Point\",\n    impl<'a> Trait for &'a Point -> \"Point\". A type that is not a named type\n    (impl dyn Shape, impl Trait for (u8, u8)) gives its text.\n\n    Args:\n        node: An impl_item node.\n\n    Returns:\n        [name], or empty when the node has no type.\n    \"\"\"\n    type_node = node.child_by_field_name(\"type\")\n    if type_node is None:\n        return []\n    inner_node: Node | None = type_node\n    while inner_node is not None:\n        if inner_node.type == \"type_identifier\":\n            return [_node_text(inner_node)]\n        if inner_node.type == \"scoped_type_identifier\":\n            inner_node = inner_node.child_by_field_name(\"name\")\n        elif inner_node.type in (\"generic_type\", \"reference_type\"):\n            inner_node = inner_node.child_by_field_name(\"type\")\n        else:\n            break\n    return [\" \".join(_node_text(type_node).split())]"
+    },
+    {
+      "name": "_extract_inline_module_name_list",
+      "type": "function_definition",
+      "start_line": 962,
+      "end_line": 974,
+      "context": "def _extract_inline_module_name_list(node: Node) -> list[str]:\n    \"\"\"Extract the module name from a Rust inline module (mod name { ... }).\n\n    Args:\n        node: A mod_item node.\n\n    Returns:\n        [name], or empty for a declaration without a body.\n    \"\"\"\n    if node.child_by_field_name(\"body\") is None:\n        return []\n    name_node = node.child_by_field_name(\"name\")\n    return [_node_text(name_node)] if name_node else []"
+    },
+    {
+      "name": "_extract_name_field_name_list",
+      "type": "function_definition",
+      "start_line": 977,
+      "end_line": 998,
+      "context": "def _extract_name_field_name_list(node: Node) -> list[str]:\n    \"\"\"Extract the name from the name field of a C# declaration.\n\n    Target AST structure:\n        method_declaration               <- this node is passed as the argument\n          +-- modifier\n          +-- returns: identifier \"Order\"\n          +-- name: identifier \"Find\"    <- extract this\n          +-- parameters: parameter_list\n\n    The same structure applies to the declarations of types, constructors, properties,\n    events and enum members. The prefix of a verbatim identifier is removed\n    (@class -> class).\n\n    Args:\n        node: A declaration node.\n\n    Returns:\n        [name], or empty if the node has no name field.\n    \"\"\"\n    name_node = node.child_by_field_name(\"name\")\n    return [_node_text(name_node).removeprefix(\"@\")] if name_node else []"
+    },
+    {
+      "name": "_extract_variable_declaration_name_list",
+      "type": "function_definition",
+      "start_line": 1001,
+      "end_line": 1026,
+      "context": "def _extract_variable_declaration_name_list(node: Node) -> list[str]:\n    \"\"\"Extract the variable names from a C# field declaration.\n\n    Target AST structure:\n        field_declaration                <- this node is passed as the argument\n          +-- modifier\n          +-- variable_declaration\n               +-- type: identifier \"Order\"\n               +-- variable_declarator\n                    +-- name: identifier \"X\"  <- extract this\n\n    The same structure applies to event_field_declaration. Every declarator gives its\n    name (int a, b;), without the prefix of a verbatim identifier.\n\n    Args:\n        node: A field_declaration or event_field_declaration node.\n\n    Returns:\n        The variable names.\n    \"\"\"\n    for child in node.children:\n        if child.type == \"variable_declaration\":\n            return [\n                name.removeprefix(\"@\") for name in _extract_variable_declarator_name_list(child)\n            ]\n    return []"
+    },
+    {
+      "name": "_extract_unnamed_member_name_list",
+      "type": "function_definition",
+      "start_line": 1029,
+      "end_line": 1057,
+      "context": "def _extract_unnamed_member_name_list(node: Node) -> list[str]:\n    \"\"\"Name a C# member declaration that has no name of its own.\n\n    public T this[int i] => ...;                  -> \"this[]\"\n    public static Vec operator +(Vec a, Vec b)    -> \"operator +\"\n    public static implicit operator int(Vec v)    -> \"operator int\"\n    ~Vec() {}                                     -> \"~Vec\"\n\n    Args:\n        node: An indexer_declaration, operator_declaration,\n            conversion_operator_declaration or destructor_declaration node.\n\n    Returns:\n        [name], or empty when the declaration cannot be read.\n    \"\"\"\n    if node.type == \"indexer_declaration\":\n        return [\"this[]\"]\n    if node.type == \"destructor_declaration\":\n        name_node = node.child_by_field_name(\"name\")\n        return [\"~\" + _node_text(name_node)] if name_node else []\n    if node.type == \"conversion_operator_declaration\":\n        type_node = node.child_by_field_name(\"type\")\n        return [\"operator \" + _node_text(type_node)] if type_node else []\n    # operator_declaration: the token written after the operator keyword\n    child_list = node.children\n    for index, child in enumerate(child_list[:-1]):\n        if child.type == \"operator\":\n            return [\"operator \" + _node_text(child_list[index + 1])]\n    return []"
+    },
+    {
+      "name": "_SENTINEL_EXTRACTOR_DICT",
+      "type": "expression_statement",
+      "start_line": 1061,
+      "end_line": 1105,
+      "context": "_SENTINEL_EXTRACTOR_DICT = {\n    # Python: expression_statement > assignment > left-hand identifiers\n    \"__assignment__\": _extract_assignment_name_list,\n    # Python: type_alias_statement > left: type > identifier\n    \"__type_alias__\": _extract_type_alias_name_list,\n    # JS/TS/Java: lexical_declaration / variable_declaration / field_declaration\n    #             > variable_declarator > identifier / pattern\n    \"__variable_declarator__\": _extract_variable_declarator_name_list,\n    # JS/TS: expression_statement > assignment_expression > exports.name / module.exports.name /\n    #        a member given a function\n    \"__member_assignment__\": _member_assignment_name_list,\n    # JS/TS: pair of an object a module exports > key\n    \"__export_member__\": _extract_export_member_name_list,\n    # TS: property_identifier directly in an enum_body\n    \"__enum_member__\": _extract_enum_member_name_list,\n    # JS/TS: export_statement with default and an unnamed value\n    \"__default_export__\": _default_export_name_list,\n    # C/C++: declaration > (init / pointer / array) declarator > identifier\n    \"__init_declarator__\": _extract_init_declarator_name_list,\n    # C/C++: field_declaration > (pointer / array) declarator > field_identifier\n    \"__field_declarator__\": _extract_field_declarator_name_list,\n    # C/C++: type_definition > declarator > type_identifier\n    \"__type_declarator__\": _extract_type_declarator_name_list,\n    # C/C++: struct / union / enum / class specifier with a body > name\n    \"__body_name__\": _extract_body_name_list,\n    # C/C++: function_definition > function_declarator > name\n    \"__function_declarator__\": _extract_function_declarator_name_list,\n    # C/C++: function_declarator > name (free function) / field_identifier (class member)\n    \"__declarator_name__\": _extract_declarator_name_list,\n    # Kotlin: property_declaration > variable_declaration > identifier\n    \"__kotlin_property__\": _extract_kotlin_property_name_list,\n    # SQL: create_table / create_view / create_function, etc. > object_reference > name: identifier\n    \"__object_reference__\": _extract_object_reference_name_list,\n    # Rust: impl_item > type: type_identifier (generic_type / scoped_type_identifier / reference_type)\n    \"__impl_type__\": _extract_impl_type_name_list,\n    # Rust: mod_item with a body > name: identifier\n    \"__inline_module__\": _extract_inline_module_name_list,\n    # C#: declaration > name: identifier\n    \"__name_field__\": _extract_name_field_name_list,\n    # C#: field_declaration / event_field_declaration > variable_declaration\n    #     > variable_declarator > identifier\n    \"__variable_declaration__\": _extract_variable_declaration_name_list,\n    # C#: indexer / operator / conversion operator / destructor declaration\n    \"__unnamed_member__\": _extract_unnamed_member_name_list,\n}"
     }
   ],
-  "callee_usages": [],
+  "callee_usages": [
+    {
+      "lines": [
+        73
+      ],
+      "name": "COBOL_DEFINITION_DICT",
+      "from": "codetwine/codetwine/config/settings_py/settings.py",
+      "target_context": "COBOL_DEFINITION_DICT = {\n    \"program_definition\": \"program_name\",\n    \"entry_statement\": \"string\",\n    \"section_header\": \"WORD\",\n    \"paragraph_header\": \"WORD\",\n    \"data_description\": \"entry_name\",\n    \"file_description_entry\": \"WORD\",\n    \"occurs_indexed\": \"WORD\",\n}",
+      "target_name": "COBOL_DEFINITION_DICT",
+      "target_start_line": 301
+    },
+    {
+      "lines": [
+        127,
+        163
+      ],
+      "name": "CobolSource",
+      "from": "codetwine/codetwine/extractors/cobol_source_py/cobol_source.py",
+      "target_context": "@dataclass\nclass CobolSource:\n    \"\"\"What one COBOL file defines, names and refers to.\"\"\"\n\n    # Lines of the source text\n    line_list: list[str]\n    # Definitions in line order\n    definition_list: list[CobolDefinition] = field(default_factory=list)\n    # COPY and CALL statements in line order\n    import_list: list[CobolImport] = field(default_factory=list)\n    # Each place a name is referred to\n    reference_list: list[CobolReference] = field(default_factory=list)\n    # Upper-case names a COPY statement can name the file by besides its file name\n    # (BMS: the mapset names)\n    copy_name_list: list[str] = field(default_factory=list)\n\n    def usage_line_list(self, name_set: set[str]) -> list[tuple[str, int]]:\n        \"\"\"Return the places the file refers to one of the given names.\n\n        Names are compared without regard to upper and lower case.\n\n        Args:\n            name_set: The names to look for.\n\n        Returns:\n            (name as given in name_set, line) tuples in line order, without duplicates.\n        \"\"\"\n        name_dict = {name.upper(): name for name in name_set}\n        usage_set = {\n            (name_dict[reference.name], reference.line)\n            for reference in self.reference_list if reference.name in name_dict\n        }\n        return sorted(usage_set, key=lambda usage: (usage[1], usage[0]))\n\n    def definition_text(self, definition: CobolDefinition) -> str:\n        \"\"\"Return the source text of a definition: its lines joined by \"\\\\n\".\"\"\"\n        return \"\\n\".join(self.line_list[definition.start_line - 1:definition.end_line])\n\n    def definition_source(self, name: str) -> str | None:\n        \"\"\"Return the source text of the first definition with a name.\n\n        Names are compared without regard to upper and lower case.\n\n        Args:\n            name: The definition name.\n\n        Returns:\n            The lines of the definition joined by \"\\\\n\". None when no definition has the name.\n        \"\"\"\n        for definition in self.definition_list:\n            if definition.name.upper() == name.upper():\n                return self.definition_text(definition)\n        return None",
+      "target_name": "CobolSource",
+      "target_start_line": 110
+    },
+    {
+      "lines": [
+        171
+      ],
+      "name": "R_DEFINITION_DICT",
+      "from": "codetwine/codetwine/config/settings_py/settings.py",
+      "target_context": "R_DEFINITION_DICT = {\n    \"function_definition\": \"identifier\",\n    \"binary_operator\": \"identifier\",\n    \"call\": \"string\",\n    \"argument\": \"identifier\",\n}",
+      "target_name": "R_DEFINITION_DICT",
+      "target_start_line": 319
+    },
+    {
+      "lines": [
+        174
+      ],
+      "name": "r_definition_list",
+      "from": "codetwine/codetwine/extractors/r_source_py/r_source.py",
+      "target_context": "def r_definition_list(root_node: Node) -> list[RDefinition]:\n    \"\"\"Return the definitions of an R file in line order.\n\n    A top-level assignment to a name (name <- value, name = value, name <<- value,\n    value -> name, value ->> name; the name an identifier, a backtick name or a string)\n    is a definition: of type \"function_definition\" when the value is a function, else\n    \"binary_operator\". Every name of a chain (a <- b <- value) is one. setClass,\n    setRefClass, setClassUnion and setGeneric define the name of their string, and\n    setMethod, setReplaceMethod and setValidity are listed under the name they are\n    written for (type \"call\"), also as an argument of another top-level call\n    (invisible(setClass(\"A\"))). The named entries of public, private and active of\n    R6Class and of methods and fields of setRefClass are members (type \"argument\").\n    The statements of a top-level if, \"{ }\", \"( )\", for, while and repeat are top-level\n    statements (_read_top_level). An assignment inside a function is not a definition.\n    A name assigned inside a top-level statement, outside the functions written in it,\n    is a definition when a later top-level statement refers to it\n    (_inner_definition_list).\n\n    Args:\n        root_node: The AST root node of the file.\n\n    Returns:\n        The RDefinition list, sorted by start_line.\n    \"\"\"\n    definition_list: list[RDefinition] = []\n    for statement in _read_top_level(root_node)[0]:\n        start_line = _line(statement)\n        end_line = statement.end_point[0] + 1\n        target_list, value = _assign_chain(statement)\n        name_list = [name for name in map(_name_text, target_list) if name]\n\n        # The names the statement assigns: a function, or any other value\n        if value is not None:\n            is_function = value.type == \"function_definition\"\n            is_generic = is_function and _has_call(value, _GENERIC_CALL)\n            definition_list.extend(\n                RDefinition(\n                    name=name,\n                    type=\"function_definition\" if is_function else \"binary_operator\",\n                    start_line=start_line,\n                    end_line=end_line,\n                    is_function=is_function,\n                    is_generic=is_generic,\n                )\n                for name in name_list\n            )\n\n        # The calls that define a name by a string, or make a class\n        for call_node in _define_call_list(value):\n            definition_list.extend(_call_definition_list(call_node, statement, set(name_list)))\n            definition_list.extend(_member_definition_list(call_node))\n\n    definition_list.extend(_inner_definition_list(root_node))\n    return sorted(definition_list, key=lambda definition: definition.start_line)",
+      "target_name": "r_definition_list",
+      "target_start_line": 601
+    },
+    {
+      "lines": [
+        448,
+        489
+      ],
+      "name": "PATTERN_FIELD_DICT",
+      "from": "codetwine/codetwine/config/settings_py/settings.py",
+      "target_context": "PATTERN_FIELD_DICT: dict[str, str] = {\n    node_type: field_name\n    for lang_config in _LANG_REGISTRY.values() if lang_config.usage_node_type_dict\n    for node_type, field_name in lang_config.usage_node_type_dict.get(\"pattern_field_dict\", {}).items()\n}",
+      "target_name": "PATTERN_FIELD_DICT",
+      "target_start_line": 1316
+    },
+    {
+      "lines": [
+        448,
+        489
+      ],
+      "name": "PATTERN_TYPE_SET",
+      "from": "codetwine/codetwine/config/settings_py/settings.py",
+      "target_context": "PATTERN_TYPE_SET: set[str] = set().union(*(\n    lang_config.usage_node_type_dict.get(\"pattern_types\", set())\n    for lang_config in _LANG_REGISTRY.values() if lang_config.usage_node_type_dict\n))",
+      "target_name": "PATTERN_TYPE_SET",
+      "target_start_line": 1312
+    }
+  ],
+  "same_file_usages": [
+    {
+      "lines": [
+        129,
+        165,
+        173,
+        177,
+        207,
+        230,
+        231,
+        245
+      ],
+      "name": "DefinitionInfo",
+      "target_name": "DefinitionInfo",
+      "target_start_line": 109
+    },
+    {
+      "lines": [
+        187
+      ],
+      "name": "_is_call_in_place",
+      "target_name": "_is_call_in_place",
+      "target_start_line": 345
+    },
+    {
+      "lines": [
+        187
+      ],
+      "name": "_LOCAL_BODY_TYPE_SET",
+      "target_name": "_LOCAL_BODY_TYPE_SET",
+      "target_start_line": 85
+    },
+    {
+      "lines": [
+        193,
+        279
+      ],
+      "name": "_decorated_inner_node",
+      "target_name": "_decorated_inner_node",
+      "target_start_line": 368
+    },
+    {
+      "lines": [
+        194,
+        327
+      ],
+      "name": "definition_name_list",
+      "target_name": "definition_name_list",
+      "target_start_line": 263
+    },
+    {
+      "lines": [
+        197
+      ],
+      "name": "_INCLUDE_GUARD_RE.match",
+      "target_name": "_INCLUDE_GUARD_RE",
+      "target_start_line": 15
+    },
+    {
+      "lines": [
+        204
+      ],
+      "name": "_extent_node",
+      "target_name": "_extent_node",
+      "target_start_line": 302
+    },
+    {
+      "lines": [
+        205
+      ],
+      "name": "_line_range",
+      "target_name": "_line_range",
+      "target_start_line": 333
+    },
+    {
+      "lines": [
+        214,
+        256
+      ],
+      "name": "CONTAINER_DEFINITION_TYPE_SET",
+      "target_name": "CONTAINER_DEFINITION_TYPE_SET",
+      "target_start_line": 20
+    },
+    {
+      "lines": [
+        216
+      ],
+      "name": "_TYPE_FIELD_DEFINITION_TYPE_SET",
+      "target_name": "_TYPE_FIELD_DEFINITION_TYPE_SET",
+      "target_start_line": 68
+    },
+    {
+      "lines": [
+        222,
+        599,
+        639
+      ],
+      "name": "commonjs_export_assignment",
+      "target_name": "commonjs_export_assignment",
+      "target_start_line": 493
+    },
+    {
+      "lines": [
+        248
+      ],
+      "name": "BARE_NAME_DEFINITION_TYPE_SET",
+      "target_name": "BARE_NAME_DEFINITION_TYPE_SET",
+      "target_start_line": 73
+    },
+    {
+      "lines": [
+        257
+      ],
+      "name": "OPEN_DEFINITION_TYPE_SET",
+      "target_name": "OPEN_DEFINITION_TYPE_SET",
+      "target_start_line": 60
+    },
+    {
+      "lines": [
+        286
+      ],
+      "name": "_SENTINEL_EXTRACTOR_DICT.get",
+      "target_name": "_SENTINEL_EXTRACTOR_DICT",
+      "target_start_line": 1061
+    },
+    {
+      "lines": [
+        293,
+        408,
+        458,
+        523,
+        529,
+        531,
+        542,
+        547,
+        580,
+        643,
+        650,
+        714,
+        737,
+        742,
+        841,
+        860,
+        895,
+        922,
+        952,
+        959,
+        974,
+        998,
+        1048,
+        1051,
+        1056
+      ],
+      "name": "_node_text",
+      "target_name": "_node_text",
+      "target_start_line": 297
+    },
+    {
+      "lines": [
+        319,
+        689
+      ],
+      "name": "_WRAP_DECLARATOR_TYPE_SET",
+      "target_name": "_WRAP_DECLARATOR_TYPE_SET",
+      "target_start_line": 94
+    },
+    {
+      "lines": [
+        325
+      ],
+      "name": "_DECLARATION_TYPE_SET",
+      "target_name": "_DECLARATION_TYPE_SET",
+      "target_start_line": 91
+    },
+    {
+      "lines": [
+        407
+      ],
+      "name": "PATTERN_NAME_TYPE_SET",
+      "target_name": "PATTERN_NAME_TYPE_SET",
+      "target_start_line": 104
+    },
+    {
+      "lines": [
+        448,
+        489
+      ],
+      "name": "pattern_name_list",
+      "target_name": "pattern_name_list",
+      "target_start_line": 385
+    },
+    {
+      "lines": [
+        524,
+        604,
+        673
+      ],
+      "name": "DEFAULT_EXPORT_NAME",
+      "target_name": "DEFAULT_EXPORT_NAME",
+      "target_start_line": 80
+    },
+    {
+      "lines": [
+        574
+      ],
+      "name": "_FUNCTION_VALUE_TYPE_SET",
+      "target_name": "_FUNCTION_VALUE_TYPE_SET",
+      "target_start_line": 99
+    },
+    {
+      "lines": [
+        601
+      ],
+      "name": "_member_function_name",
+      "target_name": "_member_function_name",
+      "target_start_line": 550
+    },
+    {
+      "lines": [
+        605
+      ],
+      "name": "require_module",
+      "target_name": "require_module",
+      "target_start_line": 536
+    },
+    {
+      "lines": [
+        712,
+        766,
+        837,
+        839
+      ],
+      "name": "declarator_name_node",
+      "target_name": "declarator_name_node",
+      "target_start_line": 676
+    },
+    {
+      "lines": [
+        769,
+        788
+      ],
+      "name": "_function_name",
+      "target_name": "_function_name",
+      "target_start_line": 718
+    },
+    {
+      "lines": [
+        815,
+        820
+      ],
+      "name": "_declarator_name_list",
+      "target_name": "_declarator_name_list",
+      "target_start_line": 700
+    },
+    {
+      "lines": [
+        1024,
+        1068
+      ],
+      "name": "_extract_variable_declarator_name_list",
+      "target_name": "_extract_variable_declarator_name_list",
+      "target_start_line": 461
+    },
+    {
+      "lines": [
+        1063
+      ],
+      "name": "_extract_assignment_name_list",
+      "target_name": "_extract_assignment_name_list",
+      "target_start_line": 424
+    },
+    {
+      "lines": [
+        1065
+      ],
+      "name": "_extract_type_alias_name_list",
+      "target_name": "_extract_type_alias_name_list",
+      "target_start_line": 453
+    },
+    {
+      "lines": [
+        1071
+      ],
+      "name": "_member_assignment_name_list",
+      "target_name": "_member_assignment_name_list",
+      "target_start_line": 583
+    },
+    {
+      "lines": [
+        1073
+      ],
+      "name": "_extract_export_member_name_list",
+      "target_name": "_extract_export_member_name_list",
+      "target_start_line": 611
+    },
+    {
+      "lines": [
+        1075
+      ],
+      "name": "_extract_enum_member_name_list",
+      "target_name": "_extract_enum_member_name_list",
+      "target_start_line": 646
+    },
+    {
+      "lines": [
+        1077
+      ],
+      "name": "_default_export_name_list",
+      "target_name": "_default_export_name_list",
+      "target_start_line": 653
+    },
+    {
+      "lines": [
+        1079
+      ],
+      "name": "_extract_init_declarator_name_list",
+      "target_name": "_extract_init_declarator_name_list",
+      "target_start_line": 792
+    },
+    {
+      "lines": [
+        1081
+      ],
+      "name": "_extract_field_declarator_name_list",
+      "target_name": "_extract_field_declarator_name_list",
+      "target_start_line": 818
+    },
+    {
+      "lines": [
+        1083
+      ],
+      "name": "_extract_type_declarator_name_list",
+      "target_name": "_extract_type_declarator_name_list",
+      "target_start_line": 823
+    },
+    {
+      "lines": [
+        1085
+      ],
+      "name": "_extract_body_name_list",
+      "target_name": "_extract_body_name_list",
+      "target_start_line": 845
+    },
+    {
+      "lines": [
+        1087
+      ],
+      "name": "_extract_function_declarator_name_list",
+      "target_name": "_extract_function_declarator_name_list",
+      "target_start_line": 746
+    },
+    {
+      "lines": [
+        1089
+      ],
+      "name": "_extract_declarator_name_list",
+      "target_name": "_extract_declarator_name_list",
+      "target_start_line": 773
+    },
+    {
+      "lines": [
+        1091
+      ],
+      "name": "_extract_kotlin_property_name_list",
+      "target_name": "_extract_kotlin_property_name_list",
+      "target_start_line": 863
+    },
+    {
+      "lines": [
+        1093
+      ],
+      "name": "_extract_object_reference_name_list",
+      "target_name": "_extract_object_reference_name_list",
+      "target_start_line": 900
+    },
+    {
+      "lines": [
+        1095
+      ],
+      "name": "_extract_impl_type_name_list",
+      "target_name": "_extract_impl_type_name_list",
+      "target_start_line": 926
+    },
+    {
+      "lines": [
+        1097
+      ],
+      "name": "_extract_inline_module_name_list",
+      "target_name": "_extract_inline_module_name_list",
+      "target_start_line": 962
+    },
+    {
+      "lines": [
+        1099
+      ],
+      "name": "_extract_name_field_name_list",
+      "target_name": "_extract_name_field_name_list",
+      "target_start_line": 977
+    },
+    {
+      "lines": [
+        1102
+      ],
+      "name": "_extract_variable_declaration_name_list",
+      "target_name": "_extract_variable_declaration_name_list",
+      "target_start_line": 1001
+    },
+    {
+      "lines": [
+        1104
+      ],
+      "name": "_extract_unnamed_member_name_list",
+      "target_name": "_extract_unnamed_member_name_list",
+      "target_start_line": 1029
+    }
+  ],
   "caller_usages": [
     {
       "lines": [
-        59
+        733
       ],
-      "name": "extract_definitions",
-      "file": "codetwine/codetwine/file_analyzer_py/file_analyzer.py",
-      "usage_context": "            \"end_line\":   d.end_line,\n            \"context\":    \"\\n\".join(content_lines[d.start_line - 1 : d.end_line]),\n        }\n        for d in extract_definitions(root_node, definition_dict)\n    ]\n\n    # import / usage analysis"
+      "name": "definition_name_list",
+      "file": "codetwine/codetwine/extractors/csharp_source_py/csharp_source.py",
+      "usage_context": "        Every variable of a declaration of fields; the name of any other declaration.\n        Empty when the declaration has no name.\n    \"\"\"\n    return definition_name_list(node, CSHARP_DEFINITION_DICT)\n\n\ndef _add_member(owner: CsharpType, node: Node) -> None:"
     },
     {
       "lines": [
-        430
-      ],
-      "name": "extract_definitions",
-      "file": "codetwine/codetwine/import_to_path_py/import_to_path.py",
-      "usage_context": "\n    # Parse the file, extract definitions, and register each definition name in symbol_to_file_map\n    root_node = parse_file(abs_path)[0]\n    definition_list = extract_definitions(root_node, definition_dict)\n    for defn in _select_top_level_definitions(definition_list):\n        if defn.name:\n            _put_symbol(symbol_to_file_map, defn.name, file_rel)"
-    },
-    {
-      "lines": [
-        437,
-        438,
-        450
+        24,
+        28,
+        37,
+        71,
+        95,
+        98,
+        106,
+        107,
+        130,
+        131,
+        154,
+        155,
+        185,
+        204,
+        239
       ],
       "name": "DefinitionInfo",
-      "file": "codetwine/codetwine/import_to_path_py/import_to_path.py",
-      "usage_context": "\n\ndef _select_top_level_definitions(\n    definition_list: list[DefinitionInfo],\n) -> list[DefinitionInfo]:\n    \"\"\"Keep only definitions that are not nested inside another definition.\n\n...\n\ndef _select_top_level_definitions(\n    definition_list: list[DefinitionInfo],\n) -> list[DefinitionInfo]:\n    \"\"\"Keep only definitions that are not nested inside another definition.\n\n    Class members (methods, constructors, fields) are not importable on their own,"
+      "file": "codetwine/codetwine/extractors/definition_source_py/definition_source.py",
+      "usage_context": "# Cache of the definitions and the text of the files a definition was looked up in,\n# ordered from least to most recently used: absolute path -> (definitions in line order,\n# UTF-8 text of the file). The number of entries is capped by PARSE_CACHE_MAX_FILES.\n_definition_cache: OrderedDict[str, tuple[list[DefinitionInfo], bytes]] = OrderedDict()\n\n# Cache of the definitions of the files, which hold no syntax tree:\n# absolute path -> definitions in line order\n...\n\n# Cache of the definitions of the files, which hold no syntax tree:\n# absolute path -> definitions in line order\n_definition_list_cache: dict[str, list[DefinitionInfo]] = {}\n\n\ndef clear_definition_source_cache() -> None:"
     },
     {
       "lines": [
-        221
+        52
       ],
       "name": "extract_definitions",
+      "file": "codetwine/codetwine/extractors/definition_source_py/definition_source.py",
+      "usage_context": "    \"\"\"\n    definition_list = _definition_list_cache.get(absolute_path)\n    if definition_list is None:\n        definition_list = extract_definitions(parse_file(absolute_path)[0], definition_dict)\n        _definition_list_cache[absolute_path] = definition_list\n    return definition_list\n"
+    },
+    {
+      "lines": [
+        99
+      ],
+      "name": "DefinitionInfo.start_line",
+      "file": "codetwine/codetwine/extractors/definition_source_py/definition_source.py",
+      "usage_context": "    \"\"\"Return whether a definition is written inside the lines of one of the owners.\"\"\"\n    return any(\n        owner is not definition\n        and owner.start_line <= definition.start_line\n        and definition.end_line <= owner.end_line\n        for owner in owner_list\n    )"
+    },
+    {
+      "lines": [
+        100
+      ],
+      "name": "DefinitionInfo.end_line",
+      "file": "codetwine/codetwine/extractors/definition_source_py/definition_source.py",
+      "usage_context": "    return any(\n        owner is not definition\n        and owner.start_line <= definition.start_line\n        and definition.end_line <= owner.end_line\n        for owner in owner_list\n    )\n"
+    },
+    {
+      "lines": [
+        142
+      ],
+      "name": "ATTACHED_DEFINITION_TYPE_SET",
+      "file": "codetwine/codetwine/extractors/definition_source_py/definition_source.py",
+      "usage_context": "            break\n        own_list = [\n            definition for definition in match_list\n            if definition.type not in ATTACHED_DEFINITION_TYPE_SET\n        ]\n        if owner_list is None:\n            # The first part names a top-level definition before a member of the same name"
+    },
+    {
+      "lines": [
+        146
+      ],
+      "name": "select_top_level_definitions",
+      "file": "codetwine/codetwine/extractors/definition_source_py/definition_source.py",
+      "usage_context": "        ]\n        if owner_list is None:\n            # The first part names a top-level definition before a member of the same name\n            top_level_id_set = {id(d) for d in select_top_level_definitions(definition_list)}\n            own_list.sort(key=lambda definition: id(definition) not in top_level_id_set)\n        last_definition = (own_list or match_list)[0]\n        owner_list = match_list"
+    },
+    {
+      "lines": [
+        363,
+        514,
+        626,
+        655
+      ],
+      "name": "DEFAULT_EXPORT_NAME",
+      "file": "codetwine/codetwine/extractors/imports_py/imports.py",
+      "usage_context": "                import_by_key_dict[group_key].names.append(default_name)\n                if import_by_key_dict[group_key].alias_map is None:\n                    import_by_key_dict[group_key].alias_map = {}\n                import_by_key_dict[group_key].alias_map[default_name] = DEFAULT_EXPORT_NAME\n\n        # If @name captures exist, add them to the names list (excluding duplicates)\n        # When an alias is present, register the alias name and record the mapping to the original name in alias_map\n...\n        if statement.type != \"expression_statement\":\n            continue\n        export_assignment = commonjs_export_assignment(statement)\n        if export_assignment is not None and export_assignment[0] == DEFAULT_EXPORT_NAME:\n            module = require_module(export_assignment[1])\n            if module is not None:\n                module_list.append(module)"
+    },
+    {
+      "lines": [
+        513,
+        620
+      ],
+      "name": "commonjs_export_assignment",
+      "file": "codetwine/codetwine/extractors/imports_py/imports.py",
+      "usage_context": "    for statement in root_node.children:\n        if statement.type != \"expression_statement\":\n            continue\n        export_assignment = commonjs_export_assignment(statement)\n        if export_assignment is not None and export_assignment[0] == DEFAULT_EXPORT_NAME:\n            module = require_module(export_assignment[1])\n            if module is not None:\n...\n    export_dict: dict[str, str] = {}\n    for statement in root_node.children:\n        if statement.type == \"expression_statement\":\n            export_assignment = commonjs_export_assignment(statement)\n            if export_assignment is None:\n                continue\n            export_name, value_node = export_assignment"
+    },
+    {
+      "lines": [
+        515
+      ],
+      "name": "require_module",
+      "file": "codetwine/codetwine/extractors/imports_py/imports.py",
+      "usage_context": "            continue\n        export_assignment = commonjs_export_assignment(statement)\n        if export_assignment is not None and export_assignment[0] == DEFAULT_EXPORT_NAME:\n            module = require_module(export_assignment[1])\n            if module is not None:\n                module_list.append(module)\n    return module_list"
+    },
+    {
+      "lines": [
+        110,
+        122,
+        135,
+        155,
+        362
+      ],
+      "name": "DefinitionInfo",
       "file": "codetwine/codetwine/extractors/usage_analysis_py/usage_analysis.py",
-      "usage_context": "    target_def_dict = DEFINITION_DICTS.get(target_ext)\n    if target_def_dict and os.path.isfile(target_abs):\n        target_root = parse_file(target_abs)[0]\n        for defn in extract_definitions(target_root, target_def_dict):\n            if defn.name:\n                names.append(defn.name)\n    return names"
+      "usage_context": "\n\ndef _definition_range_dict(\n    definition_list: list[DefinitionInfo],\n) -> dict[str, list[tuple[int, int]]]:\n    \"\"\"Return {definition name: (start_line, end_line) of each definition of that name}.\"\"\"\n    range_dict: dict[str, list[tuple[int, int]]] = {}\n...\n\n\ndef _cobol_own_range_function(\n    definition_list: list[DefinitionInfo], root_node: Node | CobolSource,\n) -> Callable[[CobolReferenceTarget], list[tuple[int, int]]]:\n    \"\"\"Return the function giving the lines of the definition a COBOL reference resolved to.\"\"\"\n    def cobol_range_list(target: CobolReferenceTarget) -> list[tuple[int, int]]:"
+    },
+    {
+      "lines": [
+        123
+      ],
+      "name": "pattern_name_list",
+      "file": "codetwine/codetwine/extractors/usages_py/usages.py",
+      "usage_context": "\ndef _pattern_name_list(node: Node, setting: _UsageSetting) -> list[str]:\n    \"\"\"Return the names a binding pattern binds (pattern_name_list with the settings of the file).\"\"\"\n    return pattern_name_list(\n        node, setting.type_set(\"pattern_types\"),\n        setting.usage_node_types.get(\"pattern_field_dict\", {}),\n    )"
+    },
+    {
+      "lines": [
+        1074
+      ],
+      "name": "declarator_name_node",
+      "file": "codetwine/codetwine/extractors/usages_py/usages.py",
+      "usage_context": "        elif child.type == \"identifier\":\n            var_name_list.append(child.text.decode(\"utf-8\"))\n        elif child.type in _DECLARATOR_TYPE_SET:\n            name_node = declarator_name_node(child)\n            if name_node is not None and name_node.type == \"variable_declarator\":\n                name_node = name_node.child_by_field_name(\"name\")\n            if name_node is not None and name_node.type == \"identifier\":"
+    },
+    {
+      "lines": [
+        19,
+        37
+      ],
+      "name": "DefinitionInfo",
+      "file": "codetwine/codetwine/file_analyzer_py/file_analyzer.py",
+      "usage_context": "logger = logging.getLogger(__name__)\n\n\ndef _definition_entry(definition: DefinitionInfo, content_line_list: list[str]) -> dict:\n    \"\"\"Return the entry of one definition in the \"definitions\" list.\n\n    Args:\n...\n        \"end_line\":   definition.end_line,\n    }\n    for key in (\"name_line\", \"level\", \"is_group\"):\n        value = getattr(definition, key)\n        if value is not None:\n            entry[key] = value\n    entry[\"context\"] = \"\\n\".join(content_line_list[definition.start_line - 1 : definition.end_line])"
+    },
+    {
+      "lines": [
+        31
+      ],
+      "name": "DefinitionInfo.name",
+      "file": "codetwine/codetwine/file_analyzer_py/file_analyzer.py",
+      "usage_context": "        \"level\" and \"is_group\" after \"end_line\" when the definition has them.\n    \"\"\"\n    entry = {\n        \"name\":       definition.name,\n        \"type\":       definition.type,\n        \"start_line\": definition.start_line,\n        \"end_line\":   definition.end_line,"
+    },
+    {
+      "lines": [
+        32
+      ],
+      "name": "DefinitionInfo.type",
+      "file": "codetwine/codetwine/file_analyzer_py/file_analyzer.py",
+      "usage_context": "    \"\"\"\n    entry = {\n        \"name\":       definition.name,\n        \"type\":       definition.type,\n        \"start_line\": definition.start_line,\n        \"end_line\":   definition.end_line,\n    }"
+    },
+    {
+      "lines": [
+        33,
+        40
+      ],
+      "name": "DefinitionInfo.start_line",
+      "file": "codetwine/codetwine/file_analyzer_py/file_analyzer.py",
+      "usage_context": "    entry = {\n        \"name\":       definition.name,\n        \"type\":       definition.type,\n        \"start_line\": definition.start_line,\n        \"end_line\":   definition.end_line,\n    }\n    for key in (\"name_line\", \"level\", \"is_group\"):\n...\n        value = getattr(definition, key)\n        if value is not None:\n            entry[key] = value\n    entry[\"context\"] = \"\\n\".join(content_line_list[definition.start_line - 1 : definition.end_line])\n    return entry\n\n"
+    },
+    {
+      "lines": [
+        34,
+        40
+      ],
+      "name": "DefinitionInfo.end_line",
+      "file": "codetwine/codetwine/file_analyzer_py/file_analyzer.py",
+      "usage_context": "        \"name\":       definition.name,\n        \"type\":       definition.type,\n        \"start_line\": definition.start_line,\n        \"end_line\":   definition.end_line,\n    }\n    for key in (\"name_line\", \"level\", \"is_group\"):\n        value = getattr(definition, key)\n...\n        value = getattr(definition, key)\n        if value is not None:\n            entry[key] = value\n    entry[\"context\"] = \"\\n\".join(content_line_list[definition.start_line - 1 : definition.end_line])\n    return entry\n\n"
+    },
+    {
+      "lines": [
+        335
+      ],
+      "name": "DefinitionInfo",
+      "file": "codetwine/codetwine/import_binding_py/import_binding.py",
+      "usage_context": "        self._tree_fact_dict[file_rel] = tree_fact\n        return tree_fact\n\n    def _definition_list(self, file_rel: str) -> list[DefinitionInfo]:\n        \"\"\"Return the definitions of a file (file_definition_list).\"\"\"\n        return file_definition_list(\n            os.path.join(self.project_dir, file_rel),"
+    },
+    {
+      "lines": [
+        525,
+        1000
+      ],
+      "name": "DEFAULT_EXPORT_NAME",
+      "file": "codetwine/codetwine/import_binding_py/import_binding.py",
+      "usage_context": "            module_file = self._resolve(module, file_rel)\n            if module_file is not None:\n                file_binding.export_alias_dict.setdefault(\n                    DEFAULT_EXPORT_NAME, SymbolBinding(module_file, DEFAULT_EXPORT_NAME),\n                )\n                file_binding.wildcard_list.append(module_file)\n\n...\n        \"\"\"\n        if self._bind_kind(file_rel) != \"export\":\n            return None\n        return self._export_name_dict(file_rel).get(DEFAULT_EXPORT_NAME)\n\n    # == Declarations and their definitions (C / C++) =========================\n"
+    },
+    {
+      "lines": [
+        762
+      ],
+      "name": "CONTAINER_DEFINITION_TYPE_SET",
+      "file": "codetwine/codetwine/import_binding_py/import_binding.py",
+      "usage_context": "        definition_list = self._definition_list(file_rel)\n        member_name_list: list[str] = []\n        for owner in definition_list:\n            if owner.name != type_name or owner.type not in CONTAINER_DEFINITION_TYPE_SET:\n                continue\n            for definition in definition_list:\n                if definition is not owner and owner.start_line <= definition.start_line <= owner.end_line:"
+    },
+    {
+      "lines": [
+        1237
+      ],
+      "name": "ATTACHED_DEFINITION_TYPE_SET",
+      "file": "codetwine/codetwine/import_binding_py/import_binding.py",
+      "usage_context": "                )\n                continue\n            for owner in definition_list:\n                if owner.type not in ATTACHED_DEFINITION_TYPE_SET:\n                    continue\n                for definition in definition_list:\n                    if definition is owner or not ("
+    },
+    {
+      "lines": [
+        55,
+        82,
+        237,
+        313
+      ],
+      "name": "DefinitionInfo",
+      "file": "codetwine/codetwine/import_reference_py/import_reference.py",
+      "usage_context": "\n\ndef _own_name_set(\n    definition_list: list[DefinitionInfo],\n    symbol_dict: dict[str, SymbolBinding],\n    import_line_dict: dict[str, set[int]],\n    file_import_line_dict: dict[str, set[int]],\n...\n        described above and the names carried only by definitions in\n        ATTACHED_DEFINITION_TYPE_SET or TRANSPARENT_DEFINITION_TYPE_SET.\n    \"\"\"\n    def is_own(definition: DefinitionInfo) -> bool:\n        \"\"\"Return whether a definition gives a name of the file apart from its import statements.\"\"\"\n        return (\n            bool(definition.name)"
+    },
+    {
+      "lines": [
+        85,
+        88,
+        91
+      ],
+      "name": "DefinitionInfo.name",
+      "file": "codetwine/codetwine/import_reference_py/import_reference.py",
+      "usage_context": "    def is_own(definition: DefinitionInfo) -> bool:\n        \"\"\"Return whether a definition gives a name of the file apart from its import statements.\"\"\"\n        return (\n            bool(definition.name)\n            and definition.type not in ATTACHED_DEFINITION_TYPE_SET\n            and definition.type not in TRANSPARENT_DEFINITION_TYPE_SET\n            and definition.name not in symbol_dict\n...\n            bool(definition.name)\n            and definition.type not in ATTACHED_DEFINITION_TYPE_SET\n            and definition.type not in TRANSPARENT_DEFINITION_TYPE_SET\n            and definition.name not in symbol_dict\n            and not any(\n                definition.start_line <= line <= definition.end_line\n                for line in file_import_line_dict.get(definition.name, ())"
+    },
+    {
+      "lines": [
+        86
+      ],
+      "name": "ATTACHED_DEFINITION_TYPE_SET",
+      "file": "codetwine/codetwine/import_reference_py/import_reference.py",
+      "usage_context": "        \"\"\"Return whether a definition gives a name of the file apart from its import statements.\"\"\"\n        return (\n            bool(definition.name)\n            and definition.type not in ATTACHED_DEFINITION_TYPE_SET\n            and definition.type not in TRANSPARENT_DEFINITION_TYPE_SET\n            and definition.name not in symbol_dict\n            and not any("
+    },
+    {
+      "lines": [
+        86,
+        87
+      ],
+      "name": "DefinitionInfo.type",
+      "file": "codetwine/codetwine/import_reference_py/import_reference.py",
+      "usage_context": "        \"\"\"Return whether a definition gives a name of the file apart from its import statements.\"\"\"\n        return (\n            bool(definition.name)\n            and definition.type not in ATTACHED_DEFINITION_TYPE_SET\n            and definition.type not in TRANSPARENT_DEFINITION_TYPE_SET\n            and definition.name not in symbol_dict\n            and not any(\n...\n        return (\n            bool(definition.name)\n            and definition.type not in ATTACHED_DEFINITION_TYPE_SET\n            and definition.type not in TRANSPARENT_DEFINITION_TYPE_SET\n            and definition.name not in symbol_dict\n            and not any(\n                definition.start_line <= line <= definition.end_line"
+    },
+    {
+      "lines": [
+        87
+      ],
+      "name": "TRANSPARENT_DEFINITION_TYPE_SET",
+      "file": "codetwine/codetwine/import_reference_py/import_reference.py",
+      "usage_context": "        return (\n            bool(definition.name)\n            and definition.type not in ATTACHED_DEFINITION_TYPE_SET\n            and definition.type not in TRANSPARENT_DEFINITION_TYPE_SET\n            and definition.name not in symbol_dict\n            and not any(\n                definition.start_line <= line <= definition.end_line"
+    },
+    {
+      "lines": [
+        90
+      ],
+      "name": "DefinitionInfo.end_line",
+      "file": "codetwine/codetwine/import_reference_py/import_reference.py",
+      "usage_context": "            and definition.type not in TRANSPARENT_DEFINITION_TYPE_SET\n            and definition.name not in symbol_dict\n            and not any(\n                definition.start_line <= line <= definition.end_line\n                for line in file_import_line_dict.get(definition.name, ())\n            )\n        )"
+    },
+    {
+      "lines": [
+        90
+      ],
+      "name": "DefinitionInfo.start_line",
+      "file": "codetwine/codetwine/import_reference_py/import_reference.py",
+      "usage_context": "            and definition.type not in TRANSPARENT_DEFINITION_TYPE_SET\n            and definition.name not in symbol_dict\n            and not any(\n                definition.start_line <= line <= definition.end_line\n                for line in file_import_line_dict.get(definition.name, ())\n            )\n        )"
+    },
+    {
+      "lines": [
+        97
+      ],
+      "name": "select_top_level_definitions",
+      "file": "codetwine/codetwine/import_reference_py/import_reference.py",
+      "usage_context": "\n    top_level_name_set = {\n        definition.name\n        for definition in select_top_level_definitions(definition_list) if is_own(definition)\n    }\n    return {\n        definition.name for definition in definition_list"
+    },
+    {
+      "lines": [
+        509,
+        522
+      ],
+      "name": "CLASS_DEFINITION_TYPE_SET",
+      "file": "codetwine/codetwine/import_reference_py/import_reference.py",
+      "usage_context": "    )\n    own_type_name_set = {\n        definition.name for definition in definition_list\n        if definition.type in CLASS_DEFINITION_TYPE_SET and definition.name in own_name_set\n    }\n\n    def is_class_name(name: str) -> bool:\n...\n        target = _import_target_list(name, root_name, 0, symbol_dict[root_name], binder)[0]\n        definition = file_definition(target.file_rel, target.definition_name, project_dir)\n        return (\n            definition is not None and definition.type in CLASS_DEFINITION_TYPE_SET\n            and definition.name == symbol_part_list(target.definition_name)[-1]\n        )\n"
+    },
+    {
+      "lines": [
+        456
+      ],
+      "name": "select_top_level_definitions",
+      "file": "codetwine/codetwine/import_to_path_py/import_to_path.py",
+      "usage_context": "\n    definition_list = file_definition_list(abs_path, definition_dict)\n    return list(dict.fromkeys(\n        d.name for d in select_top_level_definitions(definition_list)\n        if d.name\n        and d.type not in ATTACHED_DEFINITION_TYPE_SET\n        and d.type not in TRANSPARENT_DEFINITION_TYPE_SET"
+    },
+    {
+      "lines": [
+        458
+      ],
+      "name": "ATTACHED_DEFINITION_TYPE_SET",
+      "file": "codetwine/codetwine/import_to_path_py/import_to_path.py",
+      "usage_context": "    return list(dict.fromkeys(\n        d.name for d in select_top_level_definitions(definition_list)\n        if d.name\n        and d.type not in ATTACHED_DEFINITION_TYPE_SET\n        and d.type not in TRANSPARENT_DEFINITION_TYPE_SET\n    ))\n"
+    },
+    {
+      "lines": [
+        459
+      ],
+      "name": "TRANSPARENT_DEFINITION_TYPE_SET",
+      "file": "codetwine/codetwine/import_to_path_py/import_to_path.py",
+      "usage_context": "        d.name for d in select_top_level_definitions(definition_list)\n        if d.name\n        and d.type not in ATTACHED_DEFINITION_TYPE_SET\n        and d.type not in TRANSPARENT_DEFINITION_TYPE_SET\n    ))\n\n"
+    },
+    {
+      "lines": [
+        90
+      ],
+      "name": "extract_definitions",
+      "file": "codetwine/codetwine/rust_module_tree_py/rust_module_tree.py",
+      "usage_context": "    root_node = parse_file(file_abs)[0]\n    module_file = _ModuleFile()\n\n    definition_list = extract_definitions(root_node, EXT_TO_DEFINITION_DICT[\"rs\"])\n    module_file.definition_name_set = {\n        d.name for d in select_top_level_definitions(definition_list)\n        if d.type not in ATTACHED_DEFINITION_TYPE_SET"
+    },
+    {
+      "lines": [
+        92
+      ],
+      "name": "select_top_level_definitions",
+      "file": "codetwine/codetwine/rust_module_tree_py/rust_module_tree.py",
+      "usage_context": "\n    definition_list = extract_definitions(root_node, EXT_TO_DEFINITION_DICT[\"rs\"])\n    module_file.definition_name_set = {\n        d.name for d in select_top_level_definitions(definition_list)\n        if d.type not in ATTACHED_DEFINITION_TYPE_SET\n    }\n"
+    },
+    {
+      "lines": [
+        93
+      ],
+      "name": "ATTACHED_DEFINITION_TYPE_SET",
+      "file": "codetwine/codetwine/rust_module_tree_py/rust_module_tree.py",
+      "usage_context": "    definition_list = extract_definitions(root_node, EXT_TO_DEFINITION_DICT[\"rs\"])\n    module_file.definition_name_set = {\n        d.name for d in select_top_level_definitions(definition_list)\n        if d.type not in ATTACHED_DEFINITION_TYPE_SET\n    }\n\n    for child in root_node.children:"
     }
   ]
 }

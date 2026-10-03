@@ -1,5 +1,7 @@
 {
   "file": "codetwine/codetwine/extractors/usage_analysis_py/usage_analysis.py",
+  "language": "py",
+  "detected_encoding": null,
   "definitions": [
     {
       "name": "logger",
@@ -9,152 +11,786 @@
       "context": "logger = logging.getLogger(__name__)"
     },
     {
-      "name": "build_usage_info_list",
-      "type": "function_definition",
+      "name": "_MAX_CONTEXT_LOCATION",
+      "type": "expression_statement",
       "start_line": 22,
-      "end_line": 108,
-      "context": "def build_usage_info_list(\n    root_node,\n    symbol_to_file_map: dict[str, str],\n    project_dir: str,\n    file_ext: str,\n    alias_to_original: dict[str, str] | None = None,\n) -> list[dict]:\n    \"\"\"Extract usage locations of names imported from within the project and attach\n    the definition source code, producing data for the callee_usages JSON output.\n\n    When the same name appears on multiple lines, entries are merged into a single\n    record with all line numbers accumulated in the lines list.\n\n    Args:\n        root_node: The AST root node of the file.\n        symbol_to_file_map: A dict mapping imported names to their definition file paths.\n        project_dir: Absolute path to the project root.\n        file_ext: File extension (without leading \".\").\n        alias_to_original: A dict mapping alias names to original names (used for definition lookup).\n\n    Returns:\n        A list of dicts containing usage location information.\n    \"\"\"\n    usage_node_types = USAGE_NODE_TYPES.get(file_ext)\n\n    # Build a variable-name -> type-name mapping from typed variable declarations\n    typed_alias_parent_types = (\n        usage_node_types.get(\"typed_alias_parent_types\", set())\n        if usage_node_types else set()\n    )\n    typed_aliases = extract_typed_aliases(\n        root_node, set(symbol_to_file_map.keys()), typed_alias_parent_types\n    )\n    # Add alias variable names to the tracking set (map genre -> same file as Genre)\n    for var_name, type_name in typed_aliases.items():\n        if var_name not in symbol_to_file_map:\n            symbol_to_file_map[var_name] = symbol_to_file_map[type_name]\n\n    usage_info_list = extract_usages(\n        root_node, set(symbol_to_file_map.keys()), usage_node_types\n    )\n\n    # Key: (definition file path, project-internal imported name) -> merged entry\n    usage_group_map: dict[tuple, dict] = {}\n\n    for usage in usage_info_list:\n        # For attribute access like \"helper.process\", the leading \"helper\" is the name from the import statement\n        root_symbol = usage.name.split(\".\")[0]\n\n        # Remap alias variable names back to original type names (genre -> Genre)\n        if root_symbol in typed_aliases:\n            original_type = typed_aliases[root_symbol]\n            remapped_name = original_type + usage.name[len(root_symbol):]\n            root_symbol = original_type\n        else:\n            remapped_name = usage.name\n\n        source_file = symbol_to_file_map[root_symbol]\n        group_key = (source_file, remapped_name)\n\n        if group_key in usage_group_map:\n            usage_group_map[group_key][\"lines\"].append(usage.line)\n        else:\n            # If an alias exists, search for the definition using the original name\n            search_name = remapped_name\n            if alias_to_original and root_symbol in alias_to_original:\n                original = alias_to_original[root_symbol]\n                search_name = original + remapped_name[len(root_symbol):]\n\n            # First occurrence of this name: retrieve source code from the definition file within the project\n            source_code = extract_callee_source(\n                source_file,\n                search_name,\n                project_dir,\n            )\n            usage_group_map[group_key] = {\n                \"lines\":          [usage.line],\n                \"name\":           remapped_name,\n                \"from\":           source_file,\n                \"target_context\": source_code,\n            }\n\n    # Remove duplicates from the lines list of each group\n    for entry in usage_group_map.values():\n        entry[\"lines\"] = sorted(set(entry[\"lines\"]))\n\n    return list(usage_group_map.values())"
+      "end_line": 22,
+      "context": "_MAX_CONTEXT_LOCATION = 2"
     },
     {
-      "name": "_collect_names_from_target",
-      "type": "function_definition",
-      "start_line": 111,
-      "end_line": 199,
-      "context": "def _collect_names_from_target(\n    caller_import_list: list,\n    target_file_rel: str,\n    caller_ext: str,\n    caller_rel: str,\n    project_file_set: set[str],\n    project_dir: str,\n    target_definition_names: list[str] | None,\n) -> tuple[list[str], list[str] | None]:\n    \"\"\"Collect names originating from the target file based on the caller's import statements.\n\n    The method of deriving names differs by language:\n    - Python/JS/TS: Use names = [\"a\", \"b\"] directly from \"from X import a, b\".\n    - Java/Kotlin:  Use the trailing \"Bar\" from \"import com.foo.Bar\".\n    - C/C++:        \"#include <header.h>\" incorporates the entire file,\n                    so collect all definition names from the target file.\n\n    Args:\n        caller_import_list: List of ImportInfo from the caller file.\n        target_file_rel: Relative path of the target file.\n        caller_ext: File extension of the caller file (without leading \".\").\n        caller_rel: Relative path of the caller file (used for module resolution).\n        project_file_set: Set of file paths within the project.\n        project_dir: Absolute path to the project root.\n        target_definition_names: Cached target definition names for C/C++.\n                                 Pass None on the first call.\n\n    Returns:\n        A (names_from_target, target_definition_names) tuple.\n        For C/C++, target_definition_names is returned as a cache to the caller.\n    \"\"\"\n    names_from_target: list[str] = []\n    caller_resolve_config = IMPORT_RESOLVE_CONFIG.get(caller_ext, {})\n    caller_separator = caller_resolve_config.get(\"separator\", \".\")\n\n    for import_info in caller_import_list:\n        resolved = resolve_module_to_project_path(\n            import_info.module, caller_rel, project_file_set\n        )\n        if resolved == target_file_rel:\n            if import_info.names:\n                # \"from X import a, b\" form: add individual names\n                names_from_target.extend(n for n in import_info.names if n != \"*\")\n                # \"from X import *\" form: add all definition names from the target file\n                if \"*\" in import_info.names:\n                    if target_definition_names is None:\n                        target_definition_names = _load_target_definitions(\n                            target_file_rel, project_dir,\n                        )\n                    names_from_target.extend(target_definition_names)\n            elif caller_separator == \".\":\n                # Java/Kotlin: \"import com.foo.Bar\" -> add trailing \"Bar\"\n                module_parts = import_info.module.split(\".\")\n                leaf = module_parts[-1]\n                if leaf:\n                    names_from_target.append(leaf)\n            elif caller_separator == \"/\":\n                # C/C++: #include incorporates the entire file.\n                # Add all definition names from the target file to names_from_target\n                if target_definition_names is None:\n                    target_definition_names = _load_target_definitions(\n                        target_file_rel, project_dir,\n                    )\n                names_from_target.extend(target_definition_names)\n        elif (\n            not resolved\n            and \"*\" in import_info.names\n            and caller_separator == \".\"\n        ):\n            # Java/Kotlin wildcard import: check if target is a file within the package\n            package_dir = import_info.module.replace(\".\", \"/\")\n            if target_file_rel.startswith(package_dir + \"/\"):\n                if target_definition_names is None:\n                    target_definition_names = _load_target_definitions(\n                        target_file_rel, project_dir,\n                    )\n                names_from_target.extend(target_definition_names)\n\n    # Same package (same directory): references are possible without import statements (Java/Kotlin)\n    # Add target definition names even if there are no import matches\n    if not names_from_target and SAME_PACKAGE_VISIBLE.get(caller_ext):\n        if os.path.dirname(caller_rel) == os.path.dirname(target_file_rel):\n            if target_definition_names is None:\n                target_definition_names = _load_target_definitions(\n                    target_file_rel, project_dir,\n                )\n            names_from_target.extend(target_definition_names)\n\n    return names_from_target, target_definition_names"
+      "name": "_CONTEXT_RADIUS",
+      "type": "expression_statement",
+      "start_line": 25,
+      "end_line": 25,
+      "context": "_CONTEXT_RADIUS = 3"
     },
     {
-      "name": "_load_target_definitions",
+      "name": "_TargetDefinition",
+      "type": "class_definition",
+      "start_line": 28,
+      "end_line": 34,
+      "context": "@dataclass(frozen=True)\nclass _TargetDefinition:\n    \"\"\"The definition a reference leads to, as a usage entry carries it.\"\"\"\n\n    context: str | None      # Source text of the definition\n    name: str | None         # Name of the definition, as \"definitions\" lists it\n    start_line: int | None   # First line of the definition (1-based)"
+    },
+    {
+      "name": "context",
+      "type": "expression_statement",
+      "start_line": 32,
+      "end_line": 32,
+      "context": "    context: str | None      # Source text of the definition"
+    },
+    {
+      "name": "name",
+      "type": "expression_statement",
+      "start_line": 33,
+      "end_line": 33,
+      "context": "    name: str | None         # Name of the definition, as \"definitions\" lists it"
+    },
+    {
+      "name": "start_line",
+      "type": "expression_statement",
+      "start_line": 34,
+      "end_line": 34,
+      "context": "    start_line: int | None   # First line of the definition (1-based)"
+    },
+    {
+      "name": "_NO_DEFINITION",
+      "type": "expression_statement",
+      "start_line": 38,
+      "end_line": 38,
+      "context": "_NO_DEFINITION = _TargetDefinition(None, None, None)"
+    },
+    {
+      "name": "_memo_definition_function",
       "type": "function_definition",
-      "start_line": 202,
-      "end_line": 224,
-      "context": "def _load_target_definitions(\n    target_file_rel: str,\n    project_dir: str,\n) -> list[str]:\n    \"\"\"Parse the target file and return a list of all definition names within it.\n\n    Args:\n        target_file_rel: Relative path of the target file from the project root.\n        project_dir: Absolute path to the project root.\n\n    Returns:\n        A list of definition name strings.\n    \"\"\"\n    names: list[str] = []\n    target_abs = os.path.join(project_dir, target_file_rel)\n    target_ext = os.path.splitext(target_file_rel)[1].lstrip(\".\")\n    target_def_dict = DEFINITION_DICTS.get(target_ext)\n    if target_def_dict and os.path.isfile(target_abs):\n        target_root = parse_file(target_abs)[0]\n        for defn in extract_definitions(target_root, target_def_dict):\n            if defn.name:\n                names.append(defn.name)\n    return names"
+      "start_line": 41,
+      "end_line": 65,
+      "context": "def _memo_definition_function(\n    target_definition: Callable[[ReferenceTarget], _TargetDefinition],\n) -> Callable[[ReferenceTarget], _TargetDefinition]:\n    \"\"\"Return a function that looks the definition of each distinct reference target up once.\n\n    Args:\n        target_definition: Returns the definition a reference leads to.\n\n    Returns:\n        The same function, answering from memory for a reference whose fields apart\n        from its line equal those of an earlier one.\n    \"\"\"\n    definition_dict: dict[str, _TargetDefinition] = {}\n\n    def memo_definition(target: ReferenceTarget) -> _TargetDefinition:\n        \"\"\"Return the definition a reference leads to.\"\"\"\n        target_key = repr([\n            (target_field.name, getattr(target, target_field.name))\n            for target_field in fields(target) if target_field.name != \"line\"\n        ])\n        if target_key not in definition_dict:\n            definition_dict[target_key] = target_definition(target)\n        return definition_dict[target_key]\n\n    return memo_definition"
+    },
+    {
+      "name": "_group_other_file_target_list",
+      "type": "function_definition",
+      "start_line": 68,
+      "end_line": 106,
+      "context": "def _group_other_file_target_list(\n    target_list: list[ReferenceTarget],\n    file_rel: str,\n    target_definition: Callable[[ReferenceTarget], _TargetDefinition],\n) -> list[dict]:\n    \"\"\"Group the resolved references of a file that lead to another file.\n\n    Args:\n        target_list: The resolved references of the file.\n        file_rel: Relative path of the file.\n        target_definition: Returns the definition a reference leads to.\n\n    Returns:\n        One {\"lines\", \"name\", \"from\", \"target_context\", \"target_name\",\n        \"target_start_line\"} dict per (file, name, definition): a name that leads to\n        two definitions of a file (two overloads) gives two.\n    \"\"\"\n    target_definition = _memo_definition_function(target_definition)\n    usage_group_map: dict[tuple, dict] = {}\n    for target in target_list:\n        if target.file_rel == file_rel:\n            continue\n        definition = target_definition(target)\n        group_key = (target.file_rel, target.name, definition.name, definition.start_line)\n        if group_key in usage_group_map:\n            usage_group_map[group_key][\"lines\"].append(target.line)\n            continue\n        usage_group_map[group_key] = {\n            \"lines\":             [target.line],\n            \"name\":              target.name,\n            \"from\":              target.file_rel,\n            \"target_context\":    definition.context,\n            \"target_name\":       definition.name,\n            \"target_start_line\": definition.start_line,\n        }\n\n    for entry in usage_group_map.values():\n        entry[\"lines\"] = sorted(set(entry[\"lines\"]))\n    return list(usage_group_map.values())"
+    },
+    {
+      "name": "_definition_range_dict",
+      "type": "function_definition",
+      "start_line": 109,
+      "end_line": 118,
+      "context": "def _definition_range_dict(\n    definition_list: list[DefinitionInfo],\n) -> dict[str, list[tuple[int, int]]]:\n    \"\"\"Return {definition name: (start_line, end_line) of each definition of that name}.\"\"\"\n    range_dict: dict[str, list[tuple[int, int]]] = {}\n    for definition in definition_list:\n        range_dict.setdefault(definition.name, []).append(\n            (definition.start_line, definition.end_line)\n        )\n    return range_dict"
+    },
+    {
+      "name": "_cobol_own_range_function",
+      "type": "function_definition",
+      "start_line": 121,
+      "end_line": 131,
+      "context": "def _cobol_own_range_function(\n    definition_list: list[DefinitionInfo], root_node: Node | CobolSource,\n) -> Callable[[CobolReferenceTarget], list[tuple[int, int]]]:\n    \"\"\"Return the function giving the lines of the definition a COBOL reference resolved to.\"\"\"\n    def cobol_range_list(target: CobolReferenceTarget) -> list[tuple[int, int]]:\n        \"\"\"Return the lines of the definition a COBOL reference resolved to.\"\"\"\n        if target.definition is None:\n            return []\n        return [(target.definition.start_line, target.definition.end_line)]\n\n    return cobol_range_list"
+    },
+    {
+      "name": "_r_own_range_function",
+      "type": "function_definition",
+      "start_line": 134,
+      "end_line": 151,
+      "context": "def _r_own_range_function(\n    definition_list: list[DefinitionInfo], root_node: Node | CobolSource,\n) -> Callable[[RReferenceTarget], list[tuple[int, int]]]:\n    \"\"\"Return the function giving the lines of the top-level definitions of the name of an R reference.\n\n    The members of a class and the calls written for a name defined elsewhere\n    (setMethod) are not such definitions.\n    \"\"\"\n    range_dict = _definition_range_dict([\n        definition for definition in r_definition_list(root_node)\n        if not definition.is_member and not definition.is_attach\n    ])\n\n    def r_range_list(target: RReferenceTarget) -> list[tuple[int, int]]:\n        \"\"\"Return the lines of the top-level definitions of the name of an R reference.\"\"\"\n        return range_dict.get(usage_root_name(target.name, range_dict), [])\n\n    return r_range_list"
+    },
+    {
+      "name": "_name_own_range_function",
+      "type": "function_definition",
+      "start_line": 154,
+      "end_line": 180,
+      "context": "def _name_own_range_function(\n    definition_list: list[DefinitionInfo], root_node: Node | CobolSource,\n) -> Callable[[CsharpReferenceTarget | ImportReferenceTarget], list[tuple[int, int]]]:\n    \"\"\"Return the function giving the lines of the definitions the name of a reference names.\n\n    These are the lines of the member a name with several parts names (Cfg.Max -> Max),\n    else the lines of every definition named like the first part of the name as it is\n    written, else like the first part of the name of the definition it resolves to\n    (Rust: self::parse -> parse).\n    \"\"\"\n    range_dict = _definition_range_dict(definition_list)\n\n    def name_range_list(\n        target: CsharpReferenceTarget | ImportReferenceTarget,\n    ) -> list[tuple[int, int]]:\n        \"\"\"Return the lines of the definitions the name of a reference names.\"\"\"\n        part_list = symbol_part_list(target.definition_name)\n        if len(part_list) > 1:\n            definition = find_definition(definition_list, target.definition_name)\n            if definition is not None and definition.name == part_list[-1]:\n                return [(definition.start_line, definition.end_line)]\n        return (\n            range_dict.get(usage_root_name(target.name, range_dict))\n            or range_dict.get(usage_root_name(target.definition_name, range_dict), [])\n        )\n\n    return name_range_list"
+    },
+    {
+      "name": "_OWN_RANGE_FUNCTION_DICT",
+      "type": "expression_statement",
+      "start_line": 186,
+      "end_line": 191,
+      "context": "_OWN_RANGE_FUNCTION_DICT: dict[str, Callable[..., Callable[..., list[tuple[int, int]]]]] = {\n    \"cobol\":  _cobol_own_range_function,\n    \"r\":      _r_own_range_function,\n    \"csharp\": _name_own_range_function,\n    \"import\": _name_own_range_function,\n}"
+    },
+    {
+      "name": "TREE_RANGE_KIND_SET",
+      "type": "expression_statement",
+      "start_line": 194,
+      "end_line": 194,
+      "context": "TREE_RANGE_KIND_SET = {\"r\"}"
+    },
+    {
+      "name": "_group_same_file_target_list",
+      "type": "function_definition",
+      "start_line": 197,
+      "end_line": 239,
+      "context": "def _group_same_file_target_list(\n    target_list: list[ReferenceTarget],\n    file_rel: str,\n    own_range_list: Callable[[ReferenceTarget], list[tuple[int, int]]],\n    target_definition: Callable[[ReferenceTarget], _TargetDefinition],\n) -> list[dict]:\n    \"\"\"Group the resolved references of a file that lead to the file itself.\n\n    A reference written inside the lines of the definition it names (the definition's\n    own name, a recursive call) is left out.\n\n    Args:\n        target_list: The resolved references of the file.\n        file_rel: Relative path of the file.\n        own_range_list: Returns the line ranges of the definition a reference names\n            (_OWN_RANGE_FUNCTION_DICT).\n        target_definition: Returns the definition a reference leads to.\n\n    Returns:\n        One {\"lines\", \"name\", \"target_name\", \"target_start_line\"} dict per\n        (name, definition).\n    \"\"\"\n    target_definition = _memo_definition_function(target_definition)\n    usage_group_map: dict[tuple, dict] = {}\n    for target in target_list:\n        if target.file_rel != file_rel:\n            continue\n        if any(start <= target.line <= end for start, end in own_range_list(target)):\n            continue\n        definition = target_definition(target)\n        group_key = (target.name, definition.name, definition.start_line)\n        if group_key not in usage_group_map:\n            usage_group_map[group_key] = {\n                \"lines\":             [],\n                \"name\":              target.name,\n                \"target_name\":       definition.name,\n                \"target_start_line\": definition.start_line,\n            }\n        usage_group_map[group_key][\"lines\"].append(target.line)\n\n    for entry in usage_group_map.values():\n        entry[\"lines\"] = sorted(set(entry[\"lines\"]))\n    return list(usage_group_map.values())"
+    },
+    {
+      "name": "_cobol_definition_function",
+      "type": "function_definition",
+      "start_line": 242,
+      "end_line": 256,
+      "context": "def _cobol_definition_function(\n    project_dir: str,\n) -> Callable[[CobolReferenceTarget], _TargetDefinition]:\n    \"\"\"Return the function giving the definition a COBOL reference resolved to.\"\"\"\n    def cobol_definition(target: CobolReferenceTarget) -> _TargetDefinition:\n        \"\"\"Return the definition a COBOL reference resolves to, with its lines as text.\"\"\"\n        if target.definition is None:\n            return _NO_DEFINITION\n        target_source = parse_file(os.path.join(project_dir, target.file_rel))[0]\n        return _TargetDefinition(\n            target_source.definition_text(target.definition),\n            target.definition.name, target.definition.start_line,\n        )\n\n    return cobol_definition"
+    },
+    {
+      "name": "_r_definition_function",
+      "type": "function_definition",
+      "start_line": 259,
+      "end_line": 276,
+      "context": "def _r_definition_function(project_dir: str) -> Callable[[RReferenceTarget], _TargetDefinition]:\n    \"\"\"Return the function giving the definition an R reference resolved to.\n\n    The text is the lines start_line to end_line of the target; each file is read once.\n    \"\"\"\n    line_list_dict: dict[str, list[str]] = {}\n\n    def r_definition(target: RReferenceTarget) -> _TargetDefinition:\n        \"\"\"Return the definition an R reference resolves to, with its lines as text.\"\"\"\n        if target.file_rel not in line_list_dict:\n            target_text = read_source(os.path.join(project_dir, target.file_rel))[0]\n            line_list_dict[target.file_rel] = line_list_of(target_text)\n        return _TargetDefinition(\n            \"\\n\".join(line_list_dict[target.file_rel][target.start_line - 1:target.end_line]),\n            target.definition_name, target.start_line,\n        )\n\n    return r_definition"
+    },
+    {
+      "name": "_csharp_definition_function",
+      "type": "function_definition",
+      "start_line": 279,
+      "end_line": 293,
+      "context": "def _csharp_definition_function(\n    project_dir: str,\n) -> Callable[[CsharpReferenceTarget], _TargetDefinition]:\n    \"\"\"Return the function giving the declaration a C# reference resolved to.\n\n    The declaration is the one named by the definition_name of the target that starts\n    on its definition_line (source_definition).\n    \"\"\"\n    def csharp_definition(target: CsharpReferenceTarget) -> _TargetDefinition:\n        \"\"\"Return the declaration a C# reference resolves to.\"\"\"\n        return _source_target_definition(\n            target.file_rel, target.definition_name, project_dir, target.definition_line,\n        )\n\n    return csharp_definition"
+    },
+    {
+      "name": "_import_definition_function",
+      "type": "function_definition",
+      "start_line": 296,
+      "end_line": 304,
+      "context": "def _import_definition_function(\n    project_dir: str,\n) -> Callable[[ImportReferenceTarget], _TargetDefinition]:\n    \"\"\"Return the function giving the definition named by the definition_name of a target (source_definition).\"\"\"\n    def named_definition(target: ImportReferenceTarget) -> _TargetDefinition:\n        \"\"\"Return the definition named by the definition_name of a target.\"\"\"\n        return _source_target_definition(target.file_rel, target.definition_name, project_dir)\n\n    return named_definition"
+    },
+    {
+      "name": "_source_target_definition",
+      "type": "function_definition",
+      "start_line": 307,
+      "end_line": 315,
+      "context": "def _source_target_definition(\n    file_rel: str, name: str, project_dir: str, start_line: int | None = None,\n) -> _TargetDefinition:\n    \"\"\"Return the definition source_definition() gives as a _TargetDefinition.\"\"\"\n    definition_tuple = source_definition(file_rel, name, project_dir, start_line)\n    if definition_tuple is None:\n        return _NO_DEFINITION\n    definition, context = definition_tuple\n    return _TargetDefinition(context, definition.name, definition.start_line)"
+    },
+    {
+      "name": "_TARGET_DEFINITION_FUNCTION_DICT",
+      "type": "expression_statement",
+      "start_line": 321,
+      "end_line": 326,
+      "context": "_TARGET_DEFINITION_FUNCTION_DICT: dict[str, Callable[[str], Callable[..., _TargetDefinition]]] = {\n    \"cobol\":  _cobol_definition_function,\n    \"r\":      _r_definition_function,\n    \"csharp\": _csharp_definition_function,\n    \"import\": _import_definition_function,\n}"
+    },
+    {
+      "name": "build_callee_usages",
+      "type": "function_definition",
+      "start_line": 329,
+      "end_line": 355,
+      "context": "def build_callee_usages(\n    target_list: list[ReferenceTarget], file_rel: str, project_dir: str,\n) -> list[dict]:\n    \"\"\"Build the callee_usages of a file from its resolved references.\n\n    The references that resolve to another file are grouped by (file, name) and the\n    definition they lead to. The target_context of a group is the source text of that\n    definition, target_name the name \"definitions\" of that file lists it under and\n    target_start_line its first line; all three are None when the references lead to\n    no definition of that file (a module used as a value). The definition is read the\n    way the reference kind of the file gives (_TARGET_DEFINITION_FUNCTION_DICT).\n\n    Args:\n        target_list: Return value of reference_target_list.\n        file_rel: Relative path of the file.\n        project_dir: Absolute path to the project root.\n\n    Returns:\n        A list of {\"lines\", \"name\", \"from\", \"target_context\", \"target_name\",\n        \"target_start_line\"} dicts. Empty for a file without a language.\n    \"\"\"\n    file_kind = reference_kind(os.path.join(project_dir, file_rel))\n    if file_kind is None:\n        return []\n    return _group_other_file_target_list(\n        target_list, file_rel, _TARGET_DEFINITION_FUNCTION_DICT[file_kind](project_dir),\n    )"
+    },
+    {
+      "name": "build_same_file_usages",
+      "type": "function_definition",
+      "start_line": 358,
+      "end_line": 393,
+      "context": "def build_same_file_usages(\n    target_list: list[ReferenceTarget],\n    file_rel: str,\n    project_dir: str,\n    definition_list: list[DefinitionInfo],\n    root_node: Node | CobolSource | None,\n) -> list[dict]:\n    \"\"\"Build the same_file_usages of a file from its resolved references.\n\n    The references that resolve to the file itself are grouped by name and the\n    definition they lead to. A reference\n    written inside the lines of the definition it names (the definition's own name, a\n    recursive call) is left out; the lines of that definition are found the way the\n    reference kind of the file gives (_OWN_RANGE_FUNCTION_DICT). target_name and\n    target_start_line of a group are the name and the first line of the definition its\n    references resolve to, None when they lead to no definition.\n\n    Args:\n        target_list: Return value of reference_target_list.\n        file_rel: Relative path of the file.\n        project_dir: Absolute path to the project root.\n        definition_list: The file's definitions, sorted by start_line.\n        root_node: The AST root node of the file; None for a file whose reference\n            kind is not in TREE_RANGE_KIND_SET.\n\n    Returns:\n        A list of {\"lines\", \"name\", \"target_name\", \"target_start_line\"} dicts. Empty\n        for a file without a language.\n    \"\"\"\n    file_kind = reference_kind(os.path.join(project_dir, file_rel))\n    if file_kind is None:\n        return []\n    return _group_same_file_target_list(\n        target_list, file_rel, _OWN_RANGE_FUNCTION_DICT[file_kind](definition_list, root_node),\n        _TARGET_DEFINITION_FUNCTION_DICT[file_kind](project_dir),\n    )"
+    },
+    {
+      "name": "_group_caller_usage_list",
+      "type": "function_definition",
+      "start_line": 396,
+      "end_line": 425,
+      "context": "def _group_caller_usage_list(\n    target_list: list[ReferenceTarget],\n    caller_rel: str,\n    target_definition: Callable[[ReferenceTarget], _TargetDefinition],\n) -> dict[tuple, dict]:\n    \"\"\"Group the references of a caller by name and the definition they lead to.\n\n    Args:\n        target_list: The caller's references that resolve to one file.\n        caller_rel: Relative path of the caller file.\n        target_definition: Returns the definition a reference leads to.\n\n    Returns:\n        A {(name, definition name, first line of the definition): {\"lines\", \"name\",\n        \"file\"}} dict, the groups _group_other_file_target_list makes for the caller;\n        lines are sorted without duplicates.\n    \"\"\"\n    target_definition = _memo_definition_function(target_definition)\n    group_dict: dict[tuple, dict] = {}\n    for target in target_list:\n        definition = target_definition(target)\n        group = group_dict.setdefault(\n            (target.name, definition.name, definition.start_line),\n            {\"lines\": [], \"name\": target.name, \"file\": caller_rel},\n        )\n        group[\"lines\"].append(target.line)\n\n    for group in group_dict.values():\n        group[\"lines\"] = sorted(set(group[\"lines\"]))\n    return group_dict"
+    },
+    {
+      "name": "_attach_usage_context",
+      "type": "function_definition",
+      "start_line": 428,
+      "end_line": 453,
+      "context": "def _attach_usage_context(group_dict: dict[tuple, dict], caller_abs: str) -> None:\n    \"\"\"Add usage_context, the code around the first usage lines, to each group.\n\n    Up to _MAX_CONTEXT_LOCATION lines of each group are taken, each with\n    _CONTEXT_RADIUS lines before and after, joined by \"\\n...\\n\". The file is decoded\n    by read_source(). Nothing is added when the caller file cannot be read.\n\n    Args:\n        group_dict: Return value of _group_caller_usage_list; modified in place.\n        caller_abs: Absolute path of the caller file.\n    \"\"\"\n    try:\n        caller_source_line_list = line_list_of(read_source(caller_abs)[0])\n    except OSError:\n        return\n    if not caller_source_line_list:\n        return\n\n    line_count = len(caller_source_line_list)\n    for group in group_dict.values():\n        context_part_list = []\n        for line_no in group[\"lines\"][:_MAX_CONTEXT_LOCATION]:\n            start = max(0, line_no - 1 - _CONTEXT_RADIUS)\n            end = min(line_count, line_no - 1 + _CONTEXT_RADIUS + 1)\n            context_part_list.append(\"\\n\".join(caller_source_line_list[start:end]))\n        group[\"usage_context\"] = \"\\n...\\n\".join(context_part_list)"
     },
     {
       "name": "build_caller_usages",
       "type": "function_definition",
-      "start_line": 227,
-      "end_line": 338,
-      "context": "def build_caller_usages(\n    target_file_rel: str,\n    caller_file_list: list[str],\n    project_dir: str,\n    project_file_set: set[str],\n) -> list[dict]:\n    \"\"\"Collect the lines where names defined in this file are used in other project\n    files, producing data for the caller_usages JSON output.\n\n    Args:\n        target_file_rel: Relative path of this file from the project root.\n        caller_file_list: Relative paths of the files depending on this file.\n        project_dir: Absolute path to the project root.\n        project_file_set: Set of file paths within the project.\n\n    Returns:\n        A list of dicts containing usage location information.\n    \"\"\"\n    caller_usages: list[dict] = []\n\n    # For C/C++, retrieve target definition names once outside the caller loop and cache them\n    target_definition_names: list[str] | None = None\n\n    for caller_rel in caller_file_list:\n        caller_abs = os.path.join(project_dir, caller_rel)\n        caller_ext = os.path.splitext(caller_rel)[1].lstrip(\".\")\n\n        caller_root = parse_file(caller_abs)[0]\n\n        # Retrieve parameters for import extraction\n        language, import_query_str = get_import_params(caller_ext)\n        if not language:\n            continue\n\n        caller_import_list = extract_imports(\n            caller_root, language, import_query_str\n        )\n\n        # Step 1: Collect names that the caller imports from the target\n        names_from_target, target_definition_names = _collect_names_from_target(\n            caller_import_list, target_file_rel, caller_ext,\n            caller_rel, project_file_set, project_dir,\n            target_definition_names,\n        )\n\n        # Step 2: Extract and aggregate lines where those names are used within the caller\n        if names_from_target:\n            usage_node_types = USAGE_NODE_TYPES.get(caller_ext)\n\n            # Add typed variable aliases to the tracking set\n            typed_alias_parent_types = (\n                usage_node_types.get(\"typed_alias_parent_types\", set())\n                if usage_node_types else set()\n            )\n            typed_aliases = extract_typed_aliases(\n                caller_root, set(names_from_target), typed_alias_parent_types\n            )\n            for var_name in typed_aliases:\n                if var_name not in names_from_target:\n                    names_from_target.append(var_name)\n\n            usage_list = extract_usages(\n                caller_root, set(names_from_target), usage_node_types\n            )\n\n            # Hold the caller's source code line by line (for usage_context extraction)\n            caller_source_lines: list[str] | None = None\n            if usage_list:\n                try:\n                    with open(caller_abs, \"r\", encoding=\"utf-8\") as f:\n                        caller_source_lines = f.read().splitlines()\n                except (OSError, UnicodeDecodeError):\n                    pass\n\n            # Step 3: Group by (name, file) and accumulate into lines list\n            # Remap alias variable names to original type names for grouping\n            groups: dict[str, dict] = {}\n            for usage in usage_list:\n                name = usage.name\n                root_symbol = name.split(\".\")[0]\n                if root_symbol in typed_aliases:\n                    name = typed_aliases[root_symbol] + name[len(root_symbol):]\n\n                if name not in groups:\n                    groups[name] = {\n                        \"lines\": [usage.line],\n                        \"name\":  name,\n                        \"file\":  caller_rel,\n                    }\n                else:\n                    groups[name][\"lines\"].append(usage.line)\n\n            # Step 4: Extract usage_context from the usage locations of each group\n            # Remove duplicate lines before extracting context\n            for group in groups.values():\n                group[\"lines\"] = sorted(set(group[\"lines\"]))\n            _max_context_locations = 2\n            _context_radius = 3\n            if caller_source_lines:\n                total_lines = len(caller_source_lines)\n                for group in groups.values():\n                    context_parts = []\n                    for line_no in group[\"lines\"][:_max_context_locations]:\n                        start = max(0, line_no - 1 - _context_radius)\n                        end = min(total_lines, line_no - 1 + _context_radius + 1)\n                        snippet = \"\\n\".join(caller_source_lines[start:end])\n                        context_parts.append(snippet)\n                    group[\"usage_context\"] = \"\\n...\\n\".join(context_parts)\n\n            caller_usages.extend(groups.values())\n\n    return caller_usages"
+      "start_line": 456,
+      "end_line": 493,
+      "context": "def build_caller_usages(\n    target_file_rel: str,\n    caller_file_list: list[str],\n    project_dir: str,\n    project_file_set: set[str],\n) -> list[dict]:\n    \"\"\"Collect the lines where names defined in this file are used in other project\n    files, producing data for the caller_usages JSON output.\n\n    The references of each caller are resolved as get_file_dependencies resolves them\n    for the caller itself (reference_target_list); the ones that lead to this file are\n    grouped by name and the definition they lead to.\n\n    Args:\n        target_file_rel: Relative path of this file from the project root.\n        caller_file_list: Relative paths of the files depending on this file.\n        project_dir: Absolute path to the project root.\n        project_file_set: Set of file paths within the project.\n\n    Returns:\n        A list of {\"lines\", \"name\", \"file\", \"usage_context\"} dicts.\n    \"\"\"\n    caller_usages: list[dict] = []\n    for caller_rel in caller_file_list:\n        target_list = [\n            target\n            for target in reference_target_list(caller_rel, project_file_set, project_dir)\n            if target.file_rel == target_file_rel\n        ]\n        if not target_list:\n            continue\n        caller_kind = reference_kind(os.path.join(project_dir, caller_rel))\n        group_dict = _group_caller_usage_list(\n            target_list, caller_rel, _TARGET_DEFINITION_FUNCTION_DICT[caller_kind](project_dir),\n        )\n        _attach_usage_context(group_dict, os.path.join(project_dir, caller_rel))\n        caller_usages.extend(group_dict.values())\n    return caller_usages"
     }
   ],
   "callee_usages": [
     {
       "lines": [
-        45,
-        274
+        42,
+        43,
+        55,
+        58,
+        59,
+        62,
+        69,
+        71,
+        198,
+        200,
+        201,
+        330,
+        359,
+        397,
+        399
       ],
-      "name": "USAGE_NODE_TYPES.get",
-      "from": "codetwine/codetwine/config/settings_py/settings.py",
-      "target_context": "USAGE_NODE_TYPES: dict[str, dict | None] = _expand_ext_aliases(\n    {ext: cfg.usage_node_types for ext, cfg in _LANG_REGISTRY.items()}\n)"
+      "name": "ReferenceTarget",
+      "from": "codetwine/codetwine/reference_target_py/reference_target.py",
+      "target_context": "ReferenceTarget = (\n    CobolReferenceTarget | CsharpReferenceTarget | RReferenceTarget | ImportReferenceTarget\n)",
+      "target_name": "ReferenceTarget",
+      "target_start_line": 10
     },
     {
       "lines": [
-        52,
-        281
+        110,
+        122,
+        135,
+        155,
+        362
       ],
-      "name": "extract_typed_aliases",
-      "from": "codetwine/codetwine/extractors/usages_py/usages.py",
-      "target_context": "def extract_typed_aliases(\n    root_node: Node,\n    imported_names: set[str],\n    typed_alias_parent_types: set[str],\n) -> dict[str, str]:\n    \"\"\"Traverse the AST to find typed variable declarations and return a variable-name -> type-name mapping.\n\n    Detects variables declared with an imported type (e.g. Genre) such as genre,\n    and returns them in the format {\"genre\": \"Genre\"}.\n\n    Supported AST patterns:\n      Java:   field_declaration / local_variable_declaration / formal_parameter\n      Kotlin: property_declaration / parameter\n      C/C++:  declaration / parameter_declaration\n\n    Args:\n        root_node: The AST root node covering the entire file.\n        imported_names: Set of imported type names to track.\n        typed_alias_parent_types: Set of AST node types representing typed variable declarations.\n\n    Returns:\n        A variable-name -> type-name mapping dict.\n        Only declarations whose type name is in imported_names are included.\n    \"\"\"\n    if not typed_alias_parent_types:\n        return {}\n\n    aliases: dict[str, str] = {}\n    stack = [root_node]\n\n    while stack:\n        node = stack.pop()\n\n        if node.type in typed_alias_parent_types:\n            type_name, var_names = _extract_type_and_var(node)\n            if type_name and type_name in imported_names:\n                for var_name in var_names:\n                    if var_name != type_name:\n                        aliases[var_name] = type_name\n\n        stack.extend(node.children)\n\n    return aliases"
+      "name": "DefinitionInfo",
+      "from": "codetwine/codetwine/extractors/definitions_py/definitions.py",
+      "target_context": "@dataclass\nclass DefinitionInfo:\n    \"\"\"Data class holding information about a single definition.\"\"\"\n\n    name: str                                     # Definition name (function / class / variable / type, etc.)\n    type: str                                     # AST node type (\"function_definition\" / \"expression_statement\", etc.)\n    start_line: int                               # Start line number of the definition (1-based)\n    end_line: int                                 # End line number of the definition\n    name_line: int | None = None                  # Line the name is written on (COBOL, BMS)\n    level: int | None = None                      # Level number of a data item (COBOL, BMS)\n    is_group: bool | None = None                  # Whether a data item is a group item (COBOL, BMS)\n    # Byte range of the definition in the UTF-8 text parse_file() returns; None for a\n    # COBOL, BMS or R definition\n    start_byte: int | None = None\n    end_byte: int | None = None",
+      "target_name": "DefinitionInfo",
+      "target_start_line": 109
     },
     {
       "lines": [
-        60,
-        288
+        122,
+        135,
+        155,
+        363
       ],
-      "name": "extract_usages",
-      "from": "codetwine/codetwine/extractors/usages_py/usages.py",
-      "target_context": "def extract_usages(\n    root_node: Node,\n    imported_names: set[str],\n    usage_node_types: dict | None = None,\n) -> list[UsageInfo]:\n    \"\"\"Extract usage locations of imported names from the AST and return them.\n\n    Traverses the AST via depth-first search (DFS) and detects the following kinds:\n    - Nodes in call_types (function calls)\n    - Nodes in attribute_types (attribute access)\n    - identifier nodes (simple variable references)\n    - type_identifier / namespace_identifier nodes (type / namespace references)\n      Java: \"User\" in User user = new User() is a type_identifier\n      C/C++: \"Point\" in struct Point p is a type_identifier\n      C++: \"geometry\" in geometry::Rectangle is a namespace_identifier\n\n    Duplicate and redundant entries are removed at the end by _deduplicate.\n\n    Args:\n        root_node: The AST root node covering the entire file.\n        imported_names: Set of names whose usage is to be tracked.\n        usage_node_types: Per-language node type settings dict, obtained from USAGE_NODE_TYPES in config.py.\n                          Returns an empty list when None (for languages with no usage tracking defined).\n                          Required keys: \"call_types\", \"attribute_types\", \"skip_parent_types\"\n                          Optional key: \"skip_parent_types_for_type_ref\" (uses skip_parent_types if absent)\n                          Optional key: \"skip_name_field_types\" (when the parent is this type,\n                            only the name-field child is skipped; the value side is detected as a usage)\n\n    Returns:\n        A list of UsageInfo (deduplicated).\n    \"\"\"\n    if not usage_node_types:\n        return []\n\n    # Retrieve per-language node types from the settings\n    call_types: set[str] = usage_node_types[\"call_types\"]\n    attribute_types: set[str] = usage_node_types[\"attribute_types\"]\n    skip_parent_types: set[str] = usage_node_types[\"skip_parent_types\"]\n    skip_name_field_types: set[str] = usage_node_types.get(\n        \"skip_name_field_types\", set()\n    )\n    skip_parent_types_for_type_ref: set[str] = usage_node_types.get(\n        \"skip_parent_types_for_type_ref\", skip_parent_types\n    )\n\n    # Type reference / namespace reference node types (skip_parent_types check not needed)\n    _TYPE_REFERENCE_NODE_TYPES = {\"type_identifier\", \"namespace_identifier\"}\n\n    usage_list: list[UsageInfo] = []\n    # DFS traversal of the AST using a stack\n    node_stack = [root_node]\n\n    while node_stack:\n        node = node_stack.pop()\n\n        # Process function call nodes\n        if node.type in call_types:\n            usage = _parse_call_node(node, imported_names, attribute_types)\n            if usage:\n                usage_list.append(usage)\n\n        elif node.type in attribute_types:\n            # Process only standalone attribute access (exclude function part of a call)\n            if not _is_function_part_of_call(node, call_types):\n                usage = _parse_attribute_node(node, imported_names)\n                if usage:\n                    usage_list.append(usage)\n\n        elif node.type == \"qualified_identifier\":\n            # C++ identifier containing the scope resolution operator.\n            # Record as a Usage if the scope part (left of ::) matches an imported name.\n            # Internal namespace_identifier / identifier are individually skipped by skip_parent_types.\n            # By extracting only the scope part here, duplication is prevented while still detecting usages.\n            # Skip qualified_identifier inside import / package declarations.\n            parent = node.parent\n            if parent and parent.type in skip_parent_types:\n                node_stack.extend(node.children)\n                continue\n            for child in node.children:\n                if child.type in (\"namespace_identifier\", \"identifier\", \"type_identifier\"):\n                    name = child.text.decode(\"utf-8\")\n                    if name in imported_names:\n                        usage_list.append(UsageInfo(name=name, line=child.start_point[0] + 1))\n                    break\n\n        elif node.type in _TYPE_REFERENCE_NODE_TYPES:\n            # Process type reference nodes.\n            # Use the type-reference skip list for checking (only import statements and scope resolution are skipped).\n            # Unlike the identifier skip_parent_types, type references in parameters and method declarations\n            # are detected as dependencies.\n            parent = node.parent\n            if parent and parent.type in skip_parent_types_for_type_ref:\n                node_stack.extend(node.children)\n                continue\n            name = node.text.decode(\"utf-8\")\n            if name in imported_names:\n                usage_list.append(UsageInfo(name=name, line=node.start_point[0] + 1))\n\n        elif node.type == \"identifier\":\n            # Process simple identifier nodes\n            usage = _parse_identifier_node(\n                node, imported_names, skip_parent_types, skip_name_field_types\n            )\n            if usage:\n                usage_list.append(usage)\n\n        # Add child nodes to the stack to continue traversal\n        node_stack.extend(node.children)\n\n    # Remove duplicate and redundant entries and return\n    return _deduplicate(usage_list)"
+      "name": "CobolSource",
+      "from": "codetwine/codetwine/extractors/cobol_source_py/cobol_source.py",
+      "target_context": "@dataclass\nclass CobolSource:\n    \"\"\"What one COBOL file defines, names and refers to.\"\"\"\n\n    # Lines of the source text\n    line_list: list[str]\n    # Definitions in line order\n    definition_list: list[CobolDefinition] = field(default_factory=list)\n    # COPY and CALL statements in line order\n    import_list: list[CobolImport] = field(default_factory=list)\n    # Each place a name is referred to\n    reference_list: list[CobolReference] = field(default_factory=list)\n    # Upper-case names a COPY statement can name the file by besides its file name\n    # (BMS: the mapset names)\n    copy_name_list: list[str] = field(default_factory=list)\n\n    def usage_line_list(self, name_set: set[str]) -> list[tuple[str, int]]:\n        \"\"\"Return the places the file refers to one of the given names.\n\n        Names are compared without regard to upper and lower case.\n\n        Args:\n            name_set: The names to look for.\n\n        Returns:\n            (name as given in name_set, line) tuples in line order, without duplicates.\n        \"\"\"\n        name_dict = {name.upper(): name for name in name_set}\n        usage_set = {\n            (name_dict[reference.name], reference.line)\n            for reference in self.reference_list if reference.name in name_dict\n        }\n        return sorted(usage_set, key=lambda usage: (usage[1], usage[0]))\n\n    def definition_text(self, definition: CobolDefinition) -> str:\n        \"\"\"Return the source text of a definition: its lines joined by \"\\\\n\".\"\"\"\n        return \"\\n\".join(self.line_list[definition.start_line - 1:definition.end_line])\n\n    def definition_source(self, name: str) -> str | None:\n        \"\"\"Return the source text of the first definition with a name.\n\n        Names are compared without regard to upper and lower case.\n\n        Args:\n            name: The definition name.\n\n        Returns:\n            The lines of the definition joined by \"\\\\n\". None when no definition has the name.\n        \"\"\"\n        for definition in self.definition_list:\n            if definition.name.upper() == name.upper():\n                return self.definition_text(definition)\n        return None",
+      "target_name": "CobolSource",
+      "target_start_line": 110
     },
     {
       "lines": [
-        92
+        123,
+        125,
+        244,
+        246
       ],
-      "name": "extract_callee_source",
-      "from": "codetwine/codetwine/extractors/dependency_graph_py/dependency_graph.py",
-      "target_context": "def extract_callee_source(\n    callee_file_path: str,\n    callee_name: str,\n    project_dir: str,\n) -> str | None:\n    \"\"\"Retrieve the definition source code for a specified name from the dependency target file.\n\n    Search the AST by breadth-first search (BFS) to find an identifier matching callee_name,\n    then return the entire source code of its parent node (function_definition / class_definition /\n    assignment, etc.).\n\n    Parse results are reused via the module-level cache in ts_parser.py.\n\n    Args:\n        callee_file_path: Path of the dependency target file (relative to project root, e.g. \"src/foo.py\").\n        callee_name: Name of the definition to retrieve (e.g. \"parse_file\", \"helper.process\").\n        project_dir: Absolute path to the project root.\n\n    Returns:\n        The source code string. None if the definition is not found.\n    \"\"\"\n\n    absolute_path = os.path.join(project_dir, callee_file_path)\n\n    callee_root = parse_file(absolute_path)[0]\n\n    # For attribute access like \"helper.process\", the trailing \"process\" is the actual definition name.\n    # For cases like \"TEMPLATE.format\" where the trailing part is a built-in method,\n    # the leading \"TEMPLATE\" is the definition name.\n    # If not found by the trailing part, re-search by the leading part.\n    parts = callee_name.split(\".\")\n    search_names = [parts[-1]]\n    if len(parts) > 1:\n        search_names.append(parts[0])\n\n    for definition_name in search_names:\n        parent_node = _find_definition_node(callee_root, definition_name)\n        if parent_node is not None:\n            return parent_node.text.decode(\"utf-8\")\n\n    return None"
+      "name": "CobolReferenceTarget",
+      "from": "codetwine/codetwine/cobol_file_index_py/cobol_file_index.py",
+      "target_context": "@dataclass\nclass CobolReferenceTarget:\n    \"\"\"The definition one reference of a COBOL file resolves to.\"\"\"\n\n    # Name of the definition: a data name or procedure name as the referring file writes\n    # it (after REPLACING), a program or ENTRY name as its definition writes it\n    name: str\n    line: int        # Line of the reference (1-based)\n    file_rel: str    # Relative path of the file with the definition\n    # The definition; None when the program file of a CALL is not read\n    definition: CobolDefinition | None",
+      "target_name": "CobolReferenceTarget",
+      "target_start_line": 461
+    },
+    {
+      "lines": [
+        127,
+        248,
+        252
+      ],
+      "name": "CobolReferenceTarget.definition",
+      "from": "codetwine/codetwine/cobol_file_index_py/cobol_file_index.py",
+      "target_context": "definition: CobolDefinition | None",
+      "target_name": "definition",
+      "target_start_line": 471
+    },
+    {
+      "lines": [
+        129
+      ],
+      "name": "CobolReferenceTarget.definition.end_line",
+      "from": "codetwine/codetwine/cobol_file_index_py/cobol_file_index.py",
+      "target_context": "definition: CobolDefinition | None",
+      "target_name": "definition",
+      "target_start_line": 471
+    },
+    {
+      "lines": [
+        129,
+        253
+      ],
+      "name": "CobolReferenceTarget.definition.start_line",
+      "from": "codetwine/codetwine/cobol_file_index_py/cobol_file_index.py",
+      "target_context": "definition: CobolDefinition | None",
+      "target_name": "definition",
+      "target_start_line": 471
+    },
+    {
+      "lines": [
+        136,
+        147,
+        259,
+        266
+      ],
+      "name": "RReferenceTarget",
+      "from": "codetwine/codetwine/r_name_index_py/r_name_index.py",
+      "target_context": "@dataclass\nclass RReferenceTarget:\n    \"\"\"The definition one reference of an R file resolves to.\"\"\"\n\n    name: str               # Name of the usage: the name of the definition\n    line: int               # Line of the reference (1-based)\n    file_rel: str           # Relative path of the file with the definition\n    definition_name: str    # Name the definition is looked up by in file_rel\n    start_line: int         # First line of the definition in file_rel (1-based)\n    end_line: int           # Last line of the definition in file_rel",
+      "target_name": "RReferenceTarget",
+      "target_start_line": 66
     },
     {
       "lines": [
         143
       ],
-      "name": "IMPORT_RESOLVE_CONFIG.get",
-      "from": "codetwine/codetwine/config/settings_py/settings.py",
-      "target_context": "IMPORT_RESOLVE_CONFIG: dict[str, dict] = _expand_ext_aliases(\n    {ext: cfg.import_resolve for ext, cfg in _LANG_REGISTRY.items()\n     if cfg.import_resolve is not None}\n)"
+      "name": "r_definition_list",
+      "from": "codetwine/codetwine/extractors/r_source_py/r_source.py",
+      "target_context": "def r_definition_list(root_node: Node) -> list[RDefinition]:\n    \"\"\"Return the definitions of an R file in line order.\n\n    A top-level assignment to a name (name <- value, name = value, name <<- value,\n    value -> name, value ->> name; the name an identifier, a backtick name or a string)\n    is a definition: of type \"function_definition\" when the value is a function, else\n    \"binary_operator\". Every name of a chain (a <- b <- value) is one. setClass,\n    setRefClass, setClassUnion and setGeneric define the name of their string, and\n    setMethod, setReplaceMethod and setValidity are listed under the name they are\n    written for (type \"call\"), also as an argument of another top-level call\n    (invisible(setClass(\"A\"))). The named entries of public, private and active of\n    R6Class and of methods and fields of setRefClass are members (type \"argument\").\n    The statements of a top-level if, \"{ }\", \"( )\", for, while and repeat are top-level\n    statements (_read_top_level). An assignment inside a function is not a definition.\n    A name assigned inside a top-level statement, outside the functions written in it,\n    is a definition when a later top-level statement refers to it\n    (_inner_definition_list).\n\n    Args:\n        root_node: The AST root node of the file.\n\n    Returns:\n        The RDefinition list, sorted by start_line.\n    \"\"\"\n    definition_list: list[RDefinition] = []\n    for statement in _read_top_level(root_node)[0]:\n        start_line = _line(statement)\n        end_line = statement.end_point[0] + 1\n        target_list, value = _assign_chain(statement)\n        name_list = [name for name in map(_name_text, target_list) if name]\n\n        # The names the statement assigns: a function, or any other value\n        if value is not None:\n            is_function = value.type == \"function_definition\"\n            is_generic = is_function and _has_call(value, _GENERIC_CALL)\n            definition_list.extend(\n                RDefinition(\n                    name=name,\n                    type=\"function_definition\" if is_function else \"binary_operator\",\n                    start_line=start_line,\n                    end_line=end_line,\n                    is_function=is_function,\n                    is_generic=is_generic,\n                )\n                for name in name_list\n            )\n\n        # The calls that define a name by a string, or make a class\n        for call_node in _define_call_list(value):\n            definition_list.extend(_call_definition_list(call_node, statement, set(name_list)))\n            definition_list.extend(_member_definition_list(call_node))\n\n    definition_list.extend(_inner_definition_list(root_node))\n    return sorted(definition_list, key=lambda definition: definition.start_line)",
+      "target_name": "r_definition_list",
+      "target_start_line": 601
     },
     {
       "lines": [
-        147
+        149,
+        176,
+        177
       ],
-      "name": "resolve_module_to_project_path",
-      "from": "codetwine/codetwine/import_to_path_py/import_to_path.py",
-      "target_context": "def resolve_module_to_project_path(\n    module: str,\n    current_file_rel: str,\n    project_file_set: set[str],\n    source_root_set: set[str] | None = None,\n) -> str | None:\n    \"\"\"Resolve an import statement's module name to a file path within the project.\n\n    The module names passed to this function include not only project-internal modules\n    but also standard library modules (os, json, etc.) and external packages (requests, etc.).\n    This function generates file path candidates from the module name and checks them\n    against project_file_set to determine whether the module is a project-internal file.\n    Returns None if no matching file exists within the project.\n\n    The internal processing consists of 3 steps, each delegated to a dedicated function:\n    1. resolve_relative_import: Parse relative/absolute imports to determine path_part_list.\n    2. generate_candidate_path_list: Generate candidate file paths from path_part_list.\n    3. Match against project_file_set and return the first matching candidate.\n       If no exact match is found and source_root_set is provided, retry with\n       each source root prefix prepended to the candidate path.\n       (e.g. \"com/example/Foo.java\" -> \"src/main/java/com/example/Foo.java\")\n\n    Args:\n        module: The module name from the import statement. Both project-internal and external\n                modules are passed (e.g. \"..utils\", \"os\", \"requests\", \"com.example.Foo\",\n                \"./helper\", \"stdio.h\").\n        current_file_rel: Relative path of the current file from the project root.\n        project_file_set: Set of file paths within the project (\"path/to/file.ext\" format).\n        source_root_set: Set of source root prefixes detected in the project\n                         (e.g. {\"src/main/java/\", \"src/test/java/\"}). None or empty to skip.\n\n    Returns:\n        A project-internal file path (\"path/to/file.ext\" format).\n        None if no matching file exists within the project.\n    \"\"\"\n    # Get the current file's extension and resolve config\n    src_ext_with_dot = os.path.splitext(current_file_rel)[1]\n    src_ext = src_ext_with_dot.lstrip(\".\")\n\n    # Get the module resolve config for this extension\n    resolve_config = IMPORT_RESOLVE_CONFIG.get(src_ext)\n    if not resolve_config:\n        return None\n\n    separator = resolve_config[\"separator\"]\n    # Split the current file's directory path into components\n    current_dir_part_list = current_file_rel.replace(\"\\\\\", \"/\").split(\"/\")[:-1]\n\n    # Step 1: Convert the module name to path components\n    path_part_list = resolve_relative_import(\n        module, separator, current_dir_part_list\n    )\n    base_path = \"/\".join(path_part_list)\n\n    # Step 2: Generate file candidates\n    candidate_path_list = generate_candidate_path_list(\n        base_path, src_ext_with_dot, resolve_config, current_dir_part_list\n    )\n\n    # Step 3: Match against project_file_set and return the first matching candidate\n    for candidate_path in candidate_path_list:\n        if candidate_path in project_file_set:\n            return candidate_path\n\n    # Step 3 fallback: Prepend source root prefixes and retry.\n    # Java import \"com.example.Foo\" generates candidate \"com/example/Foo.java\",\n    # but the actual file may be at \"src/main/java/com/example/Foo.java\".\n    if source_root_set:\n        for candidate_path in candidate_path_list:\n            for source_root in source_root_set:\n                prefixed = source_root + candidate_path\n                if prefixed in project_file_set:\n                    return prefixed\n\n    return None"
+      "name": "usage_root_name",
+      "from": "codetwine/codetwine/extractors/usages_py/usages.py",
+      "target_context": "def usage_root_name(name: str, tracked_name_set: Container[str]) -> str:\n    \"\"\"Return the tracked name a usage name starts from.\n\n    Examples (tracked names {\"helper\", \"super::ENCODINGS\"}):\n        \"helper.process\"               -> \"helper\"\n        \"super::ENCODINGS\"             -> \"super::ENCODINGS\"\n        \"super::ENCODINGS.trim_end\"    -> \"super::ENCODINGS\"\n\n    Args:\n        name: A usage name (UsageInfo.name).\n        tracked_name_set: The names whose usages were tracked (a set or a dict keyed by name).\n\n    Returns:\n        The longest leading part of name (cut at \".\" or \"::\") that is tracked,\n        or the first part when none is.\n    \"\"\"\n    return _track_root(name, tracked_name_set) or symbol_part_list(name)[0]",
+      "target_name": "usage_root_name",
+      "target_start_line": 81
     },
     {
       "lines": [
-        191
+        149
       ],
-      "name": "SAME_PACKAGE_VISIBLE.get",
-      "from": "codetwine/codetwine/config/settings_py/settings.py",
-      "target_context": "SAME_PACKAGE_VISIBLE: dict[str, bool] = _expand_ext_aliases(\n    {ext: cfg.same_package_visible for ext, cfg in _LANG_REGISTRY.items()\n     if cfg.same_package_visible}\n)"
+      "name": "RReferenceTarget.name",
+      "from": "codetwine/codetwine/r_name_index_py/r_name_index.py",
+      "target_context": "name: str",
+      "target_name": "name",
+      "target_start_line": 70
     },
     {
       "lines": [
-        218
+        156,
+        167,
+        298,
+        300
       ],
-      "name": "DEFINITION_DICTS.get",
-      "from": "codetwine/codetwine/config/settings_py/settings.py",
-      "target_context": "DEFINITION_DICTS: dict[str, dict[str, str]] = _expand_ext_aliases(\n    {ext: cfg.definition_dict for ext, cfg in _LANG_REGISTRY.items()}\n)"
+      "name": "ImportReferenceTarget",
+      "from": "codetwine/codetwine/import_reference_py/import_reference.py",
+      "target_context": "@dataclass\nclass ImportReferenceTarget:\n    \"\"\"The definition one reference of a file resolves to.\"\"\"\n\n    name: str               # Name of the usage as the referring file writes it\n    line: int               # Line of the reference (1-based)\n    file_rel: str           # Relative path of the file with the definition\n    definition_name: str    # Name the definition is looked up by in file_rel",
+      "target_name": "ImportReferenceTarget",
+      "target_start_line": 44
     },
     {
       "lines": [
-        220,
-        254
+        156,
+        167,
+        281,
+        287
+      ],
+      "name": "CsharpReferenceTarget",
+      "from": "codetwine/codetwine/csharp_namespace_index_py/csharp_namespace_index.py",
+      "target_context": "@dataclass\nclass CsharpReferenceTarget:\n    \"\"\"The definition one reference of a C# file resolves to.\"\"\"\n\n    name: str               # Name of the usage as the referring file writes it\n    line: int               # Line of the reference (1-based)\n    file_rel: str           # Relative path of the file with the definition\n    definition_name: str    # Name the definition is looked up by in file_rel (Type.Member)\n    definition_line: int    # First line of the declaration in file_rel the reference names",
+      "target_name": "CsharpReferenceTarget",
+      "target_start_line": 54
+    },
+    {
+      "lines": [
+        170
+      ],
+      "name": "symbol_part_list",
+      "from": "codetwine/codetwine/extractors/usages_py/usages.py",
+      "target_context": "def symbol_part_list(name: str) -> list[str]:\n    \"\"\"Split a usage name into its parts.\n\n    Examples:\n        \"helper.process\"      -> [\"helper\", \"process\"]\n        \"config::Settings\"    -> [\"config\", \"Settings\"]\n\n    Args:\n        name: A usage name (UsageInfo.name).\n\n    Returns:\n        The parts separated by \".\" or \"::\".\n    \"\"\"\n    return _SYMBOL_SEPARATOR_RE.split(name)",
+      "target_name": "symbol_part_list",
+      "target_start_line": 41
+    },
+    {
+      "lines": [
+        172
+      ],
+      "name": "find_definition",
+      "from": "codetwine/codetwine/extractors/definition_source_py/definition_source.py",
+      "target_context": "def find_definition(\n    definition_list: list[DefinitionInfo], callee_name: str,\n) -> DefinitionInfo | None:\n    \"\"\"Return the definition of a file that a name written with \".\" or \"::\" names.\n\n    Tried in this order:\n        1. A definition named callee_name as a whole (C++: Shape::area defined outside its class)\n        2. The parts of the name followed from each part in turn (_find_by_path), so\n           the leading parts that are no definitions of the file (modules, namespaces,\n           a variable) are skipped\n\n    Args:\n        definition_list: Definitions of a file, sorted by start_line.\n        callee_name: Name of the definition to find.\n\n    Returns:\n        The definition, or None when no part of the name is a definition of the file.\n    \"\"\"\n    part_list = symbol_part_list(callee_name)\n    if len(part_list) > 1:\n        for definition in definition_list:\n            if definition.name == callee_name:\n                return definition\n    for start in range(len(part_list)):\n        definition = _find_by_path(definition_list, part_list[start:])\n        if definition is not None:\n            return definition\n    return None",
+      "target_name": "find_definition",
+      "target_start_line": 153
+    },
+    {
+      "lines": [
+        250
       ],
       "name": "parse_file",
       "from": "codetwine/codetwine/parsers/ts_parser_py/ts_parser.py",
-      "target_context": "def parse_file(file_path: str) -> tuple[Node, bytes]:\n    \"\"\"Read a file, parse it with tree-sitter, and return (AST root node, byte content).\n\n    Parse results are cached at module level to avoid re-parsing the same file.\n    The cache holds at most PARSE_CACHE_MAX_FILES entries; when it is full, the least\n    recently used entry is discarded and that file is parsed again the next time it is\n    requested. PARSE_CACHE_MAX_FILES = 0 disables the limit.\n\n    Args:\n        file_path: Absolute path of the file to parse.\n\n    Returns:\n        A (root_node, content) tuple.\n    \"\"\"\n    # Return from cache if available, marking the entry as most recently used\n    cached = parse_cache.get(file_path)\n    if cached is not None:\n        parse_cache.move_to_end(file_path)\n        return cached\n\n    # Get the corresponding language from the file extension\n    ext = os.path.splitext(file_path)[1].lstrip(\".\")\n\n    # Initialize the Parser with the Language object for this extension\n    parser = Parser(_language_map[ext])\n\n    # Read the file content in binary mode\n    with open(file_path, \"rb\") as f:\n        content = f.read()\n\n    # Parse with tree-sitter to generate the AST\n    tree = parser.parse(content)\n    result = (tree.root_node, content)\n\n    # Store in cache and drop the oldest entries once the limit is exceeded\n    parse_cache[file_path] = result\n    if PARSE_CACHE_MAX_FILES > 0:\n        while len(parse_cache) > PARSE_CACHE_MAX_FILES:\n            parse_cache.popitem(last=False)\n    return result"
+      "target_context": "def parse_file(file_path: str) -> tuple[Node | CobolSource, bytes]:\n    \"\"\"Read a file, parse it with tree-sitter, and return (AST root node, byte content).\n\n    The file is decoded by read_source() and parsed as UTF-8, whatever encoding it is\n    stored in; the byte content is that UTF-8 text, and the text of every node decodes\n    as UTF-8. Line numbers are those of line_list_of() over the file.\n\n    For a COBOL file the first element is a CobolSource (read_cobol_source) in place of\n    the root node, and for a BMS source the CobolSource of its symbolic maps\n    (read_bms_source); extract_definitions(), extract_imports() and extract_usages()\n    take it as they take a root node. The language is the one language_ext() gives.\n\n    For an R Markdown or Quarto file the root node is the tree of its R code chunks\n    (r_chunk_code), each node at the position its code has in the file; the byte content\n    is the whole file. A chunk whose code does not end inside the chunk (an open \"{\", an\n    operator at its end) is left out of the tree.\n\n    For a C or C++ file a macro name written between a class keyword and a class name\n    (class EXPORT Shape { ... }) is read as spaces (_parse_c_family); the byte content\n    is the whole file, and class_macro_cache holds those names and their lines.\n\n    Parse results are cached at module level; a file found in the cache is not parsed again.\n    The cache holds at most PARSE_CACHE_MAX_FILES entries; when it is full, the least\n    recently used entry is discarded and that file is parsed again the next time it is\n    requested. PARSE_CACHE_MAX_FILES = 0 disables the limit.\n\n    Args:\n        file_path: Absolute path of the file to parse.\n\n    Returns:\n        A (root_node, content) tuple.\n    \"\"\"\n    # Return from cache if available, marking the entry as most recently used\n    cache_entry = parse_cache.get(file_path)\n    if cache_entry is not None:\n        parse_cache.move_to_end(file_path)\n        return cache_entry\n\n    # Get the corresponding language from the file extension\n    ext = language_ext(file_path)\n\n    # Read the file as UTF-8 bytes\n    content = read_utf8_content(file_path)\n\n    if ext in COBOL_EXT_SET:\n        # Split the COBOL text into statements and parse each of them\n        cobol_source = read_cobol_source(content.decode(\"utf-8\"), EXT_TO_LANGUAGE_DICT[ext])\n        parse_result = (cobol_source, content)\n    elif ext in BMS_EXT_SET:\n        # Read the maps of the BMS macros\n        parse_result = (read_bms_source(content.decode(\"utf-8\")), content)\n    elif ext in R_MARKDOWN_EXT_SET:\n        # Parse the R code chunks of the document, everything else blanked; a chunk\n        # whose code runs on past its end is blanked as well\n        language = EXT_TO_LANGUAGE_DICT[ext]\n        chunk_code = r_chunk_code(content, lambda code: _is_whole_code(code, language))\n        tree = Parser(language).parse(chunk_code)\n        parse_result = (tree.root_node, content)\n    elif ext in C_FAMILY_EXT_SET:\n        # Parse with the macro names in front of class names blanked\n        root_node, class_macro_cache[file_path] = _parse_c_family(content, EXT_TO_LANGUAGE_DICT[ext])\n        parse_result = (root_node, content)\n    else:\n        # Parse with tree-sitter to generate the AST\n        tree = Parser(EXT_TO_LANGUAGE_DICT[ext]).parse(content)\n        parse_result = (tree.root_node, content)\n\n    # Store in cache and drop the oldest entries once the limit is exceeded\n    parse_cache[file_path] = parse_result\n    if PARSE_CACHE_MAX_FILES > 0:\n        while len(parse_cache) > PARSE_CACHE_MAX_FILES:\n            parse_cache.popitem(last=False)\n    return parse_result",
+      "target_name": "parse_file",
+      "target_start_line": 167
     },
     {
       "lines": [
-        221
+        250
       ],
-      "name": "extract_definitions",
-      "from": "codetwine/codetwine/extractors/definitions_py/definitions.py",
-      "target_context": "def extract_definitions(\n    root_node: Node,\n    definition_dict: dict[str, str],\n) -> list[DefinitionInfo]:\n    \"\"\"Extract definitions (functions, classes, variables, types, etc.) from the AST and return them in line-number order.\n\n    definition_dict structure:\n        key = AST node type (e.g. \"function_definition\")\n        value = one of the following:\n          - Child node type name (standard pattern): obtains the name from a direct child.\n            e.g. \"identifier\" -> searches node.children for a child with type==\"identifier\"\n          - \"__sentinel__\" format sentinel value (special pattern): the name node is\n            nested two or more levels deep, and a dedicated extraction function is used.\n            e.g. \"__assignment__\" -> expression_statement > assignment > identifier\n\n    If name extraction fails (e.g. a C/C++ declaration is a forward declaration),\n    child nodes are added to the queue and BFS continues. This allows detection of\n    definitions like function_declarator nested inside.\n\n    Args:\n        root_node: The AST root node covering the entire file.\n        definition_dict: Per-language definition node settings.\n\n    Returns:\n        A list of DefinitionInfo sorted by line number in ascending order.\n    \"\"\"\n\n    definition_list: list[DefinitionInfo] = []\n\n    # AST node types for which child node traversal continues even after being recorded as a definition.\n    # e.g. namespace_definition contains class and function definitions inside,\n    # and class bodies contain methods, constructors and fields.\n    _CONTAINER_DEFINITION_TYPES = {\n        \"namespace_definition\",   # C++\n        \"class_definition\",       # Python\n        \"class_declaration\",      # Java / Kotlin / JS / TS\n        \"class_specifier\",        # C++\n        \"struct_specifier\",       # C / C++\n        \"interface_declaration\",  # Java / TS\n        \"enum_declaration\",       # Java / TS\n        \"object_declaration\",     # Kotlin\n    }\n\n    # BFS traversal of the AST using a deque\n    node_queue = deque([root_node])\n\n    while node_queue:\n        node = node_queue.popleft()\n\n        if node.type == \"decorated_definition\" and \"decorated_definition\" in definition_dict:\n            # Process decorated definitions (e.g. @property) with a dedicated parser\n            definition = _parse_decorated_definition(node, definition_dict)\n            if definition:\n                definition_list.append(definition)\n\n        elif node.type in definition_dict and node.type != \"decorated_definition\":\n            # Process a standard definition node\n            name_node_type = definition_dict[node.type]\n            definition = _parse_definition_node(node, name_node_type)\n            if definition:\n                # Exclude #include guard #define directives\n                if node.type == \"preproc_def\" and _INCLUDE_GUARD_RE.match(definition.name):\n                    node_queue.extend(node.children)\n                    continue\n\n                definition_list.append(definition)\n\n                # Continue traversal inside container-type definitions (e.g. namespace)\n                if node.type in _CONTAINER_DEFINITION_TYPES:\n                    node_queue.extend(node.children)\n            else:\n                # For destructuring (destructured assignment), extract multiple names\n                names = _extract_destructured_names(node, name_node_type)\n                if names:\n                    for name in names:\n                        definition_list.append(DefinitionInfo(\n                            name=name,\n                            type=node.type,\n                            start_line=node.start_point[0] + 1,\n                            end_line=node.end_point[0] + 1,\n                        ))\n                else:\n                    # When name extraction fails, descend into child nodes to continue search\n                    node_queue.extend(node.children)\n\n        else:\n            # If not a definition node, add children to the queue to dig deeper\n            node_queue.extend(node.children)\n\n    return sorted(definition_list, key=lambda d: d.start_line)"
+      "name": "CobolReferenceTarget.file_rel",
+      "from": "codetwine/codetwine/cobol_file_index_py/cobol_file_index.py",
+      "target_context": "file_rel: str",
+      "target_name": "file_rel",
+      "target_start_line": 469
     },
     {
       "lines": [
-        257
+        253
       ],
-      "name": "get_import_params",
-      "from": "codetwine/codetwine/import_to_path_py/import_to_path.py",
-      "target_context": "def get_import_params(file_ext: str) -> tuple[Language, str] | tuple[None, None]:\n    \"\"\"Retrieve the Language object and query string needed for import analysis from a file extension.\n\n    For unsupported languages (extensions not defined in IMPORT_QUERIES), returns (None, None)\n    to let the caller skip import analysis.\n\n    Args:\n        file_ext: File extension (without \".\", e.g. \"py\", \"java\").\n\n    Returns:\n        A (Language, import_query_str) tuple. (None, None) if unsupported.\n    \"\"\"\n    # Get the import query string for this extension\n    import_query_str = IMPORT_QUERIES.get(file_ext)\n    if not import_query_str:\n        return None, None\n\n    # Get the tree-sitter Language object for this extension\n    try:\n        language = TREE_SITTER_LANGUAGES[file_ext]\n    except KeyError:\n        return None, None\n    return language, import_query_str"
+      "name": "CobolReferenceTarget.definition.name",
+      "from": "codetwine/codetwine/cobol_file_index_py/cobol_file_index.py",
+      "target_context": "definition: CobolDefinition | None",
+      "target_name": "definition",
+      "target_start_line": 471
     },
     {
       "lines": [
-        261
+        268,
+        269,
+        270,
+        272
       ],
-      "name": "extract_imports",
-      "from": "codetwine/codetwine/extractors/imports_py/imports.py",
-      "target_context": "def extract_imports(\n    root_node: Node,\n    language: Language,\n    import_query_str: str | None,\n) -> list[ImportInfo]:\n    \"\"\"Extract import statements from the AST and return them.\n\n    Uses tree-sitter queries (S-expression pattern matching) to uniformly\n    handle import syntax that differs across languages.\n\n    Query capture names:\n        @module      -> Import source (module name, path, header name, etc.)\n        @name        -> Individually imported name (the Y in \"from X import Y\")\n        @import_node -> The entire import statement node (for line number retrieval)\n\n    When the same import statement has multiple @name captures (from X import Y, Z),\n    they are consolidated into a single ImportInfo.\n\n    Args:\n        root_node: The AST root node covering the entire file.\n        language: tree-sitter Language object (required for Query creation).\n        import_query_str: tree-sitter query string (obtained from IMPORT_QUERIES in config.py).\n                          Returns an empty list when None (for languages with no import query defined).\n\n    Returns:\n        A list of ImportInfo.\n    \"\"\"\n    if not import_query_str:\n        return []\n\n    # Create a tree-sitter query and scan the AST with a cursor\n    query = Query(language, import_query_str)\n    cursor = QueryCursor(query)\n\n    # Key: (module string, line number) -> ImportInfo\n    # Groups multiple @name captures from the same import statement into one entry\n    grouped: dict[tuple[str, int], ImportInfo] = {}\n\n    # Retrieve query match results\n    for _, captures in cursor.matches(root_node):\n        # CommonJS require() pattern filtering:\n        # If a @_require_func capture exists and the function name is not \"require\", skip it\n        require_func_nodes = captures.get(\"_require_func\", [])\n        if require_func_nodes:\n            if require_func_nodes[0].text.decode(\"utf-8\") != \"require\":\n                continue\n\n        # Retrieve @module, @name, and @import_node captures\n        module_nodes = captures.get(\"module\", [])\n        name_nodes = captures.get(\"name\", [])\n        import_nodes = captures.get(\"import_node\", [])\n\n        if not module_nodes:\n            continue\n\n        # Get the module name from the @module capture and strip quotes\n        raw_module = module_nodes[0].text.decode(\"utf-8\")\n        module = _strip_quotes(raw_module)\n\n        # Get line number from the entire import statement node (fallback to module node)\n        if import_nodes:\n            line = import_nodes[0].start_point[0] + 1\n        else:\n            line = module_nodes[0].start_point[0] + 1\n\n        # Create the grouping key\n        group_key = (module, line)\n\n        # Create a new entry if the group does not exist yet\n        if group_key not in grouped:\n            grouped[group_key] = ImportInfo(module=module, names=[], line=line)\n\n        # Detect import X as Y alias\n        module_alias = _detect_module_alias(module_nodes[0], import_nodes)\n        if module_alias:\n            grouped[group_key].module_alias = module_alias\n\n        # If @name captures exist, add them to the names list (excluding duplicates)\n        # When an alias is present, register the alias name and record the mapping to the original name in alias_map\n        for name_node in name_nodes:\n            alias_name = _resolve_imported_name(name_node)\n            original_name = _get_original_name(name_node)\n            if alias_name and alias_name not in grouped[group_key].names:\n                grouped[group_key].names.append(alias_name)\n                if original_name and original_name != alias_name:\n                    if grouped[group_key].alias_map is None:\n                        grouped[group_key].alias_map = {}\n                    grouped[group_key].alias_map[alias_name] = original_name\n\n        # Java/Kotlin wildcard import detection:\n        # If an import_node's child contains asterisk (Java) or * (Kotlin), add \"*\" to names\n        if import_nodes and \"*\" not in grouped[group_key].names:\n            for child in import_nodes[0].children:\n                if child.type in (\"asterisk\", \"*\"):\n                    grouped[group_key].names.append(\"*\")\n                    break\n\n    return list(grouped.values())"
+      "name": "RReferenceTarget.file_rel",
+      "from": "codetwine/codetwine/r_name_index_py/r_name_index.py",
+      "target_context": "file_rel: str",
+      "target_name": "file_rel",
+      "target_start_line": 72
+    },
+    {
+      "lines": [
+        269,
+        440
+      ],
+      "name": "read_source",
+      "from": "codetwine/codetwine/utils/file_utils_py/file_utils.py",
+      "target_context": "def read_source(file_path: str) -> tuple[str, str]:\n    \"\"\"Read a text file and return its contents decoded, with the encoding used.\n\n    The encoding is chosen in this order:\n    1. The codec named by a BOM at the start of the file (the BOM is dropped)\n    2. UTF-8\n    3. The encodings of SOURCE_ENCODING, in order\n    4. The encoding charset-normalizer detects\n    5. UTF-8 with each invalid byte replaced by U+FFFD\n    Steps 1 to 3 take the first codec that decodes the whole file without error.\n    Line breaks are kept as they are; line numbers match the file.\n\n    Args:\n        file_path: Absolute path of the file to read.\n\n    Returns:\n        A (text, encoding) tuple. encoding is the codec name that decoded the file,\n        or \"\" when step 5 decoded it.\n\n    Raises:\n        OSError: When the file cannot be read.\n    \"\"\"\n    with open(file_path, \"rb\") as f:\n        text, encoding, _ = _decode_source(f.read())\n    return text, encoding",
+      "target_name": "read_source",
+      "target_start_line": 107
+    },
+    {
+      "lines": [
+        270,
+        440
+      ],
+      "name": "line_list_of",
+      "from": "codetwine/codetwine/utils/file_utils_py/file_utils.py",
+      "target_context": "def line_list_of(text: str) -> list[str]:\n    \"\"\"Split a text into its lines at \"\\\\n\", \"\\\\r\\\\n\" and a lone \"\\\\r\" alone.\n\n    Every line number of the analysis counts lines this way. A form feed, a vertical tab,\n    U+0085, U+2028 and the other characters str.splitlines() also breaks at stay inside\n    their line.\n\n    Examples:\n        \"a\\\\r\\\\nb\\\\rc\\\\n\" -> [\"a\", \"b\", \"c\"]\n        \"a\\\\n\\\\f\\\\nb\"      -> [\"a\", \"\\\\f\", \"b\"]\n        \"\"              -> []\n\n    Args:\n        text: The text to split.\n\n    Returns:\n        The lines without their line breaks. A text that ends in a line break has no\n        empty line after it.\n    \"\"\"\n    line_list = lone_cr_to_lf(text).replace(\"\\r\\n\", \"\\n\").split(\"\\n\")\n    if line_list[-1] == \"\":\n        line_list.pop()\n    return line_list",
+      "target_name": "line_list_of",
+      "target_start_line": 168
+    },
+    {
+      "lines": [
+        272
+      ],
+      "name": "RReferenceTarget.end_line",
+      "from": "codetwine/codetwine/r_name_index_py/r_name_index.py",
+      "target_context": "end_line: int",
+      "target_name": "end_line",
+      "target_start_line": 75
+    },
+    {
+      "lines": [
+        272,
+        273
+      ],
+      "name": "RReferenceTarget.start_line",
+      "from": "codetwine/codetwine/r_name_index_py/r_name_index.py",
+      "target_context": "start_line: int",
+      "target_name": "start_line",
+      "target_start_line": 74
+    },
+    {
+      "lines": [
+        273
+      ],
+      "name": "RReferenceTarget.definition_name",
+      "from": "codetwine/codetwine/r_name_index_py/r_name_index.py",
+      "target_context": "definition_name: str",
+      "target_name": "definition_name",
+      "target_start_line": 73
+    },
+    {
+      "lines": [
+        290
+      ],
+      "name": "CsharpReferenceTarget.definition_line",
+      "from": "codetwine/codetwine/csharp_namespace_index_py/csharp_namespace_index.py",
+      "target_context": "definition_line: int",
+      "target_name": "definition_line",
+      "target_start_line": 62
+    },
+    {
+      "lines": [
+        290
+      ],
+      "name": "CsharpReferenceTarget.definition_name",
+      "from": "codetwine/codetwine/csharp_namespace_index_py/csharp_namespace_index.py",
+      "target_context": "definition_name: str",
+      "target_name": "definition_name",
+      "target_start_line": 61
+    },
+    {
+      "lines": [
+        290
+      ],
+      "name": "CsharpReferenceTarget.file_rel",
+      "from": "codetwine/codetwine/csharp_namespace_index_py/csharp_namespace_index.py",
+      "target_context": "file_rel: str",
+      "target_name": "file_rel",
+      "target_start_line": 60
+    },
+    {
+      "lines": [
+        302
+      ],
+      "name": "ImportReferenceTarget.definition_name",
+      "from": "codetwine/codetwine/import_reference_py/import_reference.py",
+      "target_context": "definition_name: str",
+      "target_name": "definition_name",
+      "target_start_line": 51
+    },
+    {
+      "lines": [
+        302
+      ],
+      "name": "ImportReferenceTarget.file_rel",
+      "from": "codetwine/codetwine/import_reference_py/import_reference.py",
+      "target_context": "file_rel: str",
+      "target_name": "file_rel",
+      "target_start_line": 50
+    },
+    {
+      "lines": [
+        311
+      ],
+      "name": "source_definition",
+      "from": "codetwine/codetwine/extractors/definition_source_py/definition_source.py",
+      "target_context": "def source_definition(\n    file_rel: str, name: str, project_dir: str, start_line: int | None = None,\n) -> tuple[DefinitionInfo, str] | None:\n    \"\"\"Return the definition of a file a name names, with its source text.\n\n    With start_line, the parts of the name are tried from the last one and the first\n    definition named like the part whose first line is start_line is taken; when\n    there is none, and without start_line, the name is looked up by find_definition().\n\n    Examples (class Gen<T> on line 7 and class Gen on line 11, each with Size):\n        \"Gen.Size\", 13   -> Size inside class Gen\n        \"Gen\", 11        -> class Gen\n        \"Gen.Count\", 11  -> class Gen (Count is no definition)\n\n    Args:\n        file_rel: Path of the file relative to the project root.\n        name: Name of the definition, its parts joined with \".\" or \"::\".\n        project_dir: Absolute path to the project root.\n        start_line: First line of the definition (1-based), None when it is not known.\n\n    Returns:\n        (definition, source text of the definition). None when the name names no\n        definition of the file, and for a file whose definitions are not read by\n        extract_definitions() from a syntax tree (COBOL, BMS, R, a file without a\n        language).\n    \"\"\"\n    absolute_path = os.path.join(project_dir, file_rel)\n    file_ext = language_ext(absolute_path)\n    definition_dict = EXT_TO_DEFINITION_DICT.get(file_ext)\n    if (\n        not definition_dict\n        or definition_dict is COBOL_DEFINITION_DICT\n        or definition_dict is BMS_DEFINITION_DICT\n        or file_ext in R_EXT_SET\n    ):\n        return None\n    definition_list, content = _file_definition(absolute_path, definition_dict)\n    definition: DefinitionInfo | None = None\n    if start_line is not None:\n        for part in reversed(symbol_part_list(name)):\n            definition = next(\n                (\n                    candidate for candidate in definition_list\n                    if candidate.name == part and candidate.start_line == start_line\n                ),\n                None,\n            )\n            if definition is not None:\n                break\n    if definition is None:\n        definition = find_definition(definition_list, name)\n    if definition is None:\n        return None\n    return definition, content[definition.start_byte:definition.end_byte].decode(\"utf-8\")",
+      "target_name": "source_definition",
+      "target_start_line": 202
+    },
+    {
+      "lines": [
+        350,
+        387,
+        487
+      ],
+      "name": "reference_kind",
+      "from": "codetwine/codetwine/reference_target_py/reference_target.py",
+      "target_context": "def reference_kind(file_abs: str) -> str | None:\n    \"\"\"Return how the references of a file are resolved.\n\n    Args:\n        file_abs: Absolute path of the file.\n\n    Returns:\n        \"cobol\", \"csharp\", \"r\" or \"import\" (EXT_TO_REFERENCE_KIND_DICT), None for a\n        file without a language.\n    \"\"\"\n    return EXT_TO_REFERENCE_KIND_DICT.get(language_ext(file_abs))",
+      "target_name": "reference_kind",
+      "target_start_line": 24
+    },
+    {
+      "lines": [
+        482
+      ],
+      "name": "reference_target_list",
+      "from": "codetwine/codetwine/reference_target_py/reference_target.py",
+      "target_context": "def reference_target_list(\n    file_rel: str, project_file_set: set[str], project_dir: str,\n) -> list[ReferenceTarget]:\n    \"\"\"Resolve each reference of a file to the definition it names.\n\n    The references are resolved the way the language of the file names things: a COBOL\n    file or a BMS source with OF / IN qualification (cobol_reference_target_list), a C#\n    file through its namespaces and using directives (csharp_reference_target_list), an\n    R file through the names it sees (r_reference_target_list), a file of any other\n    language through its import statements (import_reference_target_list).\n\n    Args:\n        file_rel: Relative path of the file.\n        project_file_set: Relative paths of the project files that have a language.\n        project_dir: Absolute path to the project root.\n\n    Returns:\n        The resolved references; each has name, line and file_rel. A target whose\n        file_rel is the file itself is a reference to a definition of the file. Empty\n        for a file without a language.\n    \"\"\"\n    file_kind = reference_kind(os.path.join(project_dir, file_rel))\n    if file_kind is None:\n        return []\n    return _TARGET_LIST_FUNCTION_DICT[file_kind](file_rel, project_file_set, project_dir)",
+      "target_name": "reference_target_list",
+      "target_start_line": 37
+    }
+  ],
+  "same_file_usages": [
+    {
+      "lines": [
+        38,
+        42,
+        43,
+        53,
+        55,
+        71,
+        201,
+        244,
+        246,
+        251,
+        259,
+        266,
+        271,
+        281,
+        287,
+        298,
+        300,
+        309,
+        315,
+        321,
+        399
+      ],
+      "name": "_TargetDefinition",
+      "target_name": "_TargetDefinition",
+      "target_start_line": 28
+    },
+    {
+      "lines": [
+        85,
+        219,
+        413
+      ],
+      "name": "_memo_definition_function",
+      "target_name": "_memo_definition_function",
+      "target_start_line": 41
+    },
+    {
+      "lines": [
+        142,
+        164
+      ],
+      "name": "_definition_range_dict",
+      "target_name": "_definition_range_dict",
+      "target_start_line": 109
+    },
+    {
+      "lines": [
+        187
+      ],
+      "name": "_cobol_own_range_function",
+      "target_name": "_cobol_own_range_function",
+      "target_start_line": 121
+    },
+    {
+      "lines": [
+        188
+      ],
+      "name": "_r_own_range_function",
+      "target_name": "_r_own_range_function",
+      "target_start_line": 134
+    },
+    {
+      "lines": [
+        189,
+        190
+      ],
+      "name": "_name_own_range_function",
+      "target_name": "_name_own_range_function",
+      "target_start_line": 154
+    },
+    {
+      "lines": [
+        249,
+        313
+      ],
+      "name": "_NO_DEFINITION",
+      "target_name": "_NO_DEFINITION",
+      "target_start_line": 38
+    },
+    {
+      "lines": [
+        289,
+        302
+      ],
+      "name": "_source_target_definition",
+      "target_name": "_source_target_definition",
+      "target_start_line": 307
+    },
+    {
+      "lines": [
+        322
+      ],
+      "name": "_cobol_definition_function",
+      "target_name": "_cobol_definition_function",
+      "target_start_line": 242
+    },
+    {
+      "lines": [
+        323
+      ],
+      "name": "_r_definition_function",
+      "target_name": "_r_definition_function",
+      "target_start_line": 259
+    },
+    {
+      "lines": [
+        324
+      ],
+      "name": "_csharp_definition_function",
+      "target_name": "_csharp_definition_function",
+      "target_start_line": 279
+    },
+    {
+      "lines": [
+        325
+      ],
+      "name": "_import_definition_function",
+      "target_name": "_import_definition_function",
+      "target_start_line": 296
+    },
+    {
+      "lines": [
+        353
+      ],
+      "name": "_group_other_file_target_list",
+      "target_name": "_group_other_file_target_list",
+      "target_start_line": 68
+    },
+    {
+      "lines": [
+        354,
+        392,
+        489
+      ],
+      "name": "_TARGET_DEFINITION_FUNCTION_DICT",
+      "target_name": "_TARGET_DEFINITION_FUNCTION_DICT",
+      "target_start_line": 321
+    },
+    {
+      "lines": [
+        390
+      ],
+      "name": "_group_same_file_target_list",
+      "target_name": "_group_same_file_target_list",
+      "target_start_line": 197
+    },
+    {
+      "lines": [
+        391
+      ],
+      "name": "_OWN_RANGE_FUNCTION_DICT",
+      "target_name": "_OWN_RANGE_FUNCTION_DICT",
+      "target_start_line": 186
+    },
+    {
+      "lines": [
+        449
+      ],
+      "name": "_MAX_CONTEXT_LOCATION",
+      "target_name": "_MAX_CONTEXT_LOCATION",
+      "target_start_line": 22
+    },
+    {
+      "lines": [
+        450,
+        451
+      ],
+      "name": "_CONTEXT_RADIUS",
+      "target_name": "_CONTEXT_RADIUS",
+      "target_start_line": 25
+    },
+    {
+      "lines": [
+        488
+      ],
+      "name": "_group_caller_usage_list",
+      "target_name": "_group_caller_usage_list",
+      "target_start_line": 396
+    },
+    {
+      "lines": [
+        491
+      ],
+      "name": "_attach_usage_context",
+      "target_name": "_attach_usage_context",
+      "target_start_line": 428
     }
   ],
   "caller_usages": [
     {
       "lines": [
-        80
+        97
       ],
-      "name": "build_usage_info_list",
+      "name": "TREE_RANGE_KIND_SET",
       "file": "codetwine/codetwine/file_analyzer_py/file_analyzer.py",
-      "usage_context": "        )\n\n        # Get the list of usage locations and dependency target source code\n        usage_list = build_usage_info_list(\n            root_node,\n            symbol_to_file_map,\n            project_dir,"
+      "usage_context": "    definition_info_list = file_definition_list(target_file, definition_dict)\n    root_node = (\n        parse_file(target_file)[0]\n        if reference_kind(target_file) in TREE_RANGE_KIND_SET else None\n    )\n\n    # Convert content to text lines and extract source code from each definition's line range"
     },
     {
       "lines": [
-        89
+        109
+      ],
+      "name": "build_callee_usages",
+      "file": "codetwine/codetwine/file_analyzer_py/file_analyzer.py",
+      "usage_context": "    # Resolve each reference of the file to this file or another, and collect the\n    # references of the files depending on this file that lead to it\n    target_list = reference_target_list(target_file_rel, project_file_set, project_dir)\n    usage_list = build_callee_usages(target_list, target_file_rel, project_dir)\n    same_file_usages = build_same_file_usages(\n        target_list, target_file_rel, project_dir, definition_info_list, root_node,\n    )"
+    },
+    {
+      "lines": [
+        110
+      ],
+      "name": "build_same_file_usages",
+      "file": "codetwine/codetwine/file_analyzer_py/file_analyzer.py",
+      "usage_context": "    # references of the files depending on this file that lead to it\n    target_list = reference_target_list(target_file_rel, project_file_set, project_dir)\n    usage_list = build_callee_usages(target_list, target_file_rel, project_dir)\n    same_file_usages = build_same_file_usages(\n        target_list, target_file_rel, project_dir, definition_info_list, root_node,\n    )\n    caller_usages = build_caller_usages("
+    },
+    {
+      "lines": [
+        113
       ],
       "name": "build_caller_usages",
       "file": "codetwine/codetwine/file_analyzer_py/file_analyzer.py",
-      "usage_context": "        )\n\n        # Collect locations where functions/classes/variables defined in this file are used in other project files\n        caller_usages = build_caller_usages(\n            target_file_rel, caller_map.get(target_file_rel, []),\n            project_dir, project_file_set,\n        )"
+      "usage_context": "    same_file_usages = build_same_file_usages(\n        target_list, target_file_rel, project_dir, definition_info_list, root_node,\n    )\n    caller_usages = build_caller_usages(\n        target_file_rel, caller_map.get(target_file_rel, []), project_dir, project_file_set,\n    )\n"
     }
   ]
 }

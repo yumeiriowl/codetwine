@@ -1,14 +1,12 @@
 """SQLite form of the whole-project analysis result.
 
 The database is built from the per-file JSON files in the output directory, one file at
-a time, so the consolidated result is never held in memory as a whole. It carries the
-same content as project_knowledge.json:
+a time. It carries the same content as project_knowledge.json:
 
     project_knowledge.json "files"[]                -> files table (one row per file)
     project_knowledge.json "project_dependencies"[] -> files.summary + file_edges
 
-callers and callees come from two separate analyses and do not always mirror each other.
-file_edges holds each direction as it was analyzed; neither is derived from the other.
+file_edges holds the callers and the callees of each file, one row per direction.
 """
 
 import json
@@ -22,7 +20,7 @@ from codetwine.output import build_file_entry, to_output_path
 
 logger = logging.getLogger(__name__)
 
-# Bumped whenever the table layout below changes
+# Version of the table layout below, stored in the meta table
 SCHEMA_VERSION = "1"
 
 _SCHEMA = """
@@ -58,7 +56,7 @@ CREATE INDEX idx_definitions_file ON definitions(file);
 """
 
 
-def _definition_rows(file_path: str, file_deps: dict) -> Iterator[tuple]:
+def _iter_definition_row(file_path: str, file_deps: dict) -> Iterator[tuple]:
     """Yield the definitions table rows for one file.
 
     Args:
@@ -87,11 +85,13 @@ def save_consolidated_sqlite(
 ) -> None:
     """Write the entire project's analysis results to a SQLite database.
 
-    Any existing database at output_path is replaced. The per-file JSON files are the
-    source of truth and the database is rebuilt from them on every run.
+    The database is written to output_path + ".tmp" and moved to output_path once it is
+    complete, replacing any existing database there. When writing fails, the existing
+    database is left as it was. The database is built from the per-file JSON files on
+    every run.
 
     Each file's analysis results are read, inserted and released before the next file is
-    read, so only one file is held in memory at a time.
+    read.
 
     Args:
         base_output_dir: Base output directory for file_dependencies.
@@ -102,11 +102,13 @@ def save_consolidated_sqlite(
     """
     project_name = os.path.basename(base_output_dir)
 
-    if os.path.exists(output_path):
-        os.remove(output_path)
+    # A file that a stopped run left at the temporary path is removed first
+    tmp_path = output_path + ".tmp"
+    if os.path.exists(tmp_path):
+        os.remove(tmp_path)
 
     written_count = 0
-    connection = sqlite3.connect(output_path)
+    connection = sqlite3.connect(tmp_path)
     try:
         connection.executescript(_SCHEMA)
         connection.executemany(
@@ -139,7 +141,7 @@ def save_consolidated_sqlite(
                 connection.executemany(
                     "INSERT INTO definitions "
                     "(file, name, type, start_line, end_line) VALUES (?, ?, ?, ?, ?)",
-                    _definition_rows(entry["file"], file_deps),
+                    _iter_definition_row(entry["file"], file_deps),
                 )
             written_count += 1
 
@@ -157,6 +159,8 @@ def save_consolidated_sqlite(
         connection.commit()
     finally:
         connection.close()
+
+    os.replace(tmp_path, output_path)
 
     logger.info(
         f"Consolidated SQLite output: {output_path} "
@@ -269,6 +273,24 @@ def get_file(connection: sqlite3.Connection, file: str) -> dict | None:
     return _row_to_entry(row) if row else None
 
 
+def _edge_list(connection: sqlite3.Connection, file: str, direction: str) -> list[str]:
+    """Return the other ends of a file's edges in one direction, sorted.
+
+    Args:
+        connection: An open knowledge database connection.
+        file: The file path in "project_name/copy_path" format.
+        direction: "caller" or "callee".
+
+    Returns:
+        The file paths at the other end.
+    """
+    cursor = connection.execute(
+        "SELECT other FROM file_edges WHERE file = ? AND direction = ? ORDER BY other",
+        (file, direction),
+    )
+    return [row["other"] for row in cursor]
+
+
 def callees_of(connection: sqlite3.Connection, file: str) -> list[str]:
     """Return the files that a file depends on, sorted.
 
@@ -279,12 +301,7 @@ def callees_of(connection: sqlite3.Connection, file: str) -> list[str]:
     Returns:
         The dependency target file paths.
     """
-    rows = connection.execute(
-        "SELECT other FROM file_edges WHERE file = ? AND direction = 'callee' "
-        "ORDER BY other",
-        (file,),
-    )
-    return [row["other"] for row in rows]
+    return _edge_list(connection, file, "callee")
 
 
 def callers_of(connection: sqlite3.Connection, file: str) -> list[str]:
@@ -297,17 +314,12 @@ def callers_of(connection: sqlite3.Connection, file: str) -> list[str]:
     Returns:
         The dependent file paths.
     """
-    rows = connection.execute(
-        "SELECT other FROM file_edges WHERE file = ? AND direction = 'caller' "
-        "ORDER BY other",
-        (file,),
-    )
-    return [row["other"] for row in rows]
+    return _edge_list(connection, file, "caller")
 
 
 def find_definitions(connection: sqlite3.Connection, name: str,
                      partial: bool = False) -> list[dict]:
-    """Return every definition with a given name, without reading any file body.
+    """Return every definition with a given name, read from the definitions table.
 
     Args:
         connection: An open knowledge database connection.
@@ -318,15 +330,15 @@ def find_definitions(connection: sqlite3.Connection, name: str,
     Returns:
         A list of {"file", "name", "type", "start_line", "end_line"} dicts.
     """
-    columns = "SELECT file, name, type, start_line, end_line FROM definitions "
-    order = " ORDER BY file, start_line"
+    select_sql = "SELECT file, name, type, start_line, end_line FROM definitions "
+    order_sql = " ORDER BY file, start_line"
     if partial:
-        # ESCAPE keeps a name containing % or _ from being read as a wildcard
+        # % and _ in the name are matched literally
         pattern = name.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-        rows = connection.execute(
-            columns + "WHERE name LIKE ? ESCAPE '\\'" + order,
+        cursor = connection.execute(
+            select_sql + "WHERE name LIKE ? ESCAPE '\\'" + order_sql,
             (f"%{pattern}%",),
         )
     else:
-        rows = connection.execute(columns + "WHERE name = ?" + order, (name,))
-    return [dict(row) for row in rows]
+        cursor = connection.execute(select_sql + "WHERE name = ?" + order_sql, (name,))
+    return [dict(row) for row in cursor]

@@ -1,99 +1,125 @@
 import os
 import logging
 from codetwine.parsers.ts_parser import parse_file
-from codetwine.extractors.definitions import extract_definitions
+from codetwine.extractors.definitions import DefinitionInfo
+from codetwine.extractors.definition_source import file_content, file_definition_list
 from codetwine.extractors.usage_analysis import (
-    build_usage_info_list,
+    TREE_RANGE_KIND_SET,
+    build_callee_usages,
+    build_same_file_usages,
     build_caller_usages,
 )
-from codetwine.import_to_path import (
-    build_symbol_to_file_map,
-    get_import_params,
-)
-from codetwine.extractors.imports import extract_imports
-from codetwine.config.settings import DEFINITION_DICTS
+from codetwine.reference_target import reference_kind, reference_target_list
+from codetwine.config.settings import EXT_TO_DEFINITION_DICT, language_ext
+from codetwine.utils.file_utils import detected_encoding, line_list_of
 
 logger = logging.getLogger(__name__)
+
+
+def _definition_entry(definition: DefinitionInfo, content_line_list: list[str]) -> dict:
+    """Return the entry of one definition in the "definitions" list.
+
+    Args:
+        definition: The definition.
+        content_line_list: The lines of the file.
+
+    Returns:
+        {"name", "type", "start_line", "end_line", "context"}, with "name_line",
+        "level" and "is_group" after "end_line" when the definition has them.
+    """
+    entry = {
+        "name":       definition.name,
+        "type":       definition.type,
+        "start_line": definition.start_line,
+        "end_line":   definition.end_line,
+    }
+    for key in ("name_line", "level", "is_group"):
+        value = getattr(definition, key)
+        if value is not None:
+            entry[key] = value
+    entry["context"] = "\n".join(content_line_list[definition.start_line - 1 : definition.end_line])
+    return entry
 
 
 def get_file_dependencies(
     target_file: str,
     project_dir: str,
     project_file_set: set[str],
-    source_root_set: set[str],
     caller_map: dict[str, list[str]],
 ) -> dict:
     """Called for each file from process_all_files, returns a dict containing definition info,
-    callee_usages, and caller_usages that serves as the source data for file_dependencies.json.
+    callee_usages, same_file_usages, and caller_usages that serves as the source data for
+    file_dependencies.json.
 
-    project_file_set, source_root_set and caller_map are the same for every file of one
-    project; the caller builds them once and passes the same values to every call.
+    project_file_set and caller_map are the same for every file of one project; the
+    caller builds them once and passes the same values to every call.
+
+    "language" is the extension whose language settings the file is analyzed with
+    (language_ext), "" for a file without a language. Such a file is not parsed: its lists
+    come back empty.
+    "detected_encoding" is the encoding read_source() had to detect for the file
+    (detected_encoding), "" when it reads the file as UTF-8 with replacement, and None
+    when a BOM, UTF-8 or SOURCE_ENCODING decodes it or the file has no language.
+    A definition of a COBOL file or a BMS source also has "name_line", and a data item
+    "level" and "is_group". The references of the file, and of the files depending on
+    it, are resolved by reference_target_list().
 
     Args:
         target_file: Absolute path of the target file to analyze.
         project_dir: Absolute path to the project root.
-        project_file_set: Set of relative paths of all files within the project.
-        source_root_set: Source root prefixes present in the project (e.g. "src/main/java/").
+        project_file_set: Set of relative paths of the project files that have a language.
         caller_map: A {file relative path: list of files depending on it} dict.
 
     Returns:
-        A dict with {"file", "definitions", "callee_usages", "caller_usages"} keys.
+        A dict with {"file", "language", "detected_encoding", "definitions",
+        "callee_usages", "same_file_usages", "caller_usages"} keys.
     """
     target_file_rel = os.path.relpath(target_file, project_dir).replace("\\", "/")
-    file_ext = os.path.splitext(target_file)[1].lstrip(".")
-    # Per-language definition extraction settings (None for unsupported languages)
-    definition_dict = DEFINITION_DICTS.get(file_ext)
+    file_ext = language_ext(target_file)
+    # Per-language definition extraction settings (None for a file without a language)
+    definition_dict = EXT_TO_DEFINITION_DICT.get(file_ext)
+    if definition_dict is None:
+        return {
+            "file":          target_file_rel,
+            "language":      file_ext,
+            "detected_encoding": None,
+            "definitions":   [],
+            "callee_usages": [],
+            "same_file_usages": [],
+            "caller_usages": [],
+        }
 
-    root_node, content = parse_file(target_file)
+    # The definitions are read once per file and kept without the syntax tree; the
+    # tree is read again only for a language whose same-file references need it
+    definition_info_list = file_definition_list(target_file, definition_dict)
+    root_node = (
+        parse_file(target_file)[0]
+        if reference_kind(target_file) in TREE_RANGE_KIND_SET else None
+    )
 
     # Convert content to text lines and extract source code from each definition's line range
-    content_lines = content.decode("utf-8").splitlines()
+    content_line_list = line_list_of(file_content(target_file).decode("utf-8"))
     definition_list = [
-        {
-            "name":       d.name,
-            "type":       d.type,
-            "start_line": d.start_line,
-            "end_line":   d.end_line,
-            "context":    "\n".join(content_lines[d.start_line - 1 : d.end_line]),
-        }
-        for d in extract_definitions(root_node, definition_dict)
+        _definition_entry(definition, content_line_list) for definition in definition_info_list
     ]
 
-    # import / usage analysis
-    usage_list: list = []
-    caller_usages: list = []
-
-    language, import_query_str = get_import_params(file_ext)
-
-    if language and import_query_str:
-        # Parse import statements and create an "imported name -> dependency file" dict
-        symbol_to_file_map, alias_to_original = build_symbol_to_file_map(
-            extract_imports(root_node, language, import_query_str),
-            target_file_rel,
-            project_file_set,
-            file_ext,
-            project_dir,
-            source_root_set,
-        )
-
-        # Get the list of usage locations and dependency target source code
-        usage_list = build_usage_info_list(
-            root_node,
-            symbol_to_file_map,
-            project_dir,
-            file_ext,
-            alias_to_original,
-        )
-
-        # Collect locations where functions/classes/variables defined in this file are used in other project files
-        caller_usages = build_caller_usages(
-            target_file_rel, caller_map.get(target_file_rel, []),
-            project_dir, project_file_set,
-        )
+    # Resolve each reference of the file to this file or another, and collect the
+    # references of the files depending on this file that lead to it
+    target_list = reference_target_list(target_file_rel, project_file_set, project_dir)
+    usage_list = build_callee_usages(target_list, target_file_rel, project_dir)
+    same_file_usages = build_same_file_usages(
+        target_list, target_file_rel, project_dir, definition_info_list, root_node,
+    )
+    caller_usages = build_caller_usages(
+        target_file_rel, caller_map.get(target_file_rel, []), project_dir, project_file_set,
+    )
 
     return {
         "file":          target_file_rel,
+        "language":      file_ext,
+        "detected_encoding": detected_encoding(target_file),
         "definitions":   definition_list,
         "callee_usages": usage_list,
+        "same_file_usages": same_file_usages,
         "caller_usages": caller_usages,
     }

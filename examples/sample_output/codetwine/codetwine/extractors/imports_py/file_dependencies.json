@@ -1,74 +1,650 @@
 {
   "file": "codetwine/codetwine/extractors/imports_py/imports.py",
+  "language": "py",
+  "detected_encoding": null,
   "definitions": [
+    {
+      "name": "_query_cache",
+      "type": "expression_statement",
+      "start_line": 12,
+      "end_line": 12,
+      "context": "_query_cache: dict[tuple[int, str], Query] = {}"
+    },
+    {
+      "name": "_WILDCARD_NODE_TYPE_SET",
+      "type": "expression_statement",
+      "start_line": 16,
+      "end_line": 16,
+      "context": "_WILDCARD_NODE_TYPE_SET = {\"asterisk\", \"*\", \"wildcard_import\"}"
+    },
+    {
+      "name": "_EXPORT_STATEMENT_TYPE",
+      "type": "expression_statement",
+      "start_line": 19,
+      "end_line": 19,
+      "context": "_EXPORT_STATEMENT_TYPE = \"export_statement\""
+    },
+    {
+      "name": "_PYTHON_ALL_NAME",
+      "type": "expression_statement",
+      "start_line": 23,
+      "end_line": 23,
+      "context": "_PYTHON_ALL_NAME = b\"__all__\""
+    },
+    {
+      "name": "_PYTHON_ALL_METHOD_SET",
+      "type": "expression_statement",
+      "start_line": 24,
+      "end_line": 24,
+      "context": "_PYTHON_ALL_METHOD_SET = {b\"extend\", b\"append\"}"
+    },
+    {
+      "name": "_PYTHON_STRING_TYPE",
+      "type": "expression_statement",
+      "start_line": 25,
+      "end_line": 25,
+      "context": "_PYTHON_STRING_TYPE = \"string\""
+    },
+    {
+      "name": "_PYTHON_SEQUENCE_TYPE_SET",
+      "type": "expression_statement",
+      "start_line": 26,
+      "end_line": 26,
+      "context": "_PYTHON_SEQUENCE_TYPE_SET = {\"list\", \"tuple\", \"parenthesized_expression\"}"
+    },
     {
       "name": "ImportInfo",
       "type": "class_definition",
-      "start_line": 5,
-      "end_line": 13,
-      "context": "@dataclass\nclass ImportInfo:\n    \"\"\"Data class holding information about a single import statement.\"\"\"\n\n    module: str         # Import source module name/path\n    names: list[str]    # List of names specified in from ... import (empty list for languages without this)\n    line: int           # Line number of the import statement (1-based)\n    module_alias: str | None = None  # \"Y\" in import X as Y (alias name)\n    alias_map: dict[str, str] | None = None  # {alias name -> original name} (for from X import a as b: {\"b\": \"a\"})"
+      "start_line": 29,
+      "end_line": 51,
+      "context": "@dataclass\nclass ImportInfo:\n    \"\"\"Data class holding information about a single import statement.\"\"\"\n\n    module: str         # Import source module name/path\n    names: list[str]    # List of names specified in from ... import (empty list for languages without this)\n    line: int           # Line number of the import statement (1-based)\n    # \"Y\" in import X as Y; the name bound to the module as a whole in JS/TS\n    # (import * as Y, const Y = require(...))\n    module_alias: str | None = None\n    # {alias name -> original name} (for from X import a as b: {\"b\": \"a\"}); the original\n    # name of a JS/TS default import is DEFAULT_EXPORT_NAME\n    alias_map: dict[str, str] | None = None\n    # (first line, last line) the names are bound for: the function an import statement\n    # is written in, the block or inline module of a Rust use declaration, the statement\n    # itself for a JS/TS export statement with a source; None for the whole file\n    scope_line_tuple: tuple[int, int] | None = None\n    # True for a JS/TS export statement with a source (export { a } from \"./m\"): its\n    # names are passed on to the files that import the file\n    is_export: bool = False\n    # True for a member read where its module is required (JS/TS: require(\"./m\").run()):\n    # the statement is a usage of the names on its line\n    is_use: bool = False"
+    },
+    {
+      "name": "module",
+      "type": "expression_statement",
+      "start_line": 33,
+      "end_line": 33,
+      "context": "    module: str         # Import source module name/path"
+    },
+    {
+      "name": "names",
+      "type": "expression_statement",
+      "start_line": 34,
+      "end_line": 34,
+      "context": "    names: list[str]    # List of names specified in from ... import (empty list for languages without this)"
+    },
+    {
+      "name": "line",
+      "type": "expression_statement",
+      "start_line": 35,
+      "end_line": 35,
+      "context": "    line: int           # Line number of the import statement (1-based)"
+    },
+    {
+      "name": "module_alias",
+      "type": "expression_statement",
+      "start_line": 38,
+      "end_line": 38,
+      "context": "    module_alias: str | None = None"
+    },
+    {
+      "name": "alias_map",
+      "type": "expression_statement",
+      "start_line": 41,
+      "end_line": 41,
+      "context": "    alias_map: dict[str, str] | None = None"
+    },
+    {
+      "name": "scope_line_tuple",
+      "type": "expression_statement",
+      "start_line": 45,
+      "end_line": 45,
+      "context": "    scope_line_tuple: tuple[int, int] | None = None"
+    },
+    {
+      "name": "is_export",
+      "type": "expression_statement",
+      "start_line": 48,
+      "end_line": 48,
+      "context": "    is_export: bool = False"
+    },
+    {
+      "name": "is_use",
+      "type": "expression_statement",
+      "start_line": 51,
+      "end_line": 51,
+      "context": "    is_use: bool = False"
+    },
+    {
+      "name": "cobol_module",
+      "type": "function_definition",
+      "start_line": 54,
+      "end_line": 64,
+      "context": "def cobol_module(kind: str, name: str, library: str = \"\") -> str:\n    \"\"\"Return the module string of a COBOL COPY or CALL statement.\n\n    Inverse of cobol_module_part.\n\n    Examples:\n        (\"COPY\", \"CUSTREC\")             -> \"COPY CUSTREC\"\n        (\"COPY\", \"CUSTREC\", \"COPYLIB\")  -> \"COPY CUSTREC OF COPYLIB\"\n        (\"CALL\", \"TAXCALC\")             -> \"CALL TAXCALC\"\n    \"\"\"\n    return f\"{kind} {name} OF {library}\" if library else f\"{kind} {name}\""
+    },
+    {
+      "name": "cobol_module_part",
+      "type": "function_definition",
+      "start_line": 67,
+      "end_line": 81,
+      "context": "def cobol_module_part(module: str) -> tuple[str, str, str]:\n    \"\"\"Split the module string of a COBOL statement into (kind, name, library).\n\n    Inverse of cobol_module.\n\n    Examples:\n        \"COPY CUSTREC OF COPYLIB\"  -> (\"COPY\", \"CUSTREC\", \"COPYLIB\")\n        \"CALL TAXCALC\"             -> (\"CALL\", \"TAXCALC\", \"\")\n        \"CALL LIST OF ITEMS\"       -> (\"CALL\", \"LIST OF ITEMS\", \"\")\n    \"\"\"\n    kind, _, operand = module.partition(\" \")\n    if kind != COPY_KIND:\n        return kind, operand, \"\"\n    name, _, library = operand.partition(\" OF \")\n    return kind, name, library"
+    },
+    {
+      "name": "_cobol_import_list",
+      "type": "function_definition",
+      "start_line": 84,
+      "end_line": 106,
+      "context": "def _cobol_import_list(cobol_source: CobolSource) -> list[ImportInfo]:\n    \"\"\"Return the COPY and CALL statements of a COBOL file as ImportInfo.\n\n    COPY name        -> module \"COPY name\", names [\"*\"]\n    CALL name        -> module \"CALL name\", names [name]\n    The same statement on the same line is returned once.\n\n    Args:\n        cobol_source: The CobolSource of the file.\n\n    Returns:\n        A list of ImportInfo in line order.\n    \"\"\"\n    import_by_key_dict: dict[tuple[str, int], ImportInfo] = {}\n    for cobol_import in cobol_source.import_list:\n        module = cobol_module(cobol_import.kind, cobol_import.name, cobol_import.library)\n        is_call = cobol_import.kind == CALL_KIND\n        import_by_key_dict.setdefault((module, cobol_import.line), ImportInfo(\n            module=module,\n            names=[cobol_import.name] if is_call else [\"*\"],\n            line=cobol_import.line,\n        ))\n    return list(import_by_key_dict.values())"
+    },
+    {
+      "name": "_line_tuple",
+      "type": "function_definition",
+      "start_line": 109,
+      "end_line": 111,
+      "context": "def _line_tuple(node: Node) -> tuple[int, int]:\n    \"\"\"Return the first and last line of a node (1-based).\"\"\"\n    return node.start_point[0] + 1, node.end_point[0] + 1"
+    },
+    {
+      "name": "_scope_line_tuple",
+      "type": "function_definition",
+      "start_line": 114,
+      "end_line": 130,
+      "context": "def _scope_line_tuple(import_node: Node, scope_types: set[str]) -> tuple[int, int] | None:\n    \"\"\"Return the lines an import statement binds its names for, None for the whole file.\n\n    Args:\n        import_node: The node of the import statement.\n        scope_types: AST node types that open a scope (functions, lambdas).\n\n    Returns:\n        The lines of the statement itself for an export statement with a source, else\n        the lines of the innermost scope_types node around the statement, else None.\n    \"\"\"\n    if import_node.type == _EXPORT_STATEMENT_TYPE:\n        return _line_tuple(import_node)\n    scope_node = import_node.parent\n    while scope_node is not None and scope_node.type not in scope_types:\n        scope_node = scope_node.parent\n    return _line_tuple(scope_node) if scope_node is not None else None"
+    },
+    {
+      "name": "_member_use_import",
+      "type": "function_definition",
+      "start_line": 133,
+      "end_line": 156,
+      "context": "def _member_use_import(module: str, member_node: Node, import_node: Node) -> ImportInfo | None:\n    \"\"\"Return the import a member read where its module is required gives (JS / TS).\n\n    require(\"./m\").run()  -> the name run of ./m, bound and used on the lines of the access\n\n    Args:\n        module: The module string.\n        member_node: The property node (@member_use).\n        import_node: The member access node (@import_node).\n\n    Returns:\n        The ImportInfo, None when the access is the value a declaration binds to a name\n        (const run = require(\"./m\").run), which binds that name instead.\n    \"\"\"\n    parent = import_node.parent\n    if parent is not None and parent.type == \"variable_declarator\":\n        name_node = parent.child_by_field_name(\"name\")\n        if name_node is not None and name_node.type == \"identifier\":\n            return None\n    return ImportInfo(\n        module=module, names=[member_node.text.decode(\"utf-8\")],\n        line=member_node.start_point[0] + 1, scope_line_tuple=_line_tuple(import_node),\n        is_use=True,\n    )"
+    },
+    {
+      "name": "_callback_import",
+      "type": "function_definition",
+      "start_line": 159,
+      "end_line": 203,
+      "context": "def _callback_import(module: str, callback_node: Node) -> ImportInfo | None:\n    \"\"\"Return the import the first parameter of a callback given a module binds (JS / TS).\n\n    import(\"./m\").then((m) => ...)              -> \"m\": the module, on the lines of the callback\n    import(\"./m\").then(({ run, a: b }) => ...)  -> \"run\" and \"b\" (the name a of the module)\n\n    Args:\n        module: The module string.\n        callback_node: The function given the module (@callback).\n\n    Returns:\n        The ImportInfo, None when the callback has no parameter or one that is neither\n        a name nor an object pattern.\n    \"\"\"\n    parameter_node = callback_node.child_by_field_name(\"parameter\")\n    if parameter_node is None:\n        parameter_list_node = callback_node.child_by_field_name(\"parameters\")\n        parameter_node = next(iter(parameter_list_node.named_children), None) if parameter_list_node else None\n    # TS: a parameter holds its pattern in a field\n    if parameter_node is not None and parameter_node.type != \"identifier\":\n        parameter_node = parameter_node.child_by_field_name(\"pattern\") or parameter_node\n    if parameter_node is None:\n        return None\n    import_info = ImportInfo(\n        module=module, names=[], line=parameter_node.start_point[0] + 1,\n        scope_line_tuple=_line_tuple(callback_node),\n    )\n    if parameter_node.type == \"identifier\":\n        import_info.module_alias = parameter_node.text.decode(\"utf-8\")\n        return import_info\n    if parameter_node.type != \"object_pattern\":\n        return None\n    for child in parameter_node.named_children:\n        if child.type == \"shorthand_property_identifier_pattern\":\n            import_info.names.append(child.text.decode(\"utf-8\"))\n        elif child.type == \"pair_pattern\":\n            key_node = child.child_by_field_name(\"key\")\n            value_node = child.child_by_field_name(\"value\")\n            if key_node is not None and value_node is not None and value_node.type == \"identifier\":\n                name = value_node.text.decode(\"utf-8\")\n                import_info.names.append(name)\n                if import_info.alias_map is None:\n                    import_info.alias_map = {}\n                import_info.alias_map[name] = key_node.text.decode(\"utf-8\")\n    return import_info"
     },
     {
       "name": "extract_imports",
       "type": "function_definition",
-      "start_line": 16,
-      "end_line": 113,
-      "context": "def extract_imports(\n    root_node: Node,\n    language: Language,\n    import_query_str: str | None,\n) -> list[ImportInfo]:\n    \"\"\"Extract import statements from the AST and return them.\n\n    Uses tree-sitter queries (S-expression pattern matching) to uniformly\n    handle import syntax that differs across languages.\n\n    Query capture names:\n        @module      -> Import source (module name, path, header name, etc.)\n        @name        -> Individually imported name (the Y in \"from X import Y\")\n        @import_node -> The entire import statement node (for line number retrieval)\n\n    When the same import statement has multiple @name captures (from X import Y, Z),\n    they are consolidated into a single ImportInfo.\n\n    Args:\n        root_node: The AST root node covering the entire file.\n        language: tree-sitter Language object (required for Query creation).\n        import_query_str: tree-sitter query string (obtained from IMPORT_QUERIES in config.py).\n                          Returns an empty list when None (for languages with no import query defined).\n\n    Returns:\n        A list of ImportInfo.\n    \"\"\"\n    if not import_query_str:\n        return []\n\n    # Create a tree-sitter query and scan the AST with a cursor\n    query = Query(language, import_query_str)\n    cursor = QueryCursor(query)\n\n    # Key: (module string, line number) -> ImportInfo\n    # Groups multiple @name captures from the same import statement into one entry\n    grouped: dict[tuple[str, int], ImportInfo] = {}\n\n    # Retrieve query match results\n    for _, captures in cursor.matches(root_node):\n        # CommonJS require() pattern filtering:\n        # If a @_require_func capture exists and the function name is not \"require\", skip it\n        require_func_nodes = captures.get(\"_require_func\", [])\n        if require_func_nodes:\n            if require_func_nodes[0].text.decode(\"utf-8\") != \"require\":\n                continue\n\n        # Retrieve @module, @name, and @import_node captures\n        module_nodes = captures.get(\"module\", [])\n        name_nodes = captures.get(\"name\", [])\n        import_nodes = captures.get(\"import_node\", [])\n\n        if not module_nodes:\n            continue\n\n        # Get the module name from the @module capture and strip quotes\n        raw_module = module_nodes[0].text.decode(\"utf-8\")\n        module = _strip_quotes(raw_module)\n\n        # Get line number from the entire import statement node (fallback to module node)\n        if import_nodes:\n            line = import_nodes[0].start_point[0] + 1\n        else:\n            line = module_nodes[0].start_point[0] + 1\n\n        # Create the grouping key\n        group_key = (module, line)\n\n        # Create a new entry if the group does not exist yet\n        if group_key not in grouped:\n            grouped[group_key] = ImportInfo(module=module, names=[], line=line)\n\n        # Detect import X as Y alias\n        module_alias = _detect_module_alias(module_nodes[0], import_nodes)\n        if module_alias:\n            grouped[group_key].module_alias = module_alias\n\n        # If @name captures exist, add them to the names list (excluding duplicates)\n        # When an alias is present, register the alias name and record the mapping to the original name in alias_map\n        for name_node in name_nodes:\n            alias_name = _resolve_imported_name(name_node)\n            original_name = _get_original_name(name_node)\n            if alias_name and alias_name not in grouped[group_key].names:\n                grouped[group_key].names.append(alias_name)\n                if original_name and original_name != alias_name:\n                    if grouped[group_key].alias_map is None:\n                        grouped[group_key].alias_map = {}\n                    grouped[group_key].alias_map[alias_name] = original_name\n\n        # Java/Kotlin wildcard import detection:\n        # If an import_node's child contains asterisk (Java) or * (Kotlin), add \"*\" to names\n        if import_nodes and \"*\" not in grouped[group_key].names:\n            for child in import_nodes[0].children:\n                if child.type in (\"asterisk\", \"*\"):\n                    grouped[group_key].names.append(\"*\")\n                    break\n\n    return list(grouped.values())"
+      "start_line": 206,
+      "end_line": 389,
+      "context": "def extract_imports(\n    root_node: Node | CobolSource,\n    language: Language,\n    import_query_str: str | None,\n    scope_types: set[str] | None = None,\n) -> list[ImportInfo]:\n    \"\"\"Extract import statements from the AST and return them.\n\n    Uses tree-sitter queries (S-expression pattern matching) to uniformly\n    handle import syntax that differs across languages.\n\n    Query capture names:\n        @module      -> Import source (module name, path, header name, etc.)\n        @name        -> Individually imported name (the Y in \"from X import Y\")\n        @default_name   -> Name bound to the default export of the module (JS/TS)\n        @namespace_name -> Name bound to the module as a whole (JS/TS)\n        @member_name -> Member of the module the @name of the statement is bound to\n                        (JS: const X = require(\"module\").Y)\n        @import_node -> The entire import statement node (for line number retrieval)\n        @path_item   -> A Rust node naming a module path; expanded by rust_import_list\n                        into one import per name\n\n    When the same import statement has multiple @name captures (from X import Y, Z),\n    they are consolidated into a single ImportInfo.\n\n    For a CobolSource its COPY and CALL statements are returned, without a query.\n\n    Args:\n        root_node: The AST root node covering the entire file, or the CobolSource of a COBOL file.\n        language: tree-sitter Language object (required for Query creation).\n        import_query_str: tree-sitter query string (obtained from EXT_TO_IMPORT_QUERY_DICT in config.py).\n                          Returns an empty list when None (for languages with no import query defined).\n        scope_types: AST node types that open a scope (functions, lambdas). An import\n                     statement written inside one binds its names for the lines of the\n                     innermost one (ImportInfo.scope_line_tuple). None reads every\n                     statement as binding for the whole file.\n\n    Returns:\n        A list of ImportInfo. A JS/TS export statement with a source has is_export set\n        and binds its names on its own lines.\n    \"\"\"\n    if isinstance(root_node, CobolSource):\n        return _cobol_import_list(root_node)\n    if not import_query_str:\n        return []\n\n    # Scan the AST with a cursor of the query, compiled once per language and query string\n    query_key = (id(language), import_query_str)\n    query = _query_cache.get(query_key)\n    if query is None:\n        query = Query(language, import_query_str)\n        _query_cache[query_key] = query\n    cursor = QueryCursor(query)\n\n    # Key: (module string, line number), for Rust with the lines the names are bound\n    # for -> ImportInfo\n    # Groups multiple @name captures from the same import statement into one entry\n    import_by_key_dict: dict[tuple, ImportInfo] = {}\n    # Rust: the use declarations of the blocks and inline modules of the file\n    use_cache_dict: UseCacheDict = {}\n\n    # Retrieve query match results\n    for _, captures in cursor.matches(root_node):\n        # CommonJS require() pattern filtering:\n        # If a @_require_func capture exists and the function name is not \"require\", skip it\n        require_func_node_list = captures.get(\"_require_func\", [])\n        if require_func_node_list:\n            if require_func_node_list[0].text.decode(\"utf-8\") != \"require\":\n                continue\n\n        # Rust: one node can bring several paths into use (use a::{b, c as d})\n        path_item_node_list = captures.get(\"path_item\", [])\n        if path_item_node_list:\n            path_item_node = path_item_node_list[0]\n            line = path_item_node.start_point[0] + 1\n            for module, name, original, scope_line_tuple in rust_import_list(\n                path_item_node, use_cache_dict,\n            ):\n                import_info = import_by_key_dict.setdefault(\n                    (module, line, scope_line_tuple),\n                    ImportInfo(\n                        module=module, names=[], line=line, scope_line_tuple=scope_line_tuple,\n                    ),\n                )\n                if name and name not in import_info.names:\n                    import_info.names.append(name)\n                    if original:\n                        if import_info.alias_map is None:\n                            import_info.alias_map = {}\n                        import_info.alias_map[name] = original\n            continue\n\n        # Retrieve @module, @name, and @import_node captures\n        module_node_list = captures.get(\"module\", [])\n        name_node_list = captures.get(\"name\", [])\n        import_node_list = captures.get(\"import_node\", [])\n\n        if not module_node_list:\n            continue\n\n        # Get the module name from the @module capture and strip quotes\n        raw_module = module_node_list[0].text.decode(\"utf-8\")\n        module = _strip_quotes(raw_module)\n\n        # A member read where its module is required, and the callback given a module:\n        # each binds its names for its own lines\n        member_use_node_list = captures.get(\"member_use\", [])\n        callback_node_list = captures.get(\"callback\", [])\n        if member_use_node_list or callback_node_list:\n            special_import: ImportInfo | None = None\n            if member_use_node_list and import_node_list:\n                special_import = _member_use_import(module, member_use_node_list[0], import_node_list[0])\n            elif callback_node_list:\n                then_node_list = captures.get(\"_then_func\", [])\n                if then_node_list and then_node_list[0].text.decode(\"utf-8\") == \"then\":\n                    special_import = _callback_import(module, callback_node_list[0])\n            if special_import is not None:\n                special_key = (module, special_import.line, special_import.scope_line_tuple, special_import.is_use)\n                known_import = import_by_key_dict.setdefault(special_key, special_import)\n                if known_import is not special_import:\n                    known_import.names.extend(\n                        name for name in special_import.names if name not in known_import.names\n                    )\n            continue\n\n        # Get line number from the entire import statement node (fallback to module node)\n        if import_node_list:\n            line = import_node_list[0].start_point[0] + 1\n        else:\n            line = module_node_list[0].start_point[0] + 1\n\n        # Create the grouping key\n        group_key = (module, line)\n\n        # Create a new entry if the group does not exist yet\n        if group_key not in import_by_key_dict:\n            import_node = import_node_list[0] if import_node_list else module_node_list[0]\n            import_by_key_dict[group_key] = ImportInfo(\n                module=module, names=[], line=line,\n                scope_line_tuple=_scope_line_tuple(import_node, scope_types or set()),\n                is_export=import_node.type == _EXPORT_STATEMENT_TYPE,\n            )\n\n        # Detect import X as Y alias, and the name bound to the whole module\n        module_alias = _detect_module_alias(module_node_list[0], import_node_list)\n        for namespace_node in captures.get(\"namespace_name\", []):\n            module_alias = namespace_node.text.decode(\"utf-8\")\n        if module_alias:\n            import_by_key_dict[group_key].module_alias = module_alias\n\n        # A default import binds its name to the default export of the module\n        for default_node in captures.get(\"default_name\", []):\n            default_name = default_node.text.decode(\"utf-8\")\n            if default_name not in import_by_key_dict[group_key].names:\n                import_by_key_dict[group_key].names.append(default_name)\n                if import_by_key_dict[group_key].alias_map is None:\n                    import_by_key_dict[group_key].alias_map = {}\n                import_by_key_dict[group_key].alias_map[default_name] = DEFAULT_EXPORT_NAME\n\n        # If @name captures exist, add them to the names list (excluding duplicates)\n        # When an alias is present, register the alias name and record the mapping to the original name in alias_map\n        member_node_list = captures.get(\"member_name\", [])\n        for name_node in name_node_list:\n            alias_name = _resolve_imported_name(name_node)\n            original_name = (\n                member_node_list[0].text.decode(\"utf-8\") if member_node_list\n                else _get_original_name(name_node)\n            )\n            if alias_name and alias_name not in import_by_key_dict[group_key].names:\n                import_by_key_dict[group_key].names.append(alias_name)\n                if original_name and original_name != alias_name:\n                    if import_by_key_dict[group_key].alias_map is None:\n                        import_by_key_dict[group_key].alias_map = {}\n                    import_by_key_dict[group_key].alias_map[alias_name] = original_name\n\n        # Wildcard import detection: a child of the statement in _WILDCARD_NODE_TYPE_SET\n        # adds \"*\" to names (import a.b.*, from m import *, export * from \"./m\")\n        if import_node_list and \"*\" not in import_by_key_dict[group_key].names:\n            for child in import_node_list[0].children:\n                if child.type in _WILDCARD_NODE_TYPE_SET:\n                    import_by_key_dict[group_key].names.append(\"*\")\n                    break\n\n    return list(import_by_key_dict.values())"
     },
     {
       "name": "_detect_module_alias",
       "type": "function_definition",
-      "start_line": 116,
-      "end_line": 146,
-      "context": "def _detect_module_alias(\n    module_node: Node, import_nodes: list[Node],\n) -> str | None:\n    \"\"\"Detect the alias name (Y) from import X as Y.\n\n    Python: aliased_import node has an alias field.\n    Kotlin: import node has an import_alias child node directly beneath it.\n\n    Args:\n        module_node: The node captured by @module.\n        import_nodes: List of nodes captured by @import_node.\n\n    Returns:\n        The alias name, or None if no alias exists.\n    \"\"\"\n    # Python: if module_node's parent is aliased_import, get the alias\n    parent = module_node.parent\n    if parent and parent.type == \"aliased_import\":\n        alias = parent.child_by_field_name(\"alias\")\n        if alias:\n            return alias.text.decode(\"utf-8\")\n\n    # Kotlin: get the alias from import_alias directly under the import node\n    if import_nodes:\n        alias_child = import_nodes[0].child_by_field_name(\"alias\")\n        if alias_child:\n            for child in alias_child.children:\n                if child.type in (\"simple_identifier\", \"identifier\"):\n                    return child.text.decode(\"utf-8\")\n\n    return None"
+      "start_line": 392,
+      "end_line": 421,
+      "context": "def _detect_module_alias(\n    module_node: Node, import_node_list: list[Node],\n) -> str | None:\n    \"\"\"Detect the alias name (Y) from import X as Y.\n\n    Python: aliased_import node has an alias field.\n    Kotlin: the import node holds \"as\" followed by the alias identifier.\n\n    Args:\n        module_node: The node captured by @module.\n        import_node_list: List of nodes captured by @import_node.\n\n    Returns:\n        The alias name, or None if no alias exists.\n    \"\"\"\n    # Python: if module_node's parent is aliased_import, get the alias\n    parent = module_node.parent\n    if parent and parent.type == \"aliased_import\":\n        alias = parent.child_by_field_name(\"alias\")\n        if alias:\n            return alias.text.decode(\"utf-8\")\n\n    # Kotlin: the identifier that follows \"as\" directly under the import node\n    if import_node_list and import_node_list[0].type == \"import\":\n        child_list = import_node_list[0].children\n        for index, child in enumerate(child_list[:-1]):\n            if child.type == \"as\" and child_list[index + 1].type == \"identifier\":\n                return child_list[index + 1].text.decode(\"utf-8\")\n\n    return None"
     },
     {
       "name": "_resolve_imported_name",
       "type": "function_definition",
-      "start_line": 149,
-      "end_line": 179,
+      "start_line": 424,
+      "end_line": 454,
       "context": "def _resolve_imported_name(name_node: Node) -> str | None:\n    \"\"\"Get the name actually used in code from a @name capture.\n\n    Returns the alias name if one exists.\n    e.g. from X import join as path_join -> returns \"path_join\"\n    e.g. import { useState as useMyState } -> returns \"useMyState\"\n\n    Args:\n        name_node: The node captured by @name.\n\n    Returns:\n        The name string as used in code.\n    \"\"\"\n    # Python: when @name is an aliased_import node (from X import a as b)\n    if name_node.type == \"aliased_import\":\n        alias = name_node.child_by_field_name(\"alias\")\n        if alias:\n            return alias.text.decode(\"utf-8\")\n        name = name_node.child_by_field_name(\"name\")\n        if name:\n            return name.text.decode(\"utf-8\")\n        return name_node.text.decode(\"utf-8\")\n\n    # JS/TS: when @name is an identifier inside import_specifier / export_specifier\n    parent = name_node.parent\n    if parent and parent.type in (\"import_specifier\", \"export_specifier\"):\n        alias = parent.child_by_field_name(\"alias\")\n        if alias:\n            return alias.text.decode(\"utf-8\")\n\n    return name_node.text.decode(\"utf-8\")"
     },
     {
       "name": "_get_original_name",
       "type": "function_definition",
-      "start_line": 182,
-      "end_line": 211,
-      "context": "def _get_original_name(name_node: Node) -> str | None:\n    \"\"\"Get the original definition name (before aliasing) from a @name capture.\n\n    Returns None if there is no alias (would be the same result as _resolve_imported_name).\n    e.g. from X import join as path_join -> returns \"join\"\n    e.g. import { useState as useMyState } -> returns \"useState\"\n    e.g. from X import join -> returns None (no alias)\n\n    Args:\n        name_node: The node captured by @name.\n\n    Returns:\n        The original name string, or None if no alias exists.\n    \"\"\"\n    # Python: return the original name only when aliased_import has an alias field\n    if name_node.type == \"aliased_import\":\n        alias = name_node.child_by_field_name(\"alias\")\n        if alias:\n            name = name_node.child_by_field_name(\"name\")\n            return name.text.decode(\"utf-8\") if name else None\n        return None\n\n    # JS/TS: when import_specifier / export_specifier has an alias field\n    parent = name_node.parent\n    if parent and parent.type in (\"import_specifier\", \"export_specifier\"):\n        alias = parent.child_by_field_name(\"alias\")\n        if alias:\n            return name_node.text.decode(\"utf-8\")\n\n    return None"
+      "start_line": 457,
+      "end_line": 495,
+      "context": "def _get_original_name(name_node: Node) -> str | None:\n    \"\"\"Get the original definition name (before aliasing) from a @name capture.\n\n    Returns None if there is no alias (would be the same result as _resolve_imported_name).\n    e.g. from X import join as path_join -> returns \"join\"\n    e.g. import { useState as useMyState } -> returns \"useState\"\n    e.g. from X import join -> returns None (no alias)\n\n    Args:\n        name_node: The node captured by @name.\n\n    Returns:\n        The original name string, or None if no alias exists.\n    \"\"\"\n    # Python: return the original name only when aliased_import has an alias field\n    if name_node.type == \"aliased_import\":\n        alias = name_node.child_by_field_name(\"alias\")\n        if alias:\n            name = name_node.child_by_field_name(\"name\")\n            return name.text.decode(\"utf-8\") if name else None\n        return None\n\n    # JS/TS: when import_specifier / export_specifier has an alias field\n    parent = name_node.parent\n    if parent and parent.type in (\"import_specifier\", \"export_specifier\"):\n        alias = parent.child_by_field_name(\"alias\")\n        if alias:\n            return name_node.text.decode(\"utf-8\")\n\n    # JS/TS: const { key: name } = require(...) and const { key: name = 1 } = require(...)\n    # bind name to key\n    if parent and parent.type == \"assignment_pattern\":\n        parent = parent.parent\n    if parent and parent.type == \"pair_pattern\":\n        key = parent.child_by_field_name(\"key\")\n        if key:\n            return key.text.decode(\"utf-8\")\n\n    return None"
+    },
+    {
+      "name": "module_export_list",
+      "type": "function_definition",
+      "start_line": 498,
+      "end_line": 518,
+      "context": "def module_export_list(root_node: Node) -> list[str]:\n    \"\"\"Return the modules a JS/TS file passes on as its own value.\n\n    module.exports = require(\"./lib/express\");  -> [\"./lib/express\"]\n\n    Args:\n        root_node: The AST root node of the file.\n\n    Returns:\n        The module strings, in line order.\n    \"\"\"\n    module_list: list[str] = []\n    for statement in root_node.children:\n        if statement.type != \"expression_statement\":\n            continue\n        export_assignment = commonjs_export_assignment(statement)\n        if export_assignment is not None and export_assignment[0] == DEFAULT_EXPORT_NAME:\n            module = require_module(export_assignment[1])\n            if module is not None:\n                module_list.append(module)\n    return module_list"
+    },
+    {
+      "name": "_string_list",
+      "type": "function_definition",
+      "start_line": 521,
+      "end_line": 549,
+      "context": "def _string_list(node: Node) -> list[str] | None:\n    \"\"\"Return the strings of a list, tuple or single string written as constants (Python).\n\n    Args:\n        node: A list, tuple, parenthesized expression or string node.\n\n    Returns:\n        The strings in the order they are written; None when the node is none of\n        those or holds anything but plain string constants.\n    \"\"\"\n    if node.type == _PYTHON_STRING_TYPE:\n        content_list = [child for child in node.named_children if child.type != \"string_content\"]\n        if any(child.type not in (\"string_start\", \"string_end\") for child in content_list):\n            return None\n        return [\"\".join(\n            child.text.decode(\"utf-8\") for child in node.named_children\n            if child.type == \"string_content\"\n        )]\n    if node.type not in _PYTHON_SEQUENCE_TYPE_SET:\n        return None\n    name_list: list[str] = []\n    for child in node.named_children:\n        if child.type == \"comment\":\n            continue\n        child_name_list = _string_list(child) if child.type == _PYTHON_STRING_TYPE else None\n        if child_name_list is None:\n            return None\n        name_list.extend(child_name_list)\n    return name_list"
+    },
+    {
+      "name": "python_all_name_list",
+      "type": "function_definition",
+      "start_line": 552,
+      "end_line": 597,
+      "context": "def python_all_name_list(root_node: Node) -> list[str] | None:\n    \"\"\"Return the names the __all__ of a Python file lists.\n\n    __all__ = [\"a\", \"b\"]         __all__ += [\"c\"]\n    __all__.extend([\"d\"])        __all__.append(\"e\")\n    Only statements at the top level of the file are read.\n\n    Args:\n        root_node: The AST root node of the file.\n\n    Returns:\n        The names in the order they are written, without duplicates. None when the\n        file has no __all__, or writes it with anything but string constants.\n    \"\"\"\n    name_list: list[str] | None = None\n    for statement in root_node.children:\n        if statement.type != \"expression_statement\" or not statement.named_children:\n            continue\n        node = statement.named_children[0]\n        value_node: Node | None = None\n        is_all = False\n        if node.type in (\"assignment\", \"augmented_assignment\"):\n            left_node = node.child_by_field_name(\"left\")\n            is_all = left_node is not None and left_node.text == _PYTHON_ALL_NAME\n            value_node = node.child_by_field_name(\"right\")\n            is_reset = node.type == \"assignment\"\n        elif node.type == \"call\":\n            function_node = node.child_by_field_name(\"function\")\n            object_node = function_node.child_by_field_name(\"object\") if function_node else None\n            method_node = function_node.child_by_field_name(\"attribute\") if function_node else None\n            is_all = (\n                function_node is not None and function_node.type == \"attribute\"\n                and object_node is not None and object_node.text == _PYTHON_ALL_NAME\n                and method_node is not None and method_node.text in _PYTHON_ALL_METHOD_SET\n            )\n            argument_node = node.child_by_field_name(\"arguments\")\n            argument_list = argument_node.named_children if argument_node else []\n            value_node = argument_list[0] if len(argument_list) == 1 else None\n            is_reset = False\n        if not is_all:\n            continue\n        value_name_list = _string_list(value_node) if value_node is not None else None\n        if value_name_list is None:\n            return None\n        name_list = value_name_list if is_reset or name_list is None else name_list + value_name_list\n    return list(dict.fromkeys(name_list)) if name_list is not None else None"
+    },
+    {
+      "name": "local_export_dict",
+      "type": "function_definition",
+      "start_line": 600,
+      "end_line": 656,
+      "context": "def local_export_dict(root_node: Node) -> dict[str, str]:\n    \"\"\"Return the names a JS/TS file exports under another name than it defines them with.\n\n    export { p as q, r };          -> {\"q\": \"p\"}\n    export default p;              -> {\"default\": \"p\"}\n    export default function f() {} -> {\"default\": \"f\"}\n    module.exports = p;            -> {\"default\": \"p\"}\n    module.exports = { q: p };     -> {\"q\": \"p\"}\n    An export statement with a source (export { a } from \"./m\") is an import\n    (extract_imports) and is not read here.\n\n    Args:\n        root_node: The AST root node of the file.\n\n    Returns:\n        {exported name: name in the file}. Empty for a file of another language.\n    \"\"\"\n    export_dict: dict[str, str] = {}\n    for statement in root_node.children:\n        if statement.type == \"expression_statement\":\n            export_assignment = commonjs_export_assignment(statement)\n            if export_assignment is None:\n                continue\n            export_name, value_node = export_assignment\n            if value_node.type == \"identifier\":\n                export_dict[export_name] = value_node.text.decode(\"utf-8\")\n            elif export_name == DEFAULT_EXPORT_NAME and value_node.type == \"object\":\n                # An entry written key: name exports the name under the key\n                for pair_node in value_node.children:\n                    key_node = pair_node.child_by_field_name(\"key\")\n                    name_node = pair_node.child_by_field_name(\"value\")\n                    if (\n                        pair_node.type == \"pair\" and key_node is not None\n                        and name_node is not None and name_node.type == \"identifier\"\n                    ):\n                        export_dict[key_node.text.decode(\"utf-8\")] = name_node.text.decode(\"utf-8\")\n            continue\n        if statement.type != \"export_statement\" or statement.child_by_field_name(\"source\"):\n            continue\n        for child in statement.children:\n            if child.type != \"export_clause\":\n                continue\n            for specifier in child.children:\n                name_node = specifier.child_by_field_name(\"name\")\n                alias_node = specifier.child_by_field_name(\"alias\")\n                if name_node is not None and alias_node is not None:\n                    export_dict[alias_node.text.decode(\"utf-8\")] = name_node.text.decode(\"utf-8\")\n        if any(child.type == \"default\" for child in statement.children):\n            value_node = (\n                statement.child_by_field_name(\"value\")\n                or statement.child_by_field_name(\"declaration\")\n            )\n            if value_node is not None and value_node.type != \"identifier\":\n                value_node = value_node.child_by_field_name(\"name\")\n            if value_node is not None:\n                export_dict[DEFAULT_EXPORT_NAME] = value_node.text.decode(\"utf-8\")\n    return export_dict"
     },
     {
       "name": "_strip_quotes",
       "type": "function_definition",
-      "start_line": 214,
-      "end_line": 234,
+      "start_line": 659,
+      "end_line": 679,
       "context": "def _strip_quotes(text: str) -> str:\n    \"\"\"Remove quotes or angle brackets surrounding a module name.\n\n    Import path notation varies by language:\n        JavaScript/TypeScript: \"react\" / 'react'\n        C/C++:                 <stdio.h> / \"helper.h\"\n\n    Languages without quotes (Python, Java, etc.) are returned as-is.\n\n    Args:\n        text: The raw module string captured by the query.\n\n    Returns:\n        The string with quotes/angle brackets removed.\n    \"\"\"\n    if len(text) >= 2:\n        if (text[0] == '\"' and text[-1] == '\"') or (text[0] == \"'\" and text[-1] == \"'\"):\n            return text[1:-1]\n        if text[0] == '<' and text[-1] == '>':\n            return text[1:-1]\n    return text"
     }
   ],
-  "callee_usages": [],
+  "callee_usages": [
+    {
+      "lines": [
+        78
+      ],
+      "name": "COPY_KIND",
+      "from": "codetwine/codetwine/extractors/cobol_source_py/cobol_source.py",
+      "target_context": "COPY_KIND = \"COPY\"",
+      "target_name": "COPY_KIND",
+      "target_start_line": 32
+    },
+    {
+      "lines": [
+        84,
+        207,
+        247
+      ],
+      "name": "CobolSource",
+      "from": "codetwine/codetwine/extractors/cobol_source_py/cobol_source.py",
+      "target_context": "@dataclass\nclass CobolSource:\n    \"\"\"What one COBOL file defines, names and refers to.\"\"\"\n\n    # Lines of the source text\n    line_list: list[str]\n    # Definitions in line order\n    definition_list: list[CobolDefinition] = field(default_factory=list)\n    # COPY and CALL statements in line order\n    import_list: list[CobolImport] = field(default_factory=list)\n    # Each place a name is referred to\n    reference_list: list[CobolReference] = field(default_factory=list)\n    # Upper-case names a COPY statement can name the file by besides its file name\n    # (BMS: the mapset names)\n    copy_name_list: list[str] = field(default_factory=list)\n\n    def usage_line_list(self, name_set: set[str]) -> list[tuple[str, int]]:\n        \"\"\"Return the places the file refers to one of the given names.\n\n        Names are compared without regard to upper and lower case.\n\n        Args:\n            name_set: The names to look for.\n\n        Returns:\n            (name as given in name_set, line) tuples in line order, without duplicates.\n        \"\"\"\n        name_dict = {name.upper(): name for name in name_set}\n        usage_set = {\n            (name_dict[reference.name], reference.line)\n            for reference in self.reference_list if reference.name in name_dict\n        }\n        return sorted(usage_set, key=lambda usage: (usage[1], usage[0]))\n\n    def definition_text(self, definition: CobolDefinition) -> str:\n        \"\"\"Return the source text of a definition: its lines joined by \"\\\\n\".\"\"\"\n        return \"\\n\".join(self.line_list[definition.start_line - 1:definition.end_line])\n\n    def definition_source(self, name: str) -> str | None:\n        \"\"\"Return the source text of the first definition with a name.\n\n        Names are compared without regard to upper and lower case.\n\n        Args:\n            name: The definition name.\n\n        Returns:\n            The lines of the definition joined by \"\\\\n\". None when no definition has the name.\n        \"\"\"\n        for definition in self.definition_list:\n            if definition.name.upper() == name.upper():\n                return self.definition_text(definition)\n        return None",
+      "target_name": "CobolSource",
+      "target_start_line": 110
+    },
+    {
+      "lines": [
+        98
+      ],
+      "name": "CobolSource.import_list",
+      "from": "codetwine/codetwine/extractors/cobol_source_py/cobol_source.py",
+      "target_context": "import_list: list[CobolImport] = field(default_factory=list)",
+      "target_name": "import_list",
+      "target_start_line": 119
+    },
+    {
+      "lines": [
+        100
+      ],
+      "name": "CALL_KIND",
+      "from": "codetwine/codetwine/extractors/cobol_source_py/cobol_source.py",
+      "target_context": "CALL_KIND = \"CALL\"",
+      "target_name": "CALL_KIND",
+      "target_start_line": 33
+    },
+    {
+      "lines": [
+        265,
+        282
+      ],
+      "name": "UseCacheDict",
+      "from": "codetwine/codetwine/extractors/rust_path_py/rust_path.py",
+      "target_context": "UseCacheDict = dict[int, dict[str, tuple[list[str], Node]]]",
+      "target_name": "UseCacheDict",
+      "target_start_line": 35
+    },
+    {
+      "lines": [
+        281
+      ],
+      "name": "rust_import_list",
+      "from": "codetwine/codetwine/extractors/rust_path_py/rust_path.py",
+      "target_context": "def rust_import_list(node: Node, use_cache_dict: UseCacheDict | None = None) -> list[ImportEntry]:\n    \"\"\"Return the module paths a Rust node brings into use, for extract_imports.\n\n    Handles:\n        use_declaration          -> one entry per imported name (expand_use_tree)\n        mod_item without a body  -> (\"self::<name>\", name), or (the #[path] value, name)\n        extern_crate_declaration -> (crate name, bound name)\n        scoped_identifier / scoped_type_identifier\n                                 -> (path, path as written) for the outermost path\n                                    outside use declarations and visibility modifiers\n        token_tree               -> (path, path as written) for each path written in\n                                    the arguments of a macro\n\n    Args:\n        node: A node captured by @path_item.\n        use_cache_dict: Cache of the use declarations of the blocks and inline modules\n            of the file the node belongs to, shared by the calls for one syntax tree;\n            None for a call of its own.\n\n    Returns:\n        (module, name bound in the file, original name when renamed, lines) entries.\n        module joins the segments with \"::\"; a glob import has the name \"*\" and an\n        import renamed to \"_\" has the name None. A path is rewritten into a path from\n        the file's module (_module_path). lines is the (first line, last line) the\n        name is bound for: the block or inline module a use declaration is written\n        in, the lines of a path (of the macro arguments it is written in) whose first\n        segment such a use declaration binds, and None for the whole file.\n    \"\"\"\n    reader = _IMPORT_READER_DICT.get(node.type)\n    return reader(node, {} if use_cache_dict is None else use_cache_dict) if reader else []",
+      "target_name": "rust_import_list",
+      "target_start_line": 608
+    },
+    {
+      "lines": [
+        363,
+        514,
+        626,
+        655
+      ],
+      "name": "DEFAULT_EXPORT_NAME",
+      "from": "codetwine/codetwine/extractors/definitions_py/definitions.py",
+      "target_context": "DEFAULT_EXPORT_NAME = \"default\"",
+      "target_name": "DEFAULT_EXPORT_NAME",
+      "target_start_line": 80
+    },
+    {
+      "lines": [
+        513,
+        620
+      ],
+      "name": "commonjs_export_assignment",
+      "from": "codetwine/codetwine/extractors/definitions_py/definitions.py",
+      "target_context": "def commonjs_export_assignment(node: Node) -> tuple[str, Node] | None:\n    \"\"\"Read a CommonJS export assignment (JS / TS).\n\n    Target AST structure:\n        expression_statement             <- this node is passed as the argument\n          +-- assignment_expression\n               +-- left: member_expression \"exports.name\" / \"module.exports.name\" / \"module.exports\"\n               +-- right: (value)\n\n    In a chain (exports = module.exports = value) the first target that is one of\n    these counts.\n\n    Args:\n        node: An expression_statement node.\n\n    Returns:\n        (exported name, value node): the name is the property of exports.name and\n        module.exports.name, and DEFAULT_EXPORT_NAME for module.exports itself. None\n        when the statement is no such assignment.\n    \"\"\"\n    inner_node = node.children[0] if node.children else None\n    while inner_node is not None and inner_node.type == \"assignment_expression\":\n        left_node = inner_node.child_by_field_name(\"left\")\n        right_node = inner_node.child_by_field_name(\"right\")\n        if left_node is None or right_node is None:\n            return None\n        value_node = right_node\n        while value_node.type == \"assignment_expression\":\n            value_node = value_node.child_by_field_name(\"right\") or value_node.children[-1]\n        if left_node.type == \"member_expression\":\n            if _node_text(left_node) == \"module.exports\":\n                return DEFAULT_EXPORT_NAME, value_node\n            object_node = left_node.child_by_field_name(\"object\")\n            property_node = left_node.child_by_field_name(\"property\")\n            if (\n                object_node is not None and property_node is not None\n                and _node_text(object_node) in (\"exports\", \"module.exports\")\n            ):\n                return _node_text(property_node), value_node\n        inner_node = right_node\n    return None",
+      "target_name": "commonjs_export_assignment",
+      "target_start_line": 493
+    },
+    {
+      "lines": [
+        515
+      ],
+      "name": "require_module",
+      "from": "codetwine/codetwine/extractors/definitions_py/definitions.py",
+      "target_context": "def require_module(node: Node) -> str | None:\n    \"\"\"Return the module string of a require(\"module\") call, None for any other node (JS / TS).\"\"\"\n    if node.type != \"call_expression\":\n        return None\n    function_node = node.child_by_field_name(\"function\")\n    argument_node = node.child_by_field_name(\"arguments\")\n    if function_node is None or argument_node is None or _node_text(function_node) != \"require\":\n        return None\n    string_node_list = [child for child in argument_node.named_children if child.type == \"string\"]\n    if len(string_node_list) != 1:\n        return None\n    return _node_text(string_node_list[0])[1:-1]",
+      "target_name": "require_module",
+      "target_start_line": 536
+    }
+  ],
+  "same_file_usages": [
+    {
+      "lines": [
+        84,
+        97,
+        101,
+        133,
+        152,
+        159,
+        182,
+        188,
+        203,
+        211,
+        263,
+        286,
+        315,
+        343
+      ],
+      "name": "ImportInfo",
+      "target_name": "ImportInfo",
+      "target_start_line": 29
+    },
+    {
+      "lines": [
+        99
+      ],
+      "name": "cobol_module",
+      "target_name": "cobol_module",
+      "target_start_line": 54
+    },
+    {
+      "lines": [
+        125,
+        346
+      ],
+      "name": "_EXPORT_STATEMENT_TYPE",
+      "target_name": "_EXPORT_STATEMENT_TYPE",
+      "target_start_line": 19
+    },
+    {
+      "lines": [
+        126,
+        130,
+        154,
+        184
+      ],
+      "name": "_line_tuple",
+      "target_name": "_line_tuple",
+      "target_start_line": 109
+    },
+    {
+      "lines": [
+        187
+      ],
+      "name": "ImportInfo.module_alias",
+      "target_name": "module_alias",
+      "target_start_line": 38
+    },
+    {
+      "lines": [
+        193,
+        199
+      ],
+      "name": "ImportInfo.names.append",
+      "target_name": "names",
+      "target_start_line": 34
+    },
+    {
+      "lines": [
+        200,
+        201,
+        202
+      ],
+      "name": "ImportInfo.alias_map",
+      "target_name": "alias_map",
+      "target_start_line": 41
+    },
+    {
+      "lines": [
+        248
+      ],
+      "name": "_cobol_import_list",
+      "target_name": "_cobol_import_list",
+      "target_start_line": 84
+    },
+    {
+      "lines": [
+        254
+      ],
+      "name": "_query_cache.get",
+      "target_name": "_query_cache",
+      "target_start_line": 12
+    },
+    {
+      "lines": [
+        257
+      ],
+      "name": "_query_cache",
+      "target_name": "_query_cache",
+      "target_start_line": 12
+    },
+    {
+      "lines": [
+        308
+      ],
+      "name": "_strip_quotes",
+      "target_name": "_strip_quotes",
+      "target_start_line": 659
+    },
+    {
+      "lines": [
+        317
+      ],
+      "name": "_member_use_import",
+      "target_name": "_member_use_import",
+      "target_start_line": 133
+    },
+    {
+      "lines": [
+        321
+      ],
+      "name": "_callback_import",
+      "target_name": "_callback_import",
+      "target_start_line": 159
+    },
+    {
+      "lines": [
+        345
+      ],
+      "name": "_scope_line_tuple",
+      "target_name": "_scope_line_tuple",
+      "target_start_line": 114
+    },
+    {
+      "lines": [
+        350
+      ],
+      "name": "_detect_module_alias",
+      "target_name": "_detect_module_alias",
+      "target_start_line": 392
+    },
+    {
+      "lines": [
+        369
+      ],
+      "name": "_resolve_imported_name",
+      "target_name": "_resolve_imported_name",
+      "target_start_line": 424
+    },
+    {
+      "lines": [
+        372
+      ],
+      "name": "_get_original_name",
+      "target_name": "_get_original_name",
+      "target_start_line": 457
+    },
+    {
+      "lines": [
+        385
+      ],
+      "name": "_WILDCARD_NODE_TYPE_SET",
+      "target_name": "_WILDCARD_NODE_TYPE_SET",
+      "target_start_line": 16
+    },
+    {
+      "lines": [
+        531,
+        545
+      ],
+      "name": "_PYTHON_STRING_TYPE",
+      "target_name": "_PYTHON_STRING_TYPE",
+      "target_start_line": 25
+    },
+    {
+      "lines": [
+        539
+      ],
+      "name": "_PYTHON_SEQUENCE_TYPE_SET",
+      "target_name": "_PYTHON_SEQUENCE_TYPE_SET",
+      "target_start_line": 26
+    },
+    {
+      "lines": [
+        575,
+        584
+      ],
+      "name": "_PYTHON_ALL_NAME",
+      "target_name": "_PYTHON_ALL_NAME",
+      "target_start_line": 23
+    },
+    {
+      "lines": [
+        585
+      ],
+      "name": "_PYTHON_ALL_METHOD_SET",
+      "target_name": "_PYTHON_ALL_METHOD_SET",
+      "target_start_line": 24
+    },
+    {
+      "lines": [
+        593
+      ],
+      "name": "_string_list",
+      "target_name": "_string_list",
+      "target_start_line": 521
+    }
+  ],
   "caller_usages": [
     {
       "lines": [
-        71
+        275
       ],
-      "name": "extract_imports",
-      "file": "codetwine/codetwine/file_analyzer_py/file_analyzer.py",
-      "usage_context": "    if language and import_query_str:\n        # Parse import statements and create an \"imported name -> dependency file\" dict\n        symbol_to_file_map, alias_to_original = build_symbol_to_file_map(\n            extract_imports(root_node, language, import_query_str),\n            target_file_rel,\n            project_file_set,\n            file_ext,"
+      "name": "cobol_module_part",
+      "file": "codetwine/codetwine/cobol_file_index_py/cobol_file_index.py",
+      "usage_context": "        Relative path of the file. None when no project file has the name, or when\n        the statement names the current file itself.\n    \"\"\"\n    kind, name, library = cobol_module_part(module)\n    file_index = _get_file_index(project_dir, project_file_set)\n    resolved = None\n    if kind == COPY_KIND:"
     },
     {
       "lines": [
-        261
+        536,
+        636
       ],
-      "name": "extract_imports",
-      "file": "codetwine/codetwine/extractors/usage_analysis_py/usage_analysis.py",
-      "usage_context": "        if not language:\n            continue\n\n        caller_import_list = extract_imports(\n            caller_root, language, import_query_str\n        )\n"
+      "name": "cobol_module",
+      "file": "codetwine/codetwine/cobol_file_index_py/cobol_file_index.py",
+      "usage_context": "    for cobol_import in holder.cobol_source.import_list:\n        if cobol_import.kind != COPY_KIND:\n            continue\n        module = cobol_module(COPY_KIND, cobol_import.name, cobol_import.library)\n        resolved = resolve_cobol_module_path(\n            module, holder.file_rel, project_file_set, project_dir,\n        )\n...\n    for cobol_import in cobol_source.import_list:\n        if cobol_import.kind != CALL_KIND:\n            continue\n        module = cobol_module(CALL_KIND, cobol_import.name)\n        resolved = resolve_cobol_module_path(module, file_rel, project_file_set, project_dir)\n        if resolved:\n            program_target_dict.setdefault("
     },
     {
       "lines": [
-        175
+        185
       ],
       "name": "extract_imports",
       "file": "codetwine/codetwine/extractors/dependency_graph_py/dependency_graph.py",
-      "usage_context": "        # Parse import statements and add those resolvable to project files as callees\n        if language and import_query_str:\n            root_node = parse_file(file_path)[0]\n            for import_info in extract_imports(root_node, language, import_query_str):\n                resolved = resolve_module_to_project_path(\n                    import_info.module,\n                    file_rel,"
+      "usage_context": "        return set()\n    root_node = parse_file(file_path)[0]\n    callee_rel_set: set[str] = set()\n    for import_info in extract_imports(root_node, language, import_query_str):\n        resolved = resolve_module_to_project_path(\n            import_info.module, file_rel, project_file_set, None, project_dir,\n        )"
+    },
+    {
+      "lines": [
+        139,
+        390,
+        416,
+        474,
+        530,
+        556,
+        591,
+        642
+      ],
+      "name": "ImportInfo",
+      "file": "codetwine/codetwine/import_binding_py/import_binding.py",
+      "usage_context": "class _TreeFact:\n    \"\"\"What the binder reads from the syntax tree of one file, kept without the tree.\"\"\"\n\n    import_info_list: list[ImportInfo] = field(default_factory=list)\n    line_count: int = 1                          # Number of lines of the tree\n    package_name: str | None = None              # Package the file declares (Java, Kotlin)\n    all_name_list: list[str] | None = None       # python_all_name_list (Python)\n...\n\n    @staticmethod\n    def _bind_name(\n        file_binding: _FileBinding, import_info: ImportInfo, name: str,\n        binding: SymbolBinding | None,\n    ) -> None:\n        \"\"\"Bind a name of an import statement of a Python or JS/TS file."
+    },
+    {
+      "lines": [
+        143,
+        1432
+      ],
+      "name": "local_export_dict",
+      "file": "codetwine/codetwine/import_binding_py/import_binding.py",
+      "usage_context": "    line_count: int = 1                          # Number of lines of the tree\n    package_name: str | None = None              # Package the file declares (Java, Kotlin)\n    all_name_list: list[str] | None = None       # python_all_name_list (Python)\n    local_export_dict: dict[str, str] = field(default_factory=dict)   # local_export_dict (JS/TS)\n    module_export_list: list[str] = field(default_factory=list)      # module_export_list (JS/TS)\n    # inline_module_scope_list (Rust)\n    module_scope_list: list[tuple[int, int, bool]] = field(default_factory=list)\n...\n\ndef _export_tree_fact(root_node: Node, tree_fact: _TreeFact) -> None:\n    \"\"\"Read what the bindings of a JS/TS file need from its tree.\"\"\"\n    tree_fact.local_export_dict = local_export_dict(root_node)\n    tree_fact.module_export_list = module_export_list(root_node)\n\n"
+    },
+    {
+      "lines": [
+        144,
+        1433
+      ],
+      "name": "module_export_list",
+      "file": "codetwine/codetwine/import_binding_py/import_binding.py",
+      "usage_context": "    package_name: str | None = None              # Package the file declares (Java, Kotlin)\n    all_name_list: list[str] | None = None       # python_all_name_list (Python)\n    local_export_dict: dict[str, str] = field(default_factory=dict)   # local_export_dict (JS/TS)\n    module_export_list: list[str] = field(default_factory=list)      # module_export_list (JS/TS)\n    # inline_module_scope_list (Rust)\n    module_scope_list: list[tuple[int, int, bool]] = field(default_factory=list)\n    # _base_class_name_dict (C++)\n...\ndef _export_tree_fact(root_node: Node, tree_fact: _TreeFact) -> None:\n    \"\"\"Read what the bindings of a JS/TS file need from its tree.\"\"\"\n    tree_fact.local_export_dict = local_export_dict(root_node)\n    tree_fact.module_export_list = module_export_list(root_node)\n\n\ndef _include_tree_fact(root_node: Node, tree_fact: _TreeFact) -> None:"
+    },
+    {
+      "lines": [
+        322
+      ],
+      "name": "extract_imports",
+      "file": "codetwine/codetwine/import_binding_py/import_binding.py",
+      "usage_context": "        root_node = parse_file(file_abs)[0]\n        language, import_query_str = get_import_params(file_ext)\n        tree_fact = _TreeFact(\n            import_info_list=extract_imports(\n                root_node, language, import_query_str,\n                EXT_TO_USAGE_NODE_TYPE_DICT.get(file_ext, {}).get(\"scope_types\"),\n            ) if language is not None and import_query_str else [],"
+    },
+    {
+      "lines": [
+        407,
+        613
+      ],
+      "name": "ImportInfo.scope_line_tuple",
+      "file": "codetwine/codetwine/import_binding_py/import_binding.py",
+      "usage_context": "            binding: What the name stands for; None when it stands for nothing of the\n                project.\n        \"\"\"\n        line_tuple = import_info.scope_line_tuple\n        if line_tuple is not None:\n            file_binding.scope_binding_list.append(ScopeBinding(name, *line_tuple, binding))\n        elif binding is not None:\n...\n            self.project_dir,\n        )\n        target_file = module_file or file_rel\n        line_tuple = import_info.scope_line_tuple\n        variant_binding_list: list[ScopeBinding] = []\n        for name, original_name in name_dict.items():\n            binding = SymbolBinding(target_file, original_name)"
+    },
+    {
+      "lines": [
+        412
+      ],
+      "name": "ImportInfo.is_export",
+      "file": "codetwine/codetwine/import_binding_py/import_binding.py",
+      "usage_context": "            file_binding.scope_binding_list.append(ScopeBinding(name, *line_tuple, binding))\n        elif binding is not None:\n            file_binding.name_dict[name] = binding\n        if import_info.is_export and binding is not None:\n            file_binding.export_dict[name] = binding\n\n    def _bind_module("
+    },
+    {
+      "lines": [
+        605,
+        609
+      ],
+      "name": "ImportInfo.module",
+      "file": "codetwine/codetwine/import_binding_py/import_binding.py",
+      "usage_context": "        Returns:\n            The variants of an enum the import takes over for a range of lines.\n        \"\"\"\n        module_file = self._resolve(import_info.module, file_rel)\n        if module_file is not None:\n            file_binding.import_file_set.add(module_file)\n        name_dict = rust_import_name_dict(\n...\n        if module_file is not None:\n            file_binding.import_file_set.add(module_file)\n        name_dict = rust_import_name_dict(\n            import_info.module, import_info.names, file_rel, self.project_file_set,\n            self.project_dir,\n        )\n        target_file = module_file or file_rel"
+    },
+    {
+      "lines": [
+        609,
+        622,
+        637
+      ],
+      "name": "ImportInfo.names",
+      "file": "codetwine/codetwine/import_binding_py/import_binding.py",
+      "usage_context": "        if module_file is not None:\n            file_binding.import_file_set.add(module_file)\n        name_dict = rust_import_name_dict(\n            import_info.module, import_info.names, file_rel, self.project_file_set,\n            self.project_dir,\n        )\n        target_file = module_file or file_rel\n...\n                    file_binding.wildcard_list.append(target_file)\n                else:\n                    file_binding.scope_wildcard_list.append((target_file, *line_tuple))\n            elif name not in import_info.names:\n                # A variant of an enum the import takes over as a whole\n                if line_tuple is None:\n                    file_binding.wildcard_name_dict.setdefault(name, binding)"
+    },
+    {
+      "lines": [
+        1427
+      ],
+      "name": "python_all_name_list",
+      "file": "codetwine/codetwine/import_binding_py/import_binding.py",
+      "usage_context": "\ndef _module_tree_fact(root_node: Node, tree_fact: _TreeFact) -> None:\n    \"\"\"Read what the bindings of a Python file need from its tree.\"\"\"\n    tree_fact.all_name_list = python_all_name_list(root_node)\n\n\ndef _export_tree_fact(root_node: Node, tree_fact: _TreeFact) -> None:"
     }
   ]
 }

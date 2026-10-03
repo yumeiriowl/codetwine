@@ -1,13 +1,15 @@
 import os
 import logging
 from codetwine.parsers.ts_parser import parse_file
-from codetwine.extractors.definitions import DefinitionInfo, extract_definitions
+from codetwine.extractors.definitions import DefinitionInfo
+from codetwine.extractors.definition_source import file_content, file_definition_list
 from codetwine.extractors.usage_analysis import (
+    TREE_RANGE_KIND_SET,
     build_callee_usages,
     build_same_file_usages,
     build_caller_usages,
 )
-from codetwine.reference_target import reference_target_list
+from codetwine.reference_target import reference_kind, reference_target_list
 from codetwine.config.settings import EXT_TO_DEFINITION_DICT, language_ext
 from codetwine.utils.file_utils import detected_encoding, line_list_of
 
@@ -87,11 +89,16 @@ def get_file_dependencies(
             "caller_usages": [],
         }
 
-    root_node, content = parse_file(target_file)
+    # The definitions are read once per file and kept without the syntax tree; the
+    # tree is read again only for a language whose same-file references need it
+    definition_info_list = file_definition_list(target_file, definition_dict)
+    root_node = (
+        parse_file(target_file)[0]
+        if reference_kind(target_file) in TREE_RANGE_KIND_SET else None
+    )
 
     # Convert content to text lines and extract source code from each definition's line range
-    content_line_list = line_list_of(content.decode("utf-8"))
-    definition_info_list = extract_definitions(root_node, definition_dict)
+    content_line_list = line_list_of(file_content(target_file).decode("utf-8"))
     definition_list = [
         _definition_entry(definition, content_line_list) for definition in definition_info_list
     ]

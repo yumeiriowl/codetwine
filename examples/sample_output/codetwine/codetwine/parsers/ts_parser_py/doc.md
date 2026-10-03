@@ -4,30 +4,77 @@
 
 **Overview**
 
-Parses a source file with tree-sitter and caches the resulting AST so repeated requests for the same file avoid re-parsing.
+Parse source files with tree-sitter to generate abstract syntax trees, handling language-specific preprocessing and caching to support downstream definition, import, and usage extraction.
 
-- Call `parse_file` to obtain a file's AST root node and raw byte content for definition extraction, import extraction, or usage analysis.
-- Call `parse_cache.clear` at the end of a pipeline run to release cached trees and free memory once analysis is complete.
-- Inspect or reuse `parse_cache` directly when needing to check whether a file's parse result is already available at module level.
+- Call `parse_file()` to obtain the root AST node and UTF-8 byte content of any supported source file; the function handles encoding detection, language-specific parsing rules, and returns cached results when available.
+- Call `read_utf8_content()` to read a file as UTF-8 bytes with lone carriage returns normalized to line feeds, useful when needing only the file content without parsing.
+- Access `parse_cache` to retrieve or inspect cached parse results (root node or CobolSource and byte content pairs) for files already parsed in this session.
+- Access `class_macro_cache` to retrieve macro names and their line numbers for C/C++ files, populated during parsing to support import reference extraction.
 
-This file depends on `codetwine/config/settings.py` for `TREE_SITTER_LANGUAGES` (extension-to-Language mapping used to select the correct tree-sitter grammar) and `PARSE_CACHE_MAX_FILES` (cache size limit). It is used by `file_analyzer.py`, `import_to_path.py`, `extractors/usage_analysis.py`, and `extractors/dependency_graph.py` to obtain parsed ASTs for definition extraction, import resolution, and cross-file usage/dependency analysis, and by `pipeline.py` which clears `parse_cache` after analysis completes.
+The file serves as the central parsing gateway for the codebase analyzer. It depends on encoding detection (`read_source`, `lone_cr_to_lf`), language registry (`EXT_TO_LANGUAGE_DICT`, `language_ext`), and language-specific extractors (`read_cobol_source`, `read_bms_source`, `r_chunk_code`) to handle COBOL, BMS, R Markdown/Quarto, and C/C++ files according to their syntax requirements. Multiple downstream modules (`file_analyzer.py`, `import_binding.py`, `import_reference.py`, `alias_path.py`, etc.) call `parse_file()` to obtain AST roots for definition extraction, import analysis, and reference resolution; `parse_cache` is also cleared centrally during pipeline resets.
 
-Caching policy: results are stored in an `OrderedDict` keyed by file path, with least-recently-used entries evicted once the cache exceeds `PARSE_CACHE_MAX_FILES`; setting `PARSE_CACHE_MAX_FILES` to 0 disables the size limit entirely, allowing unbounded growth of the cache. Each cache hit moves the entry to the most-recently-used position, giving true LRU behavior.
+Parse results are cached at module level in `parse_cache` (an OrderedDict) with a maximum capacity controlled by `PARSE_CACHE_MAX_FILES` to balance memory usage and parse latency; when the limit is exceeded, the least recently used entry is discarded. C/C++ files undergo iterative macro-name blanking (up to `_CLASS_MACRO_PASS_MAX` passes) to treat class macro prefixes like `EXPORT` as whitespace rather than parse errors, with detected macros stored in `class_macro_cache` by file path.
 
 **Definitions**
 
-## `_language_map`
+## `read_utf8_content`
 
-Module-level alias binding `TREE_SITTER_LANGUAGES` to a local name, used internally by `parse_file` to look up the tree-sitter `Language` object for a given file extension when constructing a `Parser`.
+Read a file using `read_source()` and return its text encoded as UTF-8 bytes, converting lone carriage returns to line feeds so that line numbers in the AST match the file's line structure. A warning is logged if the file required invalid-byte replacement; a debug message logs non-UTF-8 source encodings.
 
-## `parse_cache`
+## `_is_whole_code`
 
-Module-level `OrderedDict` mapping absolute file paths to `(root_node, content)` tuples, ordered from least to most recently used; serves as the shared parse-result cache read and updated by `parse_file` and cleared externally (e.g., by `pipeline.py`) to release memory after a full analysis run. Holding the root `Node` in the cache keeps its underlying tree-sitter tree alive.
+Determine whether a piece of code (such as an R chunk) ends as a complete statement by appending an identifier marker on a new line and checking whether the parser treats that marker as a top-level statement rather than a continuation of the code. Used by R Markdown parsing to filter out incomplete chunks that would otherwise break syntax.
+
+## `_class_macro_query`
+
+Return a compiled tree-sitter Query for detecting macro names between class keywords and class names in C/C++ code, caching the compiled query by language ID to avoid recompilation. Patterns are dropped if the language grammar lacks the required node types (e.g., `union_specifier` in some C variants).
+
+## `_class_macro_range_list`
+
+Extract byte ranges of macro names occurring between a class keyword (class, struct, union) and its class name in a C/C++ AST, identifying macro uses that would otherwise cause parse failures by being misinterpreted as function definition return types.
+
+## `_parse_c_family`
+
+Parse a C/C++ file iteratively, replacing detected macro names (from `_class_macro_range_list`) with spaces of equal length and re-parsing up to `_CLASS_MACRO_PASS_MAX` times until no more macros are found or the limit is reached. Returns the final AST root node and a sorted list of (macro name, line number) pairs for all blanked macros, enabling downstream identification of macro-prefixed class declarations.
 
 ## `parse_file`
 
-Reads a file's bytes, parses it into a tree-sitter AST using the `Language` resolved from the file's extension via `_language_map` (`TREE_SITTER_LANGUAGES`), and returns the `(root_node, content)` pair; this is the sole entry point other modules use to obtain a parsed representation of a project file. On a cache hit for `file_path` it returns the cached tuple immediately and promotes the entry to most-recently-used via `move_to_end`, avoiding redundant parsing; on a miss it opens the file in binary mode, parses with a fresh `Parser`, stores the result in `parse_cache`, and evicts the oldest entry with `popitem(last=False)` whenever the cache size exceeds `PARSE_CACHE_MAX_FILES` (no eviction occurs if the limit is 0). Callers such as `file_analyzer.py`, `import_to_path.py`, `usage_analysis.py`, and `dependency_graph.py` rely on it to get the AST root node for definition, import, and usage extraction without managing parsing or caching themselves.
+Read, decode, and parse a source file, returning its AST root node (or `CobolSource` for COBOL/BMS files) and UTF-8 byte content. Handles language-specific parsing: COBOL files are split into statements and parsed individually; BMS sources extract symbolic maps as `CobolSource`; R Markdown and Quarto files have non-R chunks blanked before parsing; C/C++ files undergo macro-name blanking via `_parse_c_family`; all other supported languages are parsed directly. Results are cached in `parse_cache` (capped at `PARSE_CACHE_MAX_FILES` entries, removing least recently used entries on overflow) and retrieved from cache on subsequent calls. Line numbers match those of `line_list_of()` applied to the file.
+
+## `parse_cache`
+
+Module-level OrderedDict caching parse results as (root node or CobolSource, UTF-8 byte content) pairs, keyed by absolute file path. Entries are moved to the end when accessed; the cache is capped at `PARSE_CACHE_MAX_FILES` entries, with the least recently used entry evicted when the limit is exceeded. A size of 0 disables the limit. Accessed by downstream modules for parsed AST retrieval and cleared during pipeline resets.
+
+## `class_macro_cache`
+
+Module-level dict mapping absolute file path to a list of (macro name, line) tuples, populated during C/C++ file parsing to record macro names blanked between class keywords and class names. Accessed by downstream reference extraction to flag those names as non-class definitions.
+
+## `_END_NAME`
+
+Byte constant used by `_is_whole_code` as a marker identifier appended after code to detect whether parsing treats it as a new top-level statement, confirming the code does not have an open bracket, string, or operator expecting continuation.
+
+## `_CLASS_MACRO_QUERY_TUPLE`
+
+Tuple of three tree-sitter query patterns matching function definitions with class/struct/union specifiers lacking bodies and plain-name declarators, identifying the macro-prefixed class pattern in C/C++ code.
+
+## `_CLASS_MACRO_PASS_MAX`
+
+Integer constant (value 8) bounding the maximum number of macro-detection and macro-blanking passes in C/C++ file parsing to prevent infinite loops when iteratively blanking macro names.
+
+## `_class_macro_query_cache`
+
+Module-level dict caching compiled tree-sitter Query objects by language ID (from `id(language)`) to avoid recompiling the same query for repeated parses of the same language.
 
 # Summary
 
-Parses source files with tree-sitter and caches results by file path to avoid redundant re-parsing. Provides `parse_file`, the sole entry point returning (root_node, content) tuples, using `_language_map` (from TREE_SITTER_LANGUAGES) to select grammar by file extension. Maintains `parse_cache`, an LRU OrderedDict bounded by PARSE_CACHE_MAX_FILES, with move_to_end on hits and popitem eviction on overflow. Used by file_analyzer, import_to_path, usage_analysis, and dependency_graph for AST access; cleared by pipeline.py after analysis. Key terms: AST caching, tree-sitter parsing, LRU cache, language mapping.
+# Summary: codetwine/parsers/ts_parser.py
+
+**Single Responsibility:** Central parsing gateway that reads source files, detects encoding, generates abstract syntax trees via tree-sitter, applies language-specific preprocessing (COBOL statement splitting, BMS extraction, R Markdown chunk blanking, C/C++ macro blanking), and caches results to support downstream definition and import analysis.
+
+**Main Public Definitions:**
+- `parse_file()` — parse any supported source file and return AST root with UTF-8 content
+- `read_utf8_content()` — read file as UTF-8 bytes with normalized line endings
+- `parse_cache` — module-level LRU cache of parse results
+- `class_macro_cache` — module-level cache of C/C++ macro names by file
+
+**Key Terms:** tree-sitter parsing, encoding detection, language-specific preprocessing, COBOL/BMS extraction, R Markdown blanking, C/C++ macro name detection and blanking, LRU caching, line number alignment.

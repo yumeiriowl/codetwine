@@ -1,227 +1,456 @@
 import os
 import logging
+from collections.abc import Callable
+from dataclasses import dataclass, fields
+from tree_sitter import Node
 from codetwine.parsers.ts_parser import parse_file
-from codetwine.extractors.imports import extract_imports
-from codetwine.extractors.usages import extract_usages, extract_typed_aliases
-from codetwine.extractors.definitions import extract_definitions
-from codetwine.extractors.dependency_graph import extract_callee_source
-from codetwine.import_to_path import (
-    resolve_module_to_project_path,
-    get_import_params,
-)
-from codetwine.config.settings import (
-    DEFINITION_DICTS,
-    USAGE_NODE_TYPES,
-    IMPORT_RESOLVE_CONFIG,
-    SAME_PACKAGE_VISIBLE,
-)
+from codetwine.utils.file_utils import line_list_of, read_source
+from codetwine.extractors.cobol_source import CobolSource
+from codetwine.extractors.definitions import DefinitionInfo
+from codetwine.extractors.usages import symbol_part_list, usage_root_name
+from codetwine.extractors.definition_source import find_definition, source_definition
+from codetwine.extractors.r_source import r_definition_list
+from codetwine.cobol_file_index import CobolReferenceTarget
+from codetwine.csharp_namespace_index import CsharpReferenceTarget
+from codetwine.import_reference import ImportReferenceTarget
+from codetwine.r_name_index import RReferenceTarget
+from codetwine.reference_target import ReferenceTarget, reference_kind, reference_target_list
 
 logger = logging.getLogger(__name__)
 
+# Maximum number of usage lines of one name whose surrounding code becomes usage_context
+_MAX_CONTEXT_LOCATION = 2
 
-def build_usage_info_list(
-    root_node,
-    symbol_to_file_map: dict[str, str],
-    project_dir: str,
-    file_ext: str,
-    alias_to_original: dict[str, str] | None = None,
-) -> list[dict]:
-    """Extract usage locations of names imported from within the project and attach
-    the definition source code, producing data for the callee_usages JSON output.
+# Number of lines kept before and after a usage line in usage_context
+_CONTEXT_RADIUS = 3
 
-    When the same name appears on multiple lines, entries are merged into a single
-    record with all line numbers accumulated in the lines list.
+
+@dataclass(frozen=True)
+class _TargetDefinition:
+    """The definition a reference leads to, as a usage entry carries it."""
+
+    context: str | None      # Source text of the definition
+    name: str | None         # Name of the definition, as "definitions" lists it
+    start_line: int | None   # First line of the definition (1-based)
+
+
+# A reference that leads to no definition of its file
+_NO_DEFINITION = _TargetDefinition(None, None, None)
+
+
+def _memo_definition_function(
+    target_definition: Callable[[ReferenceTarget], _TargetDefinition],
+) -> Callable[[ReferenceTarget], _TargetDefinition]:
+    """Return a function that looks the definition of each distinct reference target up once.
 
     Args:
-        root_node: The AST root node of the file.
-        symbol_to_file_map: A dict mapping imported names to their definition file paths.
-        project_dir: Absolute path to the project root.
-        file_ext: File extension (without leading ".").
-        alias_to_original: A dict mapping alias names to original names (used for definition lookup).
+        target_definition: Returns the definition a reference leads to.
 
     Returns:
-        A list of dicts containing usage location information.
+        The same function, answering from memory for a reference whose fields apart
+        from its line equal those of an earlier one.
     """
-    usage_node_types = USAGE_NODE_TYPES.get(file_ext)
+    definition_dict: dict[str, _TargetDefinition] = {}
 
-    # Build a variable-name -> type-name mapping from typed variable declarations
-    typed_alias_parent_types = (
-        usage_node_types.get("typed_alias_parent_types", set())
-        if usage_node_types else set()
-    )
-    typed_aliases = extract_typed_aliases(
-        root_node, set(symbol_to_file_map.keys()), typed_alias_parent_types
-    )
-    # Add alias variable names to the tracking set (map genre -> same file as Genre)
-    for var_name, type_name in typed_aliases.items():
-        if var_name not in symbol_to_file_map:
-            symbol_to_file_map[var_name] = symbol_to_file_map[type_name]
+    def memo_definition(target: ReferenceTarget) -> _TargetDefinition:
+        """Return the definition a reference leads to."""
+        target_key = repr([
+            (target_field.name, getattr(target, target_field.name))
+            for target_field in fields(target) if target_field.name != "line"
+        ])
+        if target_key not in definition_dict:
+            definition_dict[target_key] = target_definition(target)
+        return definition_dict[target_key]
 
-    usage_info_list = extract_usages(
-        root_node, set(symbol_to_file_map.keys()), usage_node_types
-    )
+    return memo_definition
 
-    # Key: (definition file path, project-internal imported name) -> merged entry
+
+def _group_other_file_target_list(
+    target_list: list[ReferenceTarget],
+    file_rel: str,
+    target_definition: Callable[[ReferenceTarget], _TargetDefinition],
+) -> list[dict]:
+    """Group the resolved references of a file that lead to another file.
+
+    Args:
+        target_list: The resolved references of the file.
+        file_rel: Relative path of the file.
+        target_definition: Returns the definition a reference leads to.
+
+    Returns:
+        One {"lines", "name", "from", "target_context", "target_name",
+        "target_start_line"} dict per (file, name, definition): a name that leads to
+        two definitions of a file (two overloads) gives two.
+    """
+    target_definition = _memo_definition_function(target_definition)
     usage_group_map: dict[tuple, dict] = {}
-
-    for usage in usage_info_list:
-        # For attribute access like "helper.process", the leading "helper" is the name from the import statement
-        root_symbol = usage.name.split(".")[0]
-
-        # Remap alias variable names back to original type names (genre -> Genre)
-        if root_symbol in typed_aliases:
-            original_type = typed_aliases[root_symbol]
-            remapped_name = original_type + usage.name[len(root_symbol):]
-            root_symbol = original_type
-        else:
-            remapped_name = usage.name
-
-        source_file = symbol_to_file_map[root_symbol]
-        group_key = (source_file, remapped_name)
-
+    for target in target_list:
+        if target.file_rel == file_rel:
+            continue
+        definition = target_definition(target)
+        group_key = (target.file_rel, target.name, definition.name, definition.start_line)
         if group_key in usage_group_map:
-            usage_group_map[group_key]["lines"].append(usage.line)
-        else:
-            # If an alias exists, search for the definition using the original name
-            search_name = remapped_name
-            if alias_to_original and root_symbol in alias_to_original:
-                original = alias_to_original[root_symbol]
-                search_name = original + remapped_name[len(root_symbol):]
+            usage_group_map[group_key]["lines"].append(target.line)
+            continue
+        usage_group_map[group_key] = {
+            "lines":             [target.line],
+            "name":              target.name,
+            "from":              target.file_rel,
+            "target_context":    definition.context,
+            "target_name":       definition.name,
+            "target_start_line": definition.start_line,
+        }
 
-            # First occurrence of this name: retrieve source code from the definition file within the project
-            source_code = extract_callee_source(
-                source_file,
-                search_name,
-                project_dir,
-            )
-            usage_group_map[group_key] = {
-                "lines":          [usage.line],
-                "name":           remapped_name,
-                "from":           source_file,
-                "target_context": source_code,
-            }
-
-    # Remove duplicates from the lines list of each group
     for entry in usage_group_map.values():
         entry["lines"] = sorted(set(entry["lines"]))
-
     return list(usage_group_map.values())
 
 
-def _collect_names_from_target(
-    caller_import_list: list,
-    target_file_rel: str,
-    caller_ext: str,
-    caller_rel: str,
-    project_file_set: set[str],
-    project_dir: str,
-    target_definition_names: list[str] | None,
-) -> tuple[list[str], list[str] | None]:
-    """Collect names originating from the target file based on the caller's import statements.
-
-    The method of deriving names differs by language:
-    - Python/JS/TS: Use names = ["a", "b"] directly from "from X import a, b".
-    - Java/Kotlin:  Use the trailing "Bar" from "import com.foo.Bar".
-    - C/C++:        "#include <header.h>" incorporates the entire file,
-                    so collect all definition names from the target file.
-
-    Args:
-        caller_import_list: List of ImportInfo from the caller file.
-        target_file_rel: Relative path of the target file.
-        caller_ext: File extension of the caller file (without leading ".").
-        caller_rel: Relative path of the caller file (used for module resolution).
-        project_file_set: Set of file paths within the project.
-        project_dir: Absolute path to the project root.
-        target_definition_names: Cached target definition names for C/C++.
-                                 Pass None on the first call.
-
-    Returns:
-        A (names_from_target, target_definition_names) tuple.
-        For C/C++, target_definition_names is returned as a cache to the caller.
-    """
-    names_from_target: list[str] = []
-    caller_resolve_config = IMPORT_RESOLVE_CONFIG.get(caller_ext, {})
-    caller_separator = caller_resolve_config.get("separator", ".")
-
-    for import_info in caller_import_list:
-        resolved = resolve_module_to_project_path(
-            import_info.module, caller_rel, project_file_set
+def _definition_range_dict(
+    definition_list: list[DefinitionInfo],
+) -> dict[str, list[tuple[int, int]]]:
+    """Return {definition name: (start_line, end_line) of each definition of that name}."""
+    range_dict: dict[str, list[tuple[int, int]]] = {}
+    for definition in definition_list:
+        range_dict.setdefault(definition.name, []).append(
+            (definition.start_line, definition.end_line)
         )
-        if resolved == target_file_rel:
-            if import_info.names:
-                # "from X import a, b" form: add individual names
-                names_from_target.extend(n for n in import_info.names if n != "*")
-                # "from X import *" form: add all definition names from the target file
-                if "*" in import_info.names:
-                    if target_definition_names is None:
-                        target_definition_names = _load_target_definitions(
-                            target_file_rel, project_dir,
-                        )
-                    names_from_target.extend(target_definition_names)
-            elif caller_separator == ".":
-                # Java/Kotlin: "import com.foo.Bar" -> add trailing "Bar"
-                module_parts = import_info.module.split(".")
-                leaf = module_parts[-1]
-                if leaf:
-                    names_from_target.append(leaf)
-            elif caller_separator == "/":
-                # C/C++: #include incorporates the entire file.
-                # Add all definition names from the target file to names_from_target
-                if target_definition_names is None:
-                    target_definition_names = _load_target_definitions(
-                        target_file_rel, project_dir,
-                    )
-                names_from_target.extend(target_definition_names)
-        elif (
-            not resolved
-            and "*" in import_info.names
-            and caller_separator == "."
-        ):
-            # Java/Kotlin wildcard import: check if target is a file within the package
-            package_dir = import_info.module.replace(".", "/")
-            if target_file_rel.startswith(package_dir + "/"):
-                if target_definition_names is None:
-                    target_definition_names = _load_target_definitions(
-                        target_file_rel, project_dir,
-                    )
-                names_from_target.extend(target_definition_names)
-
-    # Same package (same directory): references are possible without import statements (Java/Kotlin)
-    # Add target definition names even if there are no import matches
-    if not names_from_target and SAME_PACKAGE_VISIBLE.get(caller_ext):
-        if os.path.dirname(caller_rel) == os.path.dirname(target_file_rel):
-            if target_definition_names is None:
-                target_definition_names = _load_target_definitions(
-                    target_file_rel, project_dir,
-                )
-            names_from_target.extend(target_definition_names)
-
-    return names_from_target, target_definition_names
+    return range_dict
 
 
-def _load_target_definitions(
-    target_file_rel: str,
-    project_dir: str,
-) -> list[str]:
-    """Parse the target file and return a list of all definition names within it.
+def _cobol_own_range_function(
+    definition_list: list[DefinitionInfo], root_node: Node | CobolSource,
+) -> Callable[[CobolReferenceTarget], list[tuple[int, int]]]:
+    """Return the function giving the lines of the definition a COBOL reference resolved to."""
+    def cobol_range_list(target: CobolReferenceTarget) -> list[tuple[int, int]]:
+        """Return the lines of the definition a COBOL reference resolved to."""
+        if target.definition is None:
+            return []
+        return [(target.definition.start_line, target.definition.end_line)]
+
+    return cobol_range_list
+
+
+def _r_own_range_function(
+    definition_list: list[DefinitionInfo], root_node: Node | CobolSource,
+) -> Callable[[RReferenceTarget], list[tuple[int, int]]]:
+    """Return the function giving the lines of the top-level definitions of the name of an R reference.
+
+    The members of a class and the calls written for a name defined elsewhere
+    (setMethod) are not such definitions.
+    """
+    range_dict = _definition_range_dict([
+        definition for definition in r_definition_list(root_node)
+        if not definition.is_member and not definition.is_attach
+    ])
+
+    def r_range_list(target: RReferenceTarget) -> list[tuple[int, int]]:
+        """Return the lines of the top-level definitions of the name of an R reference."""
+        return range_dict.get(usage_root_name(target.name, range_dict), [])
+
+    return r_range_list
+
+
+def _name_own_range_function(
+    definition_list: list[DefinitionInfo], root_node: Node | CobolSource,
+) -> Callable[[CsharpReferenceTarget | ImportReferenceTarget], list[tuple[int, int]]]:
+    """Return the function giving the lines of the definitions the name of a reference names.
+
+    These are the lines of the member a name with several parts names (Cfg.Max -> Max),
+    else the lines of every definition named like the first part of the name as it is
+    written, else like the first part of the name of the definition it resolves to
+    (Rust: self::parse -> parse).
+    """
+    range_dict = _definition_range_dict(definition_list)
+
+    def name_range_list(
+        target: CsharpReferenceTarget | ImportReferenceTarget,
+    ) -> list[tuple[int, int]]:
+        """Return the lines of the definitions the name of a reference names."""
+        part_list = symbol_part_list(target.definition_name)
+        if len(part_list) > 1:
+            definition = find_definition(definition_list, target.definition_name)
+            if definition is not None and definition.name == part_list[-1]:
+                return [(definition.start_line, definition.end_line)]
+        return (
+            range_dict.get(usage_root_name(target.name, range_dict))
+            or range_dict.get(usage_root_name(target.definition_name, range_dict), [])
+        )
+
+    return name_range_list
+
+
+# Reference kind of a language -> function that returns, for the definitions and the
+# root node of a file, the function from a same-file reference to the line ranges of
+# the definition it names
+_OWN_RANGE_FUNCTION_DICT: dict[str, Callable[..., Callable[..., list[tuple[int, int]]]]] = {
+    "cobol":  _cobol_own_range_function,
+    "r":      _r_own_range_function,
+    "csharp": _name_own_range_function,
+    "import": _name_own_range_function,
+}
+
+# Reference kinds whose function of _OWN_RANGE_FUNCTION_DICT reads the syntax tree
+TREE_RANGE_KIND_SET = {"r"}
+
+
+def _group_same_file_target_list(
+    target_list: list[ReferenceTarget],
+    file_rel: str,
+    own_range_list: Callable[[ReferenceTarget], list[tuple[int, int]]],
+    target_definition: Callable[[ReferenceTarget], _TargetDefinition],
+) -> list[dict]:
+    """Group the resolved references of a file that lead to the file itself.
+
+    A reference written inside the lines of the definition it names (the definition's
+    own name, a recursive call) is left out.
 
     Args:
-        target_file_rel: Relative path of the target file from the project root.
+        target_list: The resolved references of the file.
+        file_rel: Relative path of the file.
+        own_range_list: Returns the line ranges of the definition a reference names
+            (_OWN_RANGE_FUNCTION_DICT).
+        target_definition: Returns the definition a reference leads to.
+
+    Returns:
+        One {"lines", "name", "target_name", "target_start_line"} dict per
+        (name, definition).
+    """
+    target_definition = _memo_definition_function(target_definition)
+    usage_group_map: dict[tuple, dict] = {}
+    for target in target_list:
+        if target.file_rel != file_rel:
+            continue
+        if any(start <= target.line <= end for start, end in own_range_list(target)):
+            continue
+        definition = target_definition(target)
+        group_key = (target.name, definition.name, definition.start_line)
+        if group_key not in usage_group_map:
+            usage_group_map[group_key] = {
+                "lines":             [],
+                "name":              target.name,
+                "target_name":       definition.name,
+                "target_start_line": definition.start_line,
+            }
+        usage_group_map[group_key]["lines"].append(target.line)
+
+    for entry in usage_group_map.values():
+        entry["lines"] = sorted(set(entry["lines"]))
+    return list(usage_group_map.values())
+
+
+def _cobol_definition_function(
+    project_dir: str,
+) -> Callable[[CobolReferenceTarget], _TargetDefinition]:
+    """Return the function giving the definition a COBOL reference resolved to."""
+    def cobol_definition(target: CobolReferenceTarget) -> _TargetDefinition:
+        """Return the definition a COBOL reference resolves to, with its lines as text."""
+        if target.definition is None:
+            return _NO_DEFINITION
+        target_source = parse_file(os.path.join(project_dir, target.file_rel))[0]
+        return _TargetDefinition(
+            target_source.definition_text(target.definition),
+            target.definition.name, target.definition.start_line,
+        )
+
+    return cobol_definition
+
+
+def _r_definition_function(project_dir: str) -> Callable[[RReferenceTarget], _TargetDefinition]:
+    """Return the function giving the definition an R reference resolved to.
+
+    The text is the lines start_line to end_line of the target; each file is read once.
+    """
+    line_list_dict: dict[str, list[str]] = {}
+
+    def r_definition(target: RReferenceTarget) -> _TargetDefinition:
+        """Return the definition an R reference resolves to, with its lines as text."""
+        if target.file_rel not in line_list_dict:
+            target_text = read_source(os.path.join(project_dir, target.file_rel))[0]
+            line_list_dict[target.file_rel] = line_list_of(target_text)
+        return _TargetDefinition(
+            "\n".join(line_list_dict[target.file_rel][target.start_line - 1:target.end_line]),
+            target.definition_name, target.start_line,
+        )
+
+    return r_definition
+
+
+def _csharp_definition_function(
+    project_dir: str,
+) -> Callable[[CsharpReferenceTarget], _TargetDefinition]:
+    """Return the function giving the declaration a C# reference resolved to.
+
+    The declaration is the one named by the definition_name of the target that starts
+    on its definition_line (source_definition).
+    """
+    def csharp_definition(target: CsharpReferenceTarget) -> _TargetDefinition:
+        """Return the declaration a C# reference resolves to."""
+        return _source_target_definition(
+            target.file_rel, target.definition_name, project_dir, target.definition_line,
+        )
+
+    return csharp_definition
+
+
+def _import_definition_function(
+    project_dir: str,
+) -> Callable[[ImportReferenceTarget], _TargetDefinition]:
+    """Return the function giving the definition named by the definition_name of a target (source_definition)."""
+    def named_definition(target: ImportReferenceTarget) -> _TargetDefinition:
+        """Return the definition named by the definition_name of a target."""
+        return _source_target_definition(target.file_rel, target.definition_name, project_dir)
+
+    return named_definition
+
+
+def _source_target_definition(
+    file_rel: str, name: str, project_dir: str, start_line: int | None = None,
+) -> _TargetDefinition:
+    """Return the definition source_definition() gives as a _TargetDefinition."""
+    definition_tuple = source_definition(file_rel, name, project_dir, start_line)
+    if definition_tuple is None:
+        return _NO_DEFINITION
+    definition, context = definition_tuple
+    return _TargetDefinition(context, definition.name, definition.start_line)
+
+
+# Reference kind of a language -> function that returns, for a project root, the function
+# from a reference to the definition it leads to (_NO_DEFINITION when the target has no
+# definition or the definition is not found)
+_TARGET_DEFINITION_FUNCTION_DICT: dict[str, Callable[[str], Callable[..., _TargetDefinition]]] = {
+    "cobol":  _cobol_definition_function,
+    "r":      _r_definition_function,
+    "csharp": _csharp_definition_function,
+    "import": _import_definition_function,
+}
+
+
+def build_callee_usages(
+    target_list: list[ReferenceTarget], file_rel: str, project_dir: str,
+) -> list[dict]:
+    """Build the callee_usages of a file from its resolved references.
+
+    The references that resolve to another file are grouped by (file, name) and the
+    definition they lead to. The target_context of a group is the source text of that
+    definition, target_name the name "definitions" of that file lists it under and
+    target_start_line its first line; all three are None when the references lead to
+    no definition of that file (a module used as a value). The definition is read the
+    way the reference kind of the file gives (_TARGET_DEFINITION_FUNCTION_DICT).
+
+    Args:
+        target_list: Return value of reference_target_list.
+        file_rel: Relative path of the file.
         project_dir: Absolute path to the project root.
 
     Returns:
-        A list of definition name strings.
+        A list of {"lines", "name", "from", "target_context", "target_name",
+        "target_start_line"} dicts. Empty for a file without a language.
     """
-    names: list[str] = []
-    target_abs = os.path.join(project_dir, target_file_rel)
-    target_ext = os.path.splitext(target_file_rel)[1].lstrip(".")
-    target_def_dict = DEFINITION_DICTS.get(target_ext)
-    if target_def_dict and os.path.isfile(target_abs):
-        target_root = parse_file(target_abs)[0]
-        for defn in extract_definitions(target_root, target_def_dict):
-            if defn.name:
-                names.append(defn.name)
-    return names
+    file_kind = reference_kind(os.path.join(project_dir, file_rel))
+    if file_kind is None:
+        return []
+    return _group_other_file_target_list(
+        target_list, file_rel, _TARGET_DEFINITION_FUNCTION_DICT[file_kind](project_dir),
+    )
+
+
+def build_same_file_usages(
+    target_list: list[ReferenceTarget],
+    file_rel: str,
+    project_dir: str,
+    definition_list: list[DefinitionInfo],
+    root_node: Node | CobolSource | None,
+) -> list[dict]:
+    """Build the same_file_usages of a file from its resolved references.
+
+    The references that resolve to the file itself are grouped by name and the
+    definition they lead to. A reference
+    written inside the lines of the definition it names (the definition's own name, a
+    recursive call) is left out; the lines of that definition are found the way the
+    reference kind of the file gives (_OWN_RANGE_FUNCTION_DICT). target_name and
+    target_start_line of a group are the name and the first line of the definition its
+    references resolve to, None when they lead to no definition.
+
+    Args:
+        target_list: Return value of reference_target_list.
+        file_rel: Relative path of the file.
+        project_dir: Absolute path to the project root.
+        definition_list: The file's definitions, sorted by start_line.
+        root_node: The AST root node of the file; None for a file whose reference
+            kind is not in TREE_RANGE_KIND_SET.
+
+    Returns:
+        A list of {"lines", "name", "target_name", "target_start_line"} dicts. Empty
+        for a file without a language.
+    """
+    file_kind = reference_kind(os.path.join(project_dir, file_rel))
+    if file_kind is None:
+        return []
+    return _group_same_file_target_list(
+        target_list, file_rel, _OWN_RANGE_FUNCTION_DICT[file_kind](definition_list, root_node),
+        _TARGET_DEFINITION_FUNCTION_DICT[file_kind](project_dir),
+    )
+
+
+def _group_caller_usage_list(
+    target_list: list[ReferenceTarget],
+    caller_rel: str,
+    target_definition: Callable[[ReferenceTarget], _TargetDefinition],
+) -> dict[tuple, dict]:
+    """Group the references of a caller by name and the definition they lead to.
+
+    Args:
+        target_list: The caller's references that resolve to one file.
+        caller_rel: Relative path of the caller file.
+        target_definition: Returns the definition a reference leads to.
+
+    Returns:
+        A {(name, definition name, first line of the definition): {"lines", "name",
+        "file"}} dict, the groups _group_other_file_target_list makes for the caller;
+        lines are sorted without duplicates.
+    """
+    target_definition = _memo_definition_function(target_definition)
+    group_dict: dict[tuple, dict] = {}
+    for target in target_list:
+        definition = target_definition(target)
+        group = group_dict.setdefault(
+            (target.name, definition.name, definition.start_line),
+            {"lines": [], "name": target.name, "file": caller_rel},
+        )
+        group["lines"].append(target.line)
+
+    for group in group_dict.values():
+        group["lines"] = sorted(set(group["lines"]))
+    return group_dict
+
+
+def _attach_usage_context(group_dict: dict[tuple, dict], caller_abs: str) -> None:
+    """Add usage_context, the code around the first usage lines, to each group.
+
+    Up to _MAX_CONTEXT_LOCATION lines of each group are taken, each with
+    _CONTEXT_RADIUS lines before and after, joined by "\n...\n". The file is decoded
+    by read_source(). Nothing is added when the caller file cannot be read.
+
+    Args:
+        group_dict: Return value of _group_caller_usage_list; modified in place.
+        caller_abs: Absolute path of the caller file.
+    """
+    try:
+        caller_source_line_list = line_list_of(read_source(caller_abs)[0])
+    except OSError:
+        return
+    if not caller_source_line_list:
+        return
+
+    line_count = len(caller_source_line_list)
+    for group in group_dict.values():
+        context_part_list = []
+        for line_no in group["lines"][:_MAX_CONTEXT_LOCATION]:
+            start = max(0, line_no - 1 - _CONTEXT_RADIUS)
+            end = min(line_count, line_no - 1 + _CONTEXT_RADIUS + 1)
+            context_part_list.append("\n".join(caller_source_line_list[start:end]))
+        group["usage_context"] = "\n...\n".join(context_part_list)
 
 
 def build_caller_usages(
@@ -233,6 +462,10 @@ def build_caller_usages(
     """Collect the lines where names defined in this file are used in other project
     files, producing data for the caller_usages JSON output.
 
+    The references of each caller are resolved as get_file_dependencies resolves them
+    for the caller itself (reference_target_list); the ones that lead to this file are
+    grouped by name and the definition they lead to.
+
     Args:
         target_file_rel: Relative path of this file from the project root.
         caller_file_list: Relative paths of the files depending on this file.
@@ -240,99 +473,21 @@ def build_caller_usages(
         project_file_set: Set of file paths within the project.
 
     Returns:
-        A list of dicts containing usage location information.
+        A list of {"lines", "name", "file", "usage_context"} dicts.
     """
     caller_usages: list[dict] = []
-
-    # For C/C++, retrieve target definition names once outside the caller loop and cache them
-    target_definition_names: list[str] | None = None
-
     for caller_rel in caller_file_list:
-        caller_abs = os.path.join(project_dir, caller_rel)
-        caller_ext = os.path.splitext(caller_rel)[1].lstrip(".")
-
-        caller_root = parse_file(caller_abs)[0]
-
-        # Retrieve parameters for import extraction
-        language, import_query_str = get_import_params(caller_ext)
-        if not language:
+        target_list = [
+            target
+            for target in reference_target_list(caller_rel, project_file_set, project_dir)
+            if target.file_rel == target_file_rel
+        ]
+        if not target_list:
             continue
-
-        caller_import_list = extract_imports(
-            caller_root, language, import_query_str
+        caller_kind = reference_kind(os.path.join(project_dir, caller_rel))
+        group_dict = _group_caller_usage_list(
+            target_list, caller_rel, _TARGET_DEFINITION_FUNCTION_DICT[caller_kind](project_dir),
         )
-
-        # Step 1: Collect names that the caller imports from the target
-        names_from_target, target_definition_names = _collect_names_from_target(
-            caller_import_list, target_file_rel, caller_ext,
-            caller_rel, project_file_set, project_dir,
-            target_definition_names,
-        )
-
-        # Step 2: Extract and aggregate lines where those names are used within the caller
-        if names_from_target:
-            usage_node_types = USAGE_NODE_TYPES.get(caller_ext)
-
-            # Add typed variable aliases to the tracking set
-            typed_alias_parent_types = (
-                usage_node_types.get("typed_alias_parent_types", set())
-                if usage_node_types else set()
-            )
-            typed_aliases = extract_typed_aliases(
-                caller_root, set(names_from_target), typed_alias_parent_types
-            )
-            for var_name in typed_aliases:
-                if var_name not in names_from_target:
-                    names_from_target.append(var_name)
-
-            usage_list = extract_usages(
-                caller_root, set(names_from_target), usage_node_types
-            )
-
-            # Hold the caller's source code line by line (for usage_context extraction)
-            caller_source_lines: list[str] | None = None
-            if usage_list:
-                try:
-                    with open(caller_abs, "r", encoding="utf-8") as f:
-                        caller_source_lines = f.read().splitlines()
-                except (OSError, UnicodeDecodeError):
-                    pass
-
-            # Step 3: Group by (name, file) and accumulate into lines list
-            # Remap alias variable names to original type names for grouping
-            groups: dict[str, dict] = {}
-            for usage in usage_list:
-                name = usage.name
-                root_symbol = name.split(".")[0]
-                if root_symbol in typed_aliases:
-                    name = typed_aliases[root_symbol] + name[len(root_symbol):]
-
-                if name not in groups:
-                    groups[name] = {
-                        "lines": [usage.line],
-                        "name":  name,
-                        "file":  caller_rel,
-                    }
-                else:
-                    groups[name]["lines"].append(usage.line)
-
-            # Step 4: Extract usage_context from the usage locations of each group
-            # Remove duplicate lines before extracting context
-            for group in groups.values():
-                group["lines"] = sorted(set(group["lines"]))
-            _max_context_locations = 2
-            _context_radius = 3
-            if caller_source_lines:
-                total_lines = len(caller_source_lines)
-                for group in groups.values():
-                    context_parts = []
-                    for line_no in group["lines"][:_max_context_locations]:
-                        start = max(0, line_no - 1 - _context_radius)
-                        end = min(total_lines, line_no - 1 + _context_radius + 1)
-                        snippet = "\n".join(caller_source_lines[start:end])
-                        context_parts.append(snippet)
-                    group["usage_context"] = "\n...\n".join(context_parts)
-
-            caller_usages.extend(groups.values())
-
+        _attach_usage_context(group_dict, os.path.join(project_dir, caller_rel))
+        caller_usages.extend(group_dict.values())
     return caller_usages

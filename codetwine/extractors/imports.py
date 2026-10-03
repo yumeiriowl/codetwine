@@ -18,6 +18,13 @@ _WILDCARD_NODE_TYPE_SET = {"asterisk", "*", "wildcard_import"}
 # Node type of an export statement (JS / TS)
 _EXPORT_STATEMENT_TYPE = "export_statement"
 
+# The name a Python file lists the names "from module import *" takes in, the methods
+# that add to it, and the node types of the constants it is written with
+_PYTHON_ALL_NAME = b"__all__"
+_PYTHON_ALL_METHOD_SET = {b"extend", b"append"}
+_PYTHON_STRING_TYPE = "string"
+_PYTHON_SEQUENCE_TYPE_SET = {"list", "tuple", "parenthesized_expression"}
+
 
 @dataclass
 class ImportInfo:
@@ -39,6 +46,9 @@ class ImportInfo:
     # True for a JS/TS export statement with a source (export { a } from "./m"): its
     # names are passed on to the files that import the file
     is_export: bool = False
+    # True for a member read where its module is required (JS/TS: require("./m").run()):
+    # the statement is a usage of the names on its line
+    is_use: bool = False
 
 
 def cobol_module(kind: str, name: str, library: str = "") -> str:
@@ -118,6 +128,79 @@ def _scope_line_tuple(import_node: Node, scope_types: set[str]) -> tuple[int, in
     while scope_node is not None and scope_node.type not in scope_types:
         scope_node = scope_node.parent
     return _line_tuple(scope_node) if scope_node is not None else None
+
+
+def _member_use_import(module: str, member_node: Node, import_node: Node) -> ImportInfo | None:
+    """Return the import a member read where its module is required gives (JS / TS).
+
+    require("./m").run()  -> the name run of ./m, bound and used on the lines of the access
+
+    Args:
+        module: The module string.
+        member_node: The property node (@member_use).
+        import_node: The member access node (@import_node).
+
+    Returns:
+        The ImportInfo, None when the access is the value a declaration binds to a name
+        (const run = require("./m").run), which binds that name instead.
+    """
+    parent = import_node.parent
+    if parent is not None and parent.type == "variable_declarator":
+        name_node = parent.child_by_field_name("name")
+        if name_node is not None and name_node.type == "identifier":
+            return None
+    return ImportInfo(
+        module=module, names=[member_node.text.decode("utf-8")],
+        line=member_node.start_point[0] + 1, scope_line_tuple=_line_tuple(import_node),
+        is_use=True,
+    )
+
+
+def _callback_import(module: str, callback_node: Node) -> ImportInfo | None:
+    """Return the import the first parameter of a callback given a module binds (JS / TS).
+
+    import("./m").then((m) => ...)              -> "m": the module, on the lines of the callback
+    import("./m").then(({ run, a: b }) => ...)  -> "run" and "b" (the name a of the module)
+
+    Args:
+        module: The module string.
+        callback_node: The function given the module (@callback).
+
+    Returns:
+        The ImportInfo, None when the callback has no parameter or one that is neither
+        a name nor an object pattern.
+    """
+    parameter_node = callback_node.child_by_field_name("parameter")
+    if parameter_node is None:
+        parameter_list_node = callback_node.child_by_field_name("parameters")
+        parameter_node = next(iter(parameter_list_node.named_children), None) if parameter_list_node else None
+    # TS: a parameter holds its pattern in a field
+    if parameter_node is not None and parameter_node.type != "identifier":
+        parameter_node = parameter_node.child_by_field_name("pattern") or parameter_node
+    if parameter_node is None:
+        return None
+    import_info = ImportInfo(
+        module=module, names=[], line=parameter_node.start_point[0] + 1,
+        scope_line_tuple=_line_tuple(callback_node),
+    )
+    if parameter_node.type == "identifier":
+        import_info.module_alias = parameter_node.text.decode("utf-8")
+        return import_info
+    if parameter_node.type != "object_pattern":
+        return None
+    for child in parameter_node.named_children:
+        if child.type == "shorthand_property_identifier_pattern":
+            import_info.names.append(child.text.decode("utf-8"))
+        elif child.type == "pair_pattern":
+            key_node = child.child_by_field_name("key")
+            value_node = child.child_by_field_name("value")
+            if key_node is not None and value_node is not None and value_node.type == "identifier":
+                name = value_node.text.decode("utf-8")
+                import_info.names.append(name)
+                if import_info.alias_map is None:
+                    import_info.alias_map = {}
+                import_info.alias_map[name] = key_node.text.decode("utf-8")
+    return import_info
 
 
 def extract_imports(
@@ -223,6 +306,27 @@ def extract_imports(
         # Get the module name from the @module capture and strip quotes
         raw_module = module_node_list[0].text.decode("utf-8")
         module = _strip_quotes(raw_module)
+
+        # A member read where its module is required, and the callback given a module:
+        # each binds its names for its own lines
+        member_use_node_list = captures.get("member_use", [])
+        callback_node_list = captures.get("callback", [])
+        if member_use_node_list or callback_node_list:
+            special_import: ImportInfo | None = None
+            if member_use_node_list and import_node_list:
+                special_import = _member_use_import(module, member_use_node_list[0], import_node_list[0])
+            elif callback_node_list:
+                then_node_list = captures.get("_then_func", [])
+                if then_node_list and then_node_list[0].text.decode("utf-8") == "then":
+                    special_import = _callback_import(module, callback_node_list[0])
+            if special_import is not None:
+                special_key = (module, special_import.line, special_import.scope_line_tuple, special_import.is_use)
+                known_import = import_by_key_dict.setdefault(special_key, special_import)
+                if known_import is not special_import:
+                    known_import.names.extend(
+                        name for name in special_import.names if name not in known_import.names
+                    )
+            continue
 
         # Get line number from the entire import statement node (fallback to module node)
         if import_node_list:
@@ -379,7 +483,10 @@ def _get_original_name(name_node: Node) -> str | None:
         if alias:
             return name_node.text.decode("utf-8")
 
-    # JS/TS: const { key: name } = require(...) binds name to key
+    # JS/TS: const { key: name } = require(...) and const { key: name = 1 } = require(...)
+    # bind name to key
+    if parent and parent.type == "assignment_pattern":
+        parent = parent.parent
     if parent and parent.type == "pair_pattern":
         key = parent.child_by_field_name("key")
         if key:
@@ -409,6 +516,85 @@ def module_export_list(root_node: Node) -> list[str]:
             if module is not None:
                 module_list.append(module)
     return module_list
+
+
+def _string_list(node: Node) -> list[str] | None:
+    """Return the strings of a list, tuple or single string written as constants (Python).
+
+    Args:
+        node: A list, tuple, parenthesized expression or string node.
+
+    Returns:
+        The strings in the order they are written; None when the node is none of
+        those or holds anything but plain string constants.
+    """
+    if node.type == _PYTHON_STRING_TYPE:
+        content_list = [child for child in node.named_children if child.type != "string_content"]
+        if any(child.type not in ("string_start", "string_end") for child in content_list):
+            return None
+        return ["".join(
+            child.text.decode("utf-8") for child in node.named_children
+            if child.type == "string_content"
+        )]
+    if node.type not in _PYTHON_SEQUENCE_TYPE_SET:
+        return None
+    name_list: list[str] = []
+    for child in node.named_children:
+        if child.type == "comment":
+            continue
+        child_name_list = _string_list(child) if child.type == _PYTHON_STRING_TYPE else None
+        if child_name_list is None:
+            return None
+        name_list.extend(child_name_list)
+    return name_list
+
+
+def python_all_name_list(root_node: Node) -> list[str] | None:
+    """Return the names the __all__ of a Python file lists.
+
+    __all__ = ["a", "b"]         __all__ += ["c"]
+    __all__.extend(["d"])        __all__.append("e")
+    Only statements at the top level of the file are read.
+
+    Args:
+        root_node: The AST root node of the file.
+
+    Returns:
+        The names in the order they are written, without duplicates. None when the
+        file has no __all__, or writes it with anything but string constants.
+    """
+    name_list: list[str] | None = None
+    for statement in root_node.children:
+        if statement.type != "expression_statement" or not statement.named_children:
+            continue
+        node = statement.named_children[0]
+        value_node: Node | None = None
+        is_all = False
+        if node.type in ("assignment", "augmented_assignment"):
+            left_node = node.child_by_field_name("left")
+            is_all = left_node is not None and left_node.text == _PYTHON_ALL_NAME
+            value_node = node.child_by_field_name("right")
+            is_reset = node.type == "assignment"
+        elif node.type == "call":
+            function_node = node.child_by_field_name("function")
+            object_node = function_node.child_by_field_name("object") if function_node else None
+            method_node = function_node.child_by_field_name("attribute") if function_node else None
+            is_all = (
+                function_node is not None and function_node.type == "attribute"
+                and object_node is not None and object_node.text == _PYTHON_ALL_NAME
+                and method_node is not None and method_node.text in _PYTHON_ALL_METHOD_SET
+            )
+            argument_node = node.child_by_field_name("arguments")
+            argument_list = argument_node.named_children if argument_node else []
+            value_node = argument_list[0] if len(argument_list) == 1 else None
+            is_reset = False
+        if not is_all:
+            continue
+        value_name_list = _string_list(value_node) if value_node is not None else None
+        if value_name_list is None:
+            return None
+        name_list = value_name_list if is_reset or name_list is None else name_list + value_name_list
+    return list(dict.fromkeys(name_list)) if name_list is not None else None
 
 
 def local_export_dict(root_node: Node) -> dict[str, str]:

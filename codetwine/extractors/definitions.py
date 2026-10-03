@@ -4,7 +4,12 @@ from dataclasses import dataclass
 from tree_sitter import Node
 from codetwine.extractors.cobol_source import CobolSource
 from codetwine.extractors.r_source import r_definition_list
-from codetwine.config.settings import COBOL_DEFINITION_DICT, R_DEFINITION_DICT
+from codetwine.config.settings import (
+    COBOL_DEFINITION_DICT,
+    PATTERN_FIELD_DICT,
+    PATTERN_TYPE_SET,
+    R_DEFINITION_DICT,
+)
 
 # Regex pattern for filtering out #include guard #define directives
 _INCLUDE_GUARD_RE = re.compile(r"^_*[A-Z][A-Z0-9_]*_H(?:PP|XX)?_*(?:INCLUDED)?_*$")
@@ -33,6 +38,20 @@ CONTAINER_DEFINITION_TYPE_SET = {
     "impl_item",                   # Rust
     "trait_item",                  # Rust
     "mod_item",                    # Rust
+}
+
+# Definition node types of a type an object is made of
+CLASS_DEFINITION_TYPE_SET = {
+    "class_definition",            # Python
+    "class_declaration",           # Java / Kotlin / JS / TS
+    "abstract_class_declaration",  # TS
+    "class_specifier",             # C++
+    "struct_specifier",            # C / C++
+    "union_specifier",             # C / C++
+    "interface_declaration",       # Java / TS
+    "enum_declaration",            # Java / TS
+    "record_declaration",          # Java
+    "object_declaration",          # Kotlin
 }
 
 # Container definition types whose inner definitions are not members of the container:
@@ -81,9 +100,9 @@ _FUNCTION_VALUE_TYPE_SET = {
     "function_expression", "arrow_function", "generator_function", "class",
 }
 
-# Node types holding the names of a destructuring pattern (Python, JS / TS)
-_PATTERN_NODE_TYPE_SET = {
-    "pattern_list", "tuple_pattern", "list_pattern", "object_pattern", "array_pattern",
+# Node types of a name inside a binding pattern
+PATTERN_NAME_TYPE_SET = {
+    "identifier", "shorthand_property_identifier_pattern", "shorthand_field_identifier",
 }
 
 
@@ -363,33 +382,42 @@ def _decorated_inner_node(node: Node, definition_dict: dict[str, str]) -> Node |
     return inner_node
 
 
-def _pattern_name_list(pattern_node: Node) -> list[str]:
-    """Collect the variable names of a destructuring pattern.
+def pattern_name_list(
+    node: Node, pattern_type_set: set[str], pattern_field_dict: dict[str, str],
+) -> list[str]:
+    """Return the names a binding pattern binds.
 
-    Handles nested patterns (e.g. const { a, inner: { b } } = obj, (x, [y, z]) = v).
+    A node in PATTERN_NAME_TYPE_SET is a name. Of a node in pattern_field_dict only the
+    child in that field is read (b = 1 -> b, key: local -> local), its first named
+    child when the field is "", and of a node in pattern_type_set every named child.
+    Any other node (an attribute, a subscript, a type) binds nothing.
+
+    Examples:
+        { a, inner: { b }, hp: local = hp, ...rest }  -> ["a", "b", "local", "rest"]
+        (x, [y, z], *tail)                            -> ["x", "y", "z", "tail"]
 
     Args:
-        pattern_node: An identifier or a node in _PATTERN_NODE_TYPE_SET.
+        node: A pattern node, or a node holding patterns.
+        pattern_type_set: The pattern_types of the language settings.
+        pattern_field_dict: The pattern_field_dict of the language settings.
 
     Returns:
-        The names the pattern binds; an attribute or subscript target gives none.
+        The bound names, in the order they are written.
     """
-    if pattern_node.type == "identifier":
-        return [_node_text(pattern_node)]
-    if pattern_node.type not in _PATTERN_NODE_TYPE_SET:
+    if node.type in PATTERN_NAME_TYPE_SET:
+        return [_node_text(node)]
+    field_name = pattern_field_dict.get(node.type)
+    if field_name is not None:
+        child_list = (
+            node.children_by_field_name(field_name) if field_name else node.named_children[:1]
+        )
+    elif node.type in pattern_type_set:
+        child_list = node.named_children
+    else:
         return []
     name_list: list[str] = []
-    for child in pattern_node.children:
-        if child.type == "shorthand_property_identifier_pattern":
-            # a, b in { a, b }
-            name_list.append(_node_text(child))
-        elif child.type == "pair_pattern":
-            # { key: localName } -> localName (local variable name) is defined
-            value_node = child.child_by_field_name("value")
-            if value_node is not None:
-                name_list.extend(_pattern_name_list(value_node))
-        else:
-            name_list.extend(_pattern_name_list(child))
+    for child in child_list:
+        name_list.extend(pattern_name_list(child, pattern_type_set, pattern_field_dict))
     return name_list
 
 
@@ -417,7 +445,7 @@ def _extract_assignment_name_list(node: Node) -> list[str]:
     while inner_node is not None and inner_node.type == "assignment":
         left_node = inner_node.child_by_field_name("left")
         if left_node is not None:
-            name_list.extend(_pattern_name_list(left_node))
+            name_list.extend(pattern_name_list(left_node, PATTERN_TYPE_SET, PATTERN_FIELD_DICT))
         inner_node = inner_node.child_by_field_name("right")
     return name_list
 
@@ -458,7 +486,7 @@ def _extract_variable_declarator_name_list(node: Node) -> list[str]:
         if child.type == "variable_declarator":
             name_node = child.child_by_field_name("name")
             if name_node is not None:
-                name_list.extend(_pattern_name_list(name_node))
+                name_list.extend(pattern_name_list(name_node, PATTERN_TYPE_SET, PATTERN_FIELD_DICT))
     return name_list
 
 

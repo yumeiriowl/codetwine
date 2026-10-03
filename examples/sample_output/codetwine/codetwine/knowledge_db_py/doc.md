@@ -4,59 +4,86 @@
 
 **Overview**
 
-Persists and serves the whole-project analysis result as a queryable SQLite database built incrementally from per-file JSON outputs.
+Build and query a SQLite database containing consolidated project-wide code analysis results including file dependencies, definitions, and documentation.
 
-- A pipeline building final knowledge artifacts calls `save_consolidated_sqlite` to write `project_knowledge.sqlite`, feeding it the file list, symbol-level dependency map and summary map so the database mirrors `project_knowledge.json` without holding the whole project in memory.
-- A consumer that needs to read back the database calls `open_knowledge` to get a read-only `sqlite3.Connection` with row access by column name.
-- A caller wanting the project's display name calls `get_project_name`.
-- A caller iterating over all analyzed files calls `iter_files` or `iter_dependencies` to stream file entries or per-file caller/callee summaries in insertion order.
-- A caller looking up one file's stored data calls `get_file`, and one wanting its dependency edges calls `callees_of` or `callers_of`; a caller searching for a symbol by name (exact or partial, case-insensitive) calls `find_definitions` without loading any file body.
+This file is used to:
+- Call `save_consolidated_sqlite()` from the analysis pipeline to write the entire project's analysis results into a SQLite database, replacing the previous database atomically.
+- Call `open_knowledge()` to open an existing knowledge database for read-only querying.
+- Call `get_project_name()` to retrieve the analyzed project's name from database metadata.
+- Call `iter_dependencies()` or `iter_files()` to stream file dependency and documentation entries from the database one at a time.
+- Call `get_file()`, `callees_of()`, `callers_of()`, or `find_definitions()` to query specific files, their dependencies, or definitions by name.
 
-This file relies on `codetwine/output.py`'s `build_file_entry` to read each file's `file_dependencies.json` and `doc.json` into a single entry, and on `to_output_path` to compute the "project_name/copy_path" identifiers used as primary keys and edge endpoints. It is used by `codetwine/pipeline.py`, which calls `save_consolidated_sqlite` after per-file analysis to produce the consolidated SQLite output as an alternative to the JSON form.
+The file depends on `codetwine/output.py` for `build_file_entry()` to read per-file analysis results from disk and `to_output_path()` to standardize file paths into the "project_name/copy_path" format. The file is used by `codetwine/pipeline.py` to save analysis results and by `examples/rlm_qa/knowledge_store.py` as a query interface to the database for accessing file entries, dependencies, project metadata, and definition locations.
 
-Design decisions worth knowing: the database is always rebuilt from scratch (any existing file at `output_path` is deleted first) because the per-file JSON files, not the database, are the source of truth; files are read, inserted and released one at a time to bound memory use; caller and callee edges are stored exactly as produced by two independent analyses in `symbol_deps` without deriving one direction from the other, using `INSERT OR IGNORE` to tolerate duplicate edges; and a `schema_version` value is recorded in the `meta` table for forward compatibility checks by readers.
+The database is written to a temporary file and atomically moved to the final location only after all writes succeed, ensuring an existing database is never left in a corrupted or incomplete state. The schema includes tables for file metadata, file-level dependencies, and symbol-level definitions, with indexes on the definitions table for efficient name-based lookups.
 
 **Definitions**
 
 ## `SCHEMA_VERSION`
-A module-level constant string identifying the current table layout, stored in the `meta` table under key `schema_version` and meant to be bumped whenever `_SCHEMA` changes so readers can detect incompatible databases.
+
+Constant string identifying the database schema version; stored in the meta table and used for compatibility checking when opening an existing database.
 
 ## `_SCHEMA`
-A multi-statement SQL string defining the four tables (`meta`, `files`, `file_edges`, `definitions`) and their indexes that make up the knowledge database; used once via `executescript` when creating a new database, establishing the on-disk structure that every other function in this file reads or writes.
 
-## `_definition_rows`
-Generates the tuples to insert into the `definitions` table for a single file by reading the `definitions` list out of a file's `file_dependencies` payload, extracting `name`, `type`, `start_line` and `end_line` for each; called while building rows for `connection.executemany` so definitions can be inserted without materializing the whole list twice.
+SQL text defining the complete database schema, including five tables (meta, files, file_edges, definitions) and indexes for efficient querying by file, direction, and definition name.
+
+## `_iter_definition_row`
+
+Generator that yields tuples of (file, name, type, start_line, end_line) extracted from a file's "definitions" list in file_dependencies, one tuple per definition to be inserted into the definitions table.
 
 ## `save_consolidated_sqlite`
-Builds (or replaces) the whole project's SQLite knowledge database from per-file JSON outputs: for each file in `all_file_list` it calls `build_file_entry` to load `file_dependencies.json`/`doc.json`, inserts a row into `files` (with summary from `summary_map` and JSON-serialized `file_dependencies`/`doc`), inserts matching rows into `definitions`, then in a second pass inserts `caller`/`callee` edges into `file_edges` from `symbol_deps`, converting file paths with `to_output_path`. It deletes any pre-existing file at `output_path` before starting, commits once at the end, and logs how many of the requested files actually produced a row; entries where `build_file_entry` returns None are skipped and not counted as written.
+
+Reads per-file analysis results from disk using `build_file_entry()`, writes them to a SQLite database at a temporary path along with file-level and symbol-level dependency edges, and atomically moves the temporary database to the final output path. Logs the count of successfully written files. Called during the analysis pipeline to persist consolidated knowledge to disk; the database replaces any existing database at the output path.
 
 ## `open_knowledge`
-Opens an existing knowledge database at a given path in read-only mode via a SQLite URI connection with `sqlite3.Row` row factory, so callers get dict-like row access; raises `FileNotFoundError` when no database exists at that path, which callers use as the standard way to detect a missing knowledge database.
+
+Opens a knowledge database at a given path for read-only access, raising FileNotFoundError if the path does not exist. Returns a connection with row factory set to sqlite3.Row so result rows behave like dictionaries.
 
 ## `get_project_name`
-Looks up the `project_name` value from the `meta` table and returns it, or None if the row is absent; used to display or identify which project a given knowledge database was built from.
+
+Queries the meta table for the "project_name" key and returns its value, or None if the key is not present; used by consuming code to identify which project the database analyzes.
 
 ## `_row_to_entry`
-Converts one row of the `files` table back into the consolidated entry shape used throughout the project (a dict with `file`, and `file_dependencies`/`doc` only when those columns are non-null, parsed from their stored JSON text); shared by `iter_files` and `get_file` to keep the JSON entry reconstruction logic in one place.
+
+Converts one row from the files table back into a consolidated entry dict with "file" as a required key and "file_dependencies" and "doc" as optional keys parsed from JSON text, reconstructing the structure produced by `build_file_entry()`.
 
 ## `iter_files`
-Streams every row of the `files` table in insertion (`rowid`) order, yielding each as a consolidated entry via `_row_to_entry`; used to reproduce the "files" array of `project_knowledge.json` without loading the entire table into memory at once.
+
+Yields every file entry from the files table in insertion order, with each entry reconstructed to match the structure of consolidated JSON "files" elements, allowing streaming reads without loading the entire database into memory.
 
 ## `iter_dependencies`
-Streams, per file in insertion order, a dict of `file`, `summary`, `callers` and `callees`, calling `callers_of` and `callees_of` for each file; reproduces the "project_dependencies" array of `project_knowledge.json` for consumers that need summary plus dependency direction lists together.
+
+Yields one dict per file in insertion order, containing "file", "summary", "callers" (list of dependent file paths), and "callees" (list of dependency target file paths), matching the structure of consolidated JSON "project_dependencies" elements and querying both file_edges directions for each file.
 
 ## `get_file`
-Fetches the single `files` row matching an exact file path and converts it with `_row_to_entry`, returning None when no such file is stored; used for direct lookup of one file's dependencies and doc content by its "project_name/copy_path" key.
+
+Retrieves a single file's consolidated entry (file, file_dependencies, doc) from the files table by exact file path match, returning None if the file is not in the database.
+
+## `_edge_list`
+
+Queries the file_edges table for all edges from a given file in a given direction (caller or callee), returning the file paths at the other end sorted alphabetically; used internally by `callees_of()` and `callers_of()`.
 
 ## `callees_of`
-Queries `file_edges` for rows where `direction = 'callee'` and the given file matches, returning the sorted list of files it depends on; used to answer "what does this file call" without touching the `files` table.
+
+Returns the sorted list of file paths that a given file depends on, queried from the file_edges table with direction "callee".
 
 ## `callers_of`
-Queries `file_edges` for rows where `direction = 'caller'` and the given file matches, returning the sorted list of files recorded as depending on it; used to answer "what calls this file" from the same `file_edges` table, independent of and not derived from `callees_of`.
+
+Returns the sorted list of file paths that depend on a given file, queried from the file_edges table with direction "caller".
 
 ## `find_definitions`
-Searches the `definitions` table for a given name, either an exact match or, when `partial` is true, a case-insensitive substring match using a `LIKE` pattern with `%`/`_` escaped so those characters in `name` are treated literally, ordering results by file and start line; returns plain dicts with `file`, `name`, `type`, `start_line`, `end_line` so a caller can locate a symbol's definitions across the whole project without reading any source or doc file body.
+
+Searches the definitions table for definitions matching a given name, supporting exact name matching or partial case-insensitive matching with the partial parameter. Returns a list of dicts with "file", "name", "type", "start_line", and "end_line" keys, sorted by file and line number; escapes literal % and _ characters in partial searches to match them literally.
 
 # Summary
 
-Builds and serves a SQLite-backed project knowledge database from per-file JSON outputs, mirroring project_knowledge.json without loading everything into memory. Public API: SCHEMA_VERSION, save_consolidated_sqlite, open_knowledge, get_project_name, iter_files, iter_dependencies, get_file, callees_of, callers_of, find_definitions. Key concepts: incremental construction, meta/files/file_edges/definitions tables, caller/callee dependency edges, symbol definitions lookup, read-only access, schema versioning, memory-bounded streaming, JSON-serialized file entries.
+# Summary of codetwine/knowledge_db.py
+
+**Single Responsibility**
+Build, persist, and query a SQLite database of consolidated project-wide code analysis results, providing atomic writes and efficient lookups of files, dependencies, and symbol definitions.
+
+**Main Public Definitions**
+`save_consolidated_sqlite()`, `open_knowledge()`, `get_project_name()`, `iter_files()`, `iter_dependencies()`, `get_file()`, `callees_of()`, `callers_of()`, `find_definitions()`.
+
+**Key Terms**
+SQLite database schema with tables for file metadata, file-level dependencies (edges), and symbol-level definitions; atomic temporary-file writes; read-only database access; row factory for dict-like result rows; streaming iteration without full in-memory loading; indexed definitions table for efficient name-based searches; exact and partial case-insensitive definition matching; dependency direction tracking (caller/callee).

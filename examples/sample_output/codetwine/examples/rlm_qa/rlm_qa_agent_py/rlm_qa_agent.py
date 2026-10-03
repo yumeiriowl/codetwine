@@ -167,15 +167,15 @@ def build_doc_schema(store: knowledge_store.Store) -> str:
     Returns:
         Text listing doc sections
     """
-    sections = []
+    section_list = []
     for file_entry in store.iter_entries():
         doc = file_entry.get("doc") or {}
         if doc.get("sections"):
-            sections = doc["sections"]
+            section_list = doc["sections"]
             break
 
-    section_rows = [f"| `{s['id']}` | {s['title']} |" for s in sections]
-    section_table = "| id | title |\n|---|---|\n" + "\n".join(section_rows)
+    section_row_list = [f"| `{section['id']}` | {section['title']} |" for section in section_list]
+    section_table = "| id | title |\n|---|---|\n" + "\n".join(section_row_list)
 
     return "**doc.sections list for this project (each section has content in its content field):**\n" + section_table
 
@@ -186,7 +186,7 @@ def load_project(knowledge_path: str) -> dict:
     A ".sqlite" path is queried per file; any other path is read as
     project_knowledge.json. Both answer the same questions.
 
-    project_data is what the RLM sandbox receives, so it carries only the file graph and
+    project_data, which the RLM sandbox receives, carries only the file graph and
     one summary per file. The definitions, source code and design documents stay behind
     the tools, which run on the host.
 
@@ -222,12 +222,12 @@ def create_interpreter() -> PythonInterpreter:
     deno_dir = os.environ.get("DENO_DIR")
     if not deno_dir:
         try:
-            result = subprocess.run(
+            deno_info = subprocess.run(
                 ["deno", "info", "--json"],
                 capture_output=True, text=True, check=False,
             )
-            if result.returncode == 0:
-                deno_dir = json.loads(result.stdout).get("denoDir")
+            if deno_info.returncode == 0:
+                deno_dir = json.loads(deno_info.stdout).get("denoDir")
         except FileNotFoundError:
             pass
     if not deno_dir:
@@ -312,11 +312,11 @@ def ask(rlm: dspy.RLM, question: str) -> str:
     Returns:
         Answer text
     """
-    result = rlm(
+    prediction = rlm(
         project_data=project_data,
         question=question,
     )
-    return result.answer
+    return prediction.answer
 
 
 def main() -> None:

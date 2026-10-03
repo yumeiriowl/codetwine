@@ -1,0 +1,511 @@
+{
+  "file": "codetwine/codetwine/extractors/definition_source_py/definition_source.py",
+  "language": "py",
+  "detected_encoding": null,
+  "definitions": [
+    {
+      "name": "_definition_cache",
+      "type": "expression_statement",
+      "start_line": 24,
+      "end_line": 24,
+      "context": "_definition_cache: OrderedDict[str, tuple[list[DefinitionInfo], bytes]] = OrderedDict()"
+    },
+    {
+      "name": "_definition_list_cache",
+      "type": "expression_statement",
+      "start_line": 28,
+      "end_line": 28,
+      "context": "_definition_list_cache: dict[str, list[DefinitionInfo]] = {}"
+    },
+    {
+      "name": "clear_definition_source_cache",
+      "type": "function_definition",
+      "start_line": 31,
+      "end_line": 34,
+      "context": "def clear_definition_source_cache() -> None:\n    \"\"\"Forget the definitions and text of every file.\"\"\"\n    _definition_cache.clear()\n    _definition_list_cache.clear()"
+    },
+    {
+      "name": "file_definition_list",
+      "type": "function_definition",
+      "start_line": 37,
+      "end_line": 54,
+      "context": "def file_definition_list(absolute_path: str, definition_dict: dict[str, str]) -> list[DefinitionInfo]:\n    \"\"\"Return the definitions of a file (extract_definitions), read once per file.\n\n    The file is parsed the first time; the definitions are kept without its syntax\n    tree until clear_definition_source_cache() is called.\n\n    Args:\n        absolute_path: Absolute path of the file.\n        definition_dict: Definition node settings of its language.\n\n    Returns:\n        The definitions sorted by start_line. The list is shared: it is not to be modified.\n    \"\"\"\n    definition_list = _definition_list_cache.get(absolute_path)\n    if definition_list is None:\n        definition_list = extract_definitions(parse_file(absolute_path)[0], definition_dict)\n        _definition_list_cache[absolute_path] = definition_list\n    return definition_list"
+    },
+    {
+      "name": "file_content",
+      "type": "function_definition",
+      "start_line": 57,
+      "end_line": 68,
+      "context": "def file_content(absolute_path: str) -> bytes:\n    \"\"\"Return the UTF-8 text of a file as parse_file() returns it, without parsing the file.\n\n    Args:\n        absolute_path: Absolute path of the file.\n\n    Returns:\n        The text of the entry of parse_cache when the file is in it, else the text\n        read from the file (read_utf8_content).\n    \"\"\"\n    cache_entry = parse_cache.get(absolute_path)\n    return cache_entry[1] if cache_entry is not None else read_utf8_content(absolute_path)"
+    },
+    {
+      "name": "_file_definition",
+      "type": "function_definition",
+      "start_line": 71,
+      "end_line": 92,
+      "context": "def _file_definition(absolute_path: str, definition_dict: dict[str, str]) -> tuple[list[DefinitionInfo], bytes]:\n    \"\"\"Return the definitions and the UTF-8 text of a file, kept together while it stays in the cache.\n\n    Args:\n        absolute_path: Absolute path of the file.\n        definition_dict: Definition node settings of its language.\n\n    Returns:\n        (definitions sorted by start_line, text of the file).\n    \"\"\"\n    cache_entry = _definition_cache.get(absolute_path)\n    if cache_entry is not None:\n        _definition_cache.move_to_end(absolute_path)\n        return cache_entry\n    cache_entry = (\n        file_definition_list(absolute_path, definition_dict), file_content(absolute_path),\n    )\n    _definition_cache[absolute_path] = cache_entry\n    if PARSE_CACHE_MAX_FILES > 0:\n        while len(_definition_cache) > PARSE_CACHE_MAX_FILES:\n            _definition_cache.popitem(last=False)\n    return cache_entry"
+    },
+    {
+      "name": "_is_inside",
+      "type": "function_definition",
+      "start_line": 95,
+      "end_line": 102,
+      "context": "def _is_inside(definition: DefinitionInfo, owner_list: list[DefinitionInfo]) -> bool:\n    \"\"\"Return whether a definition is written inside the lines of one of the owners.\"\"\"\n    return any(\n        owner is not definition\n        and owner.start_line <= definition.start_line\n        and definition.end_line <= owner.end_line\n        for owner in owner_list\n    )"
+    },
+    {
+      "name": "_find_by_path",
+      "type": "function_definition",
+      "start_line": 105,
+      "end_line": 150,
+      "context": "def _find_by_path(\n    definition_list: list[DefinitionInfo], part_list: list[str],\n) -> DefinitionInfo | None:\n    \"\"\"Follow the parts of a name through the definitions of a file.\n\n    The first part is looked up among all definitions; each further part among the\n    definitions written inside the definitions the part before it named (a class and\n    its members; a Rust struct and each of its impl blocks). The walk stops at the\n    first part that names nothing.\n\n    Examples:\n        [\"Settings\", \"new\"]   -> fn new inside impl Settings\n        [\"Mode\", \"Slow\"]      -> enum Mode (Slow is no definition)\n        [\"Delete\", \"Handler\", \"Run\"] -> Run inside Handler inside Delete\n\n    Args:\n        definition_list: Definitions of a file, sorted by start_line.\n        part_list: The parts of the name.\n\n    Returns:\n        The definition the last part reached names: of several, one that defines the\n        name itself (not in ATTACHED_DEFINITION_TYPE_SET) first, for the first part a\n        top-level one first, then the first in line order. None when the first part\n        names nothing.\n    \"\"\"\n    last_definition: DefinitionInfo | None = None\n    owner_list: list[DefinitionInfo] | None = None\n    for part in part_list:\n        match_list = [\n            definition for definition in definition_list\n            if definition.name == part\n            and (owner_list is None or _is_inside(definition, owner_list))\n        ]\n        if not match_list:\n            break\n        own_list = [\n            definition for definition in match_list\n            if definition.type not in ATTACHED_DEFINITION_TYPE_SET\n        ]\n        if owner_list is None:\n            # The first part names a top-level definition before a member of the same name\n            top_level_id_set = {id(d) for d in select_top_level_definitions(definition_list)}\n            own_list.sort(key=lambda definition: id(definition) not in top_level_id_set)\n        last_definition = (own_list or match_list)[0]\n        owner_list = match_list\n    return last_definition"
+    },
+    {
+      "name": "find_definition",
+      "type": "function_definition",
+      "start_line": 153,
+      "end_line": 180,
+      "context": "def find_definition(\n    definition_list: list[DefinitionInfo], callee_name: str,\n) -> DefinitionInfo | None:\n    \"\"\"Return the definition of a file that a name written with \".\" or \"::\" names.\n\n    Tried in this order:\n        1. A definition named callee_name as a whole (C++: Shape::area defined outside its class)\n        2. The parts of the name followed from each part in turn (_find_by_path), so\n           the leading parts that are no definitions of the file (modules, namespaces,\n           a variable) are skipped\n\n    Args:\n        definition_list: Definitions of a file, sorted by start_line.\n        callee_name: Name of the definition to find.\n\n    Returns:\n        The definition, or None when no part of the name is a definition of the file.\n    \"\"\"\n    part_list = symbol_part_list(callee_name)\n    if len(part_list) > 1:\n        for definition in definition_list:\n            if definition.name == callee_name:\n                return definition\n    for start in range(len(part_list)):\n        definition = _find_by_path(definition_list, part_list[start:])\n        if definition is not None:\n            return definition\n    return None"
+    },
+    {
+      "name": "file_definition",
+      "type": "function_definition",
+      "start_line": 183,
+      "end_line": 199,
+      "context": "def file_definition(\n    file_rel: str, name: str, project_dir: str,\n) -> DefinitionInfo | None:\n    \"\"\"Return the definition of a file that a name names (find_definition).\n\n    Args:\n        file_rel: Path of the file relative to the project root.\n        name: Name of the definition, its parts joined with \".\" or \"::\".\n        project_dir: Absolute path to the project root.\n\n    Returns:\n        The definition. None when the name names no definition of the file, and for a\n        file whose definitions are not read by extract_definitions() from a syntax\n        tree (COBOL, BMS, R, a file without a language).\n    \"\"\"\n    definition_tuple = source_definition(file_rel, name, project_dir)\n    return definition_tuple[0] if definition_tuple is not None else None"
+    },
+    {
+      "name": "source_definition",
+      "type": "function_definition",
+      "start_line": 202,
+      "end_line": 255,
+      "context": "def source_definition(\n    file_rel: str, name: str, project_dir: str, start_line: int | None = None,\n) -> tuple[DefinitionInfo, str] | None:\n    \"\"\"Return the definition of a file a name names, with its source text.\n\n    With start_line, the parts of the name are tried from the last one and the first\n    definition named like the part whose first line is start_line is taken; when\n    there is none, and without start_line, the name is looked up by find_definition().\n\n    Examples (class Gen<T> on line 7 and class Gen on line 11, each with Size):\n        \"Gen.Size\", 13   -> Size inside class Gen\n        \"Gen\", 11        -> class Gen\n        \"Gen.Count\", 11  -> class Gen (Count is no definition)\n\n    Args:\n        file_rel: Path of the file relative to the project root.\n        name: Name of the definition, its parts joined with \".\" or \"::\".\n        project_dir: Absolute path to the project root.\n        start_line: First line of the definition (1-based), None when it is not known.\n\n    Returns:\n        (definition, source text of the definition). None when the name names no\n        definition of the file, and for a file whose definitions are not read by\n        extract_definitions() from a syntax tree (COBOL, BMS, R, a file without a\n        language).\n    \"\"\"\n    absolute_path = os.path.join(project_dir, file_rel)\n    file_ext = language_ext(absolute_path)\n    definition_dict = EXT_TO_DEFINITION_DICT.get(file_ext)\n    if (\n        not definition_dict\n        or definition_dict is COBOL_DEFINITION_DICT\n        or definition_dict is BMS_DEFINITION_DICT\n        or file_ext in R_EXT_SET\n    ):\n        return None\n    definition_list, content = _file_definition(absolute_path, definition_dict)\n    definition: DefinitionInfo | None = None\n    if start_line is not None:\n        for part in reversed(symbol_part_list(name)):\n            definition = next(\n                (\n                    candidate for candidate in definition_list\n                    if candidate.name == part and candidate.start_line == start_line\n                ),\n                None,\n            )\n            if definition is not None:\n                break\n    if definition is None:\n        definition = find_definition(definition_list, name)\n    if definition is None:\n        return None\n    return definition, content[definition.start_byte:definition.end_byte].decode(\"utf-8\")"
+    },
+    {
+      "name": "extract_callee_source",
+      "type": "function_definition",
+      "start_line": 258,
+      "end_line": 299,
+      "context": "def extract_callee_source(\n    callee_file_path: str,\n    callee_name: str,\n    project_dir: str,\n) -> str | None:\n    \"\"\"Retrieve the definition source code for a specified name from the dependency target file.\n\n    The name is looked up among the definitions of the file (extract_definitions) and\n    the source text of the definition is returned. A name with several parts\n    (\"Settings::new\", \"Config.load\", \"config::Settings::new\") names the definition of\n    its last part inside the definitions of the parts before it; when the last part\n    is no definition, the definition of the part before it is returned (the owner of\n    an enum variant, the variable a method is called on). See find_definition.\n\n    For a COBOL file the lines of the first definition with the name are returned;\n    names are compared without regard to upper and lower case.\n    For an R file the lines of the definition named callee_name as a whole are returned\n    (r_source.r_definition_text); the name is not split into parts.\n\n    Args:\n        callee_file_path: Path of the dependency target file (relative to project root, e.g. \"src/foo.py\").\n        callee_name: Name of the definition to retrieve (e.g. \"parse_file\", \"helper.process\",\n                     \"config::Settings::new\").\n        project_dir: Absolute path to the project root.\n\n    Returns:\n        The source code string. None if the definition is not found.\n    \"\"\"\n    absolute_path = os.path.join(project_dir, callee_file_path)\n    file_ext = language_ext(absolute_path)\n    definition_dict = EXT_TO_DEFINITION_DICT.get(file_ext)\n    if not definition_dict:\n        return None\n\n    if definition_dict is COBOL_DEFINITION_DICT or definition_dict is BMS_DEFINITION_DICT:\n        return parse_file(absolute_path)[0].definition_source(callee_name)\n    if file_ext in R_EXT_SET:\n        callee_root, callee_content = parse_file(absolute_path)\n        return r_definition_text(callee_root, callee_content, callee_name)\n\n    definition_tuple = source_definition(callee_file_path, callee_name, project_dir)\n    return definition_tuple[1] if definition_tuple is not None else None"
+    },
+    {
+      "name": "extract_definition_source",
+      "type": "function_definition",
+      "start_line": 302,
+      "end_line": 321,
+      "context": "def extract_definition_source(\n    file_rel: str, name: str, start_line: int, project_dir: str,\n) -> str | None:\n    \"\"\"Return the source text of the definition of a name that starts on a line.\n\n    Args:\n        file_rel: Path, relative to the project root, of a file whose definitions\n            extract_definitions() reads from a syntax tree.\n        name: Name of the definition, its parts joined with \".\" or \"::\".\n        start_line: First line of the definition (1-based).\n        project_dir: Absolute path to the project root.\n\n    Returns:\n        The source text of the definition source_definition() gives for the name and\n        the line. The return value of extract_callee_source() when it gives none.\n    \"\"\"\n    definition_tuple = source_definition(file_rel, name, project_dir, start_line)\n    if definition_tuple is not None:\n        return definition_tuple[1]\n    return extract_callee_source(file_rel, name, project_dir)"
+    }
+  ],
+  "callee_usages": [
+    {
+      "lines": [
+        24,
+        28,
+        37,
+        71,
+        95,
+        98,
+        106,
+        107,
+        130,
+        131,
+        154,
+        155,
+        185,
+        204,
+        239
+      ],
+      "name": "DefinitionInfo",
+      "from": "codetwine/codetwine/extractors/definitions_py/definitions.py",
+      "target_context": "@dataclass\nclass DefinitionInfo:\n    \"\"\"Data class holding information about a single definition.\"\"\"\n\n    name: str                                     # Definition name (function / class / variable / type, etc.)\n    type: str                                     # AST node type (\"function_definition\" / \"expression_statement\", etc.)\n    start_line: int                               # Start line number of the definition (1-based)\n    end_line: int                                 # End line number of the definition\n    name_line: int | None = None                  # Line the name is written on (COBOL, BMS)\n    level: int | None = None                      # Level number of a data item (COBOL, BMS)\n    is_group: bool | None = None                  # Whether a data item is a group item (COBOL, BMS)\n    # Byte range of the definition in the UTF-8 text parse_file() returns; None for a\n    # COBOL, BMS or R definition\n    start_byte: int | None = None\n    end_byte: int | None = None",
+      "target_name": "DefinitionInfo",
+      "target_start_line": 109
+    },
+    {
+      "lines": [
+        52
+      ],
+      "name": "extract_definitions",
+      "from": "codetwine/codetwine/extractors/definitions_py/definitions.py",
+      "target_context": "def extract_definitions(\n    root_node: Node | CobolSource,\n    definition_dict: dict[str, str],\n) -> list[DefinitionInfo]:\n    \"\"\"Extract definitions (functions, classes, variables, types, etc.) from the AST and return them in line-number order.\n\n    For a CobolSource its definitions are returned: programs, ENTRY names, sections,\n    paragraphs, data items, index names and descriptions of files, with the line of the\n    name, and the level number and whether it is a group item for a data item.\n\n    For an R file (definition_dict is R_DEFINITION_DICT) the definitions\n    r_definition_list() reads are returned: top-level assignments, the names setClass\n    and the like are given, and the members of R6Class and setRefClass.\n\n    definition_dict structure:\n        key = AST node type (e.g. \"function_definition\")\n        value = one of the following:\n          - Child node type name (standard pattern): obtains the name from a direct child.\n            e.g. \"identifier\" -> searches node.children for a child with type==\"identifier\"\n          - \"__sentinel__\" format sentinel value (special pattern): the names are read by\n            a dedicated extraction function.\n            e.g. \"__assignment__\" -> expression_statement > assignment > identifier\n\n    A node that defines several names (int a, b; / X, Y = 1, 2 / const { a, b } = obj)\n    gives one definition per name, all with the line range of the node.\n\n    If no name is obtained (e.g. a C/C++ declaration is a function prototype),\n    child nodes are added to the queue and BFS continues. This allows detection of\n    definitions like function_declarator nested inside.\n\n    Args:\n        root_node: The AST root node covering the entire file, or the CobolSource of a COBOL file.\n        definition_dict: Per-language definition node settings.\n\n    Returns:\n        A list of DefinitionInfo sorted by line number in ascending order.\n    \"\"\"\n    if isinstance(root_node, CobolSource):\n        return [\n            DefinitionInfo(\n                definition.name, definition.type, definition.start_line, definition.end_line,\n                definition.name_line, definition.level, definition.is_group,\n            )\n            for definition in root_node.definition_list\n        ]\n    if definition_dict is R_DEFINITION_DICT:\n        return [\n            DefinitionInfo(definition.name, definition.type, definition.start_line, definition.end_line)\n            for definition in r_definition_list(root_node)\n        ]\n\n    definition_list: list[DefinitionInfo] = []\n\n    # BFS traversal of the AST using a deque\n    node_queue = deque([root_node])\n\n    while node_queue:\n        node = node_queue.popleft()\n        if node.type not in definition_dict:\n            # If not a definition node, add children to the queue to dig deeper, except\n            # into the body of a function written as a value, whose declarations are local\n            if node.type not in _LOCAL_BODY_TYPE_SET or _is_call_in_place(node):\n                node_queue.extend(node.children)\n            continue\n\n        # A decorated definition (e.g. @property) is named and typed after the\n        # function / class inside it and keeps the line range including the decorator\n        inner_node = _decorated_inner_node(node, definition_dict) if node.type == \"decorated_definition\" else node\n        name_list = definition_name_list(inner_node, definition_dict) if inner_node else []\n        if node.type == \"preproc_def\":\n            # Exclude #include guard #define directives\n            name_list = [name for name in name_list if not _INCLUDE_GUARD_RE.match(name)]\n        if not name_list:\n            # When no name is obtained, descend into child nodes to continue search\n            node_queue.extend(node.children)\n            continue\n\n        # The definition covers the declaration its node is the declarator of\n        extent_node = _extent_node(node, definition_dict)\n        start_line, end_line = _line_range(extent_node)\n        for name in name_list:\n            definition_list.append(DefinitionInfo(\n                name=name, type=inner_node.type, start_line=start_line, end_line=end_line,\n                start_byte=extent_node.start_byte, end_byte=extent_node.end_byte,\n            ))\n\n        # Continue traversal inside container-type definitions (e.g. namespace),\n        # and inside the type a declaration is written with\n        if inner_node.type in CONTAINER_DEFINITION_TYPE_SET:\n            node_queue.extend(inner_node.children)\n        elif inner_node.type in _TYPE_FIELD_DEFINITION_TYPE_SET:\n            type_node = inner_node.child_by_field_name(\"type\")\n            if type_node is not None:\n                node_queue.append(type_node)\n        elif inner_node.type == \"expression_statement\":\n            # The entries of an object a CommonJS module exports\n            export_assignment = commonjs_export_assignment(inner_node)\n            if export_assignment is not None and export_assignment[1].type == \"object\":\n                node_queue.extend(export_assignment[1].children)\n\n    return sorted(definition_list, key=lambda definition: definition.start_line)",
+      "target_name": "extract_definitions",
+      "target_start_line": 126
+    },
+    {
+      "lines": [
+        52,
+        293,
+        295
+      ],
+      "name": "parse_file",
+      "from": "codetwine/codetwine/parsers/ts_parser_py/ts_parser.py",
+      "target_context": "def parse_file(file_path: str) -> tuple[Node | CobolSource, bytes]:\n    \"\"\"Read a file, parse it with tree-sitter, and return (AST root node, byte content).\n\n    The file is decoded by read_source() and parsed as UTF-8, whatever encoding it is\n    stored in; the byte content is that UTF-8 text, and the text of every node decodes\n    as UTF-8. Line numbers are those of line_list_of() over the file.\n\n    For a COBOL file the first element is a CobolSource (read_cobol_source) in place of\n    the root node, and for a BMS source the CobolSource of its symbolic maps\n    (read_bms_source); extract_definitions(), extract_imports() and extract_usages()\n    take it as they take a root node. The language is the one language_ext() gives.\n\n    For an R Markdown or Quarto file the root node is the tree of its R code chunks\n    (r_chunk_code), each node at the position its code has in the file; the byte content\n    is the whole file. A chunk whose code does not end inside the chunk (an open \"{\", an\n    operator at its end) is left out of the tree.\n\n    For a C or C++ file a macro name written between a class keyword and a class name\n    (class EXPORT Shape { ... }) is read as spaces (_parse_c_family); the byte content\n    is the whole file, and class_macro_cache holds those names and their lines.\n\n    Parse results are cached at module level; a file found in the cache is not parsed again.\n    The cache holds at most PARSE_CACHE_MAX_FILES entries; when it is full, the least\n    recently used entry is discarded and that file is parsed again the next time it is\n    requested. PARSE_CACHE_MAX_FILES = 0 disables the limit.\n\n    Args:\n        file_path: Absolute path of the file to parse.\n\n    Returns:\n        A (root_node, content) tuple.\n    \"\"\"\n    # Return from cache if available, marking the entry as most recently used\n    cache_entry = parse_cache.get(file_path)\n    if cache_entry is not None:\n        parse_cache.move_to_end(file_path)\n        return cache_entry\n\n    # Get the corresponding language from the file extension\n    ext = language_ext(file_path)\n\n    # Read the file as UTF-8 bytes\n    content = read_utf8_content(file_path)\n\n    if ext in COBOL_EXT_SET:\n        # Split the COBOL text into statements and parse each of them\n        cobol_source = read_cobol_source(content.decode(\"utf-8\"), EXT_TO_LANGUAGE_DICT[ext])\n        parse_result = (cobol_source, content)\n    elif ext in BMS_EXT_SET:\n        # Read the maps of the BMS macros\n        parse_result = (read_bms_source(content.decode(\"utf-8\")), content)\n    elif ext in R_MARKDOWN_EXT_SET:\n        # Parse the R code chunks of the document, everything else blanked; a chunk\n        # whose code runs on past its end is blanked as well\n        language = EXT_TO_LANGUAGE_DICT[ext]\n        chunk_code = r_chunk_code(content, lambda code: _is_whole_code(code, language))\n        tree = Parser(language).parse(chunk_code)\n        parse_result = (tree.root_node, content)\n    elif ext in C_FAMILY_EXT_SET:\n        # Parse with the macro names in front of class names blanked\n        root_node, class_macro_cache[file_path] = _parse_c_family(content, EXT_TO_LANGUAGE_DICT[ext])\n        parse_result = (root_node, content)\n    else:\n        # Parse with tree-sitter to generate the AST\n        tree = Parser(EXT_TO_LANGUAGE_DICT[ext]).parse(content)\n        parse_result = (tree.root_node, content)\n\n    # Store in cache and drop the oldest entries once the limit is exceeded\n    parse_cache[file_path] = parse_result\n    if PARSE_CACHE_MAX_FILES > 0:\n        while len(parse_cache) > PARSE_CACHE_MAX_FILES:\n            parse_cache.popitem(last=False)\n    return parse_result",
+      "target_name": "parse_file",
+      "target_start_line": 167
+    },
+    {
+      "lines": [
+        67
+      ],
+      "name": "parse_cache.get",
+      "from": "codetwine/codetwine/parsers/ts_parser_py/ts_parser.py",
+      "target_context": "parse_cache: OrderedDict[str, tuple[Node | CobolSource, bytes]] = OrderedDict()",
+      "target_name": "parse_cache",
+      "target_start_line": 44
+    },
+    {
+      "lines": [
+        68
+      ],
+      "name": "read_utf8_content",
+      "from": "codetwine/codetwine/parsers/ts_parser_py/ts_parser.py",
+      "target_context": "def read_utf8_content(file_path: str) -> bytes:\n    \"\"\"Read a file with read_source() and return its text encoded as UTF-8.\n\n    A lone \"\\\\r\" is turned into \"\\\\n\" (lone_cr_to_lf), so a row of the syntax tree is a line\n    as line_list_of() splits the file; every byte stays where it is.\n\n    A warning is logged when the file is read with invalid bytes replaced, and a debug\n    line when it is read in an encoding other than UTF-8.\n\n    Args:\n        file_path: Absolute path of the file to read.\n\n    Returns:\n        The file's text as UTF-8 bytes.\n    \"\"\"\n    text, encoding = read_source(file_path)\n    if encoding == \"\":\n        logger.warning(\n            f\"No encoding decodes {file_path}; it is read as UTF-8 with invalid bytes \"\n            f\"replaced. Set SOURCE_ENCODING to the encoding it is stored in.\"\n        )\n    elif encoding != \"utf-8\":\n        logger.debug(f\"{file_path} is read as {encoding}\")\n    return lone_cr_to_lf(text).encode(\"utf-8\")",
+      "target_name": "read_utf8_content",
+      "target_start_line": 51
+    },
+    {
+      "lines": [
+        89,
+        90
+      ],
+      "name": "PARSE_CACHE_MAX_FILES",
+      "from": "codetwine/codetwine/config/settings_py/settings.py",
+      "target_context": "PARSE_CACHE_MAX_FILES = get_config_value(\n    \"PARSE_CACHE_MAX_FILES\", default=200, var_type=int\n)",
+      "target_name": "PARSE_CACHE_MAX_FILES",
+      "target_start_line": 91
+    },
+    {
+      "lines": [
+        99
+      ],
+      "name": "DefinitionInfo.start_line",
+      "from": "codetwine/codetwine/extractors/definitions_py/definitions.py",
+      "target_context": "start_line: int",
+      "target_name": "start_line",
+      "target_start_line": 115
+    },
+    {
+      "lines": [
+        100
+      ],
+      "name": "DefinitionInfo.end_line",
+      "from": "codetwine/codetwine/extractors/definitions_py/definitions.py",
+      "target_context": "end_line: int",
+      "target_name": "end_line",
+      "target_start_line": 116
+    },
+    {
+      "lines": [
+        142
+      ],
+      "name": "ATTACHED_DEFINITION_TYPE_SET",
+      "from": "codetwine/codetwine/extractors/definitions_py/definitions.py",
+      "target_context": "ATTACHED_DEFINITION_TYPE_SET = {\"impl_item\"}",
+      "target_name": "ATTACHED_DEFINITION_TYPE_SET",
+      "target_start_line": 77
+    },
+    {
+      "lines": [
+        146
+      ],
+      "name": "select_top_level_definitions",
+      "from": "codetwine/codetwine/extractors/definitions_py/definitions.py",
+      "target_context": "def select_top_level_definitions(\n    definition_list: list[DefinitionInfo],\n) -> list[DefinitionInfo]:\n    \"\"\"Keep only definitions that are not members of another definition.\n\n    Members of a class, an impl block or a trait (methods, constructors, fields) are left out.\n    The definitions inside a container in OPEN_DEFINITION_TYPE_SET (a C++ namespace, a\n    C / C++ enum) are kept, and a definition of a type in BARE_NAME_DEFINITION_TYPE_SET\n    is kept wherever it is.\n\n    Args:\n        definition_list: Definitions of a single file, sorted by start_line.\n\n    Returns:\n        The outermost definitions, sorted by start_line.\n    \"\"\"\n    outer_list: list[DefinitionInfo] = []\n    member_end = 0\n    for definition in definition_list:\n        if definition.type in BARE_NAME_DEFINITION_TYPE_SET:\n            outer_list.append(definition)\n            continue\n        # Skip definitions that start within the range of a container with members\n        if definition.start_line <= member_end:\n            continue\n        outer_list.append(definition)\n        if (\n            definition.type in CONTAINER_DEFINITION_TYPE_SET\n            and definition.type not in OPEN_DEFINITION_TYPE_SET\n        ):\n            member_end = definition.end_line\n    return outer_list",
+      "target_name": "select_top_level_definitions",
+      "target_start_line": 229
+    },
+    {
+      "lines": [
+        171,
+        241
+      ],
+      "name": "symbol_part_list",
+      "from": "codetwine/codetwine/extractors/usages_py/usages.py",
+      "target_context": "def symbol_part_list(name: str) -> list[str]:\n    \"\"\"Split a usage name into its parts.\n\n    Examples:\n        \"helper.process\"      -> [\"helper\", \"process\"]\n        \"config::Settings\"    -> [\"config\", \"Settings\"]\n\n    Args:\n        name: A usage name (UsageInfo.name).\n\n    Returns:\n        The parts separated by \".\" or \"::\".\n    \"\"\"\n    return _SYMBOL_SEPARATOR_RE.split(name)",
+      "target_name": "symbol_part_list",
+      "target_start_line": 41
+    },
+    {
+      "lines": [
+        229,
+        287
+      ],
+      "name": "language_ext",
+      "from": "codetwine/codetwine/config/settings_py/settings.py",
+      "target_context": "def language_ext(path: str) -> str:\n    \"\"\"Return the extension whose language settings a file is analyzed with.\n\n    A file recorded by set_copy_target_ext() gets the extension recorded for it, and a\n    file recorded by set_no_language_file() none. Every other file gets its own\n    extension when it is a key of EXT_TO_DEFINITION_DICT; the extensions of the\n    languages with ignore_ext_case are matched in any case.\n\n    Examples:\n        \"src/app.py\"          -> \"py\"\n        \"src/MAIN.Cbl\"        -> \"cbl\"\n        \"R/utils.R\"           -> \"r\"\n        \"config.yaml\"         -> \"\"\n        \"dcl/DCLCUST.dcl\"     -> \"cpy\" (when a COPY statement names it)\n        \"docs/notes.qmd\"      -> \"\" (when it has no R code chunk)\n\n    Args:\n        path: A file path. A relative path is taken from the current directory when\n            it is looked up among the recorded files.\n\n    Returns:\n        The extension (without the dot, a key of EXT_TO_DEFINITION_DICT), or \"\" for a\n        file without a language.\n    \"\"\"\n    path_abs = os.path.abspath(path)\n    copy_target_ext = _copy_target_ext_dict.get(path_abs)\n    if copy_target_ext:\n        return copy_target_ext\n    if path_abs in _no_language_path_set:\n        return \"\"\n    ext = os.path.splitext(path)[1].lstrip(\".\")\n    if ext in EXT_TO_DEFINITION_DICT:\n        return ext\n    if ext.lower() in _IGNORE_CASE_EXT_SET:\n        return ext.lower()\n    return \"\"",
+      "target_name": "language_ext",
+      "target_start_line": 1241
+    },
+    {
+      "lines": [
+        230,
+        288
+      ],
+      "name": "EXT_TO_DEFINITION_DICT.get",
+      "from": "codetwine/codetwine/config/settings_py/settings.py",
+      "target_context": "EXT_TO_DEFINITION_DICT: dict[str, dict[str, str]] = _expand_ext_aliases(\n    {ext: lang_config.definition_dict for ext, lang_config in _LANG_REGISTRY.items()}\n)",
+      "target_name": "EXT_TO_DEFINITION_DICT",
+      "target_start_line": 1151
+    },
+    {
+      "lines": [
+        233,
+        292
+      ],
+      "name": "COBOL_DEFINITION_DICT",
+      "from": "codetwine/codetwine/config/settings_py/settings.py",
+      "target_context": "COBOL_DEFINITION_DICT = {\n    \"program_definition\": \"program_name\",\n    \"entry_statement\": \"string\",\n    \"section_header\": \"WORD\",\n    \"paragraph_header\": \"WORD\",\n    \"data_description\": \"entry_name\",\n    \"file_description_entry\": \"WORD\",\n    \"occurs_indexed\": \"WORD\",\n}",
+      "target_name": "COBOL_DEFINITION_DICT",
+      "target_start_line": 301
+    },
+    {
+      "lines": [
+        234,
+        292
+      ],
+      "name": "BMS_DEFINITION_DICT",
+      "from": "codetwine/codetwine/config/settings_py/settings.py",
+      "target_context": "BMS_DEFINITION_DICT = {\n    \"data_description\": \"entry_name\",\n}",
+      "target_name": "BMS_DEFINITION_DICT",
+      "target_start_line": 313
+    },
+    {
+      "lines": [
+        235,
+        294
+      ],
+      "name": "R_EXT_SET",
+      "from": "codetwine/codetwine/config/settings_py/settings.py",
+      "target_context": "R_EXT_SET: set[str] = {\n    ext for ext, definition_dict in EXT_TO_DEFINITION_DICT.items()\n    if definition_dict is R_DEFINITION_DICT\n}",
+      "target_name": "R_EXT_SET",
+      "target_start_line": 1178
+    },
+    {
+      "lines": [
+        296
+      ],
+      "name": "r_definition_text",
+      "from": "codetwine/codetwine/extractors/r_source_py/r_source.py",
+      "target_context": "def r_definition_text(root_node: Node, content: bytes, name: str) -> str | None:\n    \"\"\"Return the source lines of the definition of a name in an R file.\n\n    A top-level definition of the name comes before a member and before a call written\n    for a name defined elsewhere.\n\n    Args:\n        root_node: The AST root node of the file.\n        content: The file's text as UTF-8 bytes (parse_file).\n        name: Name of the definition.\n\n    Returns:\n        The lines of the first such definition joined with \"\\\\n\". None when the file\n        has no definition of the name.\n    \"\"\"\n    candidate_list = [d for d in r_definition_list(root_node) if d.name == name]\n    if not candidate_list:\n        return None\n    definition = next(\n        (d for d in candidate_list if not d.is_member and not d.is_attach), candidate_list[0],\n    )\n    line_list = line_list_of(content.decode(\"utf-8\"))\n    return \"\\n\".join(line_list[definition.start_line - 1:definition.end_line])",
+      "target_name": "r_definition_text",
+      "target_start_line": 719
+    }
+  ],
+  "same_file_usages": [
+    {
+      "lines": [
+        33
+      ],
+      "name": "_definition_cache.clear",
+      "target_name": "_definition_cache",
+      "target_start_line": 24
+    },
+    {
+      "lines": [
+        34
+      ],
+      "name": "_definition_list_cache.clear",
+      "target_name": "_definition_list_cache",
+      "target_start_line": 28
+    },
+    {
+      "lines": [
+        50
+      ],
+      "name": "_definition_list_cache.get",
+      "target_name": "_definition_list_cache",
+      "target_start_line": 28
+    },
+    {
+      "lines": [
+        53
+      ],
+      "name": "_definition_list_cache",
+      "target_name": "_definition_list_cache",
+      "target_start_line": 28
+    },
+    {
+      "lines": [
+        81
+      ],
+      "name": "_definition_cache.get",
+      "target_name": "_definition_cache",
+      "target_start_line": 24
+    },
+    {
+      "lines": [
+        83
+      ],
+      "name": "_definition_cache.move_to_end",
+      "target_name": "_definition_cache",
+      "target_start_line": 24
+    },
+    {
+      "lines": [
+        86
+      ],
+      "name": "file_content",
+      "target_name": "file_content",
+      "target_start_line": 57
+    },
+    {
+      "lines": [
+        86
+      ],
+      "name": "file_definition_list",
+      "target_name": "file_definition_list",
+      "target_start_line": 37
+    },
+    {
+      "lines": [
+        88,
+        90
+      ],
+      "name": "_definition_cache",
+      "target_name": "_definition_cache",
+      "target_start_line": 24
+    },
+    {
+      "lines": [
+        91
+      ],
+      "name": "_definition_cache.popitem",
+      "target_name": "_definition_cache",
+      "target_start_line": 24
+    },
+    {
+      "lines": [
+        136
+      ],
+      "name": "_is_inside",
+      "target_name": "_is_inside",
+      "target_start_line": 95
+    },
+    {
+      "lines": [
+        177
+      ],
+      "name": "_find_by_path",
+      "target_name": "_find_by_path",
+      "target_start_line": 105
+    },
+    {
+      "lines": [
+        198,
+        298,
+        318
+      ],
+      "name": "source_definition",
+      "target_name": "source_definition",
+      "target_start_line": 202
+    },
+    {
+      "lines": [
+        238
+      ],
+      "name": "_file_definition",
+      "target_name": "_file_definition",
+      "target_start_line": 71
+    },
+    {
+      "lines": [
+        252
+      ],
+      "name": "find_definition",
+      "target_name": "find_definition",
+      "target_start_line": 153
+    },
+    {
+      "lines": [
+        321
+      ],
+      "name": "extract_callee_source",
+      "target_name": "extract_callee_source",
+      "target_start_line": 258
+    }
+  ],
+  "caller_usages": [
+    {
+      "lines": [
+        371
+      ],
+      "name": "clear_definition_source_cache",
+      "file": "codetwine/codetwine/extractors/dependency_graph_py/dependency_graph.py",
+      "usage_context": "    clear_import_reference_cache()\n    clear_import_binder_cache()\n    clear_import_path_cache()\n    clear_definition_source_cache()\n    path_config_cache.clear()\n    clear_package_path_cache()\n    clear_alias_path_cache()"
+    },
+    {
+      "lines": [
+        172
+      ],
+      "name": "find_definition",
+      "file": "codetwine/codetwine/extractors/usage_analysis_py/usage_analysis.py",
+      "usage_context": "        \"\"\"Return the lines of the definitions the name of a reference names.\"\"\"\n        part_list = symbol_part_list(target.definition_name)\n        if len(part_list) > 1:\n            definition = find_definition(definition_list, target.definition_name)\n            if definition is not None and definition.name == part_list[-1]:\n                return [(definition.start_line, definition.end_line)]\n        return ("
+    },
+    {
+      "lines": [
+        311
+      ],
+      "name": "source_definition",
+      "file": "codetwine/codetwine/extractors/usage_analysis_py/usage_analysis.py",
+      "usage_context": "    file_rel: str, name: str, project_dir: str, start_line: int | None = None,\n) -> _TargetDefinition:\n    \"\"\"Return the definition source_definition() gives as a _TargetDefinition.\"\"\"\n    definition_tuple = source_definition(file_rel, name, project_dir, start_line)\n    if definition_tuple is None:\n        return _NO_DEFINITION\n    definition, context = definition_tuple"
+    },
+    {
+      "lines": [
+        94
+      ],
+      "name": "file_definition_list",
+      "file": "codetwine/codetwine/file_analyzer_py/file_analyzer.py",
+      "usage_context": "\n    # The definitions are read once per file and kept without the syntax tree; the\n    # tree is read again only for a language whose same-file references need it\n    definition_info_list = file_definition_list(target_file, definition_dict)\n    root_node = (\n        parse_file(target_file)[0]\n        if reference_kind(target_file) in TREE_RANGE_KIND_SET else None"
+    },
+    {
+      "lines": [
+        101
+      ],
+      "name": "file_content",
+      "file": "codetwine/codetwine/file_analyzer_py/file_analyzer.py",
+      "usage_context": "    )\n\n    # Convert content to text lines and extract source code from each definition's line range\n    content_line_list = line_list_of(file_content(target_file).decode(\"utf-8\"))\n    definition_list = [\n        _definition_entry(definition, content_line_list) for definition in definition_info_list\n    ]"
+    },
+    {
+      "lines": [
+        331,
+        337
+      ],
+      "name": "file_definition_list",
+      "file": "codetwine/codetwine/import_binding_py/import_binding.py",
+      "usage_context": "        fact_function = _TREE_FACT_FUNCTION_DICT.get(self._bind_kind(file_rel))\n        if fact_function is not None:\n            fact_function(root_node, tree_fact)\n        file_definition_list(file_abs, EXT_TO_DEFINITION_DICT[file_ext])\n        self._tree_fact_dict[file_rel] = tree_fact\n        return tree_fact\n\n...\n\n    def _definition_list(self, file_rel: str) -> list[DefinitionInfo]:\n        \"\"\"Return the definitions of a file (file_definition_list).\"\"\"\n        return file_definition_list(\n            os.path.join(self.project_dir, file_rel),\n            EXT_TO_DEFINITION_DICT[self._file_ext(file_rel)],\n        )"
+    },
+    {
+      "lines": [
+        1072,
+        1204
+      ],
+      "name": "file_definition",
+      "file": "codetwine/codetwine/import_binding_py/import_binding.py",
+      "usage_context": "        self, file_rel: str, definition_name: str,\n    ) -> list[tuple[str, str]]:\n        \"\"\"Look up the files that define a function a C / C++ file only declares (implement_file_list).\"\"\"\n        definition = file_definition(file_rel, definition_name, self.project_dir)\n        if definition is None or definition.type not in _FUNCTION_DECLARE_TYPE_SET:\n            return []\n        # A member is defined outside its class under the name of the class and its own\n...\n        part_list = symbol_part_list(definition_name)\n        if len(part_list) < 2:\n            return file_rel, definition_name\n        class_definition = file_definition(file_rel, part_list[0], self.project_dir)\n        if class_definition is None or class_definition.type not in _CLASS_NODE_TYPE_SET:\n            return file_rel, definition_name\n        binding = self._class_member_binding_dict(file_rel, part_list[0]).get(part_list[1])"
+    },
+    {
+      "lines": [
+        273,
+        520
+      ],
+      "name": "file_definition",
+      "file": "codetwine/codetwine/import_reference_py/import_reference.py",
+      "usage_context": "            binding = binding_dict.get(name)\n            answer = name in own_reference_name_set\n            if not answer and binding is not None and binding.name is not None:\n                definition = file_definition(binding.file_rel, binding.name, project_dir)\n                last_part = symbol_part_list(binding.name)[-1]\n                answer = definition is not None and (\n                    (definition.type in reference_type_set and definition.name == last_part)\n...\n        if root_name not in symbol_dict:\n            return False\n        target = _import_target_list(name, root_name, 0, symbol_dict[root_name], binder)[0]\n        definition = file_definition(target.file_rel, target.definition_name, project_dir)\n        return (\n            definition is not None and definition.type in CLASS_DEFINITION_TYPE_SET\n            and definition.name == symbol_part_list(target.definition_name)[-1]"
+    },
+    {
+      "lines": [
+        502
+      ],
+      "name": "file_definition_list",
+      "file": "codetwine/codetwine/import_reference_py/import_reference.py",
+      "usage_context": "        ).append(scope_binding)\n\n    # == Step 3: Names of the file itself =====================================\n    definition_list = file_definition_list(file_abs, EXT_TO_DEFINITION_DICT[file_ext])\n    own_name_set = _own_name_set(\n        definition_list, symbol_dict, import_line_dict,\n        binder.import_line_dict(file_rel, is_whole_file=True),"
+    },
+    {
+      "lines": [
+        454
+      ],
+      "name": "file_definition_list",
+      "file": "codetwine/codetwine/import_to_path_py/import_to_path.py",
+      "usage_context": "    if not definition_dict:\n        return []\n\n    definition_list = file_definition_list(abs_path, definition_dict)\n    return list(dict.fromkeys(\n        d.name for d in select_top_level_definitions(definition_list)\n        if d.name"
+    }
+  ]
+}

@@ -1,0 +1,237 @@
+{
+  "file": "codetwine/codetwine/reference_target_py/reference_target.py",
+  "language": "py",
+  "detected_encoding": null,
+  "definitions": [
+    {
+      "name": "ReferenceTarget",
+      "type": "expression_statement",
+      "start_line": 10,
+      "end_line": 12,
+      "context": "ReferenceTarget = (\n    CobolReferenceTarget | CsharpReferenceTarget | RReferenceTarget | ImportReferenceTarget\n)"
+    },
+    {
+      "name": "_TARGET_LIST_FUNCTION_DICT",
+      "type": "expression_statement",
+      "start_line": 16,
+      "end_line": 21,
+      "context": "_TARGET_LIST_FUNCTION_DICT: dict[str, Callable[[str, set[str], str], list]] = {\n    \"cobol\":  cobol_reference_target_list,\n    \"csharp\": csharp_reference_target_list,\n    \"r\":      r_reference_target_list,\n    \"import\": import_reference_target_list,\n}"
+    },
+    {
+      "name": "reference_kind",
+      "type": "function_definition",
+      "start_line": 24,
+      "end_line": 34,
+      "context": "def reference_kind(file_abs: str) -> str | None:\n    \"\"\"Return how the references of a file are resolved.\n\n    Args:\n        file_abs: Absolute path of the file.\n\n    Returns:\n        \"cobol\", \"csharp\", \"r\" or \"import\" (EXT_TO_REFERENCE_KIND_DICT), None for a\n        file without a language.\n    \"\"\"\n    return EXT_TO_REFERENCE_KIND_DICT.get(language_ext(file_abs))"
+    },
+    {
+      "name": "reference_target_list",
+      "type": "function_definition",
+      "start_line": 37,
+      "end_line": 61,
+      "context": "def reference_target_list(\n    file_rel: str, project_file_set: set[str], project_dir: str,\n) -> list[ReferenceTarget]:\n    \"\"\"Resolve each reference of a file to the definition it names.\n\n    The references are resolved the way the language of the file names things: a COBOL\n    file or a BMS source with OF / IN qualification (cobol_reference_target_list), a C#\n    file through its namespaces and using directives (csharp_reference_target_list), an\n    R file through the names it sees (r_reference_target_list), a file of any other\n    language through its import statements (import_reference_target_list).\n\n    Args:\n        file_rel: Relative path of the file.\n        project_file_set: Relative paths of the project files that have a language.\n        project_dir: Absolute path to the project root.\n\n    Returns:\n        The resolved references; each has name, line and file_rel. A target whose\n        file_rel is the file itself is a reference to a definition of the file. Empty\n        for a file without a language.\n    \"\"\"\n    file_kind = reference_kind(os.path.join(project_dir, file_rel))\n    if file_kind is None:\n        return []\n    return _TARGET_LIST_FUNCTION_DICT[file_kind](file_rel, project_file_set, project_dir)"
+    }
+  ],
+  "callee_usages": [
+    {
+      "lines": [
+        11
+      ],
+      "name": "ImportReferenceTarget",
+      "from": "codetwine/codetwine/import_reference_py/import_reference.py",
+      "target_context": "@dataclass\nclass ImportReferenceTarget:\n    \"\"\"The definition one reference of a file resolves to.\"\"\"\n\n    name: str               # Name of the usage as the referring file writes it\n    line: int               # Line of the reference (1-based)\n    file_rel: str           # Relative path of the file with the definition\n    definition_name: str    # Name the definition is looked up by in file_rel",
+      "target_name": "ImportReferenceTarget",
+      "target_start_line": 44
+    },
+    {
+      "lines": [
+        11
+      ],
+      "name": "RReferenceTarget",
+      "from": "codetwine/codetwine/r_name_index_py/r_name_index.py",
+      "target_context": "@dataclass\nclass RReferenceTarget:\n    \"\"\"The definition one reference of an R file resolves to.\"\"\"\n\n    name: str               # Name of the usage: the name of the definition\n    line: int               # Line of the reference (1-based)\n    file_rel: str           # Relative path of the file with the definition\n    definition_name: str    # Name the definition is looked up by in file_rel\n    start_line: int         # First line of the definition in file_rel (1-based)\n    end_line: int           # Last line of the definition in file_rel",
+      "target_name": "RReferenceTarget",
+      "target_start_line": 66
+    },
+    {
+      "lines": [
+        11
+      ],
+      "name": "CsharpReferenceTarget",
+      "from": "codetwine/codetwine/csharp_namespace_index_py/csharp_namespace_index.py",
+      "target_context": "@dataclass\nclass CsharpReferenceTarget:\n    \"\"\"The definition one reference of a C# file resolves to.\"\"\"\n\n    name: str               # Name of the usage as the referring file writes it\n    line: int               # Line of the reference (1-based)\n    file_rel: str           # Relative path of the file with the definition\n    definition_name: str    # Name the definition is looked up by in file_rel (Type.Member)\n    definition_line: int    # First line of the declaration in file_rel the reference names",
+      "target_name": "CsharpReferenceTarget",
+      "target_start_line": 54
+    },
+    {
+      "lines": [
+        11
+      ],
+      "name": "CobolReferenceTarget",
+      "from": "codetwine/codetwine/cobol_file_index_py/cobol_file_index.py",
+      "target_context": "@dataclass\nclass CobolReferenceTarget:\n    \"\"\"The definition one reference of a COBOL file resolves to.\"\"\"\n\n    # Name of the definition: a data name or procedure name as the referring file writes\n    # it (after REPLACING), a program or ENTRY name as its definition writes it\n    name: str\n    line: int        # Line of the reference (1-based)\n    file_rel: str    # Relative path of the file with the definition\n    # The definition; None when the program file of a CALL is not read\n    definition: CobolDefinition | None",
+      "target_name": "CobolReferenceTarget",
+      "target_start_line": 461
+    },
+    {
+      "lines": [
+        17
+      ],
+      "name": "cobol_reference_target_list",
+      "from": "codetwine/codetwine/cobol_file_index_py/cobol_file_index.py",
+      "target_context": "def cobol_reference_target_list(\n    file_rel: str,\n    project_file_set: set[str],\n    project_dir: str,\n) -> list[CobolReferenceTarget]:\n    \"\"\"Resolve each reference of a COBOL file to the definition it refers to.\n\n    The program name of a CALL statement goes to the program or ENTRY of the program\n    file the statement leads to, or to the one of that name in the file itself\n    (_call_target). A\n    data name or procedure name qualified with OF / IN goes to the definition under the\n    named groups in the file itself or in a copybook it includes; any other name, and a\n    qualified one no definition matches, goes to the first definition of that name in\n    the file itself, else in the copybooks in the order of the COPY statements, each\n    followed by the copybooks it includes (_name_target). The names of a copybook are\n    those a COPY ... REPLACING statement writes. Names are compared without regard to upper and lower case.\n\n    Processing flow:\n    1. Return the targets of reference_target_cache when they were resolved with the\n       same project file set\n    2. Resolve the copybooks and the CALL statements of the file\n    3. Resolve each reference\n\n    Args:\n        file_rel: Relative path of the file.\n        project_file_set: Relative paths of the project files that have a language.\n        project_dir: Absolute path to the project root.\n\n    Returns:\n        One target per reference that resolves, in line order, without duplicates. The\n        targets are kept in reference_target_cache until the project file set changes\n        or the cache is cleared.\n    \"\"\"\n    # == Step 1: Cache ========================================================\n    cache_key = os.path.abspath(os.path.join(project_dir, file_rel))\n    target_list = project_cache_value(reference_target_cache, cache_key, project_file_set)\n    if target_list is not None:\n        return target_list\n\n    # == Step 2: Copybooks and CALL statements ================================\n    cobol_source = parse_file(os.path.join(project_dir, file_rel))[0]\n    candidate_list = _candidate_list(cobol_source, file_rel, project_file_set, project_dir)\n    program_target_dict = _program_target_dict(\n        cobol_source, file_rel, project_file_set, project_dir,\n    )\n\n    # == Step 3: References ===================================================\n    # Two references of one line that write the same name lead to two definitions when\n    # they qualify it differently (FLD OF A, FLD OF B)\n    target_dict: dict[tuple[str, int, str, int | None], CobolReferenceTarget] = {}\n    for reference in cobol_source.reference_list:\n        if reference.is_call:\n            target = _call_target(reference, file_rel, program_target_dict, project_dir)\n        else:\n            target = _name_target(reference, candidate_list)\n        if target is not None:\n            definition_line = target.definition.start_line if target.definition else None\n            target_dict.setdefault(\n                (target.name, target.line, target.file_rel, definition_line), target,\n            )\n\n    target_list = sorted(target_dict.values(), key=lambda target: (target.line, target.name))\n    reference_target_cache[cache_key] = (project_file_set, target_list)\n    return target_list",
+      "target_name": "cobol_reference_target_list",
+      "target_start_line": 741
+    },
+    {
+      "lines": [
+        18
+      ],
+      "name": "csharp_reference_target_list",
+      "from": "codetwine/codetwine/csharp_namespace_index_py/csharp_namespace_index.py",
+      "target_context": "def csharp_reference_target_list(\n    file_rel: str,\n    project_file_set: set[str],\n    project_dir: str,\n) -> list[CsharpReferenceTarget]:\n    \"\"\"Resolve each reference of a C# file to the definition it refers to.\n\n    A name is looked up as the language does: among the members of the types the name\n    is written in (the other files of a partial type included), then in each namespace\n    around it from the innermost, with the alias, namespace and static using directives\n    written for that namespace; the global using directives of the files under the same\n    .csproj directory count for the file. A name written with namespaces\n    (App.Models.Customer, Models.Customer) is followed through them. The part after a\n    type is taken as a member of it. A type is looked up with the number of type\n    arguments it is written with, and with any number when that leads to nothing. A\n    method called on a value is resolved by its name and its number of arguments to\n    the extension methods of the types the line sees.\n    A type declared in several files leads to the file itself when it declares the\n    type, else to the files under the .csproj directory of the file, else to all of\n    them; with a member named, only the files that define the member count.\n\n    Processing flow:\n    1. Return the targets of csharp_target_cache when they were resolved with the same\n       project file set\n    2. Read the references of the file\n    3. Resolve each reference\n\n    Args:\n        file_rel: Relative path of the file.\n        project_file_set: Relative paths of the project files that have a language.\n        project_dir: Absolute path to the project root.\n\n    Returns:\n        One target per reference and file a definition is in, in line order, without\n        duplicates. A target whose file_rel is the file itself is a reference to a\n        definition of the file. definition_line is the first line of the declaration\n        of the type or member; of several declarations of a called method, the one\n        that takes the number of arguments of the call (_declaration_line). The\n        targets are kept in csharp_target_cache until the project file set changes or\n        the cache is cleared.\n    \"\"\"\n    # == Step 1: Cache ========================================================\n    cache_key = os.path.abspath(os.path.join(project_dir, file_rel))\n    target_list = project_cache_value(csharp_target_cache, cache_key, project_file_set)\n    if target_list is not None:\n        return target_list\n\n    # == Step 2: References ===================================================\n    namespace_index = _get_namespace_index(project_dir, project_file_set)\n    declaration = namespace_index.declaration_dict.get(file_rel)\n    if declaration is None:\n        return []\n    resolver = _ReferenceResolver(namespace_index, file_rel, declaration)\n\n    # == Step 3: Targets ======================================================\n    # Two calls of one line that write the same name lead to two declarations when\n    # they call two overloads\n    target_dict: dict[tuple[str, int, str, int], CsharpReferenceTarget] = {}\n    root_node = parse_file(os.path.join(project_dir, file_rel))[0]\n    for reference in csharp_reference_list(root_node):\n        for target in resolver.resolve(reference):\n            target_dict.setdefault(\n                (target.name, target.line, target.file_rel, target.definition_line), target,\n            )\n\n    target_list = sorted(\n        target_dict.values(), key=lambda target: (target.line, target.name, target.file_rel),\n    )\n    csharp_target_cache[cache_key] = (project_file_set, target_list)\n    return target_list",
+      "target_name": "csharp_reference_target_list",
+      "target_start_line": 913
+    },
+    {
+      "lines": [
+        19
+      ],
+      "name": "r_reference_target_list",
+      "from": "codetwine/codetwine/r_name_index_py/r_name_index.py",
+      "target_context": "def r_reference_target_list(\n    file_rel: str,\n    project_file_set: set[str],\n    project_dir: str,\n) -> list[RReferenceTarget]:\n    \"\"\"Resolve each reference of an R file to the definition it refers to.\n\n    A name no function around it binds is looked up, in this order, among the top-level\n    names of: the file itself; the box modules whose names box::use attaches; the\n    scripts the file reads with source() / sys.source(), followed through; the scripts\n    that read the file with source(), followed up, and the scripts those read; global.R\n    and the R directory of the Shiny app the file belongs to; the helper and setup\n    scripts of the testthat directory the file is in; the scripts in the R directory of\n    the package the file is in (the nearest directory above it whose DESCRIPTION file\n    has a \"Package:\" field); the packages of the project that the file, or one of the\n    scripts above, attaches with library() / require(). The scripts global.R, the R\n    directory of an app and the helper scripts read with source() count with them.\n    pkg::name and pkg:::name are looked up in the package of the project named pkg, and\n    owner$name in the box module bound to owner, through the modules that module binds\n    (owner$inner$name) and the names it attaches. A top-level function named\n    generic.class leads to the function generic that calls UseMethod.\n    A name defined in several files of the table it is found in leads to all of them.\n\n    Processing flow:\n    1. Return the targets of r_target_cache when they were resolved with the same\n       project file set\n    2. Resolve the references of the file through the name index of the project\n\n    Args:\n        file_rel: Relative path of the file.\n        project_file_set: Relative paths of the project files that have a language.\n        project_dir: Absolute path to the project root.\n\n    Returns:\n        One target per reference and file a definition is in, in line order, without\n        duplicates; the usage is named after the definition. A target whose file_rel\n        is the file itself is a reference to a definition of the file. The targets are\n        kept in r_target_cache until the project file set changes or the cache is\n        cleared. Empty for a file that could not be read.\n    \"\"\"\n    # == Step 1: Cache ========================================================\n    cache_key = os.path.abspath(os.path.join(project_dir, file_rel))\n    target_list = project_cache_value(r_target_cache, cache_key, project_file_set)\n    if target_list is not None:\n        return target_list\n\n    # == Step 2: Targets ======================================================\n    name_index = _get_name_index(project_dir, project_file_set)\n    if file_rel not in name_index.source_dict:\n        return []\n    target_dict: dict[tuple[str, int, str, int], RReferenceTarget] = {}\n    for target in _ReferenceResolver(name_index, file_rel).target_list():\n        target_dict.setdefault(\n            (target.name, target.line, target.file_rel, target.start_line), target,\n        )\n\n    target_list = sorted(\n        target_dict.values(), key=lambda target: (target.line, target.name, target.file_rel),\n    )\n    r_target_cache[cache_key] = (project_file_set, target_list)\n    return target_list",
+      "target_name": "r_reference_target_list",
+      "target_start_line": 815
+    },
+    {
+      "lines": [
+        20
+      ],
+      "name": "import_reference_target_list",
+      "from": "codetwine/codetwine/import_reference_py/import_reference.py",
+      "target_context": "def import_reference_target_list(\n    file_rel: str,\n    project_file_set: set[str],\n    project_dir: str,\n) -> list[ImportReferenceTarget]:\n    \"\"\"Resolve each reference of a file to the definition it names, through its import statements.\n\n    A name the import statements bind to a project file leads to the file that defines\n    it (ImportBinder.symbol_dict); so does a name visible without an import statement\n    (Java / Kotlin: same package, SQL: whole project). A variable declared with such a\n    type is named after the type. Every other name the file defines itself leads to\n    the file itself, also when it is written after self / this (_own_name_set).\n    A name bound for a range of lines (ImportBinder.scope_binding_list: an import\n    statement written in a function, a JS/TS export statement with a source, a Rust\n    use declaration in a block) leads to what it is bound to on those lines before\n    any of the above, and to nothing when it is bound to nothing of the project.\n    Inside a Rust inline module without use super::*, a name of the file outside the\n    module leads to nothing (ImportBinder.module_scope_list).\n    Inside a C++ function defined as a member of a class outside the class, a member\n    of the class or of a base class written by its name alone leads to that member\n    (ImportBinder.member_scope_list), before a name of the import statements.\n\n    Processing flow:\n    1. Return the targets of import_target_cache when they were resolved with the same\n       project file set\n    2. Map the names of the import statements to the files they come from\n    3. Collect the names the file defines itself\n    4. Turn each usage of those names into a target\n\n    Args:\n        file_rel: Relative path of the file.\n        project_file_set: Relative paths of the project files that have a language.\n        project_dir: Absolute path to the project root.\n\n    Returns:\n        One target per usage, in the order extract_usages() returns them. A target\n        whose file_rel is the file itself is a reference to a definition of the file.\n        The targets are kept in import_target_cache until the project file set\n        changes or the cache is cleared.\n    \"\"\"\n    # == Step 1: Cache ========================================================\n    cache_key = os.path.abspath(os.path.join(project_dir, file_rel))\n    target_list = project_cache_value(import_target_cache, cache_key, project_file_set)\n    if target_list is not None:\n        return target_list\n\n    # == Step 2: Names of the import statements ===============================\n    file_abs = os.path.join(project_dir, file_rel)\n    file_ext = language_ext(file_abs)\n    root_node = parse_file(file_abs)[0]\n    binder = import_binder(project_dir, project_file_set)\n    symbol_dict = binder.symbol_dict(file_rel)\n    import_line_dict = binder.import_line_dict(file_rel)\n    scope_binding_list = binder.scope_binding_list(file_rel)\n    scope_binding_dict: dict[str, list[ScopeBinding]] = {}\n    for scope_binding in scope_binding_list:\n        scope_binding_dict.setdefault(\n            symbol_part_list(scope_binding.name)[0], [],\n        ).append(scope_binding)\n\n    # == Step 3: Names of the file itself =====================================\n    definition_list = file_definition_list(file_abs, EXT_TO_DEFINITION_DICT[file_ext])\n    own_name_set = _own_name_set(\n        definition_list, symbol_dict, import_line_dict,\n        binder.import_line_dict(file_rel, is_whole_file=True),\n    )\n    own_type_name_set = {\n        definition.name for definition in definition_list\n        if definition.type in CLASS_DEFINITION_TYPE_SET and definition.name in own_name_set\n    }\n\n    def is_class_name(name: str) -> bool:\n        \"\"\"Return whether a name, as the file writes it, names a type an object is made of.\"\"\"\n        if name in own_type_name_set:\n            return True\n        root_name = usage_root_name(name, symbol_dict)\n        if root_name not in symbol_dict:\n            return False\n        target = _import_target_list(name, root_name, 0, symbol_dict[root_name], binder)[0]\n        definition = file_definition(target.file_rel, target.definition_name, project_dir)\n        return (\n            definition is not None and definition.type in CLASS_DEFINITION_TYPE_SET\n            and definition.name == symbol_part_list(target.definition_name)[-1]\n        )\n\n    # == Step 4: Targets ======================================================\n    member_scope_dict = _member_scope_dict(binder.member_scope_list(file_rel))\n    binding_dict = {\n        **{\n            scope_binding.name: scope_binding.binding\n            for scope_binding in scope_binding_list if scope_binding.binding is not None\n        },\n        **symbol_dict,\n    }\n    usage_list = _usage_list(\n        root_node, file_ext, symbol_dict, own_name_set, scope_binding_list, import_line_dict,\n        set(member_scope_dict), own_type_name_set, is_class_name,\n        _pattern_reference_function(file_ext, definition_list, binding_dict, project_dir),\n    )\n    module_scope_list = binder.module_scope_list(file_rel)\n    top_level_name_set = set(binder.top_level_name_list(file_rel)) if module_scope_list else set()\n    # A macro name read as spaces in front of a class name is a usage of the macro, and\n    # a member read where its module is required a usage of the member\n    extra_usage_list = [\n        UsageInfo(name=name, line=line)\n        for name, line in [*class_macro_cache.get(file_abs, ()), *binder.use_list(file_rel)]\n    ]\n    if extra_usage_list:\n        usage_list = deduplicate_usage_list(usage_list + extra_usage_list)\n\n    target_list = []\n    for usage in usage_list:\n        scope_binding = _scope_binding(scope_binding_dict, usage.name, usage.line)\n        member_binding = _member_scope_binding(member_scope_dict, usage.name, usage.line)\n        root_name = usage_root_name(usage.name, symbol_dict)\n        visibility = _module_visibility(\n            module_scope_list, usage, root_name, definition_list, top_level_name_set, symbol_dict,\n        ) if module_scope_list else None\n        if scope_binding is not None:\n            if scope_binding.binding is not None:\n                target_list.extend(_import_target_list(\n                    usage.name, scope_binding.name, usage.line, scope_binding.binding, binder,\n                ))\n        elif member_binding is not None:\n            target_list.extend(_import_target_list(\n                usage.name, symbol_part_list(usage.name)[0], usage.line, member_binding, binder,\n            ))\n        elif visibility == _HIDDEN:\n            continue\n        elif visibility == _INSIDE:\n            target_list.append(ImportReferenceTarget(usage.name, usage.line, file_rel, usage.name))\n        elif root_name in symbol_dict:\n            target_list.extend(_import_target_list(\n                usage.name, root_name, usage.line, symbol_dict[root_name], binder,\n            ))\n        elif usage_root_name(usage.name, own_name_set) in own_name_set:\n            target_list.append(ImportReferenceTarget(usage.name, usage.line, file_rel, usage.name))\n\n    import_target_cache[cache_key] = (project_file_set, target_list)\n    return target_list",
+      "target_name": "import_reference_target_list",
+      "target_start_line": 441
+    },
+    {
+      "lines": [
+        34
+      ],
+      "name": "EXT_TO_REFERENCE_KIND_DICT.get",
+      "from": "codetwine/codetwine/config/settings_py/settings.py",
+      "target_context": "EXT_TO_REFERENCE_KIND_DICT: dict[str, str] = _expand_ext_aliases(\n    {ext: lang_config.reference_kind for ext, lang_config in _LANG_REGISTRY.items()}\n)",
+      "target_name": "EXT_TO_REFERENCE_KIND_DICT",
+      "target_start_line": 1329
+    },
+    {
+      "lines": [
+        34
+      ],
+      "name": "language_ext",
+      "from": "codetwine/codetwine/config/settings_py/settings.py",
+      "target_context": "def language_ext(path: str) -> str:\n    \"\"\"Return the extension whose language settings a file is analyzed with.\n\n    A file recorded by set_copy_target_ext() gets the extension recorded for it, and a\n    file recorded by set_no_language_file() none. Every other file gets its own\n    extension when it is a key of EXT_TO_DEFINITION_DICT; the extensions of the\n    languages with ignore_ext_case are matched in any case.\n\n    Examples:\n        \"src/app.py\"          -> \"py\"\n        \"src/MAIN.Cbl\"        -> \"cbl\"\n        \"R/utils.R\"           -> \"r\"\n        \"config.yaml\"         -> \"\"\n        \"dcl/DCLCUST.dcl\"     -> \"cpy\" (when a COPY statement names it)\n        \"docs/notes.qmd\"      -> \"\" (when it has no R code chunk)\n\n    Args:\n        path: A file path. A relative path is taken from the current directory when\n            it is looked up among the recorded files.\n\n    Returns:\n        The extension (without the dot, a key of EXT_TO_DEFINITION_DICT), or \"\" for a\n        file without a language.\n    \"\"\"\n    path_abs = os.path.abspath(path)\n    copy_target_ext = _copy_target_ext_dict.get(path_abs)\n    if copy_target_ext:\n        return copy_target_ext\n    if path_abs in _no_language_path_set:\n        return \"\"\n    ext = os.path.splitext(path)[1].lstrip(\".\")\n    if ext in EXT_TO_DEFINITION_DICT:\n        return ext\n    if ext.lower() in _IGNORE_CASE_EXT_SET:\n        return ext.lower()\n    return \"\"",
+      "target_name": "language_ext",
+      "target_start_line": 1241
+    }
+  ],
+  "same_file_usages": [
+    {
+      "lines": [
+        39
+      ],
+      "name": "ReferenceTarget",
+      "target_name": "ReferenceTarget",
+      "target_start_line": 10
+    },
+    {
+      "lines": [
+        58
+      ],
+      "name": "reference_kind",
+      "target_name": "reference_kind",
+      "target_start_line": 24
+    },
+    {
+      "lines": [
+        61
+      ],
+      "name": "_TARGET_LIST_FUNCTION_DICT",
+      "target_name": "_TARGET_LIST_FUNCTION_DICT",
+      "target_start_line": 16
+    }
+  ],
+  "caller_usages": [
+    {
+      "lines": [
+        176
+      ],
+      "name": "reference_kind",
+      "file": "codetwine/codetwine/extractors/dependency_graph_py/dependency_graph.py",
+      "usage_context": "        a language without module resolve settings (EXT_TO_IMPORT_RESOLVE_DICT), which\n        is not parsed.\n    \"\"\"\n    if reference_kind(file_path) == \"import\":\n        return import_binder(project_dir, project_file_set).import_file_set(file_rel)\n\n    file_ext = language_ext(file_path)"
+    },
+    {
+      "lines": [
+        222
+      ],
+      "name": "reference_target_list",
+      "file": "codetwine/codetwine/extractors/dependency_graph_py/dependency_graph.py",
+      "usage_context": "    \"\"\"\n    callee_rel_list = [\n        target.file_rel\n        for target in reference_target_list(file_rel, project_file_set, project_dir)\n    ]\n    if language_ext(file_path) in R_EXT_SET:\n        callee_rel_list += r_import_file_list(file_rel, project_file_set, project_dir)"
+    },
+    {
+      "lines": [
+        42,
+        43,
+        55,
+        58,
+        59,
+        62,
+        69,
+        71,
+        198,
+        200,
+        201,
+        330,
+        359,
+        397,
+        399
+      ],
+      "name": "ReferenceTarget",
+      "file": "codetwine/codetwine/extractors/usage_analysis_py/usage_analysis.py",
+      "usage_context": "\n\ndef _memo_definition_function(\n    target_definition: Callable[[ReferenceTarget], _TargetDefinition],\n) -> Callable[[ReferenceTarget], _TargetDefinition]:\n    \"\"\"Return a function that looks the definition of each distinct reference target up once.\n\n...\n\ndef _memo_definition_function(\n    target_definition: Callable[[ReferenceTarget], _TargetDefinition],\n) -> Callable[[ReferenceTarget], _TargetDefinition]:\n    \"\"\"Return a function that looks the definition of each distinct reference target up once.\n\n    Args:"
+    },
+    {
+      "lines": [
+        350,
+        387,
+        487
+      ],
+      "name": "reference_kind",
+      "file": "codetwine/codetwine/extractors/usage_analysis_py/usage_analysis.py",
+      "usage_context": "        A list of {\"lines\", \"name\", \"from\", \"target_context\", \"target_name\",\n        \"target_start_line\"} dicts. Empty for a file without a language.\n    \"\"\"\n    file_kind = reference_kind(os.path.join(project_dir, file_rel))\n    if file_kind is None:\n        return []\n    return _group_other_file_target_list(\n...\n        A list of {\"lines\", \"name\", \"target_name\", \"target_start_line\"} dicts. Empty\n        for a file without a language.\n    \"\"\"\n    file_kind = reference_kind(os.path.join(project_dir, file_rel))\n    if file_kind is None:\n        return []\n    return _group_same_file_target_list("
+    },
+    {
+      "lines": [
+        482
+      ],
+      "name": "reference_target_list",
+      "file": "codetwine/codetwine/extractors/usage_analysis_py/usage_analysis.py",
+      "usage_context": "    for caller_rel in caller_file_list:\n        target_list = [\n            target\n            for target in reference_target_list(caller_rel, project_file_set, project_dir)\n            if target.file_rel == target_file_rel\n        ]\n        if not target_list:"
+    },
+    {
+      "lines": [
+        97
+      ],
+      "name": "reference_kind",
+      "file": "codetwine/codetwine/file_analyzer_py/file_analyzer.py",
+      "usage_context": "    definition_info_list = file_definition_list(target_file, definition_dict)\n    root_node = (\n        parse_file(target_file)[0]\n        if reference_kind(target_file) in TREE_RANGE_KIND_SET else None\n    )\n\n    # Convert content to text lines and extract source code from each definition's line range"
+    },
+    {
+      "lines": [
+        108
+      ],
+      "name": "reference_target_list",
+      "file": "codetwine/codetwine/file_analyzer_py/file_analyzer.py",
+      "usage_context": "\n    # Resolve each reference of the file to this file or another, and collect the\n    # references of the files depending on this file that lead to it\n    target_list = reference_target_list(target_file_rel, project_file_set, project_dir)\n    usage_list = build_callee_usages(target_list, target_file_rel, project_dir)\n    same_file_usages = build_same_file_usages(\n        target_list, target_file_rel, project_dir, definition_info_list, root_node,"
+    }
+  ]
+}

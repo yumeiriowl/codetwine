@@ -1,0 +1,635 @@
+{
+  "file": "codetwine/codetwine/extractors/rust_path_py/rust_path.py",
+  "language": "py",
+  "detected_encoding": null,
+  "definitions": [
+    {
+      "name": "PATH_NODE_TYPE_SET",
+      "type": "expression_statement",
+      "start_line": 5,
+      "end_line": 5,
+      "context": "PATH_NODE_TYPE_SET = {\"scoped_identifier\", \"scoped_type_identifier\"}"
+    },
+    {
+      "name": "_SEGMENT_NODE_TYPE_SET",
+      "type": "expression_statement",
+      "start_line": 8,
+      "end_line": 8,
+      "context": "_SEGMENT_NODE_TYPE_SET = {\"identifier\", \"type_identifier\", \"crate\", \"self\", \"super\"}"
+    },
+    {
+      "name": "_ROOT_SEGMENT",
+      "type": "expression_statement",
+      "start_line": 11,
+      "end_line": 11,
+      "context": "_ROOT_SEGMENT = \"\""
+    },
+    {
+      "name": "_SELF_TYPE_SEGMENT",
+      "type": "expression_statement",
+      "start_line": 14,
+      "end_line": 14,
+      "context": "_SELF_TYPE_SEGMENT = \"Self\""
+    },
+    {
+      "name": "_SELF_OWNER_FIELD_DICT",
+      "type": "expression_statement",
+      "start_line": 17,
+      "end_line": 17,
+      "context": "_SELF_OWNER_FIELD_DICT = {\"impl_item\": \"type\", \"trait_item\": \"name\"}"
+    },
+    {
+      "name": "_GENERIC_END_TYPE_SET",
+      "type": "expression_statement",
+      "start_line": 20,
+      "end_line": 20,
+      "context": "_GENERIC_END_TYPE_SET = {\">\", \">>\"}"
+    },
+    {
+      "name": "_ANCHOR_SEGMENT_SET",
+      "type": "expression_statement",
+      "start_line": 23,
+      "end_line": 23,
+      "context": "_ANCHOR_SEGMENT_SET = {\"crate\", \"self\", \"super\", _ROOT_SEGMENT}"
+    },
+    {
+      "name": "_MAX_SCOPE_USE_HOP",
+      "type": "expression_statement",
+      "start_line": 26,
+      "end_line": 26,
+      "context": "_MAX_SCOPE_USE_HOP = 8"
+    },
+    {
+      "name": "ImportEntry",
+      "type": "expression_statement",
+      "start_line": 30,
+      "end_line": 30,
+      "context": "ImportEntry = tuple[str, str | None, str | None, tuple[int, int] | None]"
+    },
+    {
+      "name": "UseCacheDict",
+      "type": "expression_statement",
+      "start_line": 35,
+      "end_line": 35,
+      "context": "UseCacheDict = dict[int, dict[str, tuple[list[str], Node]]]"
+    },
+    {
+      "name": "_segment_text",
+      "type": "function_definition",
+      "start_line": 38,
+      "end_line": 40,
+      "context": "def _segment_text(node: Node) -> str:\n    \"\"\"Return the text of a path segment without the raw identifier prefix (r#type -> type).\"\"\"\n    return node.text.decode(\"utf-8\").removeprefix(\"r#\")"
+    },
+    {
+      "name": "_node_segment_list",
+      "type": "function_definition",
+      "start_line": 43,
+      "end_line": 60,
+      "context": "def _node_segment_list(node: Node) -> list[str] | None:\n    \"\"\"Split a Rust path node into its segments, a first segment \"Self\" kept (path_segment_list).\"\"\"\n    if node.type in PATH_NODE_TYPE_SET:\n        path_node = node.child_by_field_name(\"path\")\n        name_node = node.child_by_field_name(\"name\")\n        if name_node is None:\n            return None\n        # A path without a path field starts with \"::\"\n        prefix = [_ROOT_SEGMENT] if path_node is None else _node_segment_list(path_node)\n        if prefix is None:\n            return None\n        return prefix + [_segment_text(name_node)]\n    if node.type == \"generic_type\":\n        type_node = node.child_by_field_name(\"type\")\n        return _node_segment_list(type_node) if type_node else None\n    if node.type in _SEGMENT_NODE_TYPE_SET:\n        return [_segment_text(node)]\n    return None"
+    },
+    {
+      "name": "_impl_type_segment_list",
+      "type": "function_definition",
+      "start_line": 63,
+      "end_line": 92,
+      "context": "def _impl_type_segment_list(node: Node, segment_list: list[str]) -> list[str]:\n    \"\"\"Replace a first segment \"Self\" by the name of the type of the impl block, or of the trait, around a node.\n\n    Examples (inside impl Point { ... } / impl fmt::Display for geo::Point { ... }):\n        [\"Self\", \"new\"]   -> [\"Point\", \"new\"]\n        [\"Point\", \"new\"]  -> [\"Point\", \"new\"]\n    Inside trait Shape { ... }:\n        [\"Self\", \"KIND\"]  -> [\"Shape\", \"KIND\"]\n\n    Args:\n        node: A node of the path.\n        segment_list: Segments of the path as written.\n\n    Returns:\n        The segments; unchanged outside an impl block and a trait, and inside an impl\n        block whose type is not a named type.\n    \"\"\"\n    if not segment_list or segment_list[0] != _SELF_TYPE_SEGMENT:\n        return segment_list\n    current = node.parent\n    while current is not None and current.type not in _SELF_OWNER_FIELD_DICT:\n        current = current.parent\n    type_node = (\n        current.child_by_field_name(_SELF_OWNER_FIELD_DICT[current.type])\n        if current is not None else None\n    )\n    type_segment_list = _node_segment_list(type_node) if type_node is not None else None\n    if not type_segment_list:\n        return segment_list\n    return [type_segment_list[-1], *segment_list[1:]]"
+    },
+    {
+      "name": "path_segment_list",
+      "type": "function_definition",
+      "start_line": 95,
+      "end_line": 120,
+      "context": "def path_segment_list(node: Node) -> list[str] | None:\n    \"\"\"Split a Rust path node into its segments.\n\n    Generic arguments and the raw identifier prefix r# are dropped. A leading \"::\"\n    gives an empty first segment, and a first segment \"Self\" inside an impl block or a\n    trait is replaced by the name of the type of the block or of the trait.\n\n    Examples:\n        crate::util::log      -> [\"crate\", \"util\", \"log\"]\n        Vec::<u8>::new        -> [\"Vec\", \"new\"]\n        r#type::Kind          -> [\"type\", \"Kind\"]\n        ::core_lib::version   -> [\"\", \"core_lib\", \"version\"]\n        Self::new (inside impl Point)  -> [\"Point\", \"new\"]\n        <T as Trait>::method  -> None\n\n    Args:\n        node: A path node (scoped_identifier, scoped_type_identifier, identifier, etc.).\n\n    Returns:\n        The segments, or None when the path does not start with a name or \"::\"\n        (a qualified type, etc.).\n    \"\"\"\n    segment_list = _node_segment_list(node)\n    if segment_list is None:\n        return None\n    return _impl_type_segment_list(node, segment_list)"
+    },
+    {
+      "name": "macro_path_list",
+      "type": "function_definition",
+      "start_line": 123,
+      "end_line": 169,
+      "context": "def macro_path_list(node: Node) -> list[tuple[Node, list[str]]]:\n    \"\"\"Return the paths written directly in the arguments of a macro.\n\n    The grammar leaves macro arguments as loose tokens; a run of names joined by \"::\"\n    is read as a path. A run that starts with \"::\" has an empty first segment, and a\n    first segment \"Self\" is replaced as in path_segment_list. A single name, and a run\n    that starts with \"::\" right after \">\" (Vec::<u8>::new, <T as Trait>::method), are\n    left out.\n\n    Examples:\n        assert_eq!(crate::util::add(1, 2), 3)   -> [[\"crate\", \"util\", \"add\"]]\n        vec![Settings::new(), x]                -> [[\"Settings\", \"new\"]]\n        assert!(::core_lib::check())            -> [[\"\", \"core_lib\", \"check\"]]\n\n    Args:\n        node: A token_tree node.\n\n    Returns:\n        (node of the first name, segments) of each path, in the order written.\n    \"\"\"\n    path_list: list[tuple[Node, list[str]]] = []\n    first_node: Node | None = None\n    segment_list: list[str] = []\n    is_after_separator = False\n    is_after_generic = False\n    previous_type = \"\"\n    for child in [*node.children, None]:\n        child_type = child.type if child is not None else \"\"\n        is_name = child_type in _SEGMENT_NODE_TYPE_SET\n        if child_type == \"::\":\n            # A \"::\" with no name before it starts a path from a crate name\n            if not segment_list:\n                segment_list = [_ROOT_SEGMENT]\n                is_after_generic = previous_type in _GENERIC_END_TYPE_SET\n            is_after_separator = True\n        elif is_name and is_after_separator:\n            first_node = first_node or child\n            segment_list.append(_segment_text(child))\n            is_after_separator = False\n        else:\n            if len(segment_list) > 1 and first_node is not None and not is_after_generic:\n                path_list.append((first_node, _impl_type_segment_list(first_node, segment_list)))\n            first_node, segment_list = (child, [_segment_text(child)]) if is_name else (None, [])\n            is_after_separator = False\n            is_after_generic = False\n        previous_type = child_type\n    return path_list"
+    },
+    {
+      "name": "_drop_trailing_self",
+      "type": "function_definition",
+      "start_line": 172,
+      "end_line": 176,
+      "context": "def _drop_trailing_self(segment_list: list[str]) -> list[str]:\n    \"\"\"Remove a trailing \"self\" segment (use a::b::{self} names a::b itself).\"\"\"\n    if len(segment_list) > 1 and segment_list[-1] == \"self\":\n        return segment_list[:-1]\n    return segment_list"
+    },
+    {
+      "name": "expand_use_tree",
+      "type": "function_definition",
+      "start_line": 179,
+      "end_line": 230,
+      "context": "def expand_use_tree(\n    node: Node, prefix: list[str],\n) -> list[tuple[list[str], str | None]]:\n    \"\"\"Expand the argument of a use declaration into one entry per imported name.\n\n    Examples:\n        use a::b::C;              -> ([\"a\", \"b\", \"C\"], \"C\")\n        use a::{b::C, D as E};    -> ([\"a\", \"b\", \"C\"], \"C\"), ([\"a\", \"D\"], \"E\")\n        use a::b::{self};         -> ([\"a\", \"b\"], \"b\")\n        use a::b::*;              -> ([\"a\", \"b\", \"*\"], None)\n\n    Args:\n        node: The argument node of a use_declaration, or a node inside it.\n        prefix: Segments of the enclosing use list path ([] at the top).\n\n    Returns:\n        (segments, name bound in the file) pairs. A glob import ends its segments\n        with \"*\" and binds no name. An entry whose path cannot be read is left out.\n    \"\"\"\n    if node.type == \"use_as_clause\":\n        path_list = path_segment_list(node.child_by_field_name(\"path\"))\n        alias_node = node.child_by_field_name(\"alias\")\n        if path_list is None or alias_node is None:\n            return []\n        return [(_drop_trailing_self(prefix + path_list), alias_node.text.decode(\"utf-8\"))]\n\n    if node.type == \"use_wildcard\":\n        child_node_list = node.named_children\n        inner_list = path_segment_list(child_node_list[0]) if child_node_list else []\n        if inner_list is None:\n            return []\n        return [(prefix + inner_list + [\"*\"], None)]\n\n    if node.type == \"scoped_use_list\":\n        path_node = node.child_by_field_name(\"path\")\n        inner_list = path_segment_list(path_node) if path_node else []\n        use_list_node = node.child_by_field_name(\"list\")\n        if inner_list is None or use_list_node is None:\n            return []\n        return expand_use_tree(use_list_node, prefix + inner_list)\n\n    if node.type == \"use_list\":\n        entry_list: list[tuple[list[str], str | None]] = []\n        for child in node.named_children:\n            entry_list.extend(expand_use_tree(child, prefix))\n        return entry_list\n\n    path_list = path_segment_list(node)\n    if path_list is None:\n        return []\n    segment_list = _drop_trailing_self(prefix + path_list)\n    return [(segment_list, segment_list[-1])]"
+    },
+    {
+      "name": "inline_module_name_list",
+      "type": "function_definition",
+      "start_line": 233,
+      "end_line": 243,
+      "context": "def inline_module_name_list(node: Node) -> list[str]:\n    \"\"\"Return the names of the inline modules (mod name { ... }) around a node, outermost first.\"\"\"\n    name_list: list[str] = []\n    current = node.parent\n    while current is not None:\n        if current.type == \"mod_item\" and current.child_by_field_name(\"body\") is not None:\n            name_node = current.child_by_field_name(\"name\")\n            name_list.append(_segment_text(name_node) if name_node is not None else \"\")\n        current = current.parent\n    name_list.reverse()\n    return name_list"
+    },
+    {
+      "name": "_is_super_glob",
+      "type": "function_definition",
+      "start_line": 246,
+      "end_line": 267,
+      "context": "def _is_super_glob(node: Node) -> bool:\n    \"\"\"Return whether the argument of a use declaration takes over every name of the module around it.\n\n    use super::*;  and  use super::{*, name};  do. A glob of any other path does not.\n\n    Args:\n        node: The argument node of a use_declaration.\n    \"\"\"\n    if node.type == \"use_wildcard\":\n        path_node_list = [child for child in node.named_children]\n        return len(path_node_list) == 1 and path_node_list[0].type == \"super\"\n    if node.type == \"scoped_use_list\":\n        path_node = node.child_by_field_name(\"path\")\n        list_node = node.child_by_field_name(\"list\")\n        return (\n            path_node is not None and path_node.type == \"super\" and list_node is not None\n            and any(\n                child.type == \"use_wildcard\" and not child.named_children\n                for child in list_node.named_children\n            )\n        )\n    return False"
+    },
+    {
+      "name": "inline_module_scope_list",
+      "type": "function_definition",
+      "start_line": 270,
+      "end_line": 298,
+      "context": "def inline_module_scope_list(root_node: Node) -> list[tuple[int, int, bool]]:\n    \"\"\"Return the lines of each inline module of a file and whether it has use super::*.\n\n    Args:\n        root_node: The AST root node of the file.\n\n    Returns:\n        (first line, last line, True when a use declaration written directly in the\n        module takes over the names of the module around it) of each mod name { ... },\n        in no particular order.\n    \"\"\"\n    scope_list: list[tuple[int, int, bool]] = []\n    node_stack = [root_node]\n    while node_stack:\n        node = node_stack.pop()\n        node_stack.extend(node.children)\n        if node.type != \"mod_item\":\n            continue\n        body_node = node.child_by_field_name(\"body\")\n        if body_node is None:\n            continue\n        is_open = any(\n            child.type == \"use_declaration\"\n            and (argument_node := child.child_by_field_name(\"argument\")) is not None\n            and _is_super_glob(argument_node)\n            for child in body_node.named_children\n        )\n        scope_list.append((node.start_point[0] + 1, node.end_point[0] + 1, is_open))\n    return scope_list"
+    },
+    {
+      "name": "file_module_path",
+      "type": "function_definition",
+      "start_line": 301,
+      "end_line": 333,
+      "context": "def file_module_path(segment_list: list[str], module_name_list: list[str]) -> list[str]:\n    \"\"\"Rewrite a path written inside inline modules into a path from the file's module.\n\n    Examples (inside mod a { mod b { ... } }):\n        [\"super\", \"super\", \"Config\"]      -> [\"self\", \"Config\"]\n        [\"super\", \"super\", \"super\", \"x\"]  -> [\"super\", \"x\"]\n        [\"super\", \"helper\"]               -> [\"self\", \"a\", \"helper\"]\n        [\"self\", \"helper\"]                -> [\"self\", \"a\", \"b\", \"helper\"]\n        [\"crate\", \"util\"]                 -> [\"crate\", \"util\"]\n\n    Args:\n        segment_list: Segments of the path as written.\n        module_name_list: Names of the inline modules around the path\n            (inline_module_name_list).\n\n    Returns:\n        The rewritten segments. A path that starts with neither self nor super, and an\n        empty segment_list, are returned as they are.\n    \"\"\"\n    if not module_name_list or not segment_list:\n        return segment_list\n    if segment_list[0] == \"self\":\n        return [\"self\", *module_name_list, *segment_list[1:]]\n    super_count = 0\n    while super_count < len(segment_list) and segment_list[super_count] == \"super\":\n        super_count += 1\n    if super_count == 0:\n        return segment_list\n    depth = len(module_name_list)\n    rest_list = segment_list[super_count:]\n    if super_count <= depth:\n        return [\"self\", *module_name_list[:depth - super_count], *rest_list]\n    return [\"super\"] * (super_count - depth) + rest_list"
+    },
+    {
+      "name": "_use_scope_node",
+      "type": "function_definition",
+      "start_line": 336,
+      "end_line": 353,
+      "context": "def _use_scope_node(node: Node) -> Node | None:\n    \"\"\"Return the innermost block or inline module body around a node.\n\n    Args:\n        node: Any node of the file.\n\n    Returns:\n        The nearest block or body of a mod_item among the ancestors of node, None when\n        node is at the top level of the file.\n    \"\"\"\n    current = node.parent\n    while current is not None:\n        if current.type == \"block\":\n            return current\n        if current.type == \"declaration_list\" and current.parent.type == \"mod_item\":\n            return current\n        current = current.parent\n    return None"
+    },
+    {
+      "name": "_line_tuple",
+      "type": "function_definition",
+      "start_line": 356,
+      "end_line": 358,
+      "context": "def _line_tuple(node: Node) -> tuple[int, int]:\n    \"\"\"Return the (first line, last line) of a node (1-based).\"\"\"\n    return node.start_point[0] + 1, node.end_point[0] + 1"
+    },
+    {
+      "name": "_scope_use_dict",
+      "type": "function_definition",
+      "start_line": 361,
+      "end_line": 387,
+      "context": "def _scope_use_dict(\n    scope_node: Node, use_cache_dict: UseCacheDict,\n) -> dict[str, tuple[list[str], Node]]:\n    \"\"\"Return the names the use declarations written directly in a scope bind.\n\n    Args:\n        scope_node: A node returned by _use_scope_node.\n        use_cache_dict: Node id of a scope -> return value of this function; filled\n            on first use.\n\n    Returns:\n        A {bound name: (segments of its use path, use_declaration node)} dict. Glob\n        imports and imports renamed to \"_\" bind no name.\n    \"\"\"\n    use_dict = use_cache_dict.get(scope_node.id)\n    if use_dict is not None:\n        return use_dict\n    use_dict = {}\n    for child in scope_node.named_children:\n        argument = child.child_by_field_name(\"argument\") if child.type == \"use_declaration\" else None\n        if argument is None:\n            continue\n        for segment_list, local_name in expand_use_tree(argument, []):\n            if local_name and local_name != \"_\":\n                use_dict[local_name] = (segment_list, child)\n    use_cache_dict[scope_node.id] = use_dict\n    return use_dict"
+    },
+    {
+      "name": "_scope_use",
+      "type": "function_definition",
+      "start_line": 390,
+      "end_line": 411,
+      "context": "def _scope_use(\n    node: Node, name: str, use_cache_dict: UseCacheDict,\n) -> tuple[list[str], Node] | None:\n    \"\"\"Return the use declaration that binds a name in the innermost scope around a node.\n\n    Args:\n        node: The node the name is written at; a use_declaration node itself is not\n            looked at.\n        name: The name.\n        use_cache_dict: Cache of _scope_use_dict.\n\n    Returns:\n        (segments of the use path, use_declaration node), None when no block or inline\n        module around the node binds the name.\n    \"\"\"\n    scope_node = _use_scope_node(node)\n    while scope_node is not None:\n        scope_use = _scope_use_dict(scope_node, use_cache_dict).get(name)\n        if scope_use is not None and scope_use[1].id != node.id:\n            return scope_use\n        scope_node = _use_scope_node(scope_node)\n    return None"
+    },
+    {
+      "name": "_module_path",
+      "type": "function_definition",
+      "start_line": 414,
+      "end_line": 449,
+      "context": "def _module_path(\n    node: Node,\n    segment_list: list[str],\n    use_cache_dict: UseCacheDict,\n) -> tuple[list[str], bool]:\n    \"\"\"Rewrite a path written at a node into a path from the file's module.\n\n    The first segment is replaced by the path of the use declaration that binds it in\n    a block or inline module around the node, the innermost first; the path is then\n    rewritten by file_module_path from the place that declaration is written at.\n\n    Examples (fn f() { use crate::config; config::load() }):\n        [\"config\", \"load\"]   -> ([\"crate\", \"config\", \"load\"], True)\n        [\"util\", \"log\"]      -> ([\"util\", \"log\"], False)\n\n    Args:\n        node: The node the path is written at.\n        segment_list: Segments of the path as written.\n        use_cache_dict: Cache of _scope_use_dict.\n\n    Returns:\n        (rewritten segments, whether a use declaration of a block or inline module\n        bound the first segment).\n    \"\"\"\n    origin_node = node\n    is_scope = False\n    for _ in range(_MAX_SCOPE_USE_HOP):\n        if not segment_list or segment_list[0] in _ANCHOR_SEGMENT_SET:\n            break\n        scope_use = _scope_use(origin_node, segment_list[0], use_cache_dict)\n        if scope_use is None:\n            break\n        segment_list = scope_use[0] + segment_list[1:]\n        origin_node = scope_use[1]\n        is_scope = True\n    return file_module_path(segment_list, inline_module_name_list(origin_node)), is_scope"
+    },
+    {
+      "name": "mod_declaration",
+      "type": "function_definition",
+      "start_line": 452,
+      "end_line": 487,
+      "context": "def mod_declaration(node: Node) -> tuple[str, str | None] | None:\n    \"\"\"Read a module declaration without a body (mod name;).\n\n    Examples:\n        mod config;                          -> (\"config\", None)\n        mod r#type;                          -> (\"type\", None)\n        #[path = \"unix.rs\"] mod imp;         -> (\"imp\", \"unix.rs\")\n        mod tests { ... }                    -> None\n\n    Args:\n        node: A mod_item node.\n\n    Returns:\n        (module name, value of its #[path] attribute or None), or None when the\n        node is not a module declaration without a body.\n    \"\"\"\n    if node.type != \"mod_item\" or node.child_by_field_name(\"body\") is not None:\n        return None\n    name_node = node.child_by_field_name(\"name\")\n    if name_node is None:\n        return None\n\n    # Look through the attributes written right before the declaration for #[path = \"...\"]\n    path_value = None\n    sibling = node.prev_named_sibling\n    while sibling is not None and sibling.type in (\"attribute_item\", \"line_comment\", \"block_comment\"):\n        if sibling.type == \"attribute_item\":\n            for attribute in sibling.named_children:\n                key = attribute.named_children[0] if attribute.named_children else None\n                value = attribute.child_by_field_name(\"value\")\n                if key is not None and key.text == b\"path\" and value is not None:\n                    for part in value.named_children:\n                        if part.type == \"string_content\":\n                            path_value = part.text.decode(\"utf-8\")\n        sibling = sibling.prev_named_sibling\n    return _segment_text(name_node), path_value"
+    },
+    {
+      "name": "_is_inside_use_declaration",
+      "type": "function_definition",
+      "start_line": 490,
+      "end_line": 497,
+      "context": "def _is_inside_use_declaration(node: Node) -> bool:\n    \"\"\"Return whether the node is part of a use declaration.\"\"\"\n    current = node.parent\n    while current is not None:\n        if current.type == \"use_declaration\":\n            return True\n        current = current.parent\n    return False"
+    },
+    {
+      "name": "_read_use_declaration",
+      "type": "function_definition",
+      "start_line": 500,
+      "end_line": 529,
+      "context": "def _read_use_declaration(node: Node, use_cache_dict: UseCacheDict) -> list[ImportEntry]:\n    \"\"\"Read a use declaration into one import per imported name (expand_use_tree).\n\n    A declaration written in a block or an inline module binds its names for the lines\n    of that block or module.\n    \"\"\"\n    argument = node.child_by_field_name(\"argument\")\n    if argument is None:\n        return []\n    scope_node = _use_scope_node(node)\n    scope_line_tuple = _line_tuple(scope_node) if scope_node is not None else None\n    entry_list: list[ImportEntry] = []\n    for segment_list, local_name in expand_use_tree(argument, []):\n        is_glob = segment_list[-1] == \"*\"\n        module_list = _module_path(\n            node, segment_list[:-1] if is_glob else segment_list, use_cache_dict,\n        )[0]\n        if not module_list:\n            continue\n        if is_glob:\n            entry_list.append((\"::\".join(module_list), \"*\", None, scope_line_tuple))\n            continue\n        original = segment_list[-1] if local_name != segment_list[-1] else None\n        entry_list.append((\n            \"::\".join(module_list),\n            None if local_name == \"_\" else local_name,\n            None if local_name == \"_\" else original,\n            scope_line_tuple,\n        ))\n    return entry_list"
+    },
+    {
+      "name": "_read_mod_declaration",
+      "type": "function_definition",
+      "start_line": 532,
+      "end_line": 538,
+      "context": "def _read_mod_declaration(node: Node, use_cache_dict: UseCacheDict) -> list[ImportEntry]:\n    \"\"\"Read a module declaration without a body outside inline modules.\"\"\"\n    declaration = mod_declaration(node)\n    if declaration is None or inline_module_name_list(node):\n        return []\n    name, path_value = declaration\n    return [(path_value or \"self::\" + name, name, None, None)]"
+    },
+    {
+      "name": "_read_extern_crate",
+      "type": "function_definition",
+      "start_line": 541,
+      "end_line": 548,
+      "context": "def _read_extern_crate(node: Node, use_cache_dict: UseCacheDict) -> list[ImportEntry]:\n    \"\"\"Read an extern crate declaration (extern crate name; / extern crate name as alias;).\"\"\"\n    name_node = node.child_by_field_name(\"name\")\n    alias_node = node.child_by_field_name(\"alias\")\n    if name_node is None or name_node.type != \"identifier\":\n        return []\n    crate_name = name_node.text.decode(\"utf-8\")\n    return [(crate_name, alias_node.text.decode(\"utf-8\") if alias_node else crate_name, None, None)]"
+    },
+    {
+      "name": "_path_entry",
+      "type": "function_definition",
+      "start_line": 551,
+      "end_line": 573,
+      "context": "def _path_entry(\n    node: Node, range_node: Node, segment_list: list[str], use_cache_dict: UseCacheDict,\n) -> list[ImportEntry]:\n    \"\"\"Return the import of a path written outside use declarations.\n\n    Args:\n        node: The node the path starts at.\n        range_node: The node whose lines the path is bound for when a use declaration\n            of a block or inline module binds its first segment.\n        segment_list: Segments of the path.\n        use_cache_dict: Cache of _scope_use_dict.\n\n    Returns:\n        [(path from the file's module, path as written, None, lines or None)], empty\n        for an empty path.\n    \"\"\"\n    module_list, is_scope = _module_path(node, segment_list, use_cache_dict)\n    if not module_list:\n        return []\n    return [(\n        \"::\".join(module_list), \"::\".join(segment_list), None,\n        _line_tuple(range_node) if is_scope else None,\n    )]"
+    },
+    {
+      "name": "_read_path",
+      "type": "function_definition",
+      "start_line": 576,
+      "end_line": 586,
+      "context": "def _read_path(node: Node, use_cache_dict: UseCacheDict) -> list[ImportEntry]:\n    \"\"\"Read the outermost path outside use declarations and visibility modifiers.\"\"\"\n    parent = node.parent\n    if parent is not None and parent.type in PATH_NODE_TYPE_SET | {\"visibility_modifier\"}:\n        return []\n    if _is_inside_use_declaration(node):\n        return []\n    segment_list = path_segment_list(node)\n    if not segment_list:\n        return []\n    return _path_entry(node, node, segment_list, use_cache_dict)"
+    },
+    {
+      "name": "_read_macro_argument",
+      "type": "function_definition",
+      "start_line": 589,
+      "end_line": 594,
+      "context": "def _read_macro_argument(node: Node, use_cache_dict: UseCacheDict) -> list[ImportEntry]:\n    \"\"\"Read the paths written in the arguments of a macro (macro_path_list).\"\"\"\n    entry_list: list[ImportEntry] = []\n    for first_node, segment_list in macro_path_list(node):\n        entry_list.extend(_path_entry(first_node, node, segment_list, use_cache_dict))\n    return entry_list"
+    },
+    {
+      "name": "_IMPORT_READER_DICT",
+      "type": "expression_statement",
+      "start_line": 598,
+      "end_line": 605,
+      "context": "_IMPORT_READER_DICT = {\n    \"use_declaration\": _read_use_declaration,\n    \"mod_item\": _read_mod_declaration,\n    \"extern_crate_declaration\": _read_extern_crate,\n    \"scoped_identifier\": _read_path,\n    \"scoped_type_identifier\": _read_path,\n    \"token_tree\": _read_macro_argument,\n}"
+    },
+    {
+      "name": "rust_import_list",
+      "type": "function_definition",
+      "start_line": 608,
+      "end_line": 637,
+      "context": "def rust_import_list(node: Node, use_cache_dict: UseCacheDict | None = None) -> list[ImportEntry]:\n    \"\"\"Return the module paths a Rust node brings into use, for extract_imports.\n\n    Handles:\n        use_declaration          -> one entry per imported name (expand_use_tree)\n        mod_item without a body  -> (\"self::<name>\", name), or (the #[path] value, name)\n        extern_crate_declaration -> (crate name, bound name)\n        scoped_identifier / scoped_type_identifier\n                                 -> (path, path as written) for the outermost path\n                                    outside use declarations and visibility modifiers\n        token_tree               -> (path, path as written) for each path written in\n                                    the arguments of a macro\n\n    Args:\n        node: A node captured by @path_item.\n        use_cache_dict: Cache of the use declarations of the blocks and inline modules\n            of the file the node belongs to, shared by the calls for one syntax tree;\n            None for a call of its own.\n\n    Returns:\n        (module, name bound in the file, original name when renamed, lines) entries.\n        module joins the segments with \"::\"; a glob import has the name \"*\" and an\n        import renamed to \"_\" has the name None. A path is rewritten into a path from\n        the file's module (_module_path). lines is the (first line, last line) the\n        name is bound for: the block or inline module a use declaration is written\n        in, the lines of a path (of the macro arguments it is written in) whose first\n        segment such a use declaration binds, and None for the whole file.\n    \"\"\"\n    reader = _IMPORT_READER_DICT.get(node.type)\n    return reader(node, {} if use_cache_dict is None else use_cache_dict) if reader else []"
+    }
+  ],
+  "callee_usages": [],
+  "same_file_usages": [
+    {
+      "lines": [
+        23,
+        51,
+        155
+      ],
+      "name": "_ROOT_SEGMENT",
+      "target_name": "_ROOT_SEGMENT",
+      "target_start_line": 11
+    },
+    {
+      "lines": [
+        45,
+        579
+      ],
+      "name": "PATH_NODE_TYPE_SET",
+      "target_name": "PATH_NODE_TYPE_SET",
+      "target_start_line": 5
+    },
+    {
+      "lines": [
+        54,
+        59,
+        160,
+        165,
+        240,
+        487
+      ],
+      "name": "_segment_text",
+      "target_name": "_segment_text",
+      "target_start_line": 38
+    },
+    {
+      "lines": [
+        58,
+        151
+      ],
+      "name": "_SEGMENT_NODE_TYPE_SET",
+      "target_name": "_SEGMENT_NODE_TYPE_SET",
+      "target_start_line": 8
+    },
+    {
+      "lines": [
+        80
+      ],
+      "name": "_SELF_TYPE_SEGMENT",
+      "target_name": "_SELF_TYPE_SEGMENT",
+      "target_start_line": 14
+    },
+    {
+      "lines": [
+        83,
+        86
+      ],
+      "name": "_SELF_OWNER_FIELD_DICT",
+      "target_name": "_SELF_OWNER_FIELD_DICT",
+      "target_start_line": 17
+    },
+    {
+      "lines": [
+        89,
+        117
+      ],
+      "name": "_node_segment_list",
+      "target_name": "_node_segment_list",
+      "target_start_line": 43
+    },
+    {
+      "lines": [
+        120,
+        164
+      ],
+      "name": "_impl_type_segment_list",
+      "target_name": "_impl_type_segment_list",
+      "target_start_line": 63
+    },
+    {
+      "lines": [
+        156
+      ],
+      "name": "_GENERIC_END_TYPE_SET",
+      "target_name": "_GENERIC_END_TYPE_SET",
+      "target_start_line": 20
+    },
+    {
+      "lines": [
+        199,
+        207,
+        214,
+        226,
+        583
+      ],
+      "name": "path_segment_list",
+      "target_name": "path_segment_list",
+      "target_start_line": 95
+    },
+    {
+      "lines": [
+        203,
+        229
+      ],
+      "name": "_drop_trailing_self",
+      "target_name": "_drop_trailing_self",
+      "target_start_line": 172
+    },
+    {
+      "lines": [
+        294
+      ],
+      "name": "_is_super_glob",
+      "target_name": "_is_super_glob",
+      "target_start_line": 246
+    },
+    {
+      "lines": [
+        362,
+        391,
+        417,
+        500,
+        532,
+        541,
+        552,
+        576,
+        589,
+        608
+      ],
+      "name": "UseCacheDict",
+      "target_name": "UseCacheDict",
+      "target_start_line": 35
+    },
+    {
+      "lines": [
+        383,
+        512
+      ],
+      "name": "expand_use_tree",
+      "target_name": "expand_use_tree",
+      "target_start_line": 179
+    },
+    {
+      "lines": [
+        405,
+        410,
+        509
+      ],
+      "name": "_use_scope_node",
+      "target_name": "_use_scope_node",
+      "target_start_line": 336
+    },
+    {
+      "lines": [
+        407
+      ],
+      "name": "_scope_use_dict",
+      "target_name": "_scope_use_dict",
+      "target_start_line": 361
+    },
+    {
+      "lines": [
+        440
+      ],
+      "name": "_MAX_SCOPE_USE_HOP",
+      "target_name": "_MAX_SCOPE_USE_HOP",
+      "target_start_line": 26
+    },
+    {
+      "lines": [
+        441
+      ],
+      "name": "_ANCHOR_SEGMENT_SET",
+      "target_name": "_ANCHOR_SEGMENT_SET",
+      "target_start_line": 23
+    },
+    {
+      "lines": [
+        443
+      ],
+      "name": "_scope_use",
+      "target_name": "_scope_use",
+      "target_start_line": 390
+    },
+    {
+      "lines": [
+        449
+      ],
+      "name": "file_module_path",
+      "target_name": "file_module_path",
+      "target_start_line": 301
+    },
+    {
+      "lines": [
+        449,
+        535
+      ],
+      "name": "inline_module_name_list",
+      "target_name": "inline_module_name_list",
+      "target_start_line": 233
+    },
+    {
+      "lines": [
+        500,
+        511,
+        532,
+        541,
+        553,
+        576,
+        589,
+        591,
+        608
+      ],
+      "name": "ImportEntry",
+      "target_name": "ImportEntry",
+      "target_start_line": 30
+    },
+    {
+      "lines": [
+        510,
+        572
+      ],
+      "name": "_line_tuple",
+      "target_name": "_line_tuple",
+      "target_start_line": 356
+    },
+    {
+      "lines": [
+        514,
+        567
+      ],
+      "name": "_module_path",
+      "target_name": "_module_path",
+      "target_start_line": 414
+    },
+    {
+      "lines": [
+        534
+      ],
+      "name": "mod_declaration",
+      "target_name": "mod_declaration",
+      "target_start_line": 452
+    },
+    {
+      "lines": [
+        581
+      ],
+      "name": "_is_inside_use_declaration",
+      "target_name": "_is_inside_use_declaration",
+      "target_start_line": 490
+    },
+    {
+      "lines": [
+        586,
+        593
+      ],
+      "name": "_path_entry",
+      "target_name": "_path_entry",
+      "target_start_line": 551
+    },
+    {
+      "lines": [
+        592
+      ],
+      "name": "macro_path_list",
+      "target_name": "macro_path_list",
+      "target_start_line": 123
+    },
+    {
+      "lines": [
+        599
+      ],
+      "name": "_read_use_declaration",
+      "target_name": "_read_use_declaration",
+      "target_start_line": 500
+    },
+    {
+      "lines": [
+        600
+      ],
+      "name": "_read_mod_declaration",
+      "target_name": "_read_mod_declaration",
+      "target_start_line": 532
+    },
+    {
+      "lines": [
+        601
+      ],
+      "name": "_read_extern_crate",
+      "target_name": "_read_extern_crate",
+      "target_start_line": 541
+    },
+    {
+      "lines": [
+        602,
+        603
+      ],
+      "name": "_read_path",
+      "target_name": "_read_path",
+      "target_start_line": 576
+    },
+    {
+      "lines": [
+        604
+      ],
+      "name": "_read_macro_argument",
+      "target_name": "_read_macro_argument",
+      "target_start_line": 589
+    },
+    {
+      "lines": [
+        636
+      ],
+      "name": "_IMPORT_READER_DICT.get",
+      "target_name": "_IMPORT_READER_DICT",
+      "target_start_line": 598
+    }
+  ],
+  "caller_usages": [
+    {
+      "lines": [
+        265,
+        282
+      ],
+      "name": "UseCacheDict",
+      "file": "codetwine/codetwine/extractors/imports_py/imports.py",
+      "usage_context": "    # Groups multiple @name captures from the same import statement into one entry\n    import_by_key_dict: dict[tuple, ImportInfo] = {}\n    # Rust: the use declarations of the blocks and inline modules of the file\n    use_cache_dict: UseCacheDict = {}\n\n    # Retrieve query match results\n    for _, captures in cursor.matches(root_node):\n...\n            path_item_node = path_item_node_list[0]\n            line = path_item_node.start_point[0] + 1\n            for module, name, original, scope_line_tuple in rust_import_list(\n                path_item_node, use_cache_dict,\n            ):\n                import_info = import_by_key_dict.setdefault(\n                    (module, line, scope_line_tuple),"
+    },
+    {
+      "lines": [
+        281
+      ],
+      "name": "rust_import_list",
+      "file": "codetwine/codetwine/extractors/imports_py/imports.py",
+      "usage_context": "        if path_item_node_list:\n            path_item_node = path_item_node_list[0]\n            line = path_item_node.start_point[0] + 1\n            for module, name, original, scope_line_tuple in rust_import_list(\n                path_item_node, use_cache_dict,\n            ):\n                import_info = import_by_key_dict.setdefault("
+    },
+    {
+      "lines": [
+        505
+      ],
+      "name": "macro_path_list",
+      "file": "codetwine/codetwine/extractors/usages_py/usages.py",
+      "usage_context": "\n        elif node.type in macro_argument_types:\n            # Process the paths written as loose tokens in the arguments of a macro\n            for first_node, segment_list in macro_path_list(node):\n                name = \"::\".join(segment_list)\n                if name in imported_names or segment_list[0] in imported_names:\n                    usage_list.append(UsageInfo(name=name, line=first_node.start_point[0] + 1))"
+    },
+    {
+      "lines": [
+        704
+      ],
+      "name": "path_segment_list",
+      "file": "codetwine/codetwine/extractors/usages_py/usages.py",
+      "usage_context": "    Returns:\n        UsageInfo, or None if not applicable.\n    \"\"\"\n    segment_list = path_segment_list(node)\n    if not segment_list:\n        return None\n    name = \"::\".join(segment_list)"
+    },
+    {
+      "lines": [
+        1443
+      ],
+      "name": "inline_module_scope_list",
+      "file": "codetwine/codetwine/import_binding_py/import_binding.py",
+      "usage_context": "\ndef _path_tree_fact(root_node: Node, tree_fact: _TreeFact) -> None:\n    \"\"\"Read what the bindings of a Rust file need from its tree.\"\"\"\n    tree_fact.module_scope_list = inline_module_scope_list(root_node)\n\n\ndef _package_tree_fact(root_node: Node, tree_fact: _TreeFact) -> None:"
+    },
+    {
+      "lines": [
+        98
+      ],
+      "name": "mod_declaration",
+      "file": "codetwine/codetwine/rust_module_tree_py/rust_module_tree.py",
+      "usage_context": "\n    for child in root_node.children:\n        if child.type == \"mod_item\":\n            declaration = mod_declaration(child)\n            if declaration is not None:\n                module_file.mod_list.append(declaration)\n        elif child.type == \"enum_item\":"
+    },
+    {
+      "lines": [
+        106
+      ],
+      "name": "rust_import_list",
+      "file": "codetwine/codetwine/rust_module_tree_py/rust_module_tree.py",
+      "usage_context": "            if enum_variant is not None:\n                module_file.variant_dict[enum_variant[0]] = enum_variant[1]\n        elif child.type in (\"use_declaration\", \"extern_crate_declaration\"):\n            for module, name, _, _ in rust_import_list(child):\n                if name == \"*\":\n                    module_file.glob_list.append(module.split(\"::\"))\n                elif name:"
+    }
+  ]
+}

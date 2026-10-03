@@ -4,20 +4,22 @@
 
 **Overview**
 
-Re-exports the `ContextWindowExceededError` exception from the `litellm` package so it can be imported through a stable, project-internal path.
+Export exception types from the litellm library for use throughout the codetwine project.
 
-- A developer catching LLM context-length failures imports `ContextWindowExceededError` from this module to detect when a prompt exceeds the model's context window and trigger a fallback behavior.
-- A caller generating a summary or documentation section via an LLM client wraps the call in a try/except on this error to gracefully degrade output (e.g., set a value to `None` or retry with a reduced prompt) instead of crashing.
+- Call `ContextWindowExceededError` when catching exceptions that occur when an LLM prompt exceeds the model's context window limit, enabling graceful fallback behavior in documentation generation.
 
-This file has no internal project dependencies; it only wraps a third-party exception from `litellm`. It is used by `codetwine/doc_creator.py`, which imports `ContextWindowExceededError` to catch failures from `llm_client.generate(prompt)` calls, allowing it to fall back to a deterministic summary or to a reduced-context prompt generation stage when the context window is exceeded.
+This file serves as a re-export point for litellm exception types. It is used by `codetwine/doc_creator.py`, which imports `ContextWindowExceededError` to handle cases where generated prompts exceed token limits and trigger fallback strategies for generating documentation summaries and section content.
 
-Design decision: centralizing the import in this module (via `__all__`) decouples the rest of the codebase from the `litellm` package's exact import path, so the underlying LLM library could be swapped without changing call sites that only reference `codetwine.llm.ContextWindowExceededError`.
+The file acts as a thin adapter layer, re-exporting third-party exceptions through the `codetwine.llm` namespace to provide a single import point for error handling across the project.
 
 **Definitions**
 
 ## `ContextWindowExceededError`
-An exception type re-exported from `litellm`, used to signal that an LLM prompt exceeded the model's context window. Callers such as `doc_creator.py` catch this exception around `llm_client.generate(...)` calls to implement fallback logic, such as returning `None` for a summary or retrying generation with progressively reduced context (source, dependencies, or implementation context stripped down) at a lower "reduction stage." It is used purely as an exception class for control flow, not instantiated or extended within this file.
+
+An exception class imported from litellm that represents the error condition when a prompt or completion request exceeds the maximum context window size supported by an LLM model. This exception is caught by the documentation generator to implement fallback strategies that reduce context or skip expensive operations when token limits are breached.
 
 # Summary
 
-This file's single responsibility is to re-export the `ContextWindowExceededError` exception from the third-party `litellm` package, providing a stable, project-internal import path. Its main public definition is `ContextWindowExceededError`, exposed via `__all__`. Key terms: LLM context window, exception handling, fallback behavior, decoupling from third-party library import paths. It has no internal dependencies and is consumed by `doc_creator.py`, which catches this error around LLM generation calls to gracefully degrade output—falling back to deterministic summaries or reduced-context prompts—rather than crashing on context-length failures.
+# Summary
+
+This file re-exports the `ContextWindowExceededError` exception from litellm, serving as a centralized import point for exception handling across the codetwine project. It acts as an adapter layer that enables `codetwine/doc_creator.py` to catch context window overflow errors and implement graceful fallback strategies when generated prompts exceed model token limits. The module's single responsibility is to provide a clean namespace for accessing litellm exceptions related to LLM API errors, specifically those triggered by oversized prompts.

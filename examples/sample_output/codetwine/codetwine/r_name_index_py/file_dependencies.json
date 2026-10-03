@@ -1,0 +1,1647 @@
+{
+  "file": "codetwine/codetwine/r_name_index_py/r_name_index.py",
+  "language": "py",
+  "detected_encoding": null,
+  "definitions": [
+    {
+      "name": "logger",
+      "type": "expression_statement",
+      "start_line": 22,
+      "end_line": 22,
+      "context": "logger = logging.getLogger(__name__)"
+    },
+    {
+      "name": "_PACKAGE_FILE",
+      "type": "expression_statement",
+      "start_line": 25,
+      "end_line": 25,
+      "context": "_PACKAGE_FILE = \"DESCRIPTION\""
+    },
+    {
+      "name": "_PACKAGE_NAME_FIELD",
+      "type": "expression_statement",
+      "start_line": 26,
+      "end_line": 26,
+      "context": "_PACKAGE_NAME_FIELD = \"Package:\""
+    },
+    {
+      "name": "_CODE_DIR",
+      "type": "expression_statement",
+      "start_line": 29,
+      "end_line": 29,
+      "context": "_CODE_DIR = \"R\""
+    },
+    {
+      "name": "_APP_FILE_SET",
+      "type": "expression_statement",
+      "start_line": 32,
+      "end_line": 32,
+      "context": "_APP_FILE_SET = {\"app.r\", \"server.r\"}"
+    },
+    {
+      "name": "_APP_SCRIPT_SET",
+      "type": "expression_statement",
+      "start_line": 35,
+      "end_line": 35,
+      "context": "_APP_SCRIPT_SET = {\"app.r\", \"ui.r\", \"server.r\", \"global.r\"}"
+    },
+    {
+      "name": "_APP_GLOBAL_FILE",
+      "type": "expression_statement",
+      "start_line": 38,
+      "end_line": 38,
+      "context": "_APP_GLOBAL_FILE = \"global.r\""
+    },
+    {
+      "name": "_TEST_DIR",
+      "type": "expression_statement",
+      "start_line": 42,
+      "end_line": 42,
+      "context": "_TEST_DIR = \"testthat\""
+    },
+    {
+      "name": "_TEST_HELPER_PREFIX_TUPLE",
+      "type": "expression_statement",
+      "start_line": 43,
+      "end_line": 43,
+      "context": "_TEST_HELPER_PREFIX_TUPLE = (\"helper\", \"setup\")"
+    },
+    {
+      "name": "_MODULE_EXT_TUPLE",
+      "type": "expression_statement",
+      "start_line": 46,
+      "end_line": 46,
+      "context": "_MODULE_EXT_TUPLE = (\".R\", \".r\")"
+    },
+    {
+      "name": "_MODULE_INIT_FILE",
+      "type": "expression_statement",
+      "start_line": 47,
+      "end_line": 47,
+      "context": "_MODULE_INIT_FILE = \"__init__\""
+    },
+    {
+      "name": "_ROOT_PATH_RE",
+      "type": "expression_statement",
+      "start_line": 50,
+      "end_line": 50,
+      "context": "_ROOT_PATH_RE = re.compile(r\"^(/|~|[A-Za-z]:)\")"
+    },
+    {
+      "name": "_Entry",
+      "type": "expression_statement",
+      "start_line": 53,
+      "end_line": 53,
+      "context": "_Entry = tuple[str, RDefinition]"
+    },
+    {
+      "name": "_NameTable",
+      "type": "expression_statement",
+      "start_line": 56,
+      "end_line": 56,
+      "context": "_NameTable = dict[str, list[_Entry]]"
+    },
+    {
+      "name": "r_name_index_cache",
+      "type": "expression_statement",
+      "start_line": 59,
+      "end_line": 59,
+      "context": "r_name_index_cache: dict[str, tuple[set[str], \"RNameIndex\"]] = {}"
+    },
+    {
+      "name": "r_target_cache",
+      "type": "expression_statement",
+      "start_line": 63,
+      "end_line": 63,
+      "context": "r_target_cache: dict[str, tuple[set[str], list[\"RReferenceTarget\"]]] = {}"
+    },
+    {
+      "name": "RReferenceTarget",
+      "type": "class_definition",
+      "start_line": 66,
+      "end_line": 75,
+      "context": "@dataclass\nclass RReferenceTarget:\n    \"\"\"The definition one reference of an R file resolves to.\"\"\"\n\n    name: str               # Name of the usage: the name of the definition\n    line: int               # Line of the reference (1-based)\n    file_rel: str           # Relative path of the file with the definition\n    definition_name: str    # Name the definition is looked up by in file_rel\n    start_line: int         # First line of the definition in file_rel (1-based)\n    end_line: int           # Last line of the definition in file_rel"
+    },
+    {
+      "name": "name",
+      "type": "expression_statement",
+      "start_line": 70,
+      "end_line": 70,
+      "context": "    name: str               # Name of the usage: the name of the definition"
+    },
+    {
+      "name": "line",
+      "type": "expression_statement",
+      "start_line": 71,
+      "end_line": 71,
+      "context": "    line: int               # Line of the reference (1-based)"
+    },
+    {
+      "name": "file_rel",
+      "type": "expression_statement",
+      "start_line": 72,
+      "end_line": 72,
+      "context": "    file_rel: str           # Relative path of the file with the definition"
+    },
+    {
+      "name": "definition_name",
+      "type": "expression_statement",
+      "start_line": 73,
+      "end_line": 73,
+      "context": "    definition_name: str    # Name the definition is looked up by in file_rel"
+    },
+    {
+      "name": "start_line",
+      "type": "expression_statement",
+      "start_line": 74,
+      "end_line": 74,
+      "context": "    start_line: int         # First line of the definition in file_rel (1-based)"
+    },
+    {
+      "name": "end_line",
+      "type": "expression_statement",
+      "start_line": 75,
+      "end_line": 75,
+      "context": "    end_line: int           # Last line of the definition in file_rel"
+    },
+    {
+      "name": "_BoxModule",
+      "type": "class_definition",
+      "start_line": 78,
+      "end_line": 83,
+      "context": "@dataclass\nclass _BoxModule:\n    \"\"\"What one argument of box::use leads to: a script of the project or one of its packages.\"\"\"\n\n    file_rel: str | None = None       # Relative path of the module script\n    package_name: str = \"\"            # Name of the package"
+    },
+    {
+      "name": "file_rel",
+      "type": "expression_statement",
+      "start_line": 82,
+      "end_line": 82,
+      "context": "    file_rel: str | None = None       # Relative path of the module script"
+    },
+    {
+      "name": "package_name",
+      "type": "expression_statement",
+      "start_line": 83,
+      "end_line": 83,
+      "context": "    package_name: str = \"\"            # Name of the package"
+    },
+    {
+      "name": "_BoxScope",
+      "type": "class_definition",
+      "start_line": 86,
+      "end_line": 95,
+      "context": "@dataclass\nclass _BoxScope:\n    \"\"\"What the box::use calls of one file bind.\"\"\"\n\n    # Name bound in the file -> the definitions attached under it one by one\n    attach_table: _NameTable = field(default_factory=dict)\n    # The names of the modules attached whole ([...])\n    attach_all_table: _NameTable = field(default_factory=dict)\n    # Name a module is bound to -> the module\n    module_dict: dict[str, _BoxModule] = field(default_factory=dict)"
+    },
+    {
+      "name": "attach_table",
+      "type": "expression_statement",
+      "start_line": 91,
+      "end_line": 91,
+      "context": "    attach_table: _NameTable = field(default_factory=dict)"
+    },
+    {
+      "name": "attach_all_table",
+      "type": "expression_statement",
+      "start_line": 93,
+      "end_line": 93,
+      "context": "    attach_all_table: _NameTable = field(default_factory=dict)"
+    },
+    {
+      "name": "module_dict",
+      "type": "expression_statement",
+      "start_line": 95,
+      "end_line": 95,
+      "context": "    module_dict: dict[str, _BoxModule] = field(default_factory=dict)"
+    },
+    {
+      "name": "RNameIndex",
+      "type": "class_definition",
+      "start_line": 98,
+      "end_line": 127,
+      "context": "@dataclass\nclass RNameIndex:\n    \"\"\"The definitions, imports and packages of the R files of a project.\"\"\"\n\n    # Relative path -> what the file defines, reads and refers to\n    source_dict: dict[str, RSource] = field(default_factory=dict)\n    # Relative path -> the top-level names the file defines\n    table_dict: dict[str, _NameTable] = field(default_factory=dict)\n    # Relative paths of the R scripts (not R Markdown or Quarto files)\n    script_file_set: set[str] = field(default_factory=set)\n    # Relative path of an R script in lower case -> the scripts with that path in any case\n    lower_file_dict: dict[str, list[str]] = field(default_factory=dict)\n    # Directory -> the R scripts directly in it, in path order\n    dir_file_dict: dict[str, list[str]] = field(default_factory=dict)\n    # Relative path -> directory of the nearest package above the file (None for no package)\n    package_dir_dict: dict[str, str | None] = field(default_factory=dict)\n    # Package name -> directories of the packages of that name, in path order\n    package_name_dict: dict[str, list[str]] = field(default_factory=dict)\n    # Directory of a package -> the top-level names of the scripts in its R directory\n    package_table_dict: dict[str, _NameTable] = field(default_factory=dict)\n    # Directory of a package -> the scripts in its R directory\n    package_file_dict: dict[str, set[str]] = field(default_factory=dict)\n    # Name -> the top-level definitions of that name in the R files, in path order\n    entry_dict: _NameTable = field(default_factory=dict)\n    # Relative path -> the scripts the file reads with source(), in line order\n    source_file_dict: dict[str, list[str]] = field(default_factory=dict)\n    # Relative path of a script -> the files that read it with source(), in path order\n    reader_file_dict: dict[str, list[str]] = field(default_factory=dict)\n    # Relative path -> what the box::use calls of the file bind (kept by _box_scope)\n    box_scope_dict: dict[str, _BoxScope] = field(default_factory=dict)"
+    },
+    {
+      "name": "source_dict",
+      "type": "expression_statement",
+      "start_line": 103,
+      "end_line": 103,
+      "context": "    source_dict: dict[str, RSource] = field(default_factory=dict)"
+    },
+    {
+      "name": "table_dict",
+      "type": "expression_statement",
+      "start_line": 105,
+      "end_line": 105,
+      "context": "    table_dict: dict[str, _NameTable] = field(default_factory=dict)"
+    },
+    {
+      "name": "script_file_set",
+      "type": "expression_statement",
+      "start_line": 107,
+      "end_line": 107,
+      "context": "    script_file_set: set[str] = field(default_factory=set)"
+    },
+    {
+      "name": "lower_file_dict",
+      "type": "expression_statement",
+      "start_line": 109,
+      "end_line": 109,
+      "context": "    lower_file_dict: dict[str, list[str]] = field(default_factory=dict)"
+    },
+    {
+      "name": "dir_file_dict",
+      "type": "expression_statement",
+      "start_line": 111,
+      "end_line": 111,
+      "context": "    dir_file_dict: dict[str, list[str]] = field(default_factory=dict)"
+    },
+    {
+      "name": "package_dir_dict",
+      "type": "expression_statement",
+      "start_line": 113,
+      "end_line": 113,
+      "context": "    package_dir_dict: dict[str, str | None] = field(default_factory=dict)"
+    },
+    {
+      "name": "package_name_dict",
+      "type": "expression_statement",
+      "start_line": 115,
+      "end_line": 115,
+      "context": "    package_name_dict: dict[str, list[str]] = field(default_factory=dict)"
+    },
+    {
+      "name": "package_table_dict",
+      "type": "expression_statement",
+      "start_line": 117,
+      "end_line": 117,
+      "context": "    package_table_dict: dict[str, _NameTable] = field(default_factory=dict)"
+    },
+    {
+      "name": "package_file_dict",
+      "type": "expression_statement",
+      "start_line": 119,
+      "end_line": 119,
+      "context": "    package_file_dict: dict[str, set[str]] = field(default_factory=dict)"
+    },
+    {
+      "name": "entry_dict",
+      "type": "expression_statement",
+      "start_line": 121,
+      "end_line": 121,
+      "context": "    entry_dict: _NameTable = field(default_factory=dict)"
+    },
+    {
+      "name": "source_file_dict",
+      "type": "expression_statement",
+      "start_line": 123,
+      "end_line": 123,
+      "context": "    source_file_dict: dict[str, list[str]] = field(default_factory=dict)"
+    },
+    {
+      "name": "reader_file_dict",
+      "type": "expression_statement",
+      "start_line": 125,
+      "end_line": 125,
+      "context": "    reader_file_dict: dict[str, list[str]] = field(default_factory=dict)"
+    },
+    {
+      "name": "box_scope_dict",
+      "type": "expression_statement",
+      "start_line": 127,
+      "end_line": 127,
+      "context": "    box_scope_dict: dict[str, _BoxScope] = field(default_factory=dict)"
+    },
+    {
+      "name": "_file_table",
+      "type": "function_definition",
+      "start_line": 130,
+      "end_line": 141,
+      "context": "def _file_table(file_rel: str, r_source: RSource) -> _NameTable:\n    \"\"\"Return the top-level names an R file defines.\n\n    Members of a class and calls written for a name defined elsewhere (setMethod) are\n    left out.\n    \"\"\"\n    table: _NameTable = {}\n    for definition in r_source.definition_list:\n        if definition.is_member or definition.is_attach:\n            continue\n        table.setdefault(definition.name, []).append((file_rel, definition))\n    return table"
+    },
+    {
+      "name": "_merge_table",
+      "type": "function_definition",
+      "start_line": 144,
+      "end_line": 150,
+      "context": "def _merge_table(table_list: list[_NameTable]) -> _NameTable:\n    \"\"\"Return one name table with the definitions of every given table, in order.\"\"\"\n    merge_table: _NameTable = {}\n    for table in table_list:\n        for name, entry_list in table.items():\n            merge_table.setdefault(name, []).extend(entry_list)\n    return merge_table"
+    },
+    {
+      "name": "_ancestor_dir_list",
+      "type": "function_definition",
+      "start_line": 153,
+      "end_line": 165,
+      "context": "def _ancestor_dir_list(file_rel: str) -> list[str]:\n    \"\"\"Return the directory of a file and each directory above it, nearest first.\n\n    Examples:\n        \"app/logic/calc.R\" -> [\"app/logic\", \"app\", \"\"]\n        \"main.R\"           -> [\"\"]\n    \"\"\"\n    directory = posixpath.dirname(file_rel)\n    dir_list = [directory]\n    while directory:\n        directory = posixpath.dirname(directory)\n        dir_list.append(directory)\n    return dir_list"
+    },
+    {
+      "name": "_package_name",
+      "type": "function_definition",
+      "start_line": 168,
+      "end_line": 187,
+      "context": "def _package_name(project_dir: str, directory: str) -> str | None:\n    \"\"\"Return the package name the DESCRIPTION file of a directory gives.\n\n    Args:\n        project_dir: Absolute path to the project root.\n        directory: Relative path of the directory (\"\" for the project root).\n\n    Returns:\n        The value of the \"Package:\" field. None when the directory has no DESCRIPTION\n        file, or the file has no such field.\n    \"\"\"\n    description_path = os.path.join(project_dir, directory, _PACKAGE_FILE)\n    try:\n        with open(description_path, encoding=\"utf-8-sig\", errors=\"replace\") as description_file:\n            for line in description_file:\n                if line.startswith(_PACKAGE_NAME_FIELD):\n                    return line[len(_PACKAGE_NAME_FIELD):].strip() or None\n    except OSError:\n        return None\n    return None"
+    },
+    {
+      "name": "_add_package",
+      "type": "function_definition",
+      "start_line": 190,
+      "end_line": 212,
+      "context": "def _add_package(name_index: RNameIndex, project_dir: str, file_rel_list: list[str]) -> None:\n    \"\"\"Index the packages of the project: the directory of each file's package, the\n    package names, and the names of the scripts in each package's R directory.\"\"\"\n    name_by_dir_dict: dict[str, str | None] = {}\n    for file_rel in file_rel_list:\n        package_dir: str | None = None\n        for directory in _ancestor_dir_list(file_rel):\n            if directory not in name_by_dir_dict:\n                name_by_dir_dict[directory] = _package_name(project_dir, directory)\n            if name_by_dir_dict[directory] is not None:\n                package_dir = directory\n                break\n        name_index.package_dir_dict[file_rel] = package_dir\n\n    for directory, package_name in sorted(name_by_dir_dict.items()):\n        if package_name is None:\n            continue\n        name_index.package_name_dict.setdefault(package_name, []).append(directory)\n        code_file_list = name_index.dir_file_dict.get(posixpath.join(directory, _CODE_DIR), [])\n        name_index.package_file_dict[directory] = set(code_file_list)\n        name_index.package_table_dict[directory] = _merge_table(\n            [name_index.table_dict[file_rel] for file_rel in code_file_list]\n        )"
+    },
+    {
+      "name": "_source_file",
+      "type": "function_definition",
+      "start_line": 215,
+      "end_line": 250,
+      "context": "def _source_file(name_index: RNameIndex, file_rel: str, path: str) -> str | None:\n    \"\"\"Return the script a source() path leads to.\n\n    The path is tried from the directory of the file, then from each directory above\n    it up to the project root. When no script has the path as written, the one script\n    whose path differs from it only in upper and lower case is taken, in the same order.\n\n    Examples (file \"app/server.R\"):\n        \"helper.R\"     -> \"app/helper.R\", else \"helper.R\"\n        \"../R/util.R\"  -> \"R/util.R\"\n        \"helper.r\"     -> \"app/helper.R\" (no \"app/helper.r\", no \"helper.r\")\n\n    Args:\n        name_index: The name index of the project.\n        file_rel: Relative path of the file the path is written in.\n        path: The path as written.\n\n    Returns:\n        The relative path of the script, or None when the path starts at a root or\n        leads to no R script of the project.\n    \"\"\"\n    path = path.replace(\"\\\\\", \"/\")\n    if _ROOT_PATH_RE.match(path):\n        return None\n    candidate_list = [\n        posixpath.normpath(posixpath.join(directory, path))\n        for directory in _ancestor_dir_list(file_rel)\n    ]\n    for candidate in candidate_list:\n        if candidate in name_index.script_file_set:\n            return candidate\n    for candidate in candidate_list:\n        same_name_list = name_index.lower_file_dict.get(candidate.lower(), [])\n        if len(same_name_list) == 1:\n            return same_name_list[0]\n    return None"
+    },
+    {
+      "name": "_box_module_file",
+      "type": "function_definition",
+      "start_line": 253,
+      "end_line": 281,
+      "context": "def _box_module_file(name_index: RNameIndex, file_rel: str, path: str) -> str | None:\n    \"\"\"Return the script a box module path leads to.\n\n    A path that starts with \"./\" or \"../\" is taken from the directory of the file; any\n    other path from the directory of the file, then from each directory above it. The\n    path leads to <path>.R, <path>.r, <path>/__init__.R or <path>/__init__.r.\n\n    Examples (file \"app/main.R\"):\n        \"./logic/calc\"   -> \"app/logic/calc.R\"\n        \"app/view/table\" -> \"app/view/table.R\" (from the project root)\n\n    Args:\n        name_index: The name index of the project.\n        file_rel: Relative path of the file box::use is written in.\n        path: The module path, its parts joined with \"/\".\n\n    Returns:\n        The relative path of the script, or None when no R script of the project\n        matches.\n    \"\"\"\n    is_relative = path.startswith((\"./\", \"../\"))\n    dir_list = _ancestor_dir_list(file_rel)\n    for directory in dir_list[:1] if is_relative else dir_list:\n        base_path = posixpath.normpath(posixpath.join(directory, path))\n        for candidate_base in (base_path, posixpath.join(base_path, _MODULE_INIT_FILE)):\n            for module_ext in _MODULE_EXT_TUPLE:\n                if candidate_base + module_ext in name_index.script_file_set:\n                    return candidate_base + module_ext\n    return None"
+    },
+    {
+      "name": "_import_file",
+      "type": "function_definition",
+      "start_line": 284,
+      "end_line": 296,
+      "context": "def _import_file(name_index: RNameIndex, file_rel: str, r_import: RImport) -> str | None:\n    \"\"\"Return the script a source() call or a box module path of a file leads to.\n\n    Returns:\n        The relative path, or None for a package (library(pkg), box::use(pkg)) and\n        for a path that leads to no script.\n    \"\"\"\n    if r_import.kind == SOURCE_IMPORT:\n        return _source_file(name_index, file_rel, r_import.path)\n    if r_import.kind == BOX_IMPORT:\n        module = _box_module(name_index, file_rel, r_import)\n        return module.file_rel if module else None\n    return None"
+    },
+    {
+      "name": "_add_source_edge",
+      "type": "function_definition",
+      "start_line": 299,
+      "end_line": 311,
+      "context": "def _add_source_edge(name_index: RNameIndex) -> None:\n    \"\"\"Index, for each file, the scripts its source() calls lead to and the files that read it.\"\"\"\n    for file_rel, r_source in name_index.source_dict.items():\n        source_file_list: list[str] = []\n        for r_import in r_source.import_list:\n            if r_import.kind != SOURCE_IMPORT:\n                continue\n            source_rel = _source_file(name_index, file_rel, r_import.path)\n            if source_rel and source_rel != file_rel and source_rel not in source_file_list:\n                source_file_list.append(source_rel)\n        name_index.source_file_dict[file_rel] = source_file_list\n        for source_rel in source_file_list:\n            name_index.reader_file_dict.setdefault(source_rel, []).append(file_rel)"
+    },
+    {
+      "name": "_reach_list",
+      "type": "function_definition",
+      "start_line": 314,
+      "end_line": 337,
+      "context": "def _reach_list(edge_dict: dict[str, list[str]], start_list: list[str]) -> list[str]:\n    \"\"\"Return the start files and every file reached from them through the edges.\n\n    Examples (edges a -> b, b -> c, c -> a):\n        [\"a\"]       -> [\"a\", \"b\", \"c\"]\n        [\"b\", \"x\"]  -> [\"b\", \"x\", \"c\", \"a\"]\n\n    Args:\n        edge_dict: {file: files one edge away}.\n        start_list: The files to start from.\n\n    Returns:\n        The files, each once, the start files first.\n    \"\"\"\n    reach_list = list(dict.fromkeys(start_list))\n    visit_set = set(reach_list)\n    position = 0\n    while position < len(reach_list):\n        for next_rel in edge_dict.get(reach_list[position], []):\n            if next_rel not in visit_set:\n                visit_set.add(next_rel)\n                reach_list.append(next_rel)\n        position += 1\n    return reach_list"
+    },
+    {
+      "name": "_package_dir_list",
+      "type": "function_definition",
+      "start_line": 340,
+      "end_line": 354,
+      "context": "def _package_dir_list(name_index: RNameIndex, package_name: str, file_rel: str) -> list[str]:\n    \"\"\"Return the directories of the packages of the project a file names with a package name.\n\n    Args:\n        name_index: The name index of the project.\n        package_name: The name as written (library(pkg), pkg::name, box::use(pkg)).\n        file_rel: Relative path of the file the name is written in.\n\n    Returns:\n        The directory of the package the file is in when it has that name, else the\n        directories of every package of that name, in path order.\n    \"\"\"\n    package_dir_list = name_index.package_name_dict.get(package_name, [])\n    own_package_dir = name_index.package_dir_dict.get(file_rel)\n    return [own_package_dir] if own_package_dir in package_dir_list else package_dir_list"
+    },
+    {
+      "name": "_package_table",
+      "type": "function_definition",
+      "start_line": 357,
+      "end_line": 364,
+      "context": "def _package_table(name_index: RNameIndex, package_name: str, file_rel: str) -> _NameTable:\n    \"\"\"Return the names of the packages a file names with a package name (_package_dir_list).\"\"\"\n    package_dir_list = _package_dir_list(name_index, package_name, file_rel)\n    if len(package_dir_list) == 1:\n        return name_index.package_table_dict[package_dir_list[0]]\n    return _merge_table(\n        [name_index.package_table_dict[package_dir] for package_dir in package_dir_list]\n    )"
+    },
+    {
+      "name": "_box_module",
+      "type": "function_definition",
+      "start_line": 367,
+      "end_line": 381,
+      "context": "def _box_module(name_index: RNameIndex, file_rel: str, r_import: RImport) -> _BoxModule | None:\n    \"\"\"Return the module one argument of box::use leads to.\n\n    A path with \"/\" is a module script (_box_module_file); a path of one part is a\n    package of the project with that name.\n\n    Returns:\n        The module, or None when the path leads to nothing in the project.\n    \"\"\"\n    if \"/\" in r_import.path:\n        module_file = _box_module_file(name_index, file_rel, r_import.path)\n        return _BoxModule(file_rel=module_file) if module_file else None\n    if r_import.path in name_index.package_name_dict:\n        return _BoxModule(package_name=r_import.path)\n    return None"
+    },
+    {
+      "name": "_module_table",
+      "type": "function_definition",
+      "start_line": 384,
+      "end_line": 413,
+      "context": "def _module_table(\n    name_index: RNameIndex,\n    module: _BoxModule,\n    file_rel: str,\n    visit_set: frozenset[str] = frozenset(),\n    hit_set: set[str] | None = None,\n) -> _NameTable:\n    \"\"\"Return the names a box module gives the file that binds it.\n\n    A module script gives its own top-level names, then the names its own box::use\n    calls attach; a module in visit_set gives its own names only. A package gives the\n    names of the packages of that name (_package_table).\n\n    Args:\n        name_index: The name index of the project.\n        module: The module.\n        file_rel: Relative path of the file that binds the module.\n        visit_set: The files whose box::use calls are read at this moment.\n        hit_set: Given the modules of visit_set the read comes back to; modified in\n            place.\n    \"\"\"\n    if module.file_rel is None:\n        return _package_table(name_index, module.package_name, file_rel)\n    own_table = name_index.table_dict[module.file_rel]\n    if module.file_rel in visit_set:\n        if hit_set is not None:\n            hit_set.add(module.file_rel)\n        return own_table\n    box_scope = _box_scope(name_index, module.file_rel, visit_set, hit_set)\n    return _merge_table([own_table, box_scope.attach_table, box_scope.attach_all_table])"
+    },
+    {
+      "name": "_box_scope",
+      "type": "function_definition",
+      "start_line": 416,
+      "end_line": 470,
+      "context": "def _box_scope(\n    name_index: RNameIndex,\n    file_rel: str,\n    visit_set: frozenset[str] = frozenset(),\n    hit_set: set[str] | None = None,\n) -> _BoxScope:\n    \"\"\"Return what the box::use calls of a file bind.\n\n    The scope is kept in name_index.box_scope_dict when the read of it came back to no\n    file of visit_set. Modules that attach the names of one another in a circle give\n    each file the names of all of them.\n\n    Args:\n        name_index: The name index of the project.\n        file_rel: Relative path of the file.\n        visit_set: The files whose box::use calls are read at this moment, when the\n            file is read as a module of one of them.\n        hit_set: Given the modules the read of the file comes back to; modified in\n            place.\n\n    Returns:\n        The _BoxScope of the file.\n    \"\"\"\n    box_scope = name_index.box_scope_dict.get(file_rel)\n    if box_scope is not None:\n        return box_scope\n    box_scope = _BoxScope()\n    module_visit_set = visit_set | {file_rel}\n    module_hit_set: set[str] = set()\n\n    attach_all_table_list: list[_NameTable] = []\n    for r_import in name_index.source_dict[file_rel].import_list:\n        if r_import.kind != BOX_IMPORT:\n            continue\n        module = _box_module(name_index, file_rel, r_import)\n        if module is None:\n            continue\n        if r_import.alias:\n            box_scope.module_dict[r_import.alias] = module\n        if not r_import.name_dict and not r_import.is_attach_all:\n            continue\n        module_table = _module_table(\n            name_index, module, file_rel, module_visit_set, module_hit_set,\n        )\n        for name, original_name in r_import.name_dict.items():\n            box_scope.attach_table.setdefault(name, []).extend(module_table.get(original_name, []))\n        if r_import.is_attach_all:\n            attach_all_table_list.append(module_table)\n    box_scope.attach_all_table.update(_merge_table(attach_all_table_list))\n\n    if not module_hit_set & visit_set:\n        name_index.box_scope_dict[file_rel] = box_scope\n    if hit_set is not None:\n        hit_set.update(module_hit_set)\n    return box_scope"
+    },
+    {
+      "name": "_build_name_index",
+      "type": "function_definition",
+      "start_line": 473,
+      "end_line": 508,
+      "context": "def _build_name_index(project_dir: str, project_file_set: set[str]) -> RNameIndex:\n    \"\"\"Parse the R files of a project and build their index.\n\n    Args:\n        project_dir: Absolute path to the project root.\n        project_file_set: Relative paths of the project files that have a language.\n\n    Returns:\n        The RNameIndex of the R files in project_file_set. A file that cannot be read\n        or parsed is not in it; the exception is logged.\n    \"\"\"\n    name_index = RNameIndex()\n    file_rel_list: list[str] = []\n    for file_rel in sorted(project_file_set):\n        file_abs = os.path.join(project_dir, file_rel)\n        file_ext = language_ext(file_abs)\n        if file_ext not in R_EXT_SET:\n            continue\n        try:\n            r_source = read_r_source(parse_file(file_abs)[0])\n        except Exception as e:\n            logger.warning(f\"{file_rel} is not read as R: {type(e).__name__}: {e}\")\n            continue\n        file_rel_list.append(file_rel)\n        name_index.source_dict[file_rel] = r_source\n        name_index.table_dict[file_rel] = _file_table(file_rel, r_source)\n        for name, entry_list in name_index.table_dict[file_rel].items():\n            name_index.entry_dict.setdefault(name, []).extend(entry_list)\n        if file_ext not in R_MARKDOWN_EXT_SET:\n            name_index.script_file_set.add(file_rel)\n            name_index.lower_file_dict.setdefault(file_rel.lower(), []).append(file_rel)\n            name_index.dir_file_dict.setdefault(posixpath.dirname(file_rel), []).append(file_rel)\n\n    _add_package(name_index, project_dir, file_rel_list)\n    _add_source_edge(name_index)\n    return name_index"
+    },
+    {
+      "name": "_get_name_index",
+      "type": "function_definition",
+      "start_line": 511,
+      "end_line": 530,
+      "context": "def _get_name_index(project_dir: str, project_file_set: set[str]) -> RNameIndex:\n    \"\"\"Return the name index of the project, building it on the first call.\n\n    The index is kept in r_name_index_cache until the project file set changes or the\n    cache is cleared.\n\n    Args:\n        project_dir: Absolute path to the project root.\n        project_file_set: Relative paths of the project files that have a language.\n\n    Returns:\n        The RNameIndex of the R files in project_file_set.\n    \"\"\"\n    name_index = project_cache_value(r_name_index_cache, project_dir, project_file_set)\n    if name_index is not None:\n        return name_index\n\n    name_index = _build_name_index(project_dir, project_file_set)\n    r_name_index_cache[project_dir] = (project_file_set, name_index)\n    return name_index"
+    },
+    {
+      "name": "_ReferenceResolver",
+      "type": "class_definition",
+      "start_line": 533,
+      "end_line": 812,
+      "context": "class _ReferenceResolver:\n    \"\"\"Resolves the references of one R file to the definitions they refer to.\"\"\"\n\n    def __init__(self, name_index: RNameIndex, file_rel: str) -> None:\n        \"\"\"Collect the names the file sees.\n\n        Args:\n            name_index: The name index of the project.\n            file_rel: Relative path of the file.\n        \"\"\"\n        self._name_index = name_index\n        self._file_rel = file_rel\n        self._r_source = name_index.source_dict[file_rel]\n        self._box_scope = _box_scope(name_index, file_rel)\n        # Package name -> the names of the packages the file names with it\n        self._package_table_dict: dict[str, _NameTable] = {}\n        # Name -> definitions of it the file sees, kept once looked up\n        self._lookup_dict: dict[str, list[_Entry]] = {}\n        self._file_set_list = self._lookup_file_set_list()\n\n    def _with_source(self, file_rel_list: list[str], skip_set: set[str]) -> list[str]:\n        \"\"\"Return the given scripts and the ones they read with source(), followed through.\n\n        Args:\n            file_rel_list: The scripts to start from.\n            skip_set: Files left out of the return value.\n\n        Returns:\n            The scripts, each once, without the ones in skip_set.\n        \"\"\"\n        reach_list = _reach_list(self._name_index.source_file_dict, file_rel_list)\n        return [file_rel for file_rel in reach_list if file_rel not in skip_set]\n\n    def _reader_file_list(self, skip_set: set[str]) -> list[str]:\n        \"\"\"Return the scripts that read the file with source(), followed up through the\n        scripts that read those, and every script they read.\"\"\"\n        reader_list = _reach_list(self._name_index.reader_file_dict, [self._file_rel])\n        return self._with_source(reader_list, skip_set)\n\n    def _is_app_dir(self, directory: str) -> bool:\n        \"\"\"Return whether a directory holds app.R or server.R.\"\"\"\n        return any(\n            posixpath.basename(script_rel).lower() in _APP_FILE_SET\n            for script_rel in self._name_index.dir_file_dict.get(directory, [])\n        )\n\n    def _app_file_list(self, file_rel: str) -> list[str]:\n        \"\"\"Return the scripts of the Shiny app of a file whose names it sees.\n\n        For app.R, ui.R, server.R and global.R of an app directory, and for the scripts\n        of its R directory: global.R and the scripts of the R directory.\n        \"\"\"\n        if file_rel not in self._name_index.script_file_set:\n            return []\n        directory = posixpath.dirname(file_rel)\n        if posixpath.basename(file_rel).lower() in _APP_SCRIPT_SET and self._is_app_dir(directory):\n            app_dir = directory\n        elif posixpath.basename(directory) == _CODE_DIR and self._is_app_dir(posixpath.dirname(directory)):\n            app_dir = posixpath.dirname(directory)\n        else:\n            return []\n        dir_file_dict = self._name_index.dir_file_dict\n        file_list = [\n            script_rel for script_rel in dir_file_dict.get(app_dir, [])\n            if posixpath.basename(script_rel).lower() == _APP_GLOBAL_FILE\n        ]\n        file_list.extend(dir_file_dict.get(posixpath.join(app_dir, _CODE_DIR), []))\n        return file_list\n\n    def _test_helper_file_list(self, file_rel: str) -> list[str]:\n        \"\"\"Return the helper and setup scripts of the testthat directory a file is in.\"\"\"\n        directory = posixpath.dirname(file_rel)\n        if posixpath.basename(directory) != _TEST_DIR:\n            return []\n        return [\n            script_rel for script_rel in self._name_index.dir_file_dict.get(directory, [])\n            if posixpath.basename(script_rel).lower().startswith(_TEST_HELPER_PREFIX_TUPLE)\n        ]\n\n    def _library_file_set_list(self, file_rel_list: list[str]) -> list[set[str]]:\n        \"\"\"Return the scripts of the project packages the given files attach with\n        library() / require(): one set for each package name, the package attached\n        last first, without the package the file itself is in.\"\"\"\n        name_index = self._name_index\n        own_package_dir = name_index.package_dir_dict.get(self._file_rel)\n        file_set_dict: dict[str, set[str]] = {}\n        for file_rel in file_rel_list:\n            for r_import in name_index.source_dict[file_rel].import_list:\n                if r_import.kind != LIBRARY_IMPORT or r_import.path in file_set_dict:\n                    continue\n                file_set_dict[r_import.path] = set().union(*(\n                    name_index.package_file_dict[package_dir]\n                    for package_dir in _package_dir_list(name_index, r_import.path, self._file_rel)\n                    if package_dir != own_package_dir\n                ))\n        return list(file_set_dict.values())[::-1]\n\n    def _lookup_file_set_list(self) -> list[set[str]]:\n        \"\"\"Return the sets of scripts a name of the file is looked up in, in order.\n\n        After the file itself and the names box::use attaches (_lookup):\n        1. The package the file is in, when the file is a script of its R directory\n        2. The scripts the file reads with source(), followed through\n        3. The files that read the file with source(), followed up, and the scripts\n           those read\n        4. global.R and the R directory of the Shiny app of the file, and of the Shiny\n           app of each file that reads it (followed up), and the scripts those read\n        5. The helper and setup scripts of the testthat directory of the file, and of\n           the testthat directory of each file that reads it (followed up), and the\n           scripts those read\n        6. The package the file is in, when the file is not a script of its R directory\n        7. The packages of the project that the file, or a script of 2 to 5, attaches\n           with library() / require()\n\n        Returns:\n            The sets that hold a script, in that order.\n        \"\"\"\n        name_index = self._name_index\n        skip_set = {self._file_rel}\n        source_list = self._with_source([self._file_rel], skip_set)\n        reader_list = self._reader_file_list(skip_set | set(source_list))\n        chain_list = _reach_list(name_index.reader_file_dict, [self._file_rel])\n        app_list = self._with_source(\n            [app_rel for chain_rel in chain_list for app_rel in self._app_file_list(chain_rel)],\n            skip_set,\n        )\n        helper_list = self._with_source(\n            [\n                helper_rel for chain_rel in chain_list\n                for helper_rel in self._test_helper_file_list(chain_rel)\n            ],\n            skip_set,\n        )\n        package_dir = name_index.package_dir_dict.get(self._file_rel)\n        package_file_set = (\n            name_index.package_file_dict[package_dir] if package_dir is not None else set()\n        )\n        is_package_code = self._file_rel in package_file_set\n\n        file_set_list: list[set[str]] = [package_file_set] if is_package_code else []\n        file_set_list.extend(\n            set(file_rel_list)\n            for file_rel_list in (source_list, reader_list, app_list, helper_list)\n        )\n        if not is_package_code:\n            file_set_list.append(package_file_set)\n        file_set_list.extend(self._library_file_set_list(\n            [self._file_rel, *source_list, *reader_list, *app_list, *helper_list]\n        ))\n        return [file_set for file_set in file_set_list if file_set]\n\n    def _lookup(self, name: str) -> list[_Entry]:\n        \"\"\"Return the definitions of a name the file sees.\n\n        The definitions of the file itself, else the ones box::use attaches under the\n        name (one by one, then whole modules), else the ones in the first set of\n        _lookup_file_set_list with a script that defines the name. A name is looked up\n        once per file.\n        \"\"\"\n        entry_list = self._lookup_dict.get(name)\n        if entry_list is None:\n            entry_list = self._find_entry_list(name)\n            self._lookup_dict[name] = entry_list\n        return entry_list\n\n    def _find_entry_list(self, name: str) -> list[_Entry]:\n        \"\"\"Look up the definitions of a name the file sees (see _lookup).\"\"\"\n        own_table_list = [\n            self._name_index.table_dict[self._file_rel],\n            self._box_scope.attach_table,\n            self._box_scope.attach_all_table,\n        ]\n        for table in own_table_list:\n            entry_list = table.get(name)\n            if entry_list:\n                return entry_list\n        all_entry_list = self._name_index.entry_dict.get(name)\n        if not all_entry_list:\n            return []\n        for file_set in self._file_set_list:\n            entry_list = [entry for entry in all_entry_list if entry[0] in file_set]\n            if entry_list:\n                return entry_list\n        return []\n\n    def _package_table(self, package_name: str) -> _NameTable:\n        \"\"\"Return the names of the packages of the project the file names with a package\n        name, read once for each name.\"\"\"\n        if package_name not in self._package_table_dict:\n            self._package_table_dict[package_name] = _package_table(\n                self._name_index, package_name, self._file_rel,\n            )\n        return self._package_table_dict[package_name]\n\n    def _member_entry_list(self, module: _BoxModule, name_list: list[str]) -> list[_Entry]:\n        \"\"\"Return the definitions a chain of names after a box module refers to.\n\n        A name that the module itself binds to another module with box::use leads into\n        that module; the first name that does not is looked up among the names the\n        module gives.\n\n        Examples (logic bound to app/logic/__init__.R, which has box::use(app/logic/data)):\n            logic$data$load   -> load of app/logic/data.R\n            logic$helper      -> helper of app/logic/__init__.R\n\n        Args:\n            module: The module the owner of the reference is bound to.\n            name_list: The names after the owner, in order.\n        \"\"\"\n        for position, name in enumerate(name_list):\n            inner_module = None\n            if module.file_rel is not None and position < len(name_list) - 1:\n                inner_module = _box_scope(self._name_index, module.file_rel).module_dict.get(name)\n            if inner_module is None:\n                return _module_table(self._name_index, module, self._file_rel).get(name, [])\n            module = inner_module\n        return []\n\n    def _entry_list(self, reference: RReference) -> list[_Entry]:\n        \"\"\"Return the definitions a reference refers to.\n\n        pkg::name is looked up in the package of the project named pkg. owner$name is\n        looked up in the box module bound to owner (_member_entry_list); with no such\n        module it is a reference to owner. Any other name is looked up through the\n        tables of the file.\n        \"\"\"\n        if reference.kind == NAMESPACE_REFERENCE:\n            return self._package_table(reference.owner).get(reference.name, [])\n        if reference.kind == MEMBER_REFERENCE:\n            module = self._box_scope.module_dict.get(reference.owner)\n            if module is not None:\n                return self._member_entry_list(module, [reference.name, *reference.member_tuple])\n            return self._lookup(reference.owner)\n        return self._lookup(reference.name)\n\n    def _method_target_list(self) -> list[RReferenceTarget]:\n        \"\"\"Return the generic each S3 method of the file is written for.\n\n        A top-level function named generic.class leads to the function named generic\n        that the file sees and that calls UseMethod, on the first line of the method.\n        Of the names a method name can be split into, the longest generic is taken.\n\n        Examples:\n            print.person          -> print\n            as.data.frame.tbl_df  -> as.data.frame, else as.data, else as\n        \"\"\"\n        target_list: list[RReferenceTarget] = []\n        for definition in self._r_source.definition_list:\n            if not definition.is_function or definition.is_member or definition.is_attach:\n                continue\n            part_list = definition.name.split(\".\")\n            for part_count in range(len(part_list) - 1, 0, -1):\n                generic_name = \".\".join(part_list[:part_count])\n                generic_entry_list = [\n                    entry for entry in self._lookup(generic_name) if entry[1].is_generic\n                ] if generic_name else []\n                if not generic_entry_list:\n                    continue\n                target_list.extend(\n                    RReferenceTarget(\n                        generic_name, definition.start_line, entry_rel, generic_name,\n                        generic.start_line, generic.end_line,\n                    )\n                    for entry_rel, generic in generic_entry_list\n                )\n                break\n        return target_list\n\n    def target_list(self) -> list[RReferenceTarget]:\n        \"\"\"Return the definitions the references and the S3 methods of the file lead to.\"\"\"\n        target_list = [\n            RReferenceTarget(\n                definition.name, reference.line, entry_rel, definition.name,\n                definition.start_line, definition.end_line,\n            )\n            for reference in self._r_source.reference_list\n            for entry_rel, definition in self._entry_list(reference)\n        ]\n        target_list.extend(self._method_target_list())\n        return target_list"
+    },
+    {
+      "name": "__init__",
+      "type": "function_definition",
+      "start_line": 536,
+      "end_line": 551,
+      "context": "    def __init__(self, name_index: RNameIndex, file_rel: str) -> None:\n        \"\"\"Collect the names the file sees.\n\n        Args:\n            name_index: The name index of the project.\n            file_rel: Relative path of the file.\n        \"\"\"\n        self._name_index = name_index\n        self._file_rel = file_rel\n        self._r_source = name_index.source_dict[file_rel]\n        self._box_scope = _box_scope(name_index, file_rel)\n        # Package name -> the names of the packages the file names with it\n        self._package_table_dict: dict[str, _NameTable] = {}\n        # Name -> definitions of it the file sees, kept once looked up\n        self._lookup_dict: dict[str, list[_Entry]] = {}\n        self._file_set_list = self._lookup_file_set_list()"
+    },
+    {
+      "name": "_with_source",
+      "type": "function_definition",
+      "start_line": 553,
+      "end_line": 564,
+      "context": "    def _with_source(self, file_rel_list: list[str], skip_set: set[str]) -> list[str]:\n        \"\"\"Return the given scripts and the ones they read with source(), followed through.\n\n        Args:\n            file_rel_list: The scripts to start from.\n            skip_set: Files left out of the return value.\n\n        Returns:\n            The scripts, each once, without the ones in skip_set.\n        \"\"\"\n        reach_list = _reach_list(self._name_index.source_file_dict, file_rel_list)\n        return [file_rel for file_rel in reach_list if file_rel not in skip_set]"
+    },
+    {
+      "name": "_reader_file_list",
+      "type": "function_definition",
+      "start_line": 566,
+      "end_line": 570,
+      "context": "    def _reader_file_list(self, skip_set: set[str]) -> list[str]:\n        \"\"\"Return the scripts that read the file with source(), followed up through the\n        scripts that read those, and every script they read.\"\"\"\n        reader_list = _reach_list(self._name_index.reader_file_dict, [self._file_rel])\n        return self._with_source(reader_list, skip_set)"
+    },
+    {
+      "name": "_is_app_dir",
+      "type": "function_definition",
+      "start_line": 572,
+      "end_line": 577,
+      "context": "    def _is_app_dir(self, directory: str) -> bool:\n        \"\"\"Return whether a directory holds app.R or server.R.\"\"\"\n        return any(\n            posixpath.basename(script_rel).lower() in _APP_FILE_SET\n            for script_rel in self._name_index.dir_file_dict.get(directory, [])\n        )"
+    },
+    {
+      "name": "_app_file_list",
+      "type": "function_definition",
+      "start_line": 579,
+      "end_line": 600,
+      "context": "    def _app_file_list(self, file_rel: str) -> list[str]:\n        \"\"\"Return the scripts of the Shiny app of a file whose names it sees.\n\n        For app.R, ui.R, server.R and global.R of an app directory, and for the scripts\n        of its R directory: global.R and the scripts of the R directory.\n        \"\"\"\n        if file_rel not in self._name_index.script_file_set:\n            return []\n        directory = posixpath.dirname(file_rel)\n        if posixpath.basename(file_rel).lower() in _APP_SCRIPT_SET and self._is_app_dir(directory):\n            app_dir = directory\n        elif posixpath.basename(directory) == _CODE_DIR and self._is_app_dir(posixpath.dirname(directory)):\n            app_dir = posixpath.dirname(directory)\n        else:\n            return []\n        dir_file_dict = self._name_index.dir_file_dict\n        file_list = [\n            script_rel for script_rel in dir_file_dict.get(app_dir, [])\n            if posixpath.basename(script_rel).lower() == _APP_GLOBAL_FILE\n        ]\n        file_list.extend(dir_file_dict.get(posixpath.join(app_dir, _CODE_DIR), []))\n        return file_list"
+    },
+    {
+      "name": "_test_helper_file_list",
+      "type": "function_definition",
+      "start_line": 602,
+      "end_line": 610,
+      "context": "    def _test_helper_file_list(self, file_rel: str) -> list[str]:\n        \"\"\"Return the helper and setup scripts of the testthat directory a file is in.\"\"\"\n        directory = posixpath.dirname(file_rel)\n        if posixpath.basename(directory) != _TEST_DIR:\n            return []\n        return [\n            script_rel for script_rel in self._name_index.dir_file_dict.get(directory, [])\n            if posixpath.basename(script_rel).lower().startswith(_TEST_HELPER_PREFIX_TUPLE)\n        ]"
+    },
+    {
+      "name": "_library_file_set_list",
+      "type": "function_definition",
+      "start_line": 612,
+      "end_line": 628,
+      "context": "    def _library_file_set_list(self, file_rel_list: list[str]) -> list[set[str]]:\n        \"\"\"Return the scripts of the project packages the given files attach with\n        library() / require(): one set for each package name, the package attached\n        last first, without the package the file itself is in.\"\"\"\n        name_index = self._name_index\n        own_package_dir = name_index.package_dir_dict.get(self._file_rel)\n        file_set_dict: dict[str, set[str]] = {}\n        for file_rel in file_rel_list:\n            for r_import in name_index.source_dict[file_rel].import_list:\n                if r_import.kind != LIBRARY_IMPORT or r_import.path in file_set_dict:\n                    continue\n                file_set_dict[r_import.path] = set().union(*(\n                    name_index.package_file_dict[package_dir]\n                    for package_dir in _package_dir_list(name_index, r_import.path, self._file_rel)\n                    if package_dir != own_package_dir\n                ))\n        return list(file_set_dict.values())[::-1]"
+    },
+    {
+      "name": "_lookup_file_set_list",
+      "type": "function_definition",
+      "start_line": 630,
+      "end_line": 682,
+      "context": "    def _lookup_file_set_list(self) -> list[set[str]]:\n        \"\"\"Return the sets of scripts a name of the file is looked up in, in order.\n\n        After the file itself and the names box::use attaches (_lookup):\n        1. The package the file is in, when the file is a script of its R directory\n        2. The scripts the file reads with source(), followed through\n        3. The files that read the file with source(), followed up, and the scripts\n           those read\n        4. global.R and the R directory of the Shiny app of the file, and of the Shiny\n           app of each file that reads it (followed up), and the scripts those read\n        5. The helper and setup scripts of the testthat directory of the file, and of\n           the testthat directory of each file that reads it (followed up), and the\n           scripts those read\n        6. The package the file is in, when the file is not a script of its R directory\n        7. The packages of the project that the file, or a script of 2 to 5, attaches\n           with library() / require()\n\n        Returns:\n            The sets that hold a script, in that order.\n        \"\"\"\n        name_index = self._name_index\n        skip_set = {self._file_rel}\n        source_list = self._with_source([self._file_rel], skip_set)\n        reader_list = self._reader_file_list(skip_set | set(source_list))\n        chain_list = _reach_list(name_index.reader_file_dict, [self._file_rel])\n        app_list = self._with_source(\n            [app_rel for chain_rel in chain_list for app_rel in self._app_file_list(chain_rel)],\n            skip_set,\n        )\n        helper_list = self._with_source(\n            [\n                helper_rel for chain_rel in chain_list\n                for helper_rel in self._test_helper_file_list(chain_rel)\n            ],\n            skip_set,\n        )\n        package_dir = name_index.package_dir_dict.get(self._file_rel)\n        package_file_set = (\n            name_index.package_file_dict[package_dir] if package_dir is not None else set()\n        )\n        is_package_code = self._file_rel in package_file_set\n\n        file_set_list: list[set[str]] = [package_file_set] if is_package_code else []\n        file_set_list.extend(\n            set(file_rel_list)\n            for file_rel_list in (source_list, reader_list, app_list, helper_list)\n        )\n        if not is_package_code:\n            file_set_list.append(package_file_set)\n        file_set_list.extend(self._library_file_set_list(\n            [self._file_rel, *source_list, *reader_list, *app_list, *helper_list]\n        ))\n        return [file_set for file_set in file_set_list if file_set]"
+    },
+    {
+      "name": "_lookup",
+      "type": "function_definition",
+      "start_line": 684,
+      "end_line": 696,
+      "context": "    def _lookup(self, name: str) -> list[_Entry]:\n        \"\"\"Return the definitions of a name the file sees.\n\n        The definitions of the file itself, else the ones box::use attaches under the\n        name (one by one, then whole modules), else the ones in the first set of\n        _lookup_file_set_list with a script that defines the name. A name is looked up\n        once per file.\n        \"\"\"\n        entry_list = self._lookup_dict.get(name)\n        if entry_list is None:\n            entry_list = self._find_entry_list(name)\n            self._lookup_dict[name] = entry_list\n        return entry_list"
+    },
+    {
+      "name": "_find_entry_list",
+      "type": "function_definition",
+      "start_line": 698,
+      "end_line": 716,
+      "context": "    def _find_entry_list(self, name: str) -> list[_Entry]:\n        \"\"\"Look up the definitions of a name the file sees (see _lookup).\"\"\"\n        own_table_list = [\n            self._name_index.table_dict[self._file_rel],\n            self._box_scope.attach_table,\n            self._box_scope.attach_all_table,\n        ]\n        for table in own_table_list:\n            entry_list = table.get(name)\n            if entry_list:\n                return entry_list\n        all_entry_list = self._name_index.entry_dict.get(name)\n        if not all_entry_list:\n            return []\n        for file_set in self._file_set_list:\n            entry_list = [entry for entry in all_entry_list if entry[0] in file_set]\n            if entry_list:\n                return entry_list\n        return []"
+    },
+    {
+      "name": "_package_table",
+      "type": "function_definition",
+      "start_line": 718,
+      "end_line": 725,
+      "context": "    def _package_table(self, package_name: str) -> _NameTable:\n        \"\"\"Return the names of the packages of the project the file names with a package\n        name, read once for each name.\"\"\"\n        if package_name not in self._package_table_dict:\n            self._package_table_dict[package_name] = _package_table(\n                self._name_index, package_name, self._file_rel,\n            )\n        return self._package_table_dict[package_name]"
+    },
+    {
+      "name": "_member_entry_list",
+      "type": "function_definition",
+      "start_line": 727,
+      "end_line": 749,
+      "context": "    def _member_entry_list(self, module: _BoxModule, name_list: list[str]) -> list[_Entry]:\n        \"\"\"Return the definitions a chain of names after a box module refers to.\n\n        A name that the module itself binds to another module with box::use leads into\n        that module; the first name that does not is looked up among the names the\n        module gives.\n\n        Examples (logic bound to app/logic/__init__.R, which has box::use(app/logic/data)):\n            logic$data$load   -> load of app/logic/data.R\n            logic$helper      -> helper of app/logic/__init__.R\n\n        Args:\n            module: The module the owner of the reference is bound to.\n            name_list: The names after the owner, in order.\n        \"\"\"\n        for position, name in enumerate(name_list):\n            inner_module = None\n            if module.file_rel is not None and position < len(name_list) - 1:\n                inner_module = _box_scope(self._name_index, module.file_rel).module_dict.get(name)\n            if inner_module is None:\n                return _module_table(self._name_index, module, self._file_rel).get(name, [])\n            module = inner_module\n        return []"
+    },
+    {
+      "name": "_entry_list",
+      "type": "function_definition",
+      "start_line": 751,
+      "end_line": 766,
+      "context": "    def _entry_list(self, reference: RReference) -> list[_Entry]:\n        \"\"\"Return the definitions a reference refers to.\n\n        pkg::name is looked up in the package of the project named pkg. owner$name is\n        looked up in the box module bound to owner (_member_entry_list); with no such\n        module it is a reference to owner. Any other name is looked up through the\n        tables of the file.\n        \"\"\"\n        if reference.kind == NAMESPACE_REFERENCE:\n            return self._package_table(reference.owner).get(reference.name, [])\n        if reference.kind == MEMBER_REFERENCE:\n            module = self._box_scope.module_dict.get(reference.owner)\n            if module is not None:\n                return self._member_entry_list(module, [reference.name, *reference.member_tuple])\n            return self._lookup(reference.owner)\n        return self._lookup(reference.name)"
+    },
+    {
+      "name": "_method_target_list",
+      "type": "function_definition",
+      "start_line": 768,
+      "end_line": 799,
+      "context": "    def _method_target_list(self) -> list[RReferenceTarget]:\n        \"\"\"Return the generic each S3 method of the file is written for.\n\n        A top-level function named generic.class leads to the function named generic\n        that the file sees and that calls UseMethod, on the first line of the method.\n        Of the names a method name can be split into, the longest generic is taken.\n\n        Examples:\n            print.person          -> print\n            as.data.frame.tbl_df  -> as.data.frame, else as.data, else as\n        \"\"\"\n        target_list: list[RReferenceTarget] = []\n        for definition in self._r_source.definition_list:\n            if not definition.is_function or definition.is_member or definition.is_attach:\n                continue\n            part_list = definition.name.split(\".\")\n            for part_count in range(len(part_list) - 1, 0, -1):\n                generic_name = \".\".join(part_list[:part_count])\n                generic_entry_list = [\n                    entry for entry in self._lookup(generic_name) if entry[1].is_generic\n                ] if generic_name else []\n                if not generic_entry_list:\n                    continue\n                target_list.extend(\n                    RReferenceTarget(\n                        generic_name, definition.start_line, entry_rel, generic_name,\n                        generic.start_line, generic.end_line,\n                    )\n                    for entry_rel, generic in generic_entry_list\n                )\n                break\n        return target_list"
+    },
+    {
+      "name": "target_list",
+      "type": "function_definition",
+      "start_line": 801,
+      "end_line": 812,
+      "context": "    def target_list(self) -> list[RReferenceTarget]:\n        \"\"\"Return the definitions the references and the S3 methods of the file lead to.\"\"\"\n        target_list = [\n            RReferenceTarget(\n                definition.name, reference.line, entry_rel, definition.name,\n                definition.start_line, definition.end_line,\n            )\n            for reference in self._r_source.reference_list\n            for entry_rel, definition in self._entry_list(reference)\n        ]\n        target_list.extend(self._method_target_list())\n        return target_list"
+    },
+    {
+      "name": "r_reference_target_list",
+      "type": "function_definition",
+      "start_line": 815,
+      "end_line": 875,
+      "context": "def r_reference_target_list(\n    file_rel: str,\n    project_file_set: set[str],\n    project_dir: str,\n) -> list[RReferenceTarget]:\n    \"\"\"Resolve each reference of an R file to the definition it refers to.\n\n    A name no function around it binds is looked up, in this order, among the top-level\n    names of: the file itself; the box modules whose names box::use attaches; the\n    scripts the file reads with source() / sys.source(), followed through; the scripts\n    that read the file with source(), followed up, and the scripts those read; global.R\n    and the R directory of the Shiny app the file belongs to; the helper and setup\n    scripts of the testthat directory the file is in; the scripts in the R directory of\n    the package the file is in (the nearest directory above it whose DESCRIPTION file\n    has a \"Package:\" field); the packages of the project that the file, or one of the\n    scripts above, attaches with library() / require(). The scripts global.R, the R\n    directory of an app and the helper scripts read with source() count with them.\n    pkg::name and pkg:::name are looked up in the package of the project named pkg, and\n    owner$name in the box module bound to owner, through the modules that module binds\n    (owner$inner$name) and the names it attaches. A top-level function named\n    generic.class leads to the function generic that calls UseMethod.\n    A name defined in several files of the table it is found in leads to all of them.\n\n    Processing flow:\n    1. Return the targets of r_target_cache when they were resolved with the same\n       project file set\n    2. Resolve the references of the file through the name index of the project\n\n    Args:\n        file_rel: Relative path of the file.\n        project_file_set: Relative paths of the project files that have a language.\n        project_dir: Absolute path to the project root.\n\n    Returns:\n        One target per reference and file a definition is in, in line order, without\n        duplicates; the usage is named after the definition. A target whose file_rel\n        is the file itself is a reference to a definition of the file. The targets are\n        kept in r_target_cache until the project file set changes or the cache is\n        cleared. Empty for a file that could not be read.\n    \"\"\"\n    # == Step 1: Cache ========================================================\n    cache_key = os.path.abspath(os.path.join(project_dir, file_rel))\n    target_list = project_cache_value(r_target_cache, cache_key, project_file_set)\n    if target_list is not None:\n        return target_list\n\n    # == Step 2: Targets ======================================================\n    name_index = _get_name_index(project_dir, project_file_set)\n    if file_rel not in name_index.source_dict:\n        return []\n    target_dict: dict[tuple[str, int, str, int], RReferenceTarget] = {}\n    for target in _ReferenceResolver(name_index, file_rel).target_list():\n        target_dict.setdefault(\n            (target.name, target.line, target.file_rel, target.start_line), target,\n        )\n\n    target_list = sorted(\n        target_dict.values(), key=lambda target: (target.line, target.name, target.file_rel),\n    )\n    r_target_cache[cache_key] = (project_file_set, target_list)\n    return target_list"
+    },
+    {
+      "name": "r_import_file_list",
+      "type": "function_definition",
+      "start_line": 878,
+      "end_line": 903,
+      "context": "def r_import_file_list(\n    file_rel: str,\n    project_file_set: set[str],\n    project_dir: str,\n) -> list[str]:\n    \"\"\"Return the scripts an R file reads with source() / sys.source() and box::use.\n\n    Args:\n        file_rel: Relative path of the file.\n        project_file_set: Relative paths of the project files that have a language.\n        project_dir: Absolute path to the project root.\n\n    Returns:\n        The relative paths of the scripts the calls of the file lead to, in line order,\n        without duplicates and without the file itself.\n    \"\"\"\n    name_index = _get_name_index(project_dir, project_file_set)\n    r_source = name_index.source_dict.get(file_rel)\n    if r_source is None:\n        return []\n    import_file_list: list[str] = []\n    for r_import in r_source.import_list:\n        import_rel = _import_file(name_index, file_rel, r_import)\n        if import_rel and import_rel != file_rel and import_rel not in import_file_list:\n            import_file_list.append(import_rel)\n    return import_file_list"
+    }
+  ],
+  "callee_usages": [
+    {
+      "lines": [
+        53
+      ],
+      "name": "RDefinition",
+      "from": "codetwine/codetwine/extractors/r_source_py/r_source.py",
+      "target_context": "@dataclass\nclass RDefinition:\n    \"\"\"One definition of an R file.\"\"\"\n\n    name: str                   # Name of the definition\n    type: str                   # function_definition / binary_operator / call / argument\n    start_line: int             # First line of the statement (1-based)\n    end_line: int               # Last line of the statement\n    is_function: bool = False   # Whether the value is a function\n    is_generic: bool = False    # Whether the function calls UseMethod\n    is_member: bool = False     # Whether it is a member of a class (R6Class, setRefClass)\n    is_attach: bool = False     # Whether it is written for a name defined elsewhere (setMethod)",
+      "target_name": "RDefinition",
+      "target_start_line": 139
+    },
+    {
+      "lines": [
+        103,
+        130
+      ],
+      "name": "RSource",
+      "from": "codetwine/codetwine/extractors/r_source_py/r_source.py",
+      "target_context": "@dataclass\nclass RSource:\n    \"\"\"The definitions, imports and references of one R file.\"\"\"\n\n    definition_list: list[RDefinition]\n    import_list: list[RImport]\n    reference_list: list[RReference]",
+      "target_name": "RSource",
+      "target_start_line": 176
+    },
+    {
+      "lines": [
+        137
+      ],
+      "name": "RSource.definition_list",
+      "from": "codetwine/codetwine/extractors/r_source_py/r_source.py",
+      "target_context": "definition_list: list[RDefinition]",
+      "target_name": "definition_list",
+      "target_start_line": 180
+    },
+    {
+      "lines": [
+        284,
+        294,
+        367
+      ],
+      "name": "RImport",
+      "from": "codetwine/codetwine/extractors/r_source_py/r_source.py",
+      "target_context": "@dataclass\nclass RImport:\n    \"\"\"One file or package an R file reads.\"\"\"\n\n    kind: str     # SOURCE_IMPORT / BOX_IMPORT / LIBRARY_IMPORT\n    path: str     # Path as written (source), module path \"a/b\" or package name (box), package name (library)\n    line: int     # Line of the call (1-based)\n    alias: str = \"\"                                            # box: name the module is bound to\n    name_dict: dict[str, str] = field(default_factory=dict)    # box: {name in the file: name in the module}\n    is_attach_all: bool = False                                # box: whether every name is attached ([...])",
+      "target_name": "RImport",
+      "target_start_line": 153
+    },
+    {
+      "lines": [
+        291,
+        304
+      ],
+      "name": "SOURCE_IMPORT",
+      "from": "codetwine/codetwine/extractors/r_source_py/r_source.py",
+      "target_context": "SOURCE_IMPORT = \"source\"",
+      "target_name": "SOURCE_IMPORT",
+      "target_start_line": 6
+    },
+    {
+      "lines": [
+        291,
+        293
+      ],
+      "name": "RImport.kind",
+      "from": "codetwine/codetwine/extractors/r_source_py/r_source.py",
+      "target_context": "kind: str",
+      "target_name": "kind",
+      "target_start_line": 157
+    },
+    {
+      "lines": [
+        292,
+        376,
+        377,
+        379,
+        380
+      ],
+      "name": "RImport.path",
+      "from": "codetwine/codetwine/extractors/r_source_py/r_source.py",
+      "target_context": "path: str",
+      "target_name": "path",
+      "target_start_line": 158
+    },
+    {
+      "lines": [
+        293,
+        448
+      ],
+      "name": "BOX_IMPORT",
+      "from": "codetwine/codetwine/extractors/r_source_py/r_source.py",
+      "target_context": "BOX_IMPORT = \"box\"",
+      "target_name": "BOX_IMPORT",
+      "target_start_line": 7
+    },
+    {
+      "lines": [
+        488
+      ],
+      "name": "language_ext",
+      "from": "codetwine/codetwine/config/settings_py/settings.py",
+      "target_context": "def language_ext(path: str) -> str:\n    \"\"\"Return the extension whose language settings a file is analyzed with.\n\n    A file recorded by set_copy_target_ext() gets the extension recorded for it, and a\n    file recorded by set_no_language_file() none. Every other file gets its own\n    extension when it is a key of EXT_TO_DEFINITION_DICT; the extensions of the\n    languages with ignore_ext_case are matched in any case.\n\n    Examples:\n        \"src/app.py\"          -> \"py\"\n        \"src/MAIN.Cbl\"        -> \"cbl\"\n        \"R/utils.R\"           -> \"r\"\n        \"config.yaml\"         -> \"\"\n        \"dcl/DCLCUST.dcl\"     -> \"cpy\" (when a COPY statement names it)\n        \"docs/notes.qmd\"      -> \"\" (when it has no R code chunk)\n\n    Args:\n        path: A file path. A relative path is taken from the current directory when\n            it is looked up among the recorded files.\n\n    Returns:\n        The extension (without the dot, a key of EXT_TO_DEFINITION_DICT), or \"\" for a\n        file without a language.\n    \"\"\"\n    path_abs = os.path.abspath(path)\n    copy_target_ext = _copy_target_ext_dict.get(path_abs)\n    if copy_target_ext:\n        return copy_target_ext\n    if path_abs in _no_language_path_set:\n        return \"\"\n    ext = os.path.splitext(path)[1].lstrip(\".\")\n    if ext in EXT_TO_DEFINITION_DICT:\n        return ext\n    if ext.lower() in _IGNORE_CASE_EXT_SET:\n        return ext.lower()\n    return \"\"",
+      "target_name": "language_ext",
+      "target_start_line": 1241
+    },
+    {
+      "lines": [
+        489
+      ],
+      "name": "R_EXT_SET",
+      "from": "codetwine/codetwine/config/settings_py/settings.py",
+      "target_context": "R_EXT_SET: set[str] = {\n    ext for ext, definition_dict in EXT_TO_DEFINITION_DICT.items()\n    if definition_dict is R_DEFINITION_DICT\n}",
+      "target_name": "R_EXT_SET",
+      "target_start_line": 1178
+    },
+    {
+      "lines": [
+        492
+      ],
+      "name": "read_r_source",
+      "from": "codetwine/codetwine/extractors/r_source_py/r_source.py",
+      "target_context": "def read_r_source(root_node: Node) -> RSource:\n    \"\"\"Read the definitions, imports and references of an R file.\n\n    Args:\n        root_node: The AST root node of the file.\n\n    Returns:\n        The RSource of the file (r_definition_list, _import_list, _reference_list).\n    \"\"\"\n    return RSource(\n        definition_list=r_definition_list(root_node),\n        import_list=_import_list(root_node),\n        reference_list=_reference_list(root_node),\n    )",
+      "target_name": "read_r_source",
+      "target_start_line": 1333
+    },
+    {
+      "lines": [
+        492
+      ],
+      "name": "parse_file",
+      "from": "codetwine/codetwine/parsers/ts_parser_py/ts_parser.py",
+      "target_context": "def parse_file(file_path: str) -> tuple[Node | CobolSource, bytes]:\n    \"\"\"Read a file, parse it with tree-sitter, and return (AST root node, byte content).\n\n    The file is decoded by read_source() and parsed as UTF-8, whatever encoding it is\n    stored in; the byte content is that UTF-8 text, and the text of every node decodes\n    as UTF-8. Line numbers are those of line_list_of() over the file.\n\n    For a COBOL file the first element is a CobolSource (read_cobol_source) in place of\n    the root node, and for a BMS source the CobolSource of its symbolic maps\n    (read_bms_source); extract_definitions(), extract_imports() and extract_usages()\n    take it as they take a root node. The language is the one language_ext() gives.\n\n    For an R Markdown or Quarto file the root node is the tree of its R code chunks\n    (r_chunk_code), each node at the position its code has in the file; the byte content\n    is the whole file. A chunk whose code does not end inside the chunk (an open \"{\", an\n    operator at its end) is left out of the tree.\n\n    For a C or C++ file a macro name written between a class keyword and a class name\n    (class EXPORT Shape { ... }) is read as spaces (_parse_c_family); the byte content\n    is the whole file, and class_macro_cache holds those names and their lines.\n\n    Parse results are cached at module level; a file found in the cache is not parsed again.\n    The cache holds at most PARSE_CACHE_MAX_FILES entries; when it is full, the least\n    recently used entry is discarded and that file is parsed again the next time it is\n    requested. PARSE_CACHE_MAX_FILES = 0 disables the limit.\n\n    Args:\n        file_path: Absolute path of the file to parse.\n\n    Returns:\n        A (root_node, content) tuple.\n    \"\"\"\n    # Return from cache if available, marking the entry as most recently used\n    cache_entry = parse_cache.get(file_path)\n    if cache_entry is not None:\n        parse_cache.move_to_end(file_path)\n        return cache_entry\n\n    # Get the corresponding language from the file extension\n    ext = language_ext(file_path)\n\n    # Read the file as UTF-8 bytes\n    content = read_utf8_content(file_path)\n\n    if ext in COBOL_EXT_SET:\n        # Split the COBOL text into statements and parse each of them\n        cobol_source = read_cobol_source(content.decode(\"utf-8\"), EXT_TO_LANGUAGE_DICT[ext])\n        parse_result = (cobol_source, content)\n    elif ext in BMS_EXT_SET:\n        # Read the maps of the BMS macros\n        parse_result = (read_bms_source(content.decode(\"utf-8\")), content)\n    elif ext in R_MARKDOWN_EXT_SET:\n        # Parse the R code chunks of the document, everything else blanked; a chunk\n        # whose code runs on past its end is blanked as well\n        language = EXT_TO_LANGUAGE_DICT[ext]\n        chunk_code = r_chunk_code(content, lambda code: _is_whole_code(code, language))\n        tree = Parser(language).parse(chunk_code)\n        parse_result = (tree.root_node, content)\n    elif ext in C_FAMILY_EXT_SET:\n        # Parse with the macro names in front of class names blanked\n        root_node, class_macro_cache[file_path] = _parse_c_family(content, EXT_TO_LANGUAGE_DICT[ext])\n        parse_result = (root_node, content)\n    else:\n        # Parse with tree-sitter to generate the AST\n        tree = Parser(EXT_TO_LANGUAGE_DICT[ext]).parse(content)\n        parse_result = (tree.root_node, content)\n\n    # Store in cache and drop the oldest entries once the limit is exceeded\n    parse_cache[file_path] = parse_result\n    if PARSE_CACHE_MAX_FILES > 0:\n        while len(parse_cache) > PARSE_CACHE_MAX_FILES:\n            parse_cache.popitem(last=False)\n    return parse_result",
+      "target_name": "parse_file",
+      "target_start_line": 167
+    },
+    {
+      "lines": [
+        501
+      ],
+      "name": "R_MARKDOWN_EXT_SET",
+      "from": "codetwine/codetwine/config/settings_py/settings.py",
+      "target_context": "R_MARKDOWN_EXT_SET: set[str] = {\"rmd\", \"qmd\"}",
+      "target_name": "R_MARKDOWN_EXT_SET",
+      "target_start_line": 1184
+    },
+    {
+      "lines": [
+        524,
+        857
+      ],
+      "name": "project_cache_value",
+      "from": "codetwine/codetwine/utils/project_cache_py/project_cache.py",
+      "target_context": "def project_cache_value(\n    cache_dict: dict[str, tuple[set[str], CacheValue]],\n    cache_key: str,\n    project_file_set: set[str],\n) -> CacheValue | None:\n    \"\"\"Return the value a cache keeps under a key for a project file set.\n\n    A value kept with an equal set that is another object is kept with\n    project_file_set from then on.\n\n    Args:\n        cache_dict: A {key: (project file set the value was built for, value)} cache.\n        cache_key: The key of the value.\n        project_file_set: Relative paths of the project files that have a language.\n\n    Returns:\n        The value, None when the cache has none under the key or it was built for\n        another project file set.\n    \"\"\"\n    cache_entry = cache_dict.get(cache_key)\n    if cache_entry is None:\n        return None\n    cache_file_set, value = cache_entry\n    if cache_file_set is project_file_set:\n        return value\n    if cache_file_set == project_file_set:\n        cache_dict[cache_key] = (project_file_set, value)\n        return value\n    return None",
+      "target_name": "project_cache_value",
+      "target_start_line": 6
+    },
+    {
+      "lines": [
+        621
+      ],
+      "name": "LIBRARY_IMPORT",
+      "from": "codetwine/codetwine/extractors/r_source_py/r_source.py",
+      "target_context": "LIBRARY_IMPORT = \"library\"",
+      "target_name": "LIBRARY_IMPORT",
+      "target_start_line": 8
+    },
+    {
+      "lines": [
+        751
+      ],
+      "name": "RReference",
+      "from": "codetwine/codetwine/extractors/r_source_py/r_source.py",
+      "target_context": "@dataclass(frozen=True)\nclass RReference:\n    \"\"\"One place an R file refers to a name no function around it binds.\"\"\"\n\n    name: str        # The name referred to\n    line: int        # Line of the reference (1-based)\n    kind: str        # NAME_REFERENCE / NAMESPACE_REFERENCE / MEMBER_REFERENCE\n    owner: str = \"\"  # Package of pkg::name, or the name before the first \"$\" / \"@\"\n    member_tuple: tuple[str, ...] = ()  # owner$name$a$b: the names after name (\"a\", \"b\")",
+      "target_name": "RReference",
+      "target_start_line": 165
+    },
+    {
+      "lines": [
+        759
+      ],
+      "name": "NAMESPACE_REFERENCE",
+      "from": "codetwine/codetwine/extractors/r_source_py/r_source.py",
+      "target_context": "NAMESPACE_REFERENCE = \"namespace\"",
+      "target_name": "NAMESPACE_REFERENCE",
+      "target_start_line": 12
+    },
+    {
+      "lines": [
+        759,
+        761
+      ],
+      "name": "RReference.kind",
+      "from": "codetwine/codetwine/extractors/r_source_py/r_source.py",
+      "target_context": "kind: str",
+      "target_name": "kind",
+      "target_start_line": 171
+    },
+    {
+      "lines": [
+        760,
+        764,
+        766
+      ],
+      "name": "RReference.name",
+      "from": "codetwine/codetwine/extractors/r_source_py/r_source.py",
+      "target_context": "name: str",
+      "target_name": "name",
+      "target_start_line": 169
+    },
+    {
+      "lines": [
+        760,
+        762,
+        765
+      ],
+      "name": "RReference.owner",
+      "from": "codetwine/codetwine/extractors/r_source_py/r_source.py",
+      "target_context": "owner: str = \"\"",
+      "target_name": "owner",
+      "target_start_line": 172
+    },
+    {
+      "lines": [
+        761
+      ],
+      "name": "MEMBER_REFERENCE",
+      "from": "codetwine/codetwine/extractors/r_source_py/r_source.py",
+      "target_context": "MEMBER_REFERENCE = \"member\"",
+      "target_name": "MEMBER_REFERENCE",
+      "target_start_line": 13
+    },
+    {
+      "lines": [
+        764
+      ],
+      "name": "RReference.member_tuple",
+      "from": "codetwine/codetwine/extractors/r_source_py/r_source.py",
+      "target_context": "member_tuple: tuple[str, ...] = ()",
+      "target_name": "member_tuple",
+      "target_start_line": 173
+    }
+  ],
+  "same_file_usages": [
+    {
+      "lines": [
+        56,
+        550,
+        684,
+        698,
+        727,
+        751
+      ],
+      "name": "_Entry",
+      "target_name": "_Entry",
+      "target_start_line": 53
+    },
+    {
+      "lines": [
+        91,
+        93,
+        105,
+        117,
+        121,
+        130,
+        136,
+        144,
+        146,
+        357,
+        390,
+        446,
+        548,
+        718
+      ],
+      "name": "_NameTable",
+      "target_name": "_NameTable",
+      "target_start_line": 56
+    },
+    {
+      "lines": [
+        95,
+        367,
+        378,
+        380,
+        386,
+        727,
+        747,
+        748
+      ],
+      "name": "_BoxModule",
+      "target_name": "_BoxModule",
+      "target_start_line": 78
+    },
+    {
+      "lines": [
+        127,
+        421,
+        442,
+        467,
+        470
+      ],
+      "name": "_BoxScope",
+      "target_name": "_BoxScope",
+      "target_start_line": 86
+    },
+    {
+      "lines": [
+        179
+      ],
+      "name": "_PACKAGE_FILE",
+      "target_name": "_PACKAGE_FILE",
+      "target_start_line": 25
+    },
+    {
+      "lines": [
+        183,
+        184
+      ],
+      "name": "_PACKAGE_NAME_FIELD",
+      "target_name": "_PACKAGE_NAME_FIELD",
+      "target_start_line": 26
+    },
+    {
+      "lines": [
+        190,
+        215,
+        253,
+        284,
+        292,
+        294,
+        299,
+        306,
+        340,
+        357,
+        359,
+        367,
+        377,
+        385,
+        406,
+        412,
+        417,
+        450,
+        458,
+        473,
+        484,
+        506,
+        507,
+        508,
+        511,
+        536,
+        543,
+        546
+      ],
+      "name": "RNameIndex",
+      "target_name": "RNameIndex",
+      "target_start_line": 98
+    },
+    {
+      "lines": [
+        196,
+        241,
+        274
+      ],
+      "name": "_ancestor_dir_list",
+      "target_name": "_ancestor_dir_list",
+      "target_start_line": 153
+    },
+    {
+      "lines": [
+        198
+      ],
+      "name": "_package_name",
+      "target_name": "_package_name",
+      "target_start_line": 168
+    },
+    {
+      "lines": [
+        202
+      ],
+      "name": "RNameIndex.package_dir_dict",
+      "target_name": "package_dir_dict",
+      "target_start_line": 113
+    },
+    {
+      "lines": [
+        207
+      ],
+      "name": "RNameIndex.package_name_dict.setdefault",
+      "target_name": "package_name_dict",
+      "target_start_line": 115
+    },
+    {
+      "lines": [
+        208
+      ],
+      "name": "RNameIndex.dir_file_dict.get",
+      "target_name": "dir_file_dict",
+      "target_start_line": 111
+    },
+    {
+      "lines": [
+        208,
+        590,
+        599
+      ],
+      "name": "_CODE_DIR",
+      "target_name": "_CODE_DIR",
+      "target_start_line": 29
+    },
+    {
+      "lines": [
+        209
+      ],
+      "name": "RNameIndex.package_file_dict",
+      "target_name": "package_file_dict",
+      "target_start_line": 119
+    },
+    {
+      "lines": [
+        210,
+        362,
+        413,
+        464
+      ],
+      "name": "_merge_table",
+      "target_name": "_merge_table",
+      "target_start_line": 144
+    },
+    {
+      "lines": [
+        210,
+        361,
+        363
+      ],
+      "name": "RNameIndex.package_table_dict",
+      "target_name": "package_table_dict",
+      "target_start_line": 117
+    },
+    {
+      "lines": [
+        211,
+        407,
+        498,
+        499
+      ],
+      "name": "RNameIndex.table_dict",
+      "target_name": "table_dict",
+      "target_start_line": 105
+    },
+    {
+      "lines": [
+        237
+      ],
+      "name": "_ROOT_PATH_RE.match",
+      "target_name": "_ROOT_PATH_RE",
+      "target_start_line": 50
+    },
+    {
+      "lines": [
+        244,
+        279
+      ],
+      "name": "RNameIndex.script_file_set",
+      "target_name": "script_file_set",
+      "target_start_line": 107
+    },
+    {
+      "lines": [
+        247
+      ],
+      "name": "RNameIndex.lower_file_dict.get",
+      "target_name": "lower_file_dict",
+      "target_start_line": 109
+    },
+    {
+      "lines": [
+        277
+      ],
+      "name": "_MODULE_INIT_FILE",
+      "target_name": "_MODULE_INIT_FILE",
+      "target_start_line": 47
+    },
+    {
+      "lines": [
+        278
+      ],
+      "name": "_MODULE_EXT_TUPLE",
+      "target_name": "_MODULE_EXT_TUPLE",
+      "target_start_line": 46
+    },
+    {
+      "lines": [
+        292,
+        306
+      ],
+      "name": "_source_file",
+      "target_name": "_source_file",
+      "target_start_line": 215
+    },
+    {
+      "lines": [
+        294,
+        450
+      ],
+      "name": "_box_module",
+      "target_name": "_box_module",
+      "target_start_line": 367
+    },
+    {
+      "lines": [
+        301
+      ],
+      "name": "RNameIndex.source_dict.items",
+      "target_name": "source_dict",
+      "target_start_line": 103
+    },
+    {
+      "lines": [
+        309
+      ],
+      "name": "RNameIndex.source_file_dict",
+      "target_name": "source_file_dict",
+      "target_start_line": 123
+    },
+    {
+      "lines": [
+        311
+      ],
+      "name": "RNameIndex.reader_file_dict.setdefault",
+      "target_name": "reader_file_dict",
+      "target_start_line": 125
+    },
+    {
+      "lines": [
+        352
+      ],
+      "name": "RNameIndex.package_name_dict.get",
+      "target_name": "package_name_dict",
+      "target_start_line": 115
+    },
+    {
+      "lines": [
+        353
+      ],
+      "name": "RNameIndex.package_dir_dict.get",
+      "target_name": "package_dir_dict",
+      "target_start_line": 113
+    },
+    {
+      "lines": [
+        359,
+        625
+      ],
+      "name": "_package_dir_list",
+      "target_name": "_package_dir_list",
+      "target_start_line": 340
+    },
+    {
+      "lines": [
+        377
+      ],
+      "name": "_box_module_file",
+      "target_name": "_box_module_file",
+      "target_start_line": 253
+    },
+    {
+      "lines": [
+        379
+      ],
+      "name": "RNameIndex.package_name_dict",
+      "target_name": "package_name_dict",
+      "target_start_line": 115
+    },
+    {
+      "lines": [
+        405,
+        407,
+        408,
+        410,
+        412,
+        744,
+        745
+      ],
+      "name": "_BoxModule.file_rel",
+      "target_name": "file_rel",
+      "target_start_line": 82
+    },
+    {
+      "lines": [
+        406,
+        760
+      ],
+      "name": "_package_table",
+      "target_name": "_package_table",
+      "target_start_line": 357
+    },
+    {
+      "lines": [
+        406
+      ],
+      "name": "_BoxModule.package_name",
+      "target_name": "package_name",
+      "target_start_line": 83
+    },
+    {
+      "lines": [
+        412,
+        546,
+        745
+      ],
+      "name": "_box_scope",
+      "target_name": "_box_scope",
+      "target_start_line": 416
+    },
+    {
+      "lines": [
+        439
+      ],
+      "name": "RNameIndex.box_scope_dict.get",
+      "target_name": "box_scope_dict",
+      "target_start_line": 127
+    },
+    {
+      "lines": [
+        447,
+        497,
+        545
+      ],
+      "name": "RNameIndex.source_dict",
+      "target_name": "source_dict",
+      "target_start_line": 103
+    },
+    {
+      "lines": [
+        454
+      ],
+      "name": "_BoxScope.module_dict",
+      "target_name": "module_dict",
+      "target_start_line": 95
+    },
+    {
+      "lines": [
+        457,
+        747
+      ],
+      "name": "_module_table",
+      "target_name": "_module_table",
+      "target_start_line": 384
+    },
+    {
+      "lines": [
+        461
+      ],
+      "name": "_BoxScope.attach_table.setdefault",
+      "target_name": "attach_table",
+      "target_start_line": 91
+    },
+    {
+      "lines": [
+        464
+      ],
+      "name": "_BoxScope.attach_all_table.update",
+      "target_name": "attach_all_table",
+      "target_start_line": 93
+    },
+    {
+      "lines": [
+        467
+      ],
+      "name": "RNameIndex.box_scope_dict",
+      "target_name": "box_scope_dict",
+      "target_start_line": 127
+    },
+    {
+      "lines": [
+        494
+      ],
+      "name": "logger.warning",
+      "target_name": "logger",
+      "target_start_line": 22
+    },
+    {
+      "lines": [
+        498
+      ],
+      "name": "_file_table",
+      "target_name": "_file_table",
+      "target_start_line": 130
+    },
+    {
+      "lines": [
+        500
+      ],
+      "name": "RNameIndex.entry_dict.setdefault",
+      "target_name": "entry_dict",
+      "target_start_line": 121
+    },
+    {
+      "lines": [
+        502
+      ],
+      "name": "RNameIndex.script_file_set.add",
+      "target_name": "script_file_set",
+      "target_start_line": 107
+    },
+    {
+      "lines": [
+        503
+      ],
+      "name": "RNameIndex.lower_file_dict.setdefault",
+      "target_name": "lower_file_dict",
+      "target_start_line": 109
+    },
+    {
+      "lines": [
+        504
+      ],
+      "name": "RNameIndex.dir_file_dict.setdefault",
+      "target_name": "dir_file_dict",
+      "target_start_line": 111
+    },
+    {
+      "lines": [
+        506
+      ],
+      "name": "_add_package",
+      "target_name": "_add_package",
+      "target_start_line": 190
+    },
+    {
+      "lines": [
+        507
+      ],
+      "name": "_add_source_edge",
+      "target_name": "_add_source_edge",
+      "target_start_line": 299
+    },
+    {
+      "lines": [
+        524,
+        529
+      ],
+      "name": "r_name_index_cache",
+      "target_name": "r_name_index_cache",
+      "target_start_line": 59
+    },
+    {
+      "lines": [
+        528
+      ],
+      "name": "_build_name_index",
+      "target_name": "_build_name_index",
+      "target_start_line": 473
+    },
+    {
+      "lines": [
+        551
+      ],
+      "name": "_lookup_file_set_list",
+      "target_name": "_lookup_file_set_list",
+      "target_start_line": 630
+    },
+    {
+      "lines": [
+        563,
+        569,
+        654
+      ],
+      "name": "_reach_list",
+      "target_name": "_reach_list",
+      "target_start_line": 314
+    },
+    {
+      "lines": [
+        570,
+        652,
+        655,
+        659
+      ],
+      "name": "_with_source",
+      "target_name": "_with_source",
+      "target_start_line": 553
+    },
+    {
+      "lines": [
+        575
+      ],
+      "name": "_APP_FILE_SET",
+      "target_name": "_APP_FILE_SET",
+      "target_start_line": 32
+    },
+    {
+      "lines": [
+        588,
+        590
+      ],
+      "name": "_is_app_dir",
+      "target_name": "_is_app_dir",
+      "target_start_line": 572
+    },
+    {
+      "lines": [
+        588
+      ],
+      "name": "_APP_SCRIPT_SET",
+      "target_name": "_APP_SCRIPT_SET",
+      "target_start_line": 35
+    },
+    {
+      "lines": [
+        597
+      ],
+      "name": "_APP_GLOBAL_FILE",
+      "target_name": "_APP_GLOBAL_FILE",
+      "target_start_line": 38
+    },
+    {
+      "lines": [
+        605
+      ],
+      "name": "_TEST_DIR",
+      "target_name": "_TEST_DIR",
+      "target_start_line": 42
+    },
+    {
+      "lines": [
+        609
+      ],
+      "name": "_TEST_HELPER_PREFIX_TUPLE",
+      "target_name": "_TEST_HELPER_PREFIX_TUPLE",
+      "target_start_line": 43
+    },
+    {
+      "lines": [
+        653
+      ],
+      "name": "_reader_file_list",
+      "target_name": "_reader_file_list",
+      "target_start_line": 566
+    },
+    {
+      "lines": [
+        656
+      ],
+      "name": "_app_file_list",
+      "target_name": "_app_file_list",
+      "target_start_line": 579
+    },
+    {
+      "lines": [
+        662
+      ],
+      "name": "_test_helper_file_list",
+      "target_name": "_test_helper_file_list",
+      "target_start_line": 602
+    },
+    {
+      "lines": [
+        679
+      ],
+      "name": "_library_file_set_list",
+      "target_name": "_library_file_set_list",
+      "target_start_line": 612
+    },
+    {
+      "lines": [
+        694
+      ],
+      "name": "_find_entry_list",
+      "target_name": "_find_entry_list",
+      "target_start_line": 698
+    },
+    {
+      "lines": [
+        702
+      ],
+      "name": "_box_scope.attach_table",
+      "target_name": "_box_scope",
+      "target_start_line": 416
+    },
+    {
+      "lines": [
+        703
+      ],
+      "name": "_box_scope.attach_all_table",
+      "target_name": "_box_scope",
+      "target_start_line": 416
+    },
+    {
+      "lines": [
+        762
+      ],
+      "name": "_box_scope.module_dict.get",
+      "target_name": "_box_scope",
+      "target_start_line": 416
+    },
+    {
+      "lines": [
+        764
+      ],
+      "name": "_member_entry_list",
+      "target_name": "_member_entry_list",
+      "target_start_line": 727
+    },
+    {
+      "lines": [
+        765,
+        766,
+        787
+      ],
+      "name": "_lookup",
+      "target_name": "_lookup",
+      "target_start_line": 684
+    },
+    {
+      "lines": [
+        768,
+        779,
+        792,
+        801,
+        804,
+        819,
+        865
+      ],
+      "name": "RReferenceTarget",
+      "target_name": "RReferenceTarget",
+      "target_start_line": 66
+    },
+    {
+      "lines": [
+        809
+      ],
+      "name": "_entry_list",
+      "target_name": "_entry_list",
+      "target_start_line": 751
+    },
+    {
+      "lines": [
+        811
+      ],
+      "name": "_method_target_list",
+      "target_name": "_method_target_list",
+      "target_start_line": 768
+    },
+    {
+      "lines": [
+        857,
+        874
+      ],
+      "name": "r_target_cache",
+      "target_name": "r_target_cache",
+      "target_start_line": 63
+    },
+    {
+      "lines": [
+        862,
+        894
+      ],
+      "name": "_get_name_index",
+      "target_name": "_get_name_index",
+      "target_start_line": 511
+    },
+    {
+      "lines": [
+        866
+      ],
+      "name": "_ReferenceResolver",
+      "target_name": "_ReferenceResolver",
+      "target_start_line": 533
+    },
+    {
+      "lines": [
+        900
+      ],
+      "name": "_import_file",
+      "target_name": "_import_file",
+      "target_start_line": 284
+    }
+  ],
+  "caller_usages": [
+    {
+      "lines": [
+        225
+      ],
+      "name": "r_import_file_list",
+      "file": "codetwine/codetwine/extractors/dependency_graph_py/dependency_graph.py",
+      "usage_context": "        for target in reference_target_list(file_rel, project_file_set, project_dir)\n    ]\n    if language_ext(file_path) in R_EXT_SET:\n        callee_rel_list += r_import_file_list(file_rel, project_file_set, project_dir)\n    return callee_rel_list\n\n"
+    },
+    {
+      "lines": [
+        364
+      ],
+      "name": "r_name_index_cache.clear",
+      "file": "codetwine/codetwine/extractors/dependency_graph_py/dependency_graph.py",
+      "usage_context": "    module_tree_cache.clear()\n    file_index_cache.clear()\n    namespace_index_cache.clear()\n    r_name_index_cache.clear()\n    reference_target_cache.clear()\n    csharp_target_cache.clear()\n    r_target_cache.clear()"
+    },
+    {
+      "lines": [
+        367
+      ],
+      "name": "r_target_cache.clear",
+      "file": "codetwine/codetwine/extractors/dependency_graph_py/dependency_graph.py",
+      "usage_context": "    r_name_index_cache.clear()\n    reference_target_cache.clear()\n    csharp_target_cache.clear()\n    r_target_cache.clear()\n    clear_import_reference_cache()\n    clear_import_binder_cache()\n    clear_import_path_cache()"
+    },
+    {
+      "lines": [
+        136,
+        147,
+        259,
+        266
+      ],
+      "name": "RReferenceTarget",
+      "file": "codetwine/codetwine/extractors/usage_analysis_py/usage_analysis.py",
+      "usage_context": "\ndef _r_own_range_function(\n    definition_list: list[DefinitionInfo], root_node: Node | CobolSource,\n) -> Callable[[RReferenceTarget], list[tuple[int, int]]]:\n    \"\"\"Return the function giving the lines of the top-level definitions of the name of an R reference.\n\n    The members of a class and the calls written for a name defined elsewhere\n...\n        if not definition.is_member and not definition.is_attach\n    ])\n\n    def r_range_list(target: RReferenceTarget) -> list[tuple[int, int]]:\n        \"\"\"Return the lines of the top-level definitions of the name of an R reference.\"\"\"\n        return range_dict.get(usage_root_name(target.name, range_dict), [])\n"
+    },
+    {
+      "lines": [
+        149
+      ],
+      "name": "RReferenceTarget.name",
+      "file": "codetwine/codetwine/extractors/usage_analysis_py/usage_analysis.py",
+      "usage_context": "\n    def r_range_list(target: RReferenceTarget) -> list[tuple[int, int]]:\n        \"\"\"Return the lines of the top-level definitions of the name of an R reference.\"\"\"\n        return range_dict.get(usage_root_name(target.name, range_dict), [])\n\n    return r_range_list\n"
+    },
+    {
+      "lines": [
+        268,
+        269,
+        270,
+        272
+      ],
+      "name": "RReferenceTarget.file_rel",
+      "file": "codetwine/codetwine/extractors/usage_analysis_py/usage_analysis.py",
+      "usage_context": "\n    def r_definition(target: RReferenceTarget) -> _TargetDefinition:\n        \"\"\"Return the definition an R reference resolves to, with its lines as text.\"\"\"\n        if target.file_rel not in line_list_dict:\n            target_text = read_source(os.path.join(project_dir, target.file_rel))[0]\n            line_list_dict[target.file_rel] = line_list_of(target_text)\n        return _TargetDefinition(\n...\n    def r_definition(target: RReferenceTarget) -> _TargetDefinition:\n        \"\"\"Return the definition an R reference resolves to, with its lines as text.\"\"\"\n        if target.file_rel not in line_list_dict:\n            target_text = read_source(os.path.join(project_dir, target.file_rel))[0]\n            line_list_dict[target.file_rel] = line_list_of(target_text)\n        return _TargetDefinition(\n            \"\\n\".join(line_list_dict[target.file_rel][target.start_line - 1:target.end_line]),"
+    },
+    {
+      "lines": [
+        272
+      ],
+      "name": "RReferenceTarget.end_line",
+      "file": "codetwine/codetwine/extractors/usage_analysis_py/usage_analysis.py",
+      "usage_context": "            target_text = read_source(os.path.join(project_dir, target.file_rel))[0]\n            line_list_dict[target.file_rel] = line_list_of(target_text)\n        return _TargetDefinition(\n            \"\\n\".join(line_list_dict[target.file_rel][target.start_line - 1:target.end_line]),\n            target.definition_name, target.start_line,\n        )\n"
+    },
+    {
+      "lines": [
+        272,
+        273
+      ],
+      "name": "RReferenceTarget.start_line",
+      "file": "codetwine/codetwine/extractors/usage_analysis_py/usage_analysis.py",
+      "usage_context": "            target_text = read_source(os.path.join(project_dir, target.file_rel))[0]\n            line_list_dict[target.file_rel] = line_list_of(target_text)\n        return _TargetDefinition(\n            \"\\n\".join(line_list_dict[target.file_rel][target.start_line - 1:target.end_line]),\n            target.definition_name, target.start_line,\n        )\n\n...\n            line_list_dict[target.file_rel] = line_list_of(target_text)\n        return _TargetDefinition(\n            \"\\n\".join(line_list_dict[target.file_rel][target.start_line - 1:target.end_line]),\n            target.definition_name, target.start_line,\n        )\n\n    return r_definition"
+    },
+    {
+      "lines": [
+        273
+      ],
+      "name": "RReferenceTarget.definition_name",
+      "file": "codetwine/codetwine/extractors/usage_analysis_py/usage_analysis.py",
+      "usage_context": "            line_list_dict[target.file_rel] = line_list_of(target_text)\n        return _TargetDefinition(\n            \"\\n\".join(line_list_dict[target.file_rel][target.start_line - 1:target.end_line]),\n            target.definition_name, target.start_line,\n        )\n\n    return r_definition"
+    },
+    {
+      "lines": [
+        343
+      ],
+      "name": "r_name_index_cache.clear",
+      "file": "codetwine/codetwine/pipeline_py/pipeline.py",
+      "usage_context": "    reference_target_cache.clear()\n    namespace_index_cache.clear()\n    csharp_target_cache.clear()\n    r_name_index_cache.clear()\n    r_target_cache.clear()\n\n    log_progress(logger, \"Analysis complete.\")"
+    },
+    {
+      "lines": [
+        344
+      ],
+      "name": "r_target_cache.clear",
+      "file": "codetwine/codetwine/pipeline_py/pipeline.py",
+      "usage_context": "    namespace_index_cache.clear()\n    csharp_target_cache.clear()\n    r_name_index_cache.clear()\n    r_target_cache.clear()\n\n    log_progress(logger, \"Analysis complete.\")\n"
+    },
+    {
+      "lines": [
+        11
+      ],
+      "name": "RReferenceTarget",
+      "file": "codetwine/codetwine/reference_target_py/reference_target.py",
+      "usage_context": "\n# A reference of a file resolved to its definition\nReferenceTarget = (\n    CobolReferenceTarget | CsharpReferenceTarget | RReferenceTarget | ImportReferenceTarget\n)\n\n# Reference kind of a language (EXT_TO_REFERENCE_KIND_DICT) -> function that resolves the"
+    },
+    {
+      "lines": [
+        19
+      ],
+      "name": "r_reference_target_list",
+      "file": "codetwine/codetwine/reference_target_py/reference_target.py",
+      "usage_context": "_TARGET_LIST_FUNCTION_DICT: dict[str, Callable[[str, set[str], str], list]] = {\n    \"cobol\":  cobol_reference_target_list,\n    \"csharp\": csharp_reference_target_list,\n    \"r\":      r_reference_target_list,\n    \"import\": import_reference_target_list,\n}\n"
+    }
+  ]
+}

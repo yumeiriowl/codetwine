@@ -1,15 +1,16 @@
 import os
 import logging
 from tree_sitter import Language
-from codetwine.parsers.ts_parser import parse_file
 from codetwine.extractors.definitions import (
     ATTACHED_DEFINITION_TYPE_SET,
     TRANSPARENT_DEFINITION_TYPE_SET,
-    extract_definitions,
     select_top_level_definitions,
 )
+from codetwine.extractors.definition_source import file_definition_list
 from codetwine.cobol_file_index import resolve_cobol_module_path
 from codetwine.path_config import path_config
+from codetwine.package_path import package_import_path_list, package_name_path_list
+from codetwine.alias_path import alias_path_list
 from codetwine.rust_module_tree import resolve_rust_module_path
 from codetwine.config.settings import (
     EXT_TO_DEFINITION_DICT,
@@ -300,10 +301,13 @@ def resolve_module_to_project_path(
        (e.g. #include "geo/shape.hpp" -> "include/geo/shape.hpp")
 
     A language whose resolve config has path_config_name_list (JS/TS) resolves a module
-    that is not relative through the config file that counts for the current file
-    (path_config): the paths its "paths" and "baseUrl" give are matched against
-    project_file_set, and nothing else is tried. Without such a config file the steps
-    above apply.
+    that is not relative through, in order: the "imports" of the package.json around
+    the current file (package_import_path_list), the "paths" and "baseUrl" of the config
+    file that counts for the current file (path_config), the aliases of the bundler
+    config around it (alias_path_list) and the packages of the project by their names
+    (package_name_path_list). The paths they give are matched against project_file_set;
+    when none matches and the file has such a config file, or the module is one of
+    "imports", nothing else is tried. Otherwise the steps above apply.
 
     The current file itself is never returned.
 
@@ -364,13 +368,25 @@ def resolve_module_to_project_path(
     config_name_list = resolve_config.get("path_config_name_list")
     if config_name_list and project_dir and not is_relative:
         config = path_config(current_file_rel, project_dir, config_name_list)
-        if config is not None:
-            for module_path in config.module_path_list(module):
-                for candidate_path in generate_candidate_path_list(
-                    module_path, src_ext_with_dot, resolve_config, [],
-                ):
-                    if candidate_path in project_file_set and candidate_path != current_file_rel:
-                        return candidate_path
+        package_file_name = resolve_config["package_file_name"]
+        import_path_list = package_import_path_list(
+            module, current_file_rel, project_dir, package_file_name,
+        )
+        module_path_list = [
+            *import_path_list,
+            *(config.module_path_list(module) if config is not None else []),
+            *alias_path_list(
+                module, current_file_rel, project_dir, resolve_config["alias_config_name_list"],
+            ),
+            *package_name_path_list(module, project_dir, project_file_set, package_file_name),
+        ]
+        for module_path in module_path_list:
+            for candidate_path in generate_candidate_path_list(
+                module_path, src_ext_with_dot, resolve_config, [],
+            ):
+                if candidate_path in project_file_set and candidate_path != current_file_rel:
+                    return candidate_path
+        if config is not None or import_path_list:
             return None
 
     # Step 2: Generate file candidates. An import that is not relative is not looked up
@@ -435,8 +451,7 @@ def top_level_definition_names(file_rel: str, project_dir: str) -> list[str]:
     if not definition_dict:
         return []
 
-    root_node = parse_file(abs_path)[0]
-    definition_list = extract_definitions(root_node, definition_dict)
+    definition_list = file_definition_list(abs_path, definition_dict)
     return list(dict.fromkeys(
         d.name for d in select_top_level_definitions(definition_list)
         if d.name

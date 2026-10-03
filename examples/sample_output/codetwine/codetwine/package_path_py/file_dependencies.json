@@ -1,0 +1,297 @@
+{
+  "file": "codetwine/codetwine/package_path_py/package_path.py",
+  "language": "py",
+  "detected_encoding": null,
+  "definitions": [
+    {
+      "name": "package_file_cache",
+      "type": "expression_statement",
+      "start_line": 7,
+      "end_line": 7,
+      "context": "package_file_cache: dict[str, dict[str, dict | None]] = {}"
+    },
+    {
+      "name": "package_name_cache",
+      "type": "expression_statement",
+      "start_line": 10,
+      "end_line": 10,
+      "context": "package_name_cache: dict[str, tuple[set[str], dict[str, str]]] = {}"
+    },
+    {
+      "name": "_IMPORT_MODULE_START",
+      "type": "expression_statement",
+      "start_line": 13,
+      "end_line": 13,
+      "context": "_IMPORT_MODULE_START = \"#\""
+    },
+    {
+      "name": "_ENTRY_KEY_TUPLE",
+      "type": "expression_statement",
+      "start_line": 17,
+      "end_line": 17,
+      "context": "_ENTRY_KEY_TUPLE = (\"types\", \"typings\", \"source\", \"module\", \"main\")"
+    },
+    {
+      "name": "_SOURCE_DIR_NAME",
+      "type": "expression_statement",
+      "start_line": 20,
+      "end_line": 20,
+      "context": "_SOURCE_DIR_NAME = \"src\""
+    },
+    {
+      "name": "_INDEX_FILE_NAME",
+      "type": "expression_statement",
+      "start_line": 21,
+      "end_line": 21,
+      "context": "_INDEX_FILE_NAME = \"index\""
+    },
+    {
+      "name": "clear_package_path_cache",
+      "type": "function_definition",
+      "start_line": 24,
+      "end_line": 27,
+      "context": "def clear_package_path_cache() -> None:\n    \"\"\"Forget the package.json files of every project.\"\"\"\n    package_file_cache.clear()\n    package_name_cache.clear()"
+    },
+    {
+      "name": "_package_file",
+      "type": "function_definition",
+      "start_line": 30,
+      "end_line": 48,
+      "context": "def _package_file(dir_rel: str, project_dir: str, package_file_name: str) -> dict | None:\n    \"\"\"Return the content of the package.json of a directory, read once per directory.\n\n    Args:\n        dir_rel: Directory relative to the project root (\"\" for the root).\n        project_dir: Absolute path to the project root.\n        package_file_name: File name of the package file (\"package.json\").\n\n    Returns:\n        The object the file holds, None when the directory has no readable one.\n    \"\"\"\n    dir_dict = package_file_cache.setdefault(project_dir, {})\n    if dir_rel not in dir_dict:\n        package_rel = posixpath.join(dir_rel, package_file_name)\n        dir_dict[dir_rel] = (\n            read_json_file(package_rel, project_dir)\n            if os.path.isfile(os.path.join(project_dir, package_rel)) else None\n        )\n    return dir_dict[dir_rel]"
+    },
+    {
+      "name": "_target_list",
+      "type": "function_definition",
+      "start_line": 51,
+      "end_line": 68,
+      "context": "def _target_list(value: object) -> list[str]:\n    \"\"\"Return the paths an \"imports\" / \"exports\" value names, in the order written.\n\n    A value is a path, a list of values, or an object whose values are values (one per\n    condition: \"types\", \"import\", \"require\", \"default\").\n\n    Examples:\n        \"./src/a.js\"                                       -> [\"./src/a.js\"]\n        {\"types\": \"./a.d.ts\", \"default\": \"./a.js\"}         -> [\"./a.d.ts\", \"./a.js\"]\n        {\"import\": {\"default\": \"./a.mjs\"}, \"require\": null} -> [\"./a.mjs\"]\n    \"\"\"\n    if isinstance(value, str):\n        return [value]\n    if isinstance(value, list):\n        return [target for item in value for target in _target_list(item)]\n    if isinstance(value, dict):\n        return [target for item in value.values() for target in _target_list(item)]\n    return []"
+    },
+    {
+      "name": "_pattern_path_list",
+      "type": "function_definition",
+      "start_line": 71,
+      "end_line": 89,
+      "context": "def _pattern_path_list(pattern_dict: dict, name: str, package_dir: str) -> list[str]:\n    \"\"\"Return the paths the entry of an \"imports\" / \"exports\" object that matches a name names.\n\n    Args:\n        pattern_dict: {name or pattern with one \"*\": value}.\n        name: The name looked up (\"#internal/a\", \"./sub\").\n        package_dir: Directory of the package file, relative to the project root.\n\n    Returns:\n        Paths relative to the project root, with the part the \"*\" stands for put in.\n        Empty when no entry matches or the paths lead outside the project.\n    \"\"\"\n    config = PathConfig(path_list=[\n        (pattern, _target_list(value)) for pattern, value in pattern_dict.items()\n    ])\n    return [\n        path_rel for target in config.module_path_list(name)\n        if (path_rel := inside_project(posixpath.join(package_dir, target))) is not None\n    ]"
+    },
+    {
+      "name": "package_import_path_list",
+      "type": "function_definition",
+      "start_line": 92,
+      "end_line": 129,
+      "context": "def package_import_path_list(\n    module: str, file_rel: str, project_dir: str, package_file_name: str,\n) -> list[str]:\n    \"\"\"Return the paths a module string of the \"imports\" of a package.json can stand for.\n\n    The package.json in the directory of the file, else in the nearest directory above\n    it, is read.\n\n    Examples (\"imports\": {\"#db\": \"./src/db.js\", \"#internal/*\": \"./src/internal/*.js\"}\n    in the package.json of the project root):\n        \"#db\"            -> [\"src/db.js\"]\n        \"#internal/log\"  -> [\"src/internal/log.js\"]\n        \"react\"          -> []\n\n    Args:\n        module: The module string of an import statement.\n        file_rel: Relative path of the file the import statement is written in.\n        project_dir: Absolute path to the project root.\n        package_file_name: File name of the package file (\"package.json\").\n\n    Returns:\n        Paths relative to the project root. Empty for a module that does not start\n        with \"#\" and when the package file has no entry for it.\n    \"\"\"\n    if not module.startswith(_IMPORT_MODULE_START):\n        return []\n    dir_rel = posixpath.dirname(file_rel.replace(\"\\\\\", \"/\"))\n    while True:\n        package_dict = _package_file(dir_rel, project_dir, package_file_name)\n        if package_dict is not None:\n            import_dict = package_dict.get(\"imports\")\n            return (\n                _pattern_path_list(import_dict, module, dir_rel)\n                if isinstance(import_dict, dict) else []\n            )\n        if not dir_rel:\n            return []\n        dir_rel = posixpath.dirname(dir_rel)"
+    },
+    {
+      "name": "_package_dir_dict",
+      "type": "function_definition",
+      "start_line": 132,
+      "end_line": 165,
+      "context": "def _package_dir_dict(\n    project_dir: str, project_file_set: set[str], package_file_name: str,\n) -> dict[str, str]:\n    \"\"\"Return the packages of a project by their names, read once per project file set.\n\n    The package.json of every directory that holds a project file, and of the\n    directories above those, is read.\n\n    Args:\n        project_dir: Absolute path to the project root.\n        project_file_set: Relative paths of the project files that have a language.\n        package_file_name: File name of the package file (\"package.json\").\n\n    Returns:\n        {\"name\" of a package.json: its directory}; of two packages of one name, the\n        one whose directory comes first in path order.\n    \"\"\"\n    cache_entry = package_name_cache.get(project_dir)\n    if cache_entry is not None and cache_entry[0] == project_file_set:\n        return cache_entry[1]\n    dir_set: set[str] = set()\n    for file_rel in project_file_set:\n        dir_rel = posixpath.dirname(file_rel.replace(\"\\\\\", \"/\"))\n        while dir_rel not in dir_set:\n            dir_set.add(dir_rel)\n            dir_rel = posixpath.dirname(dir_rel)\n    package_dir_dict: dict[str, str] = {}\n    for dir_rel in sorted(dir_set):\n        package_dict = _package_file(dir_rel, project_dir, package_file_name)\n        name = package_dict.get(\"name\") if package_dict is not None else None\n        if isinstance(name, str) and name:\n            package_dir_dict.setdefault(name, dir_rel)\n    package_name_cache[project_dir] = (project_file_set, package_dir_dict)\n    return package_dir_dict"
+    },
+    {
+      "name": "_source_path_list",
+      "type": "function_definition",
+      "start_line": 168,
+      "end_line": 186,
+      "context": "def _source_path_list(path_rel: str, package_dir: str) -> list[str]:\n    \"\"\"Return a path of a package and the path its source has when the path names a build output.\n\n    Examples (package_dir \"packages/ui\"):\n        \"packages/ui/dist/index.js\"  -> [\"packages/ui/dist/index.js\", \"packages/ui/src/index.js\"]\n        \"packages/ui/index.js\"       -> [\"packages/ui/index.js\"]\n\n    Args:\n        path_rel: A path under package_dir, relative to the project root.\n        package_dir: Directory of the package, relative to the project root.\n\n    Returns:\n        The path, then the same path with its first directory under the package\n        replaced by \"src\" when it has one that is not \"src\".\n    \"\"\"\n    inner_part_list = posixpath.relpath(path_rel, package_dir or \".\").split(\"/\")\n    if len(inner_part_list) < 2 or inner_part_list[0] in (_SOURCE_DIR_NAME, \"..\"):\n        return [path_rel]\n    return [path_rel, posixpath.join(package_dir, _SOURCE_DIR_NAME, *inner_part_list[1:])]"
+    },
+    {
+      "name": "package_name_path_list",
+      "type": "function_definition",
+      "start_line": 189,
+      "end_line": 258,
+      "context": "def package_name_path_list(\n    module: str, project_dir: str, project_file_set: set[str], package_file_name: str,\n) -> list[str]:\n    \"\"\"Return the paths a module string that names a package of the project can stand for.\n\n    Examples (packages/ui/package.json: {\"name\": \"@acme/ui\", \"main\": \"./dist/index.js\",\n    \"exports\": {\".\": \"./dist/index.js\", \"./button\": \"./dist/button.js\"}}):\n        \"@acme/ui\"         -> [\"packages/ui/dist/index.js\", \"packages/ui/src/index.js\",\n                               \"packages/ui/src/index\", \"packages/ui/index\"]\n        \"@acme/ui/button\"  -> [\"packages/ui/dist/button.js\", \"packages/ui/src/button.js\",\n                               \"packages/ui/button\", \"packages/ui/src/button\"]\n        \"react\"            -> []\n\n    Args:\n        module: The module string of an import statement.\n        project_dir: Absolute path to the project root.\n        project_file_set: Relative paths of the project files that have a language.\n        package_file_name: File name of the package file (\"package.json\").\n\n    Returns:\n        Paths relative to the project root, without duplicates: the paths \"exports\"\n        names for the part of the module after the package name, for the package\n        itself also the paths of _ENTRY_KEY_TUPLE, each followed by the path of its\n        source (_source_path_list); then the part after the package name under the\n        package and under its \"src\", or the index file of the package.\n    \"\"\"\n    package_dir_dict = _package_dir_dict(project_dir, project_file_set, package_file_name)\n    part_list = module.split(\"/\")\n    name = \"/\".join(part_list[:2]) if module.startswith(\"@\") else part_list[0]\n    package_dir = package_dir_dict.get(name)\n    if package_dir is None:\n        return []\n    package_dict = _package_file(package_dir, project_dir, package_file_name) or {}\n    inner_path = module[len(name):].lstrip(\"/\")\n\n    target_list: list[str] = []\n    export_value = package_dict.get(\"exports\")\n    export_key = \"./\" + inner_path if inner_path else \".\"\n    if isinstance(export_value, dict) and any(key.startswith(\".\") for key in export_value):\n        target_list.extend(_pattern_path_list(export_value, export_key, package_dir))\n    elif not inner_path:\n        target_list.extend(\n            path_rel for target in _target_list(export_value)\n            if (path_rel := inside_project(posixpath.join(package_dir, target))) is not None\n        )\n    if not inner_path:\n        for entry_key in _ENTRY_KEY_TUPLE:\n            entry_value = package_dict.get(entry_key)\n            path_rel = (\n                inside_project(posixpath.join(package_dir, entry_value))\n                if isinstance(entry_value, str) else None\n            )\n            if path_rel is not None:\n                target_list.append(path_rel)\n\n    path_list = [\n        source_rel for path_rel in target_list\n        for source_rel in _source_path_list(path_rel, package_dir)\n    ]\n    if inner_path:\n        path_list.extend([\n            posixpath.join(package_dir, inner_path),\n            posixpath.join(package_dir, _SOURCE_DIR_NAME, inner_path),\n        ])\n    else:\n        path_list.extend([\n            posixpath.join(package_dir, _SOURCE_DIR_NAME, _INDEX_FILE_NAME),\n            posixpath.join(package_dir, _INDEX_FILE_NAME),\n        ])\n    return list(dict.fromkeys(path_list))"
+    }
+  ],
+  "callee_usages": [
+    {
+      "lines": [
+        45
+      ],
+      "name": "read_json_file",
+      "from": "codetwine/codetwine/path_config_py/path_config.py",
+      "target_context": "def read_json_file(file_rel: str, project_dir: str) -> dict | None:\n    \"\"\"Read a JSON file of the project that may hold comments and trailing commas.\n\n    Args:\n        file_rel: Relative path of the file.\n        project_dir: Absolute path to the project root.\n\n    Returns:\n        The object the file holds. None when the file cannot be read or holds no\n        object; the exception is logged.\n    \"\"\"\n    try:\n        text = read_source(os.path.join(project_dir, file_rel))[0]\n        option_dict = json.loads(_strip_json_comment(text))\n    except (OSError, ValueError) as e:\n        logger.warning(f\"{file_rel} cannot be read: {type(e).__name__}: {e}\")\n        return None\n    return option_dict if isinstance(option_dict, dict) else None",
+      "target_name": "read_json_file",
+      "target_start_line": 109
+    },
+    {
+      "lines": [
+        83
+      ],
+      "name": "PathConfig",
+      "from": "codetwine/codetwine/path_config_py/path_config.py",
+      "target_context": "@dataclass\nclass PathConfig:\n    \"\"\"The module path settings of a tsconfig.json / jsconfig.json file.\"\"\"\n\n    # Directory a module that is not relative is looked up from (\"baseUrl\"), relative\n    # to the project root (\"\" for the root); None when the file sets none\n    base_dir: str | None = None\n    # (pattern, targets relative to the project root) of \"paths\", in the order written\n    path_list: list[tuple[str, list[str]]] = field(default_factory=list)\n\n    def module_path_list(self, module: str) -> list[str]:\n        \"\"\"Return the paths a module that is not relative can stand for.\n\n        Examples (\"paths\": {\"app\": [\"./src/index.ts\"], \"app/*\": [\"./src/*.ts\"]},\n        \"baseUrl\": \"./lib\", both in the config file of the project root):\n            \"app\"          -> [\"src/index.ts\", \"lib/app\"]\n            \"app/store\"    -> [\"src/store.ts\", \"lib/app/store\"]\n            \"react\"        -> [\"lib/react\"]\n\n        Args:\n            module: The module string of an import statement.\n\n        Returns:\n            Paths relative to the project root, without duplicates: the targets of\n            the pattern that matches the module (a pattern equal to it, else the one\n            with the longest part before its \"*\"), with the part the \"*\" stands for\n            put in; then the module under base_dir.\n        \"\"\"\n        module_path_list: list[str] = []\n        match_tuple: tuple[int, str, list[str]] | None = None\n        for pattern, target_list in self.path_list:\n            prefix, wildcard, suffix = pattern.partition(_WILDCARD)\n            if not wildcard:\n                if pattern == module:\n                    match_tuple = (len(module) + 1, \"\", target_list)\n                continue\n            is_match = (\n                len(module) >= len(prefix) + len(suffix)\n                and module.startswith(prefix) and module.endswith(suffix)\n            )\n            if is_match and (match_tuple is None or len(prefix) > match_tuple[0]):\n                match_tuple = (len(prefix), module[len(prefix):len(module) - len(suffix)], target_list)\n        if match_tuple is not None:\n            module_path_list.extend(\n                target.replace(_WILDCARD, match_tuple[1]) for target in match_tuple[2]\n            )\n        if self.base_dir is not None:\n            module_path_list.append(posixpath.normpath(posixpath.join(self.base_dir, module)))\n        return list(dict.fromkeys(module_path_list))",
+      "target_name": "PathConfig",
+      "target_start_line": 31
+    },
+    {
+      "lines": [
+        87
+      ],
+      "name": "PathConfig.module_path_list",
+      "from": "codetwine/codetwine/path_config_py/path_config.py",
+      "target_context": "def module_path_list(self, module: str) -> list[str]:\n        \"\"\"Return the paths a module that is not relative can stand for.\n\n        Examples (\"paths\": {\"app\": [\"./src/index.ts\"], \"app/*\": [\"./src/*.ts\"]},\n        \"baseUrl\": \"./lib\", both in the config file of the project root):\n            \"app\"          -> [\"src/index.ts\", \"lib/app\"]\n            \"app/store\"    -> [\"src/store.ts\", \"lib/app/store\"]\n            \"react\"        -> [\"lib/react\"]\n\n        Args:\n            module: The module string of an import statement.\n\n        Returns:\n            Paths relative to the project root, without duplicates: the targets of\n            the pattern that matches the module (a pattern equal to it, else the one\n            with the longest part before its \"*\"), with the part the \"*\" stands for\n            put in; then the module under base_dir.\n        \"\"\"\n        module_path_list: list[str] = []\n        match_tuple: tuple[int, str, list[str]] | None = None\n        for pattern, target_list in self.path_list:\n            prefix, wildcard, suffix = pattern.partition(_WILDCARD)\n            if not wildcard:\n                if pattern == module:\n                    match_tuple = (len(module) + 1, \"\", target_list)\n                continue\n            is_match = (\n                len(module) >= len(prefix) + len(suffix)\n                and module.startswith(prefix) and module.endswith(suffix)\n            )\n            if is_match and (match_tuple is None or len(prefix) > match_tuple[0]):\n                match_tuple = (len(prefix), module[len(prefix):len(module) - len(suffix)], target_list)\n        if match_tuple is not None:\n            module_path_list.extend(\n                target.replace(_WILDCARD, match_tuple[1]) for target in match_tuple[2]\n            )\n        if self.base_dir is not None:\n            module_path_list.append(posixpath.normpath(posixpath.join(self.base_dir, module)))\n        return list(dict.fromkeys(module_path_list))",
+      "target_name": "module_path_list",
+      "target_start_line": 41
+    },
+    {
+      "lines": [
+        88,
+        232,
+        238
+      ],
+      "name": "inside_project",
+      "from": "codetwine/codetwine/path_config_py/path_config.py",
+      "target_context": "def inside_project(path: str) -> str | None:\n    \"\"\"Return a normalized relative path (\"\" for the project root), None when it leads outside the project.\"\"\"\n    clean_path = posixpath.normpath(path)\n    if clean_path == \".\":\n        return \"\"\n    if clean_path.startswith(\"../\") or clean_path == \"..\" or clean_path.startswith(\"/\"):\n        return None\n    return clean_path",
+      "target_name": "inside_project",
+      "target_start_line": 173
+    }
+  ],
+  "same_file_usages": [
+    {
+      "lines": [
+        26
+      ],
+      "name": "package_file_cache.clear",
+      "target_name": "package_file_cache",
+      "target_start_line": 7
+    },
+    {
+      "lines": [
+        27
+      ],
+      "name": "package_name_cache.clear",
+      "target_name": "package_name_cache",
+      "target_start_line": 10
+    },
+    {
+      "lines": [
+        41
+      ],
+      "name": "package_file_cache.setdefault",
+      "target_name": "package_file_cache",
+      "target_start_line": 7
+    },
+    {
+      "lines": [
+        84,
+        231
+      ],
+      "name": "_target_list",
+      "target_name": "_target_list",
+      "target_start_line": 51
+    },
+    {
+      "lines": [
+        116
+      ],
+      "name": "_IMPORT_MODULE_START",
+      "target_name": "_IMPORT_MODULE_START",
+      "target_start_line": 13
+    },
+    {
+      "lines": [
+        120,
+        160,
+        221
+      ],
+      "name": "_package_file",
+      "target_name": "_package_file",
+      "target_start_line": 30
+    },
+    {
+      "lines": [
+        124,
+        228
+      ],
+      "name": "_pattern_path_list",
+      "target_name": "_pattern_path_list",
+      "target_start_line": 71
+    },
+    {
+      "lines": [
+        149
+      ],
+      "name": "package_name_cache.get",
+      "target_name": "package_name_cache",
+      "target_start_line": 10
+    },
+    {
+      "lines": [
+        164
+      ],
+      "name": "package_name_cache",
+      "target_name": "package_name_cache",
+      "target_start_line": 10
+    },
+    {
+      "lines": [
+        184,
+        186,
+        251,
+        255
+      ],
+      "name": "_SOURCE_DIR_NAME",
+      "target_name": "_SOURCE_DIR_NAME",
+      "target_start_line": 20
+    },
+    {
+      "lines": [
+        215
+      ],
+      "name": "_package_dir_dict",
+      "target_name": "_package_dir_dict",
+      "target_start_line": 132
+    },
+    {
+      "lines": [
+        235
+      ],
+      "name": "_ENTRY_KEY_TUPLE",
+      "target_name": "_ENTRY_KEY_TUPLE",
+      "target_start_line": 17
+    },
+    {
+      "lines": [
+        246
+      ],
+      "name": "_source_path_list",
+      "target_name": "_source_path_list",
+      "target_start_line": 168
+    },
+    {
+      "lines": [
+        255,
+        256
+      ],
+      "name": "_INDEX_FILE_NAME",
+      "target_name": "_INDEX_FILE_NAME",
+      "target_start_line": 21
+    }
+  ],
+  "caller_usages": [
+    {
+      "lines": [
+        373
+      ],
+      "name": "clear_package_path_cache",
+      "file": "codetwine/codetwine/extractors/dependency_graph_py/dependency_graph.py",
+      "usage_context": "    clear_import_path_cache()\n    clear_definition_source_cache()\n    path_config_cache.clear()\n    clear_package_path_cache()\n    clear_alias_path_cache()\n\n    # R Markdown and Quarto files without an R code chunk are analyzed without a language,"
+    },
+    {
+      "lines": [
+        372
+      ],
+      "name": "package_import_path_list",
+      "file": "codetwine/codetwine/import_to_path_py/import_to_path.py",
+      "usage_context": "    if config_name_list and project_dir and not is_relative:\n        config = path_config(current_file_rel, project_dir, config_name_list)\n        package_file_name = resolve_config[\"package_file_name\"]\n        import_path_list = package_import_path_list(\n            module, current_file_rel, project_dir, package_file_name,\n        )\n        module_path_list = ["
+    },
+    {
+      "lines": [
+        381
+      ],
+      "name": "package_name_path_list",
+      "file": "codetwine/codetwine/import_to_path_py/import_to_path.py",
+      "usage_context": "            *alias_path_list(\n                module, current_file_rel, project_dir, resolve_config[\"alias_config_name_list\"],\n            ),\n            *package_name_path_list(module, project_dir, project_file_set, package_file_name),\n        ]\n        for module_path in module_path_list:\n            for candidate_path in generate_candidate_path_list("
+    }
+  ]
+}

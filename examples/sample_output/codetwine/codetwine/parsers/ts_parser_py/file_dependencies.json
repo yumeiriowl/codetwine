@@ -1,89 +1,501 @@
 {
   "file": "codetwine/codetwine/parsers/ts_parser_py/ts_parser.py",
+  "language": "py",
+  "detected_encoding": null,
   "definitions": [
     {
-      "name": "_language_map",
+      "name": "logger",
       "type": "expression_statement",
-      "start_line": 7,
-      "end_line": 7,
-      "context": "_language_map = TREE_SITTER_LANGUAGES"
+      "start_line": 18,
+      "end_line": 18,
+      "context": "logger = logging.getLogger(__name__)"
+    },
+    {
+      "name": "_END_NAME",
+      "type": "expression_statement",
+      "start_line": 21,
+      "end_line": 21,
+      "context": "_END_NAME = b\"codetwine_end_of_code\""
+    },
+    {
+      "name": "_CLASS_MACRO_QUERY_TUPLE",
+      "type": "expression_statement",
+      "start_line": 26,
+      "end_line": 30,
+      "context": "_CLASS_MACRO_QUERY_TUPLE = (\n    \"(function_definition type: (struct_specifier name: (_) @macro !body) declarator: (identifier))\",\n    \"(function_definition type: (union_specifier name: (_) @macro !body) declarator: (identifier))\",\n    \"(function_definition type: (class_specifier name: (_) @macro !body) declarator: (identifier))\",\n)"
+    },
+    {
+      "name": "_class_macro_query_cache",
+      "type": "expression_statement",
+      "start_line": 33,
+      "end_line": 33,
+      "context": "_class_macro_query_cache: dict[int, Query] = {}"
+    },
+    {
+      "name": "_CLASS_MACRO_PASS_MAX",
+      "type": "expression_statement",
+      "start_line": 37,
+      "end_line": 37,
+      "context": "_CLASS_MACRO_PASS_MAX = 8"
     },
     {
       "name": "parse_cache",
       "type": "expression_statement",
-      "start_line": 13,
-      "end_line": 13,
-      "context": "parse_cache: OrderedDict[str, tuple[Node, bytes]] = OrderedDict()"
+      "start_line": 44,
+      "end_line": 44,
+      "context": "parse_cache: OrderedDict[str, tuple[Node | CobolSource, bytes]] = OrderedDict()"
+    },
+    {
+      "name": "class_macro_cache",
+      "type": "expression_statement",
+      "start_line": 48,
+      "end_line": 48,
+      "context": "class_macro_cache: dict[str, list[tuple[str, int]]] = {}"
+    },
+    {
+      "name": "read_utf8_content",
+      "type": "function_definition",
+      "start_line": 51,
+      "end_line": 74,
+      "context": "def read_utf8_content(file_path: str) -> bytes:\n    \"\"\"Read a file with read_source() and return its text encoded as UTF-8.\n\n    A lone \"\\\\r\" is turned into \"\\\\n\" (lone_cr_to_lf), so a row of the syntax tree is a line\n    as line_list_of() splits the file; every byte stays where it is.\n\n    A warning is logged when the file is read with invalid bytes replaced, and a debug\n    line when it is read in an encoding other than UTF-8.\n\n    Args:\n        file_path: Absolute path of the file to read.\n\n    Returns:\n        The file's text as UTF-8 bytes.\n    \"\"\"\n    text, encoding = read_source(file_path)\n    if encoding == \"\":\n        logger.warning(\n            f\"No encoding decodes {file_path}; it is read as UTF-8 with invalid bytes \"\n            f\"replaced. Set SOURCE_ENCODING to the encoding it is stored in.\"\n        )\n    elif encoding != \"utf-8\":\n        logger.debug(f\"{file_path} is read as {encoding}\")\n    return lone_cr_to_lf(text).encode(\"utf-8\")"
+    },
+    {
+      "name": "_is_whole_code",
+      "type": "function_definition",
+      "start_line": 77,
+      "end_line": 93,
+      "context": "def _is_whole_code(code: bytes, language: Language) -> bool:\n    \"\"\"Return whether a piece of code ends where it stops: code written after it starts a new statement.\n\n    A name is added on a line after the code; the code is whole when the parser reads\n    that name as a statement of its own (not after an open \"{\", an open string or an\n    operator at the end of the code).\n\n    Args:\n        code: The code of one R chunk.\n        language: The tree-sitter Language of the code.\n\n    Returns:\n        True when the added name is the last top-level statement of the parse.\n    \"\"\"\n    root_node = Parser(language).parse(code + b\"\\n\" + _END_NAME + b\"\\n\").root_node\n    child_list = root_node.named_children\n    return bool(child_list) and child_list[-1].type == \"identifier\" and child_list[-1].text == _END_NAME"
+    },
+    {
+      "name": "_class_macro_query",
+      "type": "function_definition",
+      "start_line": 96,
+      "end_line": 112,
+      "context": "def _class_macro_query(language: Language) -> Query:\n    \"\"\"Return the query of _CLASS_MACRO_QUERY_TUPLE for a language, compiled once.\n\n    A pattern that names a node type the grammar of the language lacks is left out.\n    \"\"\"\n    query = _class_macro_query_cache.get(id(language))\n    if query is None:\n        pattern_list = []\n        for pattern in _CLASS_MACRO_QUERY_TUPLE:\n            try:\n                Query(language, pattern)\n            except Exception:\n                continue\n            pattern_list.append(pattern)\n        query = Query(language, \"\\n\".join(pattern_list))\n        _class_macro_query_cache[id(language)] = query\n    return query"
+    },
+    {
+      "name": "_class_macro_range_list",
+      "type": "function_definition",
+      "start_line": 115,
+      "end_line": 130,
+      "context": "def _class_macro_range_list(root_node: Node, language: Language) -> list[tuple[int, int]]:\n    \"\"\"Return the byte ranges of the macro names written between a class keyword and a class name.\n\n    class EXPORT Shape : public Base { ... }; is read by the grammar as a function\n    definition whose return type is \"class EXPORT\" and whose declarator is a plain\n    name. No function is written that way, so the name of such a type is a macro.\n\n    Args:\n        root_node: The AST root node of a C / C++ file.\n        language: The tree-sitter Language of the file.\n\n    Returns:\n        (start byte, end byte) of each such macro name.\n    \"\"\"\n    capture_dict = QueryCursor(_class_macro_query(language)).captures(root_node)\n    return [(node.start_byte, node.end_byte) for node in capture_dict.get(\"macro\", [])]"
+    },
+    {
+      "name": "_parse_c_family",
+      "type": "function_definition",
+      "start_line": 133,
+      "end_line": 164,
+      "context": "def _parse_c_family(content: bytes, language: Language) -> tuple[Node, list[tuple[str, int]]]:\n    \"\"\"Parse a C / C++ file, reading a class declared with a macro in front of its name as a class.\n\n    The macro names _class_macro_range_list() finds are replaced by spaces of the same\n    length and the text is parsed again, until none is left or _CLASS_MACRO_PASS_MAX\n    passes are done. Every other byte stays where it is.\n\n    Args:\n        content: The file's text as UTF-8 bytes.\n        language: The tree-sitter Language of the file.\n\n    Returns:\n        (AST root node of the last parse, (macro name, line) of each name replaced, in\n        line order).\n    \"\"\"\n    parser = Parser(language)\n    code = content\n    root_node = parser.parse(code).root_node\n    macro_list: list[tuple[str, int]] = []\n    for _ in range(_CLASS_MACRO_PASS_MAX):\n        range_list = _class_macro_range_list(root_node, language)\n        if not range_list:\n            break\n        blank_code = bytearray(code)\n        for start_byte, end_byte in range_list:\n            macro_list.append((\n                code[start_byte:end_byte].decode(\"utf-8\"), code.count(b\"\\n\", 0, start_byte) + 1,\n            ))\n            blank_code[start_byte:end_byte] = b\" \" * (end_byte - start_byte)\n        code = bytes(blank_code)\n        root_node = parser.parse(code).root_node\n    return root_node, sorted(macro_list, key=lambda macro: macro[1])"
     },
     {
       "name": "parse_file",
       "type": "function_definition",
-      "start_line": 16,
-      "end_line": 55,
-      "context": "def parse_file(file_path: str) -> tuple[Node, bytes]:\n    \"\"\"Read a file, parse it with tree-sitter, and return (AST root node, byte content).\n\n    Parse results are cached at module level to avoid re-parsing the same file.\n    The cache holds at most PARSE_CACHE_MAX_FILES entries; when it is full, the least\n    recently used entry is discarded and that file is parsed again the next time it is\n    requested. PARSE_CACHE_MAX_FILES = 0 disables the limit.\n\n    Args:\n        file_path: Absolute path of the file to parse.\n\n    Returns:\n        A (root_node, content) tuple.\n    \"\"\"\n    # Return from cache if available, marking the entry as most recently used\n    cached = parse_cache.get(file_path)\n    if cached is not None:\n        parse_cache.move_to_end(file_path)\n        return cached\n\n    # Get the corresponding language from the file extension\n    ext = os.path.splitext(file_path)[1].lstrip(\".\")\n\n    # Initialize the Parser with the Language object for this extension\n    parser = Parser(_language_map[ext])\n\n    # Read the file content in binary mode\n    with open(file_path, \"rb\") as f:\n        content = f.read()\n\n    # Parse with tree-sitter to generate the AST\n    tree = parser.parse(content)\n    result = (tree.root_node, content)\n\n    # Store in cache and drop the oldest entries once the limit is exceeded\n    parse_cache[file_path] = result\n    if PARSE_CACHE_MAX_FILES > 0:\n        while len(parse_cache) > PARSE_CACHE_MAX_FILES:\n            parse_cache.popitem(last=False)\n    return result"
+      "start_line": 167,
+      "end_line": 239,
+      "context": "def parse_file(file_path: str) -> tuple[Node | CobolSource, bytes]:\n    \"\"\"Read a file, parse it with tree-sitter, and return (AST root node, byte content).\n\n    The file is decoded by read_source() and parsed as UTF-8, whatever encoding it is\n    stored in; the byte content is that UTF-8 text, and the text of every node decodes\n    as UTF-8. Line numbers are those of line_list_of() over the file.\n\n    For a COBOL file the first element is a CobolSource (read_cobol_source) in place of\n    the root node, and for a BMS source the CobolSource of its symbolic maps\n    (read_bms_source); extract_definitions(), extract_imports() and extract_usages()\n    take it as they take a root node. The language is the one language_ext() gives.\n\n    For an R Markdown or Quarto file the root node is the tree of its R code chunks\n    (r_chunk_code), each node at the position its code has in the file; the byte content\n    is the whole file. A chunk whose code does not end inside the chunk (an open \"{\", an\n    operator at its end) is left out of the tree.\n\n    For a C or C++ file a macro name written between a class keyword and a class name\n    (class EXPORT Shape { ... }) is read as spaces (_parse_c_family); the byte content\n    is the whole file, and class_macro_cache holds those names and their lines.\n\n    Parse results are cached at module level; a file found in the cache is not parsed again.\n    The cache holds at most PARSE_CACHE_MAX_FILES entries; when it is full, the least\n    recently used entry is discarded and that file is parsed again the next time it is\n    requested. PARSE_CACHE_MAX_FILES = 0 disables the limit.\n\n    Args:\n        file_path: Absolute path of the file to parse.\n\n    Returns:\n        A (root_node, content) tuple.\n    \"\"\"\n    # Return from cache if available, marking the entry as most recently used\n    cache_entry = parse_cache.get(file_path)\n    if cache_entry is not None:\n        parse_cache.move_to_end(file_path)\n        return cache_entry\n\n    # Get the corresponding language from the file extension\n    ext = language_ext(file_path)\n\n    # Read the file as UTF-8 bytes\n    content = read_utf8_content(file_path)\n\n    if ext in COBOL_EXT_SET:\n        # Split the COBOL text into statements and parse each of them\n        cobol_source = read_cobol_source(content.decode(\"utf-8\"), EXT_TO_LANGUAGE_DICT[ext])\n        parse_result = (cobol_source, content)\n    elif ext in BMS_EXT_SET:\n        # Read the maps of the BMS macros\n        parse_result = (read_bms_source(content.decode(\"utf-8\")), content)\n    elif ext in R_MARKDOWN_EXT_SET:\n        # Parse the R code chunks of the document, everything else blanked; a chunk\n        # whose code runs on past its end is blanked as well\n        language = EXT_TO_LANGUAGE_DICT[ext]\n        chunk_code = r_chunk_code(content, lambda code: _is_whole_code(code, language))\n        tree = Parser(language).parse(chunk_code)\n        parse_result = (tree.root_node, content)\n    elif ext in C_FAMILY_EXT_SET:\n        # Parse with the macro names in front of class names blanked\n        root_node, class_macro_cache[file_path] = _parse_c_family(content, EXT_TO_LANGUAGE_DICT[ext])\n        parse_result = (root_node, content)\n    else:\n        # Parse with tree-sitter to generate the AST\n        tree = Parser(EXT_TO_LANGUAGE_DICT[ext]).parse(content)\n        parse_result = (tree.root_node, content)\n\n    # Store in cache and drop the oldest entries once the limit is exceeded\n    parse_cache[file_path] = parse_result\n    if PARSE_CACHE_MAX_FILES > 0:\n        while len(parse_cache) > PARSE_CACHE_MAX_FILES:\n            parse_cache.popitem(last=False)\n    return parse_result"
     }
   ],
   "callee_usages": [
     {
       "lines": [
-        7
+        44,
+        167
       ],
-      "name": "TREE_SITTER_LANGUAGES",
-      "from": "codetwine/codetwine/config/settings_py/settings.py",
-      "target_context": "TREE_SITTER_LANGUAGES: dict[str, Language] = _expand_ext_aliases(\n    {ext: cfg.language for ext, cfg in _LANG_REGISTRY.items()}\n)"
+      "name": "CobolSource",
+      "from": "codetwine/codetwine/extractors/cobol_source_py/cobol_source.py",
+      "target_context": "@dataclass\nclass CobolSource:\n    \"\"\"What one COBOL file defines, names and refers to.\"\"\"\n\n    # Lines of the source text\n    line_list: list[str]\n    # Definitions in line order\n    definition_list: list[CobolDefinition] = field(default_factory=list)\n    # COPY and CALL statements in line order\n    import_list: list[CobolImport] = field(default_factory=list)\n    # Each place a name is referred to\n    reference_list: list[CobolReference] = field(default_factory=list)\n    # Upper-case names a COPY statement can name the file by besides its file name\n    # (BMS: the mapset names)\n    copy_name_list: list[str] = field(default_factory=list)\n\n    def usage_line_list(self, name_set: set[str]) -> list[tuple[str, int]]:\n        \"\"\"Return the places the file refers to one of the given names.\n\n        Names are compared without regard to upper and lower case.\n\n        Args:\n            name_set: The names to look for.\n\n        Returns:\n            (name as given in name_set, line) tuples in line order, without duplicates.\n        \"\"\"\n        name_dict = {name.upper(): name for name in name_set}\n        usage_set = {\n            (name_dict[reference.name], reference.line)\n            for reference in self.reference_list if reference.name in name_dict\n        }\n        return sorted(usage_set, key=lambda usage: (usage[1], usage[0]))\n\n    def definition_text(self, definition: CobolDefinition) -> str:\n        \"\"\"Return the source text of a definition: its lines joined by \"\\\\n\".\"\"\"\n        return \"\\n\".join(self.line_list[definition.start_line - 1:definition.end_line])\n\n    def definition_source(self, name: str) -> str | None:\n        \"\"\"Return the source text of the first definition with a name.\n\n        Names are compared without regard to upper and lower case.\n\n        Args:\n            name: The definition name.\n\n        Returns:\n            The lines of the definition joined by \"\\\\n\". None when no definition has the name.\n        \"\"\"\n        for definition in self.definition_list:\n            if definition.name.upper() == name.upper():\n                return self.definition_text(definition)\n        return None",
+      "target_name": "CobolSource",
+      "target_start_line": 110
     },
     {
       "lines": [
-        52,
-        53
+        66
+      ],
+      "name": "read_source",
+      "from": "codetwine/codetwine/utils/file_utils_py/file_utils.py",
+      "target_context": "def read_source(file_path: str) -> tuple[str, str]:\n    \"\"\"Read a text file and return its contents decoded, with the encoding used.\n\n    The encoding is chosen in this order:\n    1. The codec named by a BOM at the start of the file (the BOM is dropped)\n    2. UTF-8\n    3. The encodings of SOURCE_ENCODING, in order\n    4. The encoding charset-normalizer detects\n    5. UTF-8 with each invalid byte replaced by U+FFFD\n    Steps 1 to 3 take the first codec that decodes the whole file without error.\n    Line breaks are kept as they are; line numbers match the file.\n\n    Args:\n        file_path: Absolute path of the file to read.\n\n    Returns:\n        A (text, encoding) tuple. encoding is the codec name that decoded the file,\n        or \"\" when step 5 decoded it.\n\n    Raises:\n        OSError: When the file cannot be read.\n    \"\"\"\n    with open(file_path, \"rb\") as f:\n        text, encoding, _ = _decode_source(f.read())\n    return text, encoding",
+      "target_name": "read_source",
+      "target_start_line": 107
+    },
+    {
+      "lines": [
+        74
+      ],
+      "name": "lone_cr_to_lf",
+      "from": "codetwine/codetwine/utils/file_utils_py/file_utils.py",
+      "target_context": "def lone_cr_to_lf(text: str) -> str:\n    \"\"\"Return a text with every lone \"\\\\r\" turned into \"\\\\n\".\n\n    The text keeps its length and the position of every character, and \"\\\\r\\\\n\" stays.\n    Each \"\\\\n\" of the result ends one line as line_list_of() splits the text.\n\n    Args:\n        text: The text to change.\n\n    Returns:\n        The changed text.\n    \"\"\"\n    return _LONE_CR_RE.sub(\"\\n\", text)",
+      "target_name": "lone_cr_to_lf",
+      "target_start_line": 153
+    },
+    {
+      "lines": [
+        206
+      ],
+      "name": "language_ext",
+      "from": "codetwine/codetwine/config/settings_py/settings.py",
+      "target_context": "def language_ext(path: str) -> str:\n    \"\"\"Return the extension whose language settings a file is analyzed with.\n\n    A file recorded by set_copy_target_ext() gets the extension recorded for it, and a\n    file recorded by set_no_language_file() none. Every other file gets its own\n    extension when it is a key of EXT_TO_DEFINITION_DICT; the extensions of the\n    languages with ignore_ext_case are matched in any case.\n\n    Examples:\n        \"src/app.py\"          -> \"py\"\n        \"src/MAIN.Cbl\"        -> \"cbl\"\n        \"R/utils.R\"           -> \"r\"\n        \"config.yaml\"         -> \"\"\n        \"dcl/DCLCUST.dcl\"     -> \"cpy\" (when a COPY statement names it)\n        \"docs/notes.qmd\"      -> \"\" (when it has no R code chunk)\n\n    Args:\n        path: A file path. A relative path is taken from the current directory when\n            it is looked up among the recorded files.\n\n    Returns:\n        The extension (without the dot, a key of EXT_TO_DEFINITION_DICT), or \"\" for a\n        file without a language.\n    \"\"\"\n    path_abs = os.path.abspath(path)\n    copy_target_ext = _copy_target_ext_dict.get(path_abs)\n    if copy_target_ext:\n        return copy_target_ext\n    if path_abs in _no_language_path_set:\n        return \"\"\n    ext = os.path.splitext(path)[1].lstrip(\".\")\n    if ext in EXT_TO_DEFINITION_DICT:\n        return ext\n    if ext.lower() in _IGNORE_CASE_EXT_SET:\n        return ext.lower()\n    return \"\"",
+      "target_name": "language_ext",
+      "target_start_line": 1241
+    },
+    {
+      "lines": [
+        211
+      ],
+      "name": "COBOL_EXT_SET",
+      "from": "codetwine/codetwine/config/settings_py/settings.py",
+      "target_context": "COBOL_EXT_SET: set[str] = {\n    ext for ext, definition_dict in EXT_TO_DEFINITION_DICT.items()\n    if definition_dict is COBOL_DEFINITION_DICT\n}",
+      "target_name": "COBOL_EXT_SET",
+      "target_start_line": 1157
+    },
+    {
+      "lines": [
+        213
+      ],
+      "name": "read_cobol_source",
+      "from": "codetwine/codetwine/extractors/cobol_source_py/cobol_source.py",
+      "target_context": "def read_cobol_source(source: str, language: Language) -> CobolSource:\n    \"\"\"Parse the text of a COBOL file and return what it defines, names and refers to.\n\n    The text is split by split_cobol_source() and each unit is parsed by itself.\n    Names and line numbers of the result are those of the source.\n\n    Args:\n        source: The text of the file.\n        language: The tree-sitter Language of the COBOL grammar.\n\n    Returns:\n        A CobolSource.\n    \"\"\"\n    cobol_text = split_cobol_source(source)\n    return _UnitReader(cobol_text, line_list_of(source), language).read()",
+      "target_name": "read_cobol_source",
+      "target_start_line": 805
+    },
+    {
+      "lines": [
+        213,
+        221,
+        227,
+        231
+      ],
+      "name": "EXT_TO_LANGUAGE_DICT",
+      "from": "codetwine/codetwine/config/settings_py/settings.py",
+      "target_context": "EXT_TO_LANGUAGE_DICT: dict[str, Language] = _expand_ext_aliases(\n    {ext: lang_config.language for ext, lang_config in _LANG_REGISTRY.items()}\n)",
+      "target_name": "EXT_TO_LANGUAGE_DICT",
+      "target_start_line": 1146
+    },
+    {
+      "lines": [
+        215
+      ],
+      "name": "BMS_EXT_SET",
+      "from": "codetwine/codetwine/config/settings_py/settings.py",
+      "target_context": "BMS_EXT_SET: set[str] = {\n    ext for ext, definition_dict in EXT_TO_DEFINITION_DICT.items()\n    if definition_dict is BMS_DEFINITION_DICT\n}",
+      "target_name": "BMS_EXT_SET",
+      "target_start_line": 1187
+    },
+    {
+      "lines": [
+        217
+      ],
+      "name": "read_bms_source",
+      "from": "codetwine/codetwine/extractors/bms_source_py/bms_source.py",
+      "target_context": "def read_bms_source(source: str) -> CobolSource:\n    \"\"\"Read a BMS source (DFHMSD / DFHMDI / DFHMDF macros) and return its symbolic maps.\n\n    Each map is an input record <map>I and an output record <map>O, the names a COBOL\n    program gets from COPY of the mapset. A field with OCCURS has its items under a\n    FILLER that repeats them.\n\n    Args:\n        source: The text of the file.\n\n    Returns:\n        A CobolSource with the data items of the symbolic maps as its definitions and the\n        mapset names as its copy_name_list. It has no imports and no references.\n    \"\"\"\n    line_list = line_list_of(source)\n    map_list, mapset_name_list = _read_map_list(_statement_list(line_list))\n\n    definition_list: list[CobolDefinition] = []\n    for bms_map in map_list:\n        for letter in (_INPUT_LETTER, _OUTPUT_LETTER):\n            definition_list.append(_item_definition(\n                bms_map.name + letter, bms_map.start_line, bms_map.end_line, _RECORD_LEVEL, True,\n            ))\n        for bms_field in bms_map.field_list:\n            level = _FIELD_LEVEL + 1 if bms_field.occurs else _FIELD_LEVEL\n            definition_list += _field_definition_list(bms_field, bms_map.attribute_list, level)\n\n    return CobolSource(\n        line_list=line_list,\n        definition_list=sorted(\n            definition_list, key=lambda definition: (definition.start_line, -definition.end_line),\n        ),\n        copy_name_list=list(dict.fromkeys(mapset_name_list)),\n    )",
+      "target_name": "read_bms_source",
+      "target_start_line": 314
+    },
+    {
+      "lines": [
+        218
+      ],
+      "name": "R_MARKDOWN_EXT_SET",
+      "from": "codetwine/codetwine/config/settings_py/settings.py",
+      "target_context": "R_MARKDOWN_EXT_SET: set[str] = {\"rmd\", \"qmd\"}",
+      "target_name": "R_MARKDOWN_EXT_SET",
+      "target_start_line": 1184
+    },
+    {
+      "lines": [
+        222
+      ],
+      "name": "r_chunk_code",
+      "from": "codetwine/codetwine/parsers/r_markdown_py/r_markdown.py",
+      "target_context": "def r_chunk_code(content: bytes, is_chunk_kept: Callable[[bytes], bool] | None = None) -> bytes:\n    \"\"\"Return the text of an R Markdown or Quarto file with only its R code chunks kept.\n\n    A chunk starts at a fence line of three or more backticks or tildes followed by\n    {r ...} and ends at the next line of the same fence character, at least as many of\n    them, alone. Every byte outside the chunks, and the fence lines themselves, becomes\n    a space; line breaks stay. In a chunk whose fence line starts with blockquote marks\n    (> ```{r}), the marks before the code of each line become spaces as well. The\n    result has the length and the lines of content, so a position in it is the same\n    position in the file.\n\n    Examples:\n        b\"# Title\\\\n```{r}\\\\nx <- 1\\\\n```\\\\n\"   -> b\"       \\\\n      \\\\nx <- 1\\\\n   \\\\n\"\n        b\"> ```{r}\\\\n> x <- 1\\\\n> ```\\\\n\"         -> b\"        \\\\n  x <- 1\\\\n     \\\\n\"\n\n    Args:\n        content: The file's text as UTF-8 bytes.\n        is_chunk_kept: Called with the code of each chunk; a chunk it returns False for\n            is blanked like the text outside the chunks. None keeps every chunk.\n\n    Returns:\n        The bytes with everything but the code of the R chunks blanked. A chunk without\n        an end line runs to the end of the file. Chunks of other languages ({python})\n        are blanked.\n    \"\"\"\n    code_line_list: list[bytes] = []\n    chunk_start: int | None = None\n    fence: bytes | None = None\n    is_quote = False\n\n    def close_chunk() -> None:\n        \"\"\"Blank the lines of the chunk that ends here when is_chunk_kept rejects its code.\"\"\"\n        chunk_line_list = code_line_list[chunk_start:]\n        if is_chunk_kept is not None and not is_chunk_kept(b\"\\n\".join(chunk_line_list)):\n            code_line_list[chunk_start:] = [b\" \" * len(line) for line in chunk_line_list]\n\n    for line in content.split(b\"\\n\"):\n        if fence is None:\n            start_match = _CHUNK_START_RE.match(line)\n            if start_match:\n                fence = start_match.group(\"fence\")\n                is_quote = b\">\" in start_match.group(\"prefix\")\n                chunk_start = len(code_line_list) + 1\n            code_line_list.append(b\" \" * len(line))\n            continue\n\n        end_match = _CHUNK_END_RE.match(line)\n        end_fence = end_match.group(\"fence\") if end_match else b\"\"\n        if end_fence[:1] == fence[:1] and len(end_fence) >= len(fence):\n            close_chunk()\n            fence = None\n            code_line_list.append(b\" \" * len(line))\n            continue\n        if is_quote:\n            prefix_length = _QUOTE_PREFIX_RE.match(line).end()\n            line = b\" \" * prefix_length + line[prefix_length:]\n        code_line_list.append(line)\n    if fence is not None:\n        close_chunk()\n    return b\"\\n\".join(code_line_list)",
+      "target_name": "r_chunk_code",
+      "target_start_line": 28
+    },
+    {
+      "lines": [
+        225
+      ],
+      "name": "C_FAMILY_EXT_SET",
+      "from": "codetwine/codetwine/config/settings_py/settings.py",
+      "target_context": "C_FAMILY_EXT_SET: set[str] = {\n    ext for ext, lang_config in _LANG_REGISTRY.items()\n    if (lang_config.import_resolve_dict or {}).get(\"bind\") == \"include\"\n} | {\n    alias for alias, canonical in _EXT_ALIAS_DICT.items()\n    if (_LANG_REGISTRY[canonical].import_resolve_dict or {}).get(\"bind\") == \"include\"\n}",
+      "target_name": "C_FAMILY_EXT_SET",
+      "target_start_line": 1163
+    },
+    {
+      "lines": [
+        236,
+        237
       ],
       "name": "PARSE_CACHE_MAX_FILES",
       "from": "codetwine/codetwine/config/settings_py/settings.py",
-      "target_context": "PARSE_CACHE_MAX_FILES = get_config_value(\n    \"PARSE_CACHE_MAX_FILES\", default=200, var_type=int\n)"
+      "target_context": "PARSE_CACHE_MAX_FILES = get_config_value(\n    \"PARSE_CACHE_MAX_FILES\", default=200, var_type=int\n)",
+      "target_name": "PARSE_CACHE_MAX_FILES",
+      "target_start_line": 91
+    }
+  ],
+  "same_file_usages": [
+    {
+      "lines": [
+        68
+      ],
+      "name": "logger.warning",
+      "target_name": "logger",
+      "target_start_line": 18
+    },
+    {
+      "lines": [
+        73
+      ],
+      "name": "logger.debug",
+      "target_name": "logger",
+      "target_start_line": 18
+    },
+    {
+      "lines": [
+        91,
+        93
+      ],
+      "name": "_END_NAME",
+      "target_name": "_END_NAME",
+      "target_start_line": 21
+    },
+    {
+      "lines": [
+        101
+      ],
+      "name": "_class_macro_query_cache.get",
+      "target_name": "_class_macro_query_cache",
+      "target_start_line": 33
+    },
+    {
+      "lines": [
+        104
+      ],
+      "name": "_CLASS_MACRO_QUERY_TUPLE",
+      "target_name": "_CLASS_MACRO_QUERY_TUPLE",
+      "target_start_line": 26
+    },
+    {
+      "lines": [
+        111
+      ],
+      "name": "_class_macro_query_cache",
+      "target_name": "_class_macro_query_cache",
+      "target_start_line": 33
+    },
+    {
+      "lines": [
+        129
+      ],
+      "name": "_class_macro_query",
+      "target_name": "_class_macro_query",
+      "target_start_line": 96
+    },
+    {
+      "lines": [
+        152
+      ],
+      "name": "_CLASS_MACRO_PASS_MAX",
+      "target_name": "_CLASS_MACRO_PASS_MAX",
+      "target_start_line": 37
+    },
+    {
+      "lines": [
+        153
+      ],
+      "name": "_class_macro_range_list",
+      "target_name": "_class_macro_range_list",
+      "target_start_line": 115
+    },
+    {
+      "lines": [
+        200
+      ],
+      "name": "parse_cache.get",
+      "target_name": "parse_cache",
+      "target_start_line": 44
+    },
+    {
+      "lines": [
+        202
+      ],
+      "name": "parse_cache.move_to_end",
+      "target_name": "parse_cache",
+      "target_start_line": 44
+    },
+    {
+      "lines": [
+        209
+      ],
+      "name": "read_utf8_content",
+      "target_name": "read_utf8_content",
+      "target_start_line": 51
+    },
+    {
+      "lines": [
+        222
+      ],
+      "name": "_is_whole_code",
+      "target_name": "_is_whole_code",
+      "target_start_line": 77
+    },
+    {
+      "lines": [
+        227
+      ],
+      "name": "_parse_c_family",
+      "target_name": "_parse_c_family",
+      "target_start_line": 133
+    },
+    {
+      "lines": [
+        227
+      ],
+      "name": "class_macro_cache",
+      "target_name": "class_macro_cache",
+      "target_start_line": 48
+    },
+    {
+      "lines": [
+        235,
+        237
+      ],
+      "name": "parse_cache",
+      "target_name": "parse_cache",
+      "target_start_line": 44
+    },
+    {
+      "lines": [
+        238
+      ],
+      "name": "parse_cache.popitem",
+      "target_name": "parse_cache",
+      "target_start_line": 44
     }
   ],
   "caller_usages": [
     {
       "lines": [
-        47
+        135
       ],
       "name": "parse_file",
-      "file": "codetwine/codetwine/file_analyzer_py/file_analyzer.py",
-      "usage_context": "    # Per-language definition extraction settings (None for unsupported languages)\n    definition_dict = DEFINITION_DICTS.get(file_ext)\n\n    root_node, content = parse_file(target_file)\n\n    # Convert content to text lines and extract source code from each definition's line range\n    content_lines = content.decode(\"utf-8\").splitlines()"
+      "file": "codetwine/codetwine/alias_path_py/alias_path.py",
+      "usage_context": "        logged.\n    \"\"\"\n    try:\n        root_node = parse_file(os.path.join(project_dir, config_rel))[0]\n    except Exception as e:\n        logger.warning(f\"The aliases of {config_rel} cannot be read: {type(e).__name__}: {e}\")\n        return []"
     },
     {
       "lines": [
-        429
+        66,
+        781
       ],
       "name": "parse_file",
-      "file": "codetwine/codetwine/import_to_path_py/import_to_path.py",
-      "usage_context": "        return\n\n    # Parse the file, extract definitions, and register each definition name in symbol_to_file_map\n    root_node = parse_file(abs_path)[0]\n    definition_list = extract_definitions(root_node, definition_dict)\n    for defn in _select_top_level_definitions(definition_list):\n        if defn.name:"
+      "file": "codetwine/codetwine/cobol_file_index_py/cobol_file_index.py",
+      "usage_context": "        the exception is logged.\n    \"\"\"\n    try:\n        return parse_file(os.path.join(project_dir, file_rel))[0]\n    except Exception as e:\n        logger.warning(f\"{file_rel} is not read as COBOL: {type(e).__name__}: {e}\")\n        return None\n...\n        return target_list\n\n    # == Step 2: Copybooks and CALL statements ================================\n    cobol_source = parse_file(os.path.join(project_dir, file_rel))[0]\n    candidate_list = _candidate_list(cobol_source, file_rel, project_file_set, project_dir)\n    program_target_dict = _program_target_dict(\n        cobol_source, file_rel, project_file_set, project_dir,"
     },
     {
       "lines": [
-        274
-      ],
-      "name": "parse_cache.clear",
-      "file": "codetwine/codetwine/pipeline_py/pipeline.py",
-      "usage_context": "        )\n\n    # Clear parse result cache to free memory\n    parse_cache.clear()\n\n    print(\"Analysis complete.\")\n    logger.info(\"Analysis complete.\")"
-    },
-    {
-      "lines": [
-        220,
-        254
+        191,
+        971
       ],
       "name": "parse_file",
-      "file": "codetwine/codetwine/extractors/usage_analysis_py/usage_analysis.py",
-      "usage_context": "    target_ext = os.path.splitext(target_file_rel)[1].lstrip(\".\")\n    target_def_dict = DEFINITION_DICTS.get(target_ext)\n    if target_def_dict and os.path.isfile(target_abs):\n        target_root = parse_file(target_abs)[0]\n        for defn in extract_definitions(target_root, target_def_dict):\n            if defn.name:\n                names.append(defn.name)\n...\n        caller_abs = os.path.join(project_dir, caller_rel)\n        caller_ext = os.path.splitext(caller_rel)[1].lstrip(\".\")\n\n        caller_root = parse_file(caller_abs)[0]\n\n        # Retrieve parameters for import extraction\n        language, import_query_str = get_import_params(caller_ext)"
+      "file": "codetwine/codetwine/csharp_namespace_index_py/csharp_namespace_index.py",
+      "usage_context": "    )\n    for file_rel in file_rel_list:\n        try:\n            root_node = parse_file(os.path.join(project_dir, file_rel))[0]\n            declaration = read_csharp_declaration(root_node)\n        except Exception as e:\n            logger.warning(f\"{file_rel} is not read as C#: {type(e).__name__}: {e}\")\n...\n    # Two calls of one line that write the same name lead to two declarations when\n    # they call two overloads\n    target_dict: dict[tuple[str, int, str, int], CsharpReferenceTarget] = {}\n    root_node = parse_file(os.path.join(project_dir, file_rel))[0]\n    for reference in csharp_reference_list(root_node):\n        for target in resolver.resolve(reference):\n            target_dict.setdefault("
     },
     {
       "lines": [
-        100,
-        174
+        52,
+        293,
+        295
+      ],
+      "name": "parse_file",
+      "file": "codetwine/codetwine/extractors/definition_source_py/definition_source.py",
+      "usage_context": "    \"\"\"\n    definition_list = _definition_list_cache.get(absolute_path)\n    if definition_list is None:\n        definition_list = extract_definitions(parse_file(absolute_path)[0], definition_dict)\n        _definition_list_cache[absolute_path] = definition_list\n    return definition_list\n\n...\n        return None\n\n    if definition_dict is COBOL_DEFINITION_DICT or definition_dict is BMS_DEFINITION_DICT:\n        return parse_file(absolute_path)[0].definition_source(callee_name)\n    if file_ext in R_EXT_SET:\n        callee_root, callee_content = parse_file(absolute_path)\n        return r_definition_text(callee_root, callee_content, callee_name)"
+    },
+    {
+      "lines": [
+        67
+      ],
+      "name": "parse_cache.get",
+      "file": "codetwine/codetwine/extractors/definition_source_py/definition_source.py",
+      "usage_context": "        The text of the entry of parse_cache when the file is in it, else the text\n        read from the file (read_utf8_content).\n    \"\"\"\n    cache_entry = parse_cache.get(absolute_path)\n    return cache_entry[1] if cache_entry is not None else read_utf8_content(absolute_path)\n\n"
+    },
+    {
+      "lines": [
+        68
+      ],
+      "name": "read_utf8_content",
+      "file": "codetwine/codetwine/extractors/definition_source_py/definition_source.py",
+      "usage_context": "        read from the file (read_utf8_content).\n    \"\"\"\n    cache_entry = parse_cache.get(absolute_path)\n    return cache_entry[1] if cache_entry is not None else read_utf8_content(absolute_path)\n\n\ndef _file_definition(absolute_path: str, definition_dict: dict[str, str]) -> tuple[list[DefinitionInfo], bytes]:"
+    },
+    {
+      "lines": [
+        183
       ],
       "name": "parse_file",
       "file": "codetwine/codetwine/extractors/dependency_graph_py/dependency_graph.py",
-      "usage_context": "\n    absolute_path = os.path.join(project_dir, callee_file_path)\n\n    callee_root = parse_file(absolute_path)[0]\n\n    # For attribute access like \"helper.process\", the trailing \"process\" is the actual definition name.\n    # For cases like \"TEMPLATE.format\" where the trailing part is a built-in method,\n...\n\n        # Parse import statements and add those resolvable to project files as callees\n        if language and import_query_str:\n            root_node = parse_file(file_path)[0]\n            for import_info in extract_imports(root_node, language, import_query_str):\n                resolved = resolve_module_to_project_path(\n                    import_info.module,"
+      "usage_context": "    language, import_query_str = get_import_params(file_ext)\n    if not language or file_ext not in EXT_TO_IMPORT_RESOLVE_DICT:\n        return set()\n    root_node = parse_file(file_path)[0]\n    callee_rel_set: set[str] = set()\n    for import_info in extract_imports(root_node, language, import_query_str):\n        resolved = resolve_module_to_project_path("
+    },
+    {
+      "lines": [
+        250
+      ],
+      "name": "parse_file",
+      "file": "codetwine/codetwine/extractors/usage_analysis_py/usage_analysis.py",
+      "usage_context": "        \"\"\"Return the definition a COBOL reference resolves to, with its lines as text.\"\"\"\n        if target.definition is None:\n            return _NO_DEFINITION\n        target_source = parse_file(os.path.join(project_dir, target.file_rel))[0]\n        return _TargetDefinition(\n            target_source.definition_text(target.definition),\n            target.definition.name, target.definition.start_line,"
+    },
+    {
+      "lines": [
+        96
+      ],
+      "name": "parse_file",
+      "file": "codetwine/codetwine/file_analyzer_py/file_analyzer.py",
+      "usage_context": "    # tree is read again only for a language whose same-file references need it\n    definition_info_list = file_definition_list(target_file, definition_dict)\n    root_node = (\n        parse_file(target_file)[0]\n        if reference_kind(target_file) in TREE_RANGE_KIND_SET else None\n    )\n"
+    },
+    {
+      "lines": [
+        319
+      ],
+      "name": "parse_file",
+      "file": "codetwine/codetwine/import_binding_py/import_binding.py",
+      "usage_context": "            return tree_fact\n        file_abs = os.path.join(self.project_dir, file_rel)\n        file_ext = self._file_ext(file_rel)\n        root_node = parse_file(file_abs)[0]\n        language, import_query_str = get_import_params(file_ext)\n        tree_fact = _TreeFact(\n            import_info_list=extract_imports("
+    },
+    {
+      "lines": [
+        490
+      ],
+      "name": "parse_file",
+      "file": "codetwine/codetwine/import_reference_py/import_reference.py",
+      "usage_context": "    # == Step 2: Names of the import statements ===============================\n    file_abs = os.path.join(project_dir, file_rel)\n    file_ext = language_ext(file_abs)\n    root_node = parse_file(file_abs)[0]\n    binder = import_binder(project_dir, project_file_set)\n    symbol_dict = binder.symbol_dict(file_rel)\n    import_line_dict = binder.import_line_dict(file_rel)"
+    },
+    {
+      "lines": [
+        546
+      ],
+      "name": "class_macro_cache.get",
+      "file": "codetwine/codetwine/import_reference_py/import_reference.py",
+      "usage_context": "    # a member read where its module is required a usage of the member\n    extra_usage_list = [\n        UsageInfo(name=name, line=line)\n        for name, line in [*class_macro_cache.get(file_abs, ()), *binder.use_list(file_rel)]\n    ]\n    if extra_usage_list:\n        usage_list = deduplicate_usage_list(usage_list + extra_usage_list)"
+    },
+    {
+      "lines": [
+        337
+      ],
+      "name": "parse_cache.clear",
+      "file": "codetwine/codetwine/pipeline_py/pipeline.py",
+      "usage_context": "    # Clear parse result cache, Rust module tree cache, COBOL file index and reference\n    # caches, C# namespace index and reference caches and R name index and reference\n    # caches to free memory\n    parse_cache.clear()\n    module_tree_cache.clear()\n    file_index_cache.clear()\n    reference_target_cache.clear()"
+    },
+    {
+      "lines": [
+        492
+      ],
+      "name": "parse_file",
+      "file": "codetwine/codetwine/r_name_index_py/r_name_index.py",
+      "usage_context": "        if file_ext not in R_EXT_SET:\n            continue\n        try:\n            r_source = read_r_source(parse_file(file_abs)[0])\n        except Exception as e:\n            logger.warning(f\"{file_rel} is not read as R: {type(e).__name__}: {e}\")\n            continue"
+    },
+    {
+      "lines": [
+        87
+      ],
+      "name": "parse_file",
+      "file": "codetwine/codetwine/rust_module_tree_py/rust_module_tree.py",
+      "usage_context": "    Returns:\n        A _ModuleFile.\n    \"\"\"\n    root_node = parse_file(file_abs)[0]\n    module_file = _ModuleFile()\n\n    definition_list = extract_definitions(root_node, EXT_TO_DEFINITION_DICT[\"rs\"])"
     }
   ]
 }

@@ -1,0 +1,592 @@
+{
+  "file": "codetwine/codetwine/path_config_py/path_config.py",
+  "language": "py",
+  "detected_encoding": null,
+  "definitions": [
+    {
+      "name": "logger",
+      "type": "expression_statement",
+      "start_line": 9,
+      "end_line": 9,
+      "context": "logger = logging.getLogger(__name__)"
+    },
+    {
+      "name": "path_config_cache",
+      "type": "expression_statement",
+      "start_line": 12,
+      "end_line": 12,
+      "context": "path_config_cache: dict[str, \"_ProjectCache\"] = {}"
+    },
+    {
+      "name": "_WILDCARD",
+      "type": "expression_statement",
+      "start_line": 15,
+      "end_line": 15,
+      "context": "_WILDCARD = \"*\""
+    },
+    {
+      "name": "_FILE_KEY",
+      "type": "expression_statement",
+      "start_line": 18,
+      "end_line": 18,
+      "context": "_FILE_KEY = \"files\""
+    },
+    {
+      "name": "_INCLUDE_KEY",
+      "type": "expression_statement",
+      "start_line": 19,
+      "end_line": 19,
+      "context": "_INCLUDE_KEY = \"include\""
+    },
+    {
+      "name": "_EXCLUDE_KEY",
+      "type": "expression_statement",
+      "start_line": 20,
+      "end_line": 20,
+      "context": "_EXCLUDE_KEY = \"exclude\""
+    },
+    {
+      "name": "_DEFAULT_INCLUDE_LIST",
+      "type": "expression_statement",
+      "start_line": 24,
+      "end_line": 24,
+      "context": "_DEFAULT_INCLUDE_LIST = [\"**/*\"]"
+    },
+    {
+      "name": "_DEFAULT_EXCLUDE_LIST",
+      "type": "expression_statement",
+      "start_line": 25,
+      "end_line": 25,
+      "context": "_DEFAULT_EXCLUDE_LIST = [\"node_modules\", \"bower_components\", \"jspm_packages\"]"
+    },
+    {
+      "name": "_REFERENCE_FILE_NAME",
+      "type": "expression_statement",
+      "start_line": 28,
+      "end_line": 28,
+      "context": "_REFERENCE_FILE_NAME = \"tsconfig.json\""
+    },
+    {
+      "name": "PathConfig",
+      "type": "class_definition",
+      "start_line": 31,
+      "end_line": 79,
+      "context": "@dataclass\nclass PathConfig:\n    \"\"\"The module path settings of a tsconfig.json / jsconfig.json file.\"\"\"\n\n    # Directory a module that is not relative is looked up from (\"baseUrl\"), relative\n    # to the project root (\"\" for the root); None when the file sets none\n    base_dir: str | None = None\n    # (pattern, targets relative to the project root) of \"paths\", in the order written\n    path_list: list[tuple[str, list[str]]] = field(default_factory=list)\n\n    def module_path_list(self, module: str) -> list[str]:\n        \"\"\"Return the paths a module that is not relative can stand for.\n\n        Examples (\"paths\": {\"app\": [\"./src/index.ts\"], \"app/*\": [\"./src/*.ts\"]},\n        \"baseUrl\": \"./lib\", both in the config file of the project root):\n            \"app\"          -> [\"src/index.ts\", \"lib/app\"]\n            \"app/store\"    -> [\"src/store.ts\", \"lib/app/store\"]\n            \"react\"        -> [\"lib/react\"]\n\n        Args:\n            module: The module string of an import statement.\n\n        Returns:\n            Paths relative to the project root, without duplicates: the targets of\n            the pattern that matches the module (a pattern equal to it, else the one\n            with the longest part before its \"*\"), with the part the \"*\" stands for\n            put in; then the module under base_dir.\n        \"\"\"\n        module_path_list: list[str] = []\n        match_tuple: tuple[int, str, list[str]] | None = None\n        for pattern, target_list in self.path_list:\n            prefix, wildcard, suffix = pattern.partition(_WILDCARD)\n            if not wildcard:\n                if pattern == module:\n                    match_tuple = (len(module) + 1, \"\", target_list)\n                continue\n            is_match = (\n                len(module) >= len(prefix) + len(suffix)\n                and module.startswith(prefix) and module.endswith(suffix)\n            )\n            if is_match and (match_tuple is None or len(prefix) > match_tuple[0]):\n                match_tuple = (len(prefix), module[len(prefix):len(module) - len(suffix)], target_list)\n        if match_tuple is not None:\n            module_path_list.extend(\n                target.replace(_WILDCARD, match_tuple[1]) for target in match_tuple[2]\n            )\n        if self.base_dir is not None:\n            module_path_list.append(posixpath.normpath(posixpath.join(self.base_dir, module)))\n        return list(dict.fromkeys(module_path_list))"
+    },
+    {
+      "name": "base_dir",
+      "type": "expression_statement",
+      "start_line": 37,
+      "end_line": 37,
+      "context": "    base_dir: str | None = None"
+    },
+    {
+      "name": "path_list",
+      "type": "expression_statement",
+      "start_line": 39,
+      "end_line": 39,
+      "context": "    path_list: list[tuple[str, list[str]]] = field(default_factory=list)"
+    },
+    {
+      "name": "module_path_list",
+      "type": "function_definition",
+      "start_line": 41,
+      "end_line": 79,
+      "context": "    def module_path_list(self, module: str) -> list[str]:\n        \"\"\"Return the paths a module that is not relative can stand for.\n\n        Examples (\"paths\": {\"app\": [\"./src/index.ts\"], \"app/*\": [\"./src/*.ts\"]},\n        \"baseUrl\": \"./lib\", both in the config file of the project root):\n            \"app\"          -> [\"src/index.ts\", \"lib/app\"]\n            \"app/store\"    -> [\"src/store.ts\", \"lib/app/store\"]\n            \"react\"        -> [\"lib/react\"]\n\n        Args:\n            module: The module string of an import statement.\n\n        Returns:\n            Paths relative to the project root, without duplicates: the targets of\n            the pattern that matches the module (a pattern equal to it, else the one\n            with the longest part before its \"*\"), with the part the \"*\" stands for\n            put in; then the module under base_dir.\n        \"\"\"\n        module_path_list: list[str] = []\n        match_tuple: tuple[int, str, list[str]] | None = None\n        for pattern, target_list in self.path_list:\n            prefix, wildcard, suffix = pattern.partition(_WILDCARD)\n            if not wildcard:\n                if pattern == module:\n                    match_tuple = (len(module) + 1, \"\", target_list)\n                continue\n            is_match = (\n                len(module) >= len(prefix) + len(suffix)\n                and module.startswith(prefix) and module.endswith(suffix)\n            )\n            if is_match and (match_tuple is None or len(prefix) > match_tuple[0]):\n                match_tuple = (len(prefix), module[len(prefix):len(module) - len(suffix)], target_list)\n        if match_tuple is not None:\n            module_path_list.extend(\n                target.replace(_WILDCARD, match_tuple[1]) for target in match_tuple[2]\n            )\n        if self.base_dir is not None:\n            module_path_list.append(posixpath.normpath(posixpath.join(self.base_dir, module)))\n        return list(dict.fromkeys(module_path_list))"
+    },
+    {
+      "name": "_CoverSetting",
+      "type": "class_definition",
+      "start_line": 82,
+      "end_line": 92,
+      "context": "@dataclass\nclass _CoverSetting:\n    \"\"\"The files a config file covers, as it writes them.\"\"\"\n\n    # (\"files\" / \"include\" / \"exclude\" patterns, directory they are relative to); None\n    # for a key neither the file nor a file it extends sets\n    file_tuple: tuple[list[str], str] | None = None\n    include_tuple: tuple[list[str], str] | None = None\n    exclude_tuple: tuple[list[str], str] | None = None\n    # Config files of the project the file names in \"references\"\n    reference_list: list[str] = field(default_factory=list)"
+    },
+    {
+      "name": "file_tuple",
+      "type": "expression_statement",
+      "start_line": 88,
+      "end_line": 88,
+      "context": "    file_tuple: tuple[list[str], str] | None = None"
+    },
+    {
+      "name": "include_tuple",
+      "type": "expression_statement",
+      "start_line": 89,
+      "end_line": 89,
+      "context": "    include_tuple: tuple[list[str], str] | None = None"
+    },
+    {
+      "name": "exclude_tuple",
+      "type": "expression_statement",
+      "start_line": 90,
+      "end_line": 90,
+      "context": "    exclude_tuple: tuple[list[str], str] | None = None"
+    },
+    {
+      "name": "reference_list",
+      "type": "expression_statement",
+      "start_line": 92,
+      "end_line": 92,
+      "context": "    reference_list: list[str] = field(default_factory=list)"
+    },
+    {
+      "name": "_ProjectCache",
+      "type": "class_definition",
+      "start_line": 95,
+      "end_line": 106,
+      "context": "@dataclass\nclass _ProjectCache:\n    \"\"\"What was read of the config files of one project.\"\"\"\n\n    # Directory relative path -> config file of it or of the nearest directory above\n    # it that has one; None without one\n    dir_file_dict: dict[str, str | None] = field(default_factory=dict)\n    # Config file -> (its path settings, the files it covers); None for a file that\n    # cannot be read\n    config_dict: dict[str, tuple[PathConfig, _CoverSetting] | None] = field(default_factory=dict)\n    # File -> the path settings that count for it\n    file_config_dict: dict[str, PathConfig | None] = field(default_factory=dict)"
+    },
+    {
+      "name": "dir_file_dict",
+      "type": "expression_statement",
+      "start_line": 101,
+      "end_line": 101,
+      "context": "    dir_file_dict: dict[str, str | None] = field(default_factory=dict)"
+    },
+    {
+      "name": "config_dict",
+      "type": "expression_statement",
+      "start_line": 104,
+      "end_line": 104,
+      "context": "    config_dict: dict[str, tuple[PathConfig, _CoverSetting] | None] = field(default_factory=dict)"
+    },
+    {
+      "name": "file_config_dict",
+      "type": "expression_statement",
+      "start_line": 106,
+      "end_line": 106,
+      "context": "    file_config_dict: dict[str, PathConfig | None] = field(default_factory=dict)"
+    },
+    {
+      "name": "read_json_file",
+      "type": "function_definition",
+      "start_line": 109,
+      "end_line": 126,
+      "context": "def read_json_file(file_rel: str, project_dir: str) -> dict | None:\n    \"\"\"Read a JSON file of the project that may hold comments and trailing commas.\n\n    Args:\n        file_rel: Relative path of the file.\n        project_dir: Absolute path to the project root.\n\n    Returns:\n        The object the file holds. None when the file cannot be read or holds no\n        object; the exception is logged.\n    \"\"\"\n    try:\n        text = read_source(os.path.join(project_dir, file_rel))[0]\n        option_dict = json.loads(_strip_json_comment(text))\n    except (OSError, ValueError) as e:\n        logger.warning(f\"{file_rel} cannot be read: {type(e).__name__}: {e}\")\n        return None\n    return option_dict if isinstance(option_dict, dict) else None"
+    },
+    {
+      "name": "_strip_json_comment",
+      "type": "function_definition",
+      "start_line": 129,
+      "end_line": 170,
+      "context": "def _strip_json_comment(text: str) -> str:\n    \"\"\"Remove the comments and the trailing commas of a JSON text with comments.\n\n    Args:\n        text: The text of a tsconfig.json / jsconfig.json file.\n\n    Returns:\n        The text without // and /* */ comments written outside strings, and without\n        a comma that is followed only by white space before \"}\" or \"]\".\n    \"\"\"\n    part_list: list[str] = []\n    index = 0\n    while index < len(text):\n        char = text[index]\n        if char == '\"':\n            # A string is copied as it is, up to its closing quote\n            end = index + 1\n            while end < len(text) and text[end] != '\"':\n                end += 2 if text[end] == \"\\\\\" else 1\n            part_list.append(text[index:end + 1])\n            index = end + 1\n        elif text.startswith(\"//\", index):\n            end = text.find(\"\\n\", index)\n            index = len(text) if end == -1 else end\n        elif text.startswith(\"/*\", index):\n            end = text.find(\"*/\", index + 2)\n            index = len(text) if end == -1 else end + 2\n        else:\n            part_list.append(char)\n            index += 1\n\n    # Drop a comma that only white space separates from the closing bracket after it\n    clean_list: list[str] = []\n    for part in part_list:\n        if part in (\"}\", \"]\"):\n            tail_index = len(clean_list) - 1\n            while tail_index >= 0 and clean_list[tail_index].isspace():\n                tail_index -= 1\n            if tail_index >= 0 and clean_list[tail_index] == \",\":\n                del clean_list[tail_index]\n        clean_list.append(part)\n    return \"\".join(clean_list)"
+    },
+    {
+      "name": "inside_project",
+      "type": "function_definition",
+      "start_line": 173,
+      "end_line": 180,
+      "context": "def inside_project(path: str) -> str | None:\n    \"\"\"Return a normalized relative path (\"\" for the project root), None when it leads outside the project.\"\"\"\n    clean_path = posixpath.normpath(path)\n    if clean_path == \".\":\n        return \"\"\n    if clean_path.startswith(\"../\") or clean_path == \"..\" or clean_path.startswith(\"/\"):\n        return None\n    return clean_path"
+    },
+    {
+      "name": "_extend_file_list",
+      "type": "function_definition",
+      "start_line": 183,
+      "end_line": 209,
+      "context": "def _extend_file_list(option_dict: dict, config_dir: str, project_dir: str) -> list[str]:\n    \"\"\"Return the config files of the project a config file extends.\n\n    Args:\n        option_dict: The content of the config file.\n        config_dir: Directory of the config file, relative to the project root.\n        project_dir: Absolute path to the project root.\n\n    Returns:\n        Relative paths in the order written. An \"extends\" value that is not a relative\n        path (a package) or names no file of the project is left out; a value\n        without \".json\" names the file with it when no file has the name as written.\n    \"\"\"\n    extend_value = option_dict.get(\"extends\")\n    value_list = extend_value if isinstance(extend_value, list) else [extend_value]\n    extend_file_list: list[str] = []\n    for value in value_list:\n        if not isinstance(value, str) or not value.startswith(\".\"):\n            continue\n        extend_rel = inside_project(posixpath.join(config_dir, value))\n        if extend_rel is None:\n            continue\n        for candidate_rel in (extend_rel, extend_rel + \".json\"):\n            if os.path.isfile(os.path.join(project_dir, candidate_rel)):\n                extend_file_list.append(candidate_rel)\n                break\n    return extend_file_list"
+    },
+    {
+      "name": "_glob_regex",
+      "type": "function_definition",
+      "start_line": 212,
+      "end_line": 246,
+      "context": "def _glob_regex(pattern: str) -> re.Pattern:\n    \"\"\"Return the regular expression of an \"include\" / \"exclude\" pattern.\n\n    \"*\" stands for any characters but \"/\", \"?\" for one of them and \"**/\" for any\n    number of directories. A pattern also matches every path under the path it\n    matches (a pattern that names a directory covers the directory).\n\n    Examples:\n        \"src\"            matches \"src/a.ts\", \"src/lib/b.ts\"\n        \"src/**/*.ts\"    matches \"src/a.ts\", \"src/lib/b.ts\"\n        \"**/*.spec.ts\"   matches \"a.spec.ts\", \"lib/b.spec.ts\"\n\n    Args:\n        pattern: The pattern, relative to the directory it is written for.\n    \"\"\"\n    clean_pattern = posixpath.normpath(pattern)\n    part_list: list[str] = []\n    index = 0\n    while index < len(clean_pattern):\n        if clean_pattern.startswith(\"**/\", index):\n            part_list.append(\"(?:.*/)?\")\n            index += 3\n        elif clean_pattern.startswith(\"**\", index):\n            part_list.append(\".*\")\n            index += 2\n        elif clean_pattern[index] == \"*\":\n            part_list.append(\"[^/]*\")\n            index += 1\n        elif clean_pattern[index] == \"?\":\n            part_list.append(\"[^/]\")\n            index += 1\n        else:\n            part_list.append(re.escape(clean_pattern[index]))\n            index += 1\n    return re.compile(\"\".join(part_list) + \"(?:/.*)?$\")"
+    },
+    {
+      "name": "_is_match",
+      "type": "function_definition",
+      "start_line": 249,
+      "end_line": 258,
+      "context": "def _is_match(pattern_tuple: tuple[list[str], str], file_rel: str) -> bool:\n    \"\"\"Return whether a file matches one of the patterns of a config file.\n\n    Args:\n        pattern_tuple: (patterns, directory they are relative to).\n        file_rel: Relative path of the file from the project root.\n    \"\"\"\n    pattern_list, pattern_dir = pattern_tuple\n    file_path = posixpath.relpath(file_rel, pattern_dir or \".\")\n    return any(_glob_regex(pattern).match(file_path) for pattern in pattern_list)"
+    },
+    {
+      "name": "_is_cover",
+      "type": "function_definition",
+      "start_line": 261,
+      "end_line": 283,
+      "context": "def _is_cover(cover: _CoverSetting, file_rel: str) -> bool:\n    \"\"\"Return whether a config file covers a file.\n\n    A file \"files\" names is covered. Any other file is covered when it matches\n    \"include\" and does not match \"exclude\"; \"include\" is every file when the config\n    file sets neither it nor \"files\", and \"exclude\" is _DEFAULT_EXCLUDE_LIST when the\n    config file does not set it.\n\n    Args:\n        cover: The files the config file covers.\n        file_rel: Relative path of the file from the project root.\n    \"\"\"\n    if cover.file_tuple is not None and _is_match(cover.file_tuple, file_rel):\n        return True\n    include_tuple = cover.include_tuple\n    if include_tuple is None:\n        if cover.file_tuple is not None:\n            return False\n        include_tuple = (_DEFAULT_INCLUDE_LIST, \"\")\n    if not _is_match(include_tuple, file_rel):\n        return False\n    exclude_tuple = cover.exclude_tuple or (_DEFAULT_EXCLUDE_LIST, include_tuple[1])\n    return not _is_match(exclude_tuple, file_rel)"
+    },
+    {
+      "name": "_reference_file_list",
+      "type": "function_definition",
+      "start_line": 286,
+      "end_line": 311,
+      "context": "def _reference_file_list(option_dict: dict, config_dir: str, project_dir: str) -> list[str]:\n    \"\"\"Return the config files of the project a config file names in \"references\".\n\n    Args:\n        option_dict: The content of the config file.\n        config_dir: Directory of the config file, relative to the project root.\n        project_dir: Absolute path to the project root.\n\n    Returns:\n        Relative paths in the order written. A path that names a directory stands for\n        the tsconfig.json in it; a path that names no file of the project is left out.\n    \"\"\"\n    reference_value = option_dict.get(\"references\")\n    reference_file_list: list[str] = []\n    for reference in reference_value if isinstance(reference_value, list) else []:\n        path = reference.get(\"path\") if isinstance(reference, dict) else None\n        reference_rel = inside_project(posixpath.join(config_dir, path)) if isinstance(path, str) else None\n        if reference_rel is None:\n            continue\n        for candidate_rel in (\n            reference_rel, posixpath.join(reference_rel, _REFERENCE_FILE_NAME), reference_rel + \".json\",\n        ):\n            if os.path.isfile(os.path.join(project_dir, candidate_rel)):\n                reference_file_list.append(candidate_rel)\n                break\n    return reference_file_list"
+    },
+    {
+      "name": "_read_config",
+      "type": "function_definition",
+      "start_line": 314,
+      "end_line": 384,
+      "context": "def _read_config(\n    config_rel: str, project_dir: str, visit_set: set[str],\n) -> tuple[PathConfig, _CoverSetting] | None:\n    \"\"\"Read the module path settings of a config file, and the files it covers.\n\n    \"baseUrl\" is read relative to the file that sets it. \"paths\" is read relative to\n    the \"baseUrl\" in effect, else to the file that sets \"paths\". \"files\", \"include\"\n    and \"exclude\" are read relative to the file that sets them. A setting of the file\n    itself replaces the one of the files it extends; of several extended files, the\n    one written last. \"references\" is read from the file itself only.\n\n    Args:\n        config_rel: Relative path of the config file.\n        project_dir: Absolute path to the project root.\n        visit_set: Config files being read; a file that extends itself is read once.\n\n    Returns:\n        (path settings, files the file covers). None when the file cannot be read as\n        JSON with comments; the exception is logged.\n    \"\"\"\n    if config_rel in visit_set:\n        return PathConfig(), _CoverSetting()\n    visit_set.add(config_rel)\n    option_dict = read_json_file(config_rel, project_dir)\n    if option_dict is None:\n        return None\n\n    config_dir = posixpath.dirname(config_rel)\n    config, cover = PathConfig(), _CoverSetting()\n    for extend_rel in _extend_file_list(option_dict, config_dir, project_dir):\n        extend_tuple = _read_config(extend_rel, project_dir, visit_set)\n        if extend_tuple is None:\n            continue\n        extend_config, extend_cover = extend_tuple\n        if extend_config.base_dir is not None:\n            config.base_dir = extend_config.base_dir\n        if extend_config.path_list:\n            config.path_list = extend_config.path_list\n        cover.file_tuple = extend_cover.file_tuple or cover.file_tuple\n        cover.include_tuple = extend_cover.include_tuple or cover.include_tuple\n        cover.exclude_tuple = extend_cover.exclude_tuple or cover.exclude_tuple\n\n    for key, attribute in (\n        (_FILE_KEY, \"file_tuple\"), (_INCLUDE_KEY, \"include_tuple\"), (_EXCLUDE_KEY, \"exclude_tuple\"),\n    ):\n        pattern_value = option_dict.get(key)\n        if isinstance(pattern_value, list):\n            setattr(cover, attribute, (\n                [pattern for pattern in pattern_value if isinstance(pattern, str)], config_dir,\n            ))\n    cover.reference_list = _reference_file_list(option_dict, config_dir, project_dir)\n\n    compiler_dict = option_dict.get(\"compilerOptions\")\n    if not isinstance(compiler_dict, dict):\n        return config, cover\n    base_url = compiler_dict.get(\"baseUrl\")\n    if isinstance(base_url, str):\n        config.base_dir = inside_project(posixpath.join(config_dir, base_url))\n    path_dict = compiler_dict.get(\"paths\")\n    if isinstance(path_dict, dict):\n        path_dir = config.base_dir if config.base_dir is not None else config_dir\n        config.path_list = []\n        for pattern, target_value in path_dict.items():\n            target_list = [\n                target_rel\n                for target in (target_value if isinstance(target_value, list) else [])\n                if isinstance(target, str)\n                and (target_rel := inside_project(posixpath.join(path_dir, target))) is not None\n            ]\n            config.path_list.append((pattern, target_list))\n    return config, cover"
+    },
+    {
+      "name": "_nearest_config_file",
+      "type": "function_definition",
+      "start_line": 387,
+      "end_line": 427,
+      "context": "def _nearest_config_file(\n    dir_rel: str, project_dir: str, config_name_list: list[str], project_cache: _ProjectCache,\n) -> str | None:\n    \"\"\"Return the config file of a directory, else of the nearest directory above it.\n\n    In one directory the first name of config_name_list that names a readable file is\n    taken. The answer is kept per directory.\n\n    Args:\n        dir_rel: Directory relative to the project root (\"\" for the root).\n        project_dir: Absolute path to the project root.\n        config_name_list: File names of the config files.\n        project_cache: The cache of the project; modified in place.\n\n    Returns:\n        Relative path of the config file, None when no directory up to the project\n        root has one.\n    \"\"\"\n    walk_dir_list: list[str] = []\n    config_rel: str | None = None\n    while True:\n        if dir_rel in project_cache.dir_file_dict:\n            config_rel = project_cache.dir_file_dict[dir_rel]\n            break\n        walk_dir_list.append(dir_rel)\n        for config_name in config_name_list:\n            candidate_rel = posixpath.join(dir_rel, config_name)\n            if not os.path.isfile(os.path.join(project_dir, candidate_rel)):\n                continue\n            if candidate_rel not in project_cache.config_dict:\n                project_cache.config_dict[candidate_rel] = _read_config(candidate_rel, project_dir, set())\n            if project_cache.config_dict[candidate_rel] is not None:\n                config_rel = candidate_rel\n                break\n        if config_rel is not None or not dir_rel:\n            break\n        dir_rel = posixpath.dirname(dir_rel)\n\n    for walk_dir in walk_dir_list:\n        project_cache.dir_file_dict[walk_dir] = config_rel\n    return config_rel"
+    },
+    {
+      "name": "_cover_config",
+      "type": "function_definition",
+      "start_line": 430,
+      "end_line": 463,
+      "context": "def _cover_config(\n    config_rel: str, file_rel: str, project_dir: str, project_cache: _ProjectCache,\n    visit_set: set[str],\n) -> PathConfig | None:\n    \"\"\"Return the path settings of a config file, or of one it refers to, that covers a file.\n\n    Args:\n        config_rel: Relative path of the config file.\n        file_rel: Relative path of the file.\n        project_dir: Absolute path to the project root.\n        project_cache: The cache of the project; modified in place.\n        visit_set: Config files looked at; a file is looked at once.\n\n    Returns:\n        The path settings of the config file when it covers the file (_is_cover), else\n        of the first file of its \"references\" that does, followed through the\n        references of those files. None when none of them covers the file.\n    \"\"\"\n    if config_rel in visit_set:\n        return None\n    visit_set.add(config_rel)\n    if config_rel not in project_cache.config_dict:\n        project_cache.config_dict[config_rel] = _read_config(config_rel, project_dir, set())\n    config_tuple = project_cache.config_dict[config_rel]\n    if config_tuple is None:\n        return None\n    config, cover = config_tuple\n    if _is_cover(cover, file_rel):\n        return config\n    for reference_rel in cover.reference_list:\n        reference_config = _cover_config(reference_rel, file_rel, project_dir, project_cache, visit_set)\n        if reference_config is not None:\n            return reference_config\n    return None"
+    },
+    {
+      "name": "path_config",
+      "type": "function_definition",
+      "start_line": 466,
+      "end_line": 508,
+      "context": "def path_config(\n    file_rel: str, project_dir: str, config_name_list: list[str],\n) -> PathConfig | None:\n    \"\"\"Return the module path settings that count for a file.\n\n    The config file in the directory of the file, else in the nearest directory above\n    it, is looked at first, then the config files it names in \"references\"; the first\n    of them that covers the file (its \"files\", \"include\" and \"exclude\") gives the\n    settings. When none does, the next config file further up is looked at the same\n    way. A file no config file covers takes the settings of the nearest one. The\n    result is kept in path_config_cache until the cache is cleared.\n\n    Args:\n        file_rel: Relative path of the file an import statement is written in.\n        project_dir: Absolute path to the project root.\n        config_name_list: File names of the config files (\"tsconfig.json\", \"jsconfig.json\").\n\n    Returns:\n        The PathConfig, None when no directory from the file up to the project root\n        has a config file.\n    \"\"\"\n    project_cache = path_config_cache.setdefault(project_dir, _ProjectCache())\n    file_rel = file_rel.replace(\"\\\\\", \"/\")\n    if file_rel in project_cache.file_config_dict:\n        return project_cache.file_config_dict[file_rel]\n\n    nearest_config: PathConfig | None = None\n    config: PathConfig | None = None\n    dir_rel = posixpath.dirname(file_rel)\n    while True:\n        config_rel = _nearest_config_file(dir_rel, project_dir, config_name_list, project_cache)\n        if config_rel is None:\n            break\n        if nearest_config is None:\n            nearest_config = project_cache.config_dict[config_rel][0]\n        config = _cover_config(config_rel, file_rel, project_dir, project_cache, set())\n        config_dir = posixpath.dirname(config_rel)\n        if config is not None or not config_dir:\n            break\n        dir_rel = posixpath.dirname(config_dir)\n\n    project_cache.file_config_dict[file_rel] = config or nearest_config\n    return project_cache.file_config_dict[file_rel]"
+    }
+  ],
+  "callee_usages": [
+    {
+      "lines": [
+        121
+      ],
+      "name": "read_source",
+      "from": "codetwine/codetwine/utils/file_utils_py/file_utils.py",
+      "target_context": "def read_source(file_path: str) -> tuple[str, str]:\n    \"\"\"Read a text file and return its contents decoded, with the encoding used.\n\n    The encoding is chosen in this order:\n    1. The codec named by a BOM at the start of the file (the BOM is dropped)\n    2. UTF-8\n    3. The encodings of SOURCE_ENCODING, in order\n    4. The encoding charset-normalizer detects\n    5. UTF-8 with each invalid byte replaced by U+FFFD\n    Steps 1 to 3 take the first codec that decodes the whole file without error.\n    Line breaks are kept as they are; line numbers match the file.\n\n    Args:\n        file_path: Absolute path of the file to read.\n\n    Returns:\n        A (text, encoding) tuple. encoding is the codec name that decoded the file,\n        or \"\" when step 5 decoded it.\n\n    Raises:\n        OSError: When the file cannot be read.\n    \"\"\"\n    with open(file_path, \"rb\") as f:\n        text, encoding, _ = _decode_source(f.read())\n    return text, encoding",
+      "target_name": "read_source",
+      "target_start_line": 107
+    }
+  ],
+  "same_file_usages": [
+    {
+      "lines": [
+        61
+      ],
+      "name": "path_list",
+      "target_name": "path_list",
+      "target_start_line": 39
+    },
+    {
+      "lines": [
+        62,
+        75
+      ],
+      "name": "_WILDCARD",
+      "target_name": "_WILDCARD",
+      "target_start_line": 15
+    },
+    {
+      "lines": [
+        77,
+        78
+      ],
+      "name": "base_dir",
+      "target_name": "base_dir",
+      "target_start_line": 37
+    },
+    {
+      "lines": [
+        104,
+        261,
+        316,
+        335,
+        342
+      ],
+      "name": "_CoverSetting",
+      "target_name": "_CoverSetting",
+      "target_start_line": 82
+    },
+    {
+      "lines": [
+        104,
+        106,
+        316,
+        335,
+        342,
+        433,
+        468,
+        492,
+        493
+      ],
+      "name": "PathConfig",
+      "target_name": "PathConfig",
+      "target_start_line": 31
+    },
+    {
+      "lines": [
+        122
+      ],
+      "name": "_strip_json_comment",
+      "target_name": "_strip_json_comment",
+      "target_start_line": 129
+    },
+    {
+      "lines": [
+        124
+      ],
+      "name": "logger.warning",
+      "target_name": "logger",
+      "target_start_line": 9
+    },
+    {
+      "lines": [
+        202,
+        302,
+        371,
+        381
+      ],
+      "name": "inside_project",
+      "target_name": "inside_project",
+      "target_start_line": 173
+    },
+    {
+      "lines": [
+        258
+      ],
+      "name": "_glob_regex",
+      "target_name": "_glob_regex",
+      "target_start_line": 212
+    },
+    {
+      "lines": [
+        273,
+        280,
+        283
+      ],
+      "name": "_is_match",
+      "target_name": "_is_match",
+      "target_start_line": 249
+    },
+    {
+      "lines": [
+        273,
+        277
+      ],
+      "name": "_CoverSetting.file_tuple",
+      "target_name": "file_tuple",
+      "target_start_line": 88
+    },
+    {
+      "lines": [
+        275
+      ],
+      "name": "_CoverSetting.include_tuple",
+      "target_name": "include_tuple",
+      "target_start_line": 89
+    },
+    {
+      "lines": [
+        279
+      ],
+      "name": "_DEFAULT_INCLUDE_LIST",
+      "target_name": "_DEFAULT_INCLUDE_LIST",
+      "target_start_line": 24
+    },
+    {
+      "lines": [
+        282
+      ],
+      "name": "_DEFAULT_EXCLUDE_LIST",
+      "target_name": "_DEFAULT_EXCLUDE_LIST",
+      "target_start_line": 25
+    },
+    {
+      "lines": [
+        282
+      ],
+      "name": "_CoverSetting.exclude_tuple",
+      "target_name": "exclude_tuple",
+      "target_start_line": 90
+    },
+    {
+      "lines": [
+        306
+      ],
+      "name": "_REFERENCE_FILE_NAME",
+      "target_name": "_REFERENCE_FILE_NAME",
+      "target_start_line": 28
+    },
+    {
+      "lines": [
+        337
+      ],
+      "name": "read_json_file",
+      "target_name": "read_json_file",
+      "target_start_line": 109
+    },
+    {
+      "lines": [
+        343
+      ],
+      "name": "_extend_file_list",
+      "target_name": "_extend_file_list",
+      "target_start_line": 183
+    },
+    {
+      "lines": [
+        357
+      ],
+      "name": "_EXCLUDE_KEY",
+      "target_name": "_EXCLUDE_KEY",
+      "target_start_line": 20
+    },
+    {
+      "lines": [
+        357
+      ],
+      "name": "_INCLUDE_KEY",
+      "target_name": "_INCLUDE_KEY",
+      "target_start_line": 19
+    },
+    {
+      "lines": [
+        357
+      ],
+      "name": "_FILE_KEY",
+      "target_name": "_FILE_KEY",
+      "target_start_line": 18
+    },
+    {
+      "lines": [
+        364
+      ],
+      "name": "_reference_file_list",
+      "target_name": "_reference_file_list",
+      "target_start_line": 286
+    },
+    {
+      "lines": [
+        388,
+        431,
+        460,
+        487
+      ],
+      "name": "_ProjectCache",
+      "target_name": "_ProjectCache",
+      "target_start_line": 95
+    },
+    {
+      "lines": [
+        408,
+        409,
+        426
+      ],
+      "name": "_ProjectCache.dir_file_dict",
+      "target_name": "dir_file_dict",
+      "target_start_line": 101
+    },
+    {
+      "lines": [
+        416,
+        417,
+        418,
+        451,
+        452,
+        453
+      ],
+      "name": "_ProjectCache.config_dict",
+      "target_name": "config_dict",
+      "target_start_line": 104
+    },
+    {
+      "lines": [
+        417,
+        452
+      ],
+      "name": "_read_config",
+      "target_name": "_read_config",
+      "target_start_line": 314
+    },
+    {
+      "lines": [
+        457
+      ],
+      "name": "_is_cover",
+      "target_name": "_is_cover",
+      "target_start_line": 261
+    },
+    {
+      "lines": [
+        487
+      ],
+      "name": "path_config_cache.setdefault",
+      "target_name": "path_config_cache",
+      "target_start_line": 12
+    },
+    {
+      "lines": [
+        496
+      ],
+      "name": "_nearest_config_file",
+      "target_name": "_nearest_config_file",
+      "target_start_line": 387
+    },
+    {
+      "lines": [
+        501
+      ],
+      "name": "_cover_config",
+      "target_name": "_cover_config",
+      "target_start_line": 430
+    }
+  ],
+  "caller_usages": [
+    {
+      "lines": [
+        73,
+        86,
+        98
+      ],
+      "name": "inside_project",
+      "file": "codetwine/codetwine/alias_path_py/alias_path.py",
+      "usage_context": "    \"\"\"\n    text = _string_value(node)\n    if text is not None:\n        return inside_project(posixpath.join(config_dir, text)) if text.startswith(\".\") else None\n    if node.type != \"call_expression\":\n        return None\n    function_node = node.child_by_field_name(\"function\")\n...\n        part_list = [_string_value(argument) for argument in argument_list[1:]]\n        if _text(argument_list[0]) not in _CONFIG_DIR_NAME_SET or None in part_list:\n            return None\n        return inside_project(posixpath.join(config_dir, *part_list))\n\n    if function_name == _URL_PATH_FUNCTION_NAME and argument_list[0].type == \"new_expression\":\n        url_node = argument_list[0]"
+    },
+    {
+      "lines": [
+        372
+      ],
+      "name": "path_config_cache.clear",
+      "file": "codetwine/codetwine/extractors/dependency_graph_py/dependency_graph.py",
+      "usage_context": "    clear_import_binder_cache()\n    clear_import_path_cache()\n    clear_definition_source_cache()\n    path_config_cache.clear()\n    clear_package_path_cache()\n    clear_alias_path_cache()\n"
+    },
+    {
+      "lines": [
+        370
+      ],
+      "name": "path_config",
+      "file": "codetwine/codetwine/import_to_path_py/import_to_path.py",
+      "usage_context": "    # config file that counts for the current file, when there is one\n    config_name_list = resolve_config.get(\"path_config_name_list\")\n    if config_name_list and project_dir and not is_relative:\n        config = path_config(current_file_rel, project_dir, config_name_list)\n        package_file_name = resolve_config[\"package_file_name\"]\n        import_path_list = package_import_path_list(\n            module, current_file_rel, project_dir, package_file_name,"
+    },
+    {
+      "lines": [
+        45
+      ],
+      "name": "read_json_file",
+      "file": "codetwine/codetwine/package_path_py/package_path.py",
+      "usage_context": "    if dir_rel not in dir_dict:\n        package_rel = posixpath.join(dir_rel, package_file_name)\n        dir_dict[dir_rel] = (\n            read_json_file(package_rel, project_dir)\n            if os.path.isfile(os.path.join(project_dir, package_rel)) else None\n        )\n    return dir_dict[dir_rel]"
+    },
+    {
+      "lines": [
+        83
+      ],
+      "name": "PathConfig",
+      "file": "codetwine/codetwine/package_path_py/package_path.py",
+      "usage_context": "        Paths relative to the project root, with the part the \"*\" stands for put in.\n        Empty when no entry matches or the paths lead outside the project.\n    \"\"\"\n    config = PathConfig(path_list=[\n        (pattern, _target_list(value)) for pattern, value in pattern_dict.items()\n    ])\n    return ["
+    },
+    {
+      "lines": [
+        87
+      ],
+      "name": "PathConfig.module_path_list",
+      "file": "codetwine/codetwine/package_path_py/package_path.py",
+      "usage_context": "        (pattern, _target_list(value)) for pattern, value in pattern_dict.items()\n    ])\n    return [\n        path_rel for target in config.module_path_list(name)\n        if (path_rel := inside_project(posixpath.join(package_dir, target))) is not None\n    ]\n"
+    },
+    {
+      "lines": [
+        88,
+        232,
+        238
+      ],
+      "name": "inside_project",
+      "file": "codetwine/codetwine/package_path_py/package_path.py",
+      "usage_context": "    ])\n    return [\n        path_rel for target in config.module_path_list(name)\n        if (path_rel := inside_project(posixpath.join(package_dir, target))) is not None\n    ]\n\n\n...\n    elif not inner_path:\n        target_list.extend(\n            path_rel for target in _target_list(export_value)\n            if (path_rel := inside_project(posixpath.join(package_dir, target))) is not None\n        )\n    if not inner_path:\n        for entry_key in _ENTRY_KEY_TUPLE:"
+    }
+  ]
+}

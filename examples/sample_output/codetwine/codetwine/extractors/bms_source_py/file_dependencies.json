@@ -1,0 +1,615 @@
+{
+  "file": "codetwine/codetwine/extractors/bms_source_py/bms_source.py",
+  "language": "py",
+  "detected_encoding": null,
+  "definitions": [
+    {
+      "name": "_CONTINUE_COLUMN",
+      "type": "expression_statement",
+      "start_line": 7,
+      "end_line": 7,
+      "context": "_CONTINUE_COLUMN = 71"
+    },
+    {
+      "name": "_CONTINUE_START_COLUMN",
+      "type": "expression_statement",
+      "start_line": 9,
+      "end_line": 9,
+      "context": "_CONTINUE_START_COLUMN = 15"
+    },
+    {
+      "name": "_ATTRIBUTE_TUPLE",
+      "type": "expression_statement",
+      "start_line": 13,
+      "end_line": 16,
+      "context": "_ATTRIBUTE_TUPLE = (\n    (\"COLOR\", \"C\"), (\"PS\", \"P\"), (\"HILIGHT\", \"H\"), (\"VALIDN\", \"V\"),\n    (\"OUTLINE\", \"U\"), (\"SOSI\", \"M\"), (\"TRANSP\", \"T\"),\n)"
+    },
+    {
+      "name": "_EXTATT_ATTRIBUTE_TUPLE",
+      "type": "expression_statement",
+      "start_line": 18,
+      "end_line": 18,
+      "context": "_EXTATT_ATTRIBUTE_TUPLE = (\"COLOR\", \"PS\", \"HILIGHT\", \"VALIDN\")"
+    },
+    {
+      "name": "_LENGTH_LETTER",
+      "type": "expression_statement",
+      "start_line": 22,
+      "end_line": 22,
+      "context": "_LENGTH_LETTER = \"L\""
+    },
+    {
+      "name": "_FLAG_LETTER",
+      "type": "expression_statement",
+      "start_line": 23,
+      "end_line": 23,
+      "context": "_FLAG_LETTER = \"F\""
+    },
+    {
+      "name": "_ATTRIBUTE_LETTER",
+      "type": "expression_statement",
+      "start_line": 24,
+      "end_line": 24,
+      "context": "_ATTRIBUTE_LETTER = \"A\""
+    },
+    {
+      "name": "_INPUT_LETTER",
+      "type": "expression_statement",
+      "start_line": 25,
+      "end_line": 25,
+      "context": "_INPUT_LETTER = \"I\""
+    },
+    {
+      "name": "_OUTPUT_LETTER",
+      "type": "expression_statement",
+      "start_line": 26,
+      "end_line": 26,
+      "context": "_OUTPUT_LETTER = \"O\""
+    },
+    {
+      "name": "_RECORD_LEVEL",
+      "type": "expression_statement",
+      "start_line": 29,
+      "end_line": 29,
+      "context": "_RECORD_LEVEL = 1"
+    },
+    {
+      "name": "_FIELD_LEVEL",
+      "type": "expression_statement",
+      "start_line": 30,
+      "end_line": 30,
+      "context": "_FIELD_LEVEL = 2"
+    },
+    {
+      "name": "_NAME_RE",
+      "type": "expression_statement",
+      "start_line": 33,
+      "end_line": 33,
+      "context": "_NAME_RE = re.compile(r\"[A-Za-z][A-Za-z0-9-]*\")"
+    },
+    {
+      "name": "_STATEMENT_HEAD_RE",
+      "type": "expression_statement",
+      "start_line": 35,
+      "end_line": 35,
+      "context": "_STATEMENT_HEAD_RE = re.compile(r\"(\\S*)\\s+(\\S+)\\s*\")"
+    },
+    {
+      "name": "_Statement",
+      "type": "class_definition",
+      "start_line": 38,
+      "end_line": 46,
+      "context": "@dataclass\nclass _Statement:\n    \"\"\"One assembler statement of a BMS source.\"\"\"\n\n    label: str         # Label in column 1; \"\" without one\n    operation: str     # Upper-case operation (DFHMSD / DFHMDI / DFHMDF / ...)\n    operand_text: str  # Operands without the remark after them\n    start_line: int    # First line (1-based)\n    end_line: int      # Last line, the last continuation line"
+    },
+    {
+      "name": "label",
+      "type": "expression_statement",
+      "start_line": 42,
+      "end_line": 42,
+      "context": "    label: str         # Label in column 1; \"\" without one"
+    },
+    {
+      "name": "operation",
+      "type": "expression_statement",
+      "start_line": 43,
+      "end_line": 43,
+      "context": "    operation: str     # Upper-case operation (DFHMSD / DFHMDI / DFHMDF / ...)"
+    },
+    {
+      "name": "operand_text",
+      "type": "expression_statement",
+      "start_line": 44,
+      "end_line": 44,
+      "context": "    operand_text: str  # Operands without the remark after them"
+    },
+    {
+      "name": "start_line",
+      "type": "expression_statement",
+      "start_line": 45,
+      "end_line": 45,
+      "context": "    start_line: int    # First line (1-based)"
+    },
+    {
+      "name": "end_line",
+      "type": "expression_statement",
+      "start_line": 46,
+      "end_line": 46,
+      "context": "    end_line: int      # Last line, the last continuation line"
+    },
+    {
+      "name": "_Field",
+      "type": "class_definition",
+      "start_line": 49,
+      "end_line": 57,
+      "context": "@dataclass\nclass _Field:\n    \"\"\"One named field of a map, or a group of fields (GRPNAME).\"\"\"\n\n    name: str          # Upper-case label, or the group name\n    occurs: int        # OCCURS count; 0 without OCCURS\n    start_line: int    # First line of its statement (of the first member for a group)\n    end_line: int      # Last line of its statement (of the last member for a group)\n    member_list: list[\"_Field\"] = field(default_factory=list)"
+    },
+    {
+      "name": "name",
+      "type": "expression_statement",
+      "start_line": 53,
+      "end_line": 53,
+      "context": "    name: str          # Upper-case label, or the group name"
+    },
+    {
+      "name": "occurs",
+      "type": "expression_statement",
+      "start_line": 54,
+      "end_line": 54,
+      "context": "    occurs: int        # OCCURS count; 0 without OCCURS"
+    },
+    {
+      "name": "start_line",
+      "type": "expression_statement",
+      "start_line": 55,
+      "end_line": 55,
+      "context": "    start_line: int    # First line of its statement (of the first member for a group)"
+    },
+    {
+      "name": "end_line",
+      "type": "expression_statement",
+      "start_line": 56,
+      "end_line": 56,
+      "context": "    end_line: int      # Last line of its statement (of the last member for a group)"
+    },
+    {
+      "name": "member_list",
+      "type": "expression_statement",
+      "start_line": 57,
+      "end_line": 57,
+      "context": "    member_list: list[\"_Field\"] = field(default_factory=list)"
+    },
+    {
+      "name": "_Map",
+      "type": "class_definition",
+      "start_line": 60,
+      "end_line": 68,
+      "context": "@dataclass\nclass _Map:\n    \"\"\"One map (DFHMDI) of a mapset.\"\"\"\n\n    name: str                     # Upper-case label\n    attribute_list: list[str]     # Letters of the extended attributes of its fields\n    start_line: int               # First line of its DFHMDI statement\n    end_line: int                 # Last line of its last statement\n    field_list: list[_Field] = field(default_factory=list)"
+    },
+    {
+      "name": "name",
+      "type": "expression_statement",
+      "start_line": 64,
+      "end_line": 64,
+      "context": "    name: str                     # Upper-case label"
+    },
+    {
+      "name": "attribute_list",
+      "type": "expression_statement",
+      "start_line": 65,
+      "end_line": 65,
+      "context": "    attribute_list: list[str]     # Letters of the extended attributes of its fields"
+    },
+    {
+      "name": "start_line",
+      "type": "expression_statement",
+      "start_line": 66,
+      "end_line": 66,
+      "context": "    start_line: int               # First line of its DFHMDI statement"
+    },
+    {
+      "name": "end_line",
+      "type": "expression_statement",
+      "start_line": 67,
+      "end_line": 67,
+      "context": "    end_line: int                 # Last line of its last statement"
+    },
+    {
+      "name": "field_list",
+      "type": "expression_statement",
+      "start_line": 68,
+      "end_line": 68,
+      "context": "    field_list: list[_Field] = field(default_factory=list)"
+    },
+    {
+      "name": "_statement_list",
+      "type": "function_definition",
+      "start_line": 71,
+      "end_line": 127,
+      "context": "def _statement_list(line_list: list[str]) -> list[_Statement]:\n    \"\"\"Read the assembler statements of a BMS source.\n\n    A line with \"*\" in column 1 is a comment. A statement is continued while column 72\n    holds a character, on the next line from column 16. The operands end at the first\n    blank outside quotes; what follows is a remark.\n\n    Args:\n        line_list: The lines of the source.\n\n    Returns:\n        The statements in source order.\n    \"\"\"\n    statement_list: list[_Statement] = []\n    statement: _Statement | None = None\n    is_in_quote = is_operand_end = False\n    for line_index, raw_line in enumerate(line_list):\n        line = raw_line.expandtabs(8)\n        if statement is None:\n            if not line.strip() or line.startswith(\"*\"):\n                continue\n            head_match = _STATEMENT_HEAD_RE.match(line[:_CONTINUE_COLUMN])\n            if head_match is None:\n                continue\n            statement = _Statement(\n                label=head_match.group(1),\n                operation=head_match.group(2).upper(),\n                operand_text=\"\",\n                start_line=line_index + 1,\n                end_line=line_index + 1,\n            )\n            body = line[head_match.end():_CONTINUE_COLUMN]\n            is_in_quote = is_operand_end = False\n        else:\n            statement.end_line = line_index + 1\n            body = line[_CONTINUE_START_COLUMN:_CONTINUE_COLUMN]\n            if not is_in_quote:\n                body = body.lstrip()\n        for char in body:\n            if is_operand_end:\n                break\n            if char == \"'\":\n                is_in_quote = not is_in_quote\n            elif char == \" \" and not is_in_quote:\n                is_operand_end = True\n                break\n            statement.operand_text += char\n        if is_in_quote:\n            is_operand_end = False\n        if len(line) > _CONTINUE_COLUMN and line[_CONTINUE_COLUMN] != \" \":\n            is_operand_end = False\n        else:\n            statement_list.append(statement)\n            statement = None\n    if statement is not None:\n        statement_list.append(statement)\n    return statement_list"
+    },
+    {
+      "name": "_operand_dict",
+      "type": "function_definition",
+      "start_line": 130,
+      "end_line": 162,
+      "context": "def _operand_dict(operand_text: str) -> dict[str, str]:\n    \"\"\"Split operands \"KEY=value,...\" at the commas outside quotes and parentheses.\n\n    Examples:\n        \"TYPE=MAP,DSATTS=(COLOR,HILIGHT)\" -> {\"TYPE\": \"MAP\", \"DSATTS\": \"(COLOR,HILIGHT)\"}\n\n    Returns:\n        {upper-case key: value as written}; a key without \"=\" has the value \"\".\n    \"\"\"\n    part_list: list[str] = []\n    part = \"\"\n    depth = 0\n    is_in_quote = False\n    for char in operand_text:\n        if char == \"'\":\n            is_in_quote = not is_in_quote\n        elif not is_in_quote and char == \"(\":\n            depth += 1\n        elif not is_in_quote and char == \")\":\n            depth -= 1\n        elif not is_in_quote and depth == 0 and char == \",\":\n            part_list.append(part)\n            part = \"\"\n            continue\n        part += char\n    part_list.append(part)\n\n    operand_dict: dict[str, str] = {}\n    for part in part_list:\n        key, _, value = part.partition(\"=\")\n        if key.strip():\n            operand_dict[key.strip().upper()] = value.strip()\n    return operand_dict"
+    },
+    {
+      "name": "_value_list",
+      "type": "function_definition",
+      "start_line": 165,
+      "end_line": 167,
+      "context": "def _value_list(value: str) -> list[str]:\n    \"\"\"Return the upper-case items of an operand value such as \"(COLOR,HILIGHT)\" or \"YES\".\"\"\"\n    return [item.strip().upper() for item in value.strip(\"()\").split(\",\") if item.strip()]"
+    },
+    {
+      "name": "_attribute_list",
+      "type": "function_definition",
+      "start_line": 170,
+      "end_line": 182,
+      "context": "def _attribute_list(option_dict: dict[str, str]) -> list[str]:\n    \"\"\"Return the letters of the extended attributes a map's fields get in the symbolic map.\n\n    Args:\n        option_dict: The operands of the mapset (DFHMSD), updated with those of the map (DFHMDI).\n    \"\"\"\n    if \"DSATTS\" in option_dict:\n        attribute_set = set(_value_list(option_dict[\"DSATTS\"]))\n    elif option_dict.get(\"EXTATT\", \"NO\").upper() == \"YES\":\n        attribute_set = set(_EXTATT_ATTRIBUTE_TUPLE)\n    else:\n        attribute_set = set()\n    return [letter for attribute, letter in _ATTRIBUTE_TUPLE if attribute in attribute_set]"
+    },
+    {
+      "name": "_read_map_list",
+      "type": "function_definition",
+      "start_line": 185,
+      "end_line": 242,
+      "context": "def _read_map_list(statement_list: list[_Statement]) -> tuple[list[_Map], list[str]]:\n    \"\"\"Read the maps of the mapsets of a BMS source.\n\n    A map or a field whose label is not a COBOL word is left out.\n\n    Args:\n        statement_list: The statements of the source.\n\n    Returns:\n        A (maps in source order, upper-case mapset names) tuple.\n    \"\"\"\n    map_list: list[_Map] = []\n    mapset_name_list: list[str] = []\n    mapset_option_dict: dict[str, str] = {}\n    current_map: _Map | None = None\n    group_dict: dict[str, _Field] = {}\n    for statement in statement_list:\n        operand_dict = _operand_dict(statement.operand_text)\n        if statement.operation == \"DFHMSD\":\n            current_map = None\n            if operand_dict.get(\"TYPE\", \"\").upper() != \"FINAL\":\n                mapset_option_dict = operand_dict\n                if _NAME_RE.fullmatch(statement.label):\n                    mapset_name_list.append(statement.label.upper())\n            continue\n        if statement.operation == \"DFHMDI\":\n            current_map = None\n            if _NAME_RE.fullmatch(statement.label):\n                current_map = _Map(\n                    statement.label.upper(),\n                    _attribute_list({**mapset_option_dict, **operand_dict}),\n                    statement.start_line,\n                    statement.end_line,\n                )\n                map_list.append(current_map)\n            group_dict = {}\n            continue\n        if current_map is None:\n            continue\n        current_map.end_line = statement.end_line\n        if statement.operation != \"DFHMDF\" or not _NAME_RE.fullmatch(statement.label):\n            continue\n\n        occurs = operand_dict.get(\"OCCURS\", \"\")\n        bms_field = _Field(\n            statement.label.upper(), int(occurs) if occurs.isdigit() else 0,\n            statement.start_line, statement.end_line,\n        )\n        group_name = operand_dict.get(\"GRPNAME\", \"\").upper()\n        if not group_name:\n            current_map.field_list.append(bms_field)\n            continue\n        if group_name not in group_dict:\n            group_dict[group_name] = _Field(group_name, 0, statement.start_line, statement.end_line)\n            current_map.field_list.append(group_dict[group_name])\n        group_dict[group_name].member_list.append(bms_field)\n        group_dict[group_name].end_line = statement.end_line\n    return map_list, mapset_name_list"
+    },
+    {
+      "name": "_item_definition",
+      "type": "function_definition",
+      "start_line": 245,
+      "end_line": 268,
+      "context": "def _item_definition(\n    name: str, start_line: int, end_line: int, level: int, is_group: bool,\n) -> CobolDefinition:\n    \"\"\"Return the definition of one data item of a symbolic map.\n\n    Args:\n        name: Name of the item.\n        start_line: First line of the statement or statements it comes from (1-based).\n        end_line: Last line of them.\n        level: Level number of the item.\n        is_group: Whether items belong to it.\n\n    Returns:\n        A data item definition whose name is on start_line.\n    \"\"\"\n    return CobolDefinition(\n        name=name,\n        type=DATA_ITEM_TYPE,\n        start_line=start_line,\n        end_line=end_line,\n        name_line=start_line,\n        level=level,\n        is_group=is_group,\n    )"
+    },
+    {
+      "name": "_field_definition_list",
+      "type": "function_definition",
+      "start_line": 271,
+      "end_line": 311,
+      "context": "def _field_definition_list(\n    bms_field: _Field, attribute_list: list[str], level: int,\n) -> list[CobolDefinition]:\n    \"\"\"Return the definitions a field gives in the input and the output record of its map.\n\n    Input record:  <field>L, <field>F, <field>A (under a FILLER that redefines <field>F),\n                   <field>I\n    Output record: <field> + the letter of each extended attribute, <field>O\n    A group (GRPNAME) holds <member>I / <member>O of each member in <group>I / <group>O.\n\n    Args:\n        bms_field: The field or the group.\n        attribute_list: Letters of the extended attributes of the map's fields.\n        level: Level number of the field's items.\n\n    Returns:\n        The definitions, each over the lines of the field's statement (of its members'\n        statements for a group).\n    \"\"\"\n    is_group = bool(bms_field.member_list)\n    suffix_level_list = [\n        (_LENGTH_LETTER, level, False),\n        (_FLAG_LETTER, level, False),\n        (_ATTRIBUTE_LETTER, level + 1, False),\n        (_INPUT_LETTER, level, is_group),\n        *((letter, level, False) for letter in attribute_list),\n        (_OUTPUT_LETTER, level, is_group),\n    ]\n    definition_list = [\n        _item_definition(\n            bms_field.name + suffix, bms_field.start_line, bms_field.end_line,\n            item_level, item_is_group,\n        )\n        for suffix, item_level, item_is_group in suffix_level_list\n    ]\n    for member in bms_field.member_list:\n        for letter in (_INPUT_LETTER, _OUTPUT_LETTER):\n            definition_list.append(_item_definition(\n                member.name + letter, member.start_line, member.end_line, level + 1, False,\n            ))\n    return definition_list"
+    },
+    {
+      "name": "read_bms_source",
+      "type": "function_definition",
+      "start_line": 314,
+      "end_line": 347,
+      "context": "def read_bms_source(source: str) -> CobolSource:\n    \"\"\"Read a BMS source (DFHMSD / DFHMDI / DFHMDF macros) and return its symbolic maps.\n\n    Each map is an input record <map>I and an output record <map>O, the names a COBOL\n    program gets from COPY of the mapset. A field with OCCURS has its items under a\n    FILLER that repeats them.\n\n    Args:\n        source: The text of the file.\n\n    Returns:\n        A CobolSource with the data items of the symbolic maps as its definitions and the\n        mapset names as its copy_name_list. It has no imports and no references.\n    \"\"\"\n    line_list = line_list_of(source)\n    map_list, mapset_name_list = _read_map_list(_statement_list(line_list))\n\n    definition_list: list[CobolDefinition] = []\n    for bms_map in map_list:\n        for letter in (_INPUT_LETTER, _OUTPUT_LETTER):\n            definition_list.append(_item_definition(\n                bms_map.name + letter, bms_map.start_line, bms_map.end_line, _RECORD_LEVEL, True,\n            ))\n        for bms_field in bms_map.field_list:\n            level = _FIELD_LEVEL + 1 if bms_field.occurs else _FIELD_LEVEL\n            definition_list += _field_definition_list(bms_field, bms_map.attribute_list, level)\n\n    return CobolSource(\n        line_list=line_list,\n        definition_list=sorted(\n            definition_list, key=lambda definition: (definition.start_line, -definition.end_line),\n        ),\n        copy_name_list=list(dict.fromkeys(mapset_name_list)),\n    )"
+    }
+  ],
+  "callee_usages": [
+    {
+      "lines": [
+        247,
+        260,
+        273,
+        331
+      ],
+      "name": "CobolDefinition",
+      "from": "codetwine/codetwine/extractors/cobol_source_py/cobol_source.py",
+      "target_context": "@dataclass\nclass CobolDefinition:\n    \"\"\"One definition of a COBOL file.\"\"\"\n\n    name: str        # Name as written in the source\n    type: str        # One of the definition types of this module\n    start_line: int  # First line of the definition (1-based)\n    end_line: int    # Last line of the definition\n    name_line: int   # Line the name is written on (1-based)\n    # Level number of a data item; None for the other types\n    level: int | None = None\n    # Whether a data item is a group item (items belong to it, or a COPY statement\n    # inside it brings them in); None for the other types\n    is_group: bool | None = None",
+      "target_name": "CobolDefinition",
+      "target_start_line": 70
+    },
+    {
+      "lines": [
+        262
+      ],
+      "name": "DATA_ITEM_TYPE",
+      "from": "codetwine/codetwine/extractors/cobol_source_py/cobol_source.py",
+      "target_context": "DATA_ITEM_TYPE = \"data_description\"",
+      "target_name": "DATA_ITEM_TYPE",
+      "target_start_line": 24
+    },
+    {
+      "lines": [
+        314,
+        341
+      ],
+      "name": "CobolSource",
+      "from": "codetwine/codetwine/extractors/cobol_source_py/cobol_source.py",
+      "target_context": "@dataclass\nclass CobolSource:\n    \"\"\"What one COBOL file defines, names and refers to.\"\"\"\n\n    # Lines of the source text\n    line_list: list[str]\n    # Definitions in line order\n    definition_list: list[CobolDefinition] = field(default_factory=list)\n    # COPY and CALL statements in line order\n    import_list: list[CobolImport] = field(default_factory=list)\n    # Each place a name is referred to\n    reference_list: list[CobolReference] = field(default_factory=list)\n    # Upper-case names a COPY statement can name the file by besides its file name\n    # (BMS: the mapset names)\n    copy_name_list: list[str] = field(default_factory=list)\n\n    def usage_line_list(self, name_set: set[str]) -> list[tuple[str, int]]:\n        \"\"\"Return the places the file refers to one of the given names.\n\n        Names are compared without regard to upper and lower case.\n\n        Args:\n            name_set: The names to look for.\n\n        Returns:\n            (name as given in name_set, line) tuples in line order, without duplicates.\n        \"\"\"\n        name_dict = {name.upper(): name for name in name_set}\n        usage_set = {\n            (name_dict[reference.name], reference.line)\n            for reference in self.reference_list if reference.name in name_dict\n        }\n        return sorted(usage_set, key=lambda usage: (usage[1], usage[0]))\n\n    def definition_text(self, definition: CobolDefinition) -> str:\n        \"\"\"Return the source text of a definition: its lines joined by \"\\\\n\".\"\"\"\n        return \"\\n\".join(self.line_list[definition.start_line - 1:definition.end_line])\n\n    def definition_source(self, name: str) -> str | None:\n        \"\"\"Return the source text of the first definition with a name.\n\n        Names are compared without regard to upper and lower case.\n\n        Args:\n            name: The definition name.\n\n        Returns:\n            The lines of the definition joined by \"\\\\n\". None when no definition has the name.\n        \"\"\"\n        for definition in self.definition_list:\n            if definition.name.upper() == name.upper():\n                return self.definition_text(definition)\n        return None",
+      "target_name": "CobolSource",
+      "target_start_line": 110
+    },
+    {
+      "lines": [
+        328
+      ],
+      "name": "line_list_of",
+      "from": "codetwine/codetwine/utils/file_utils_py/file_utils.py",
+      "target_context": "def line_list_of(text: str) -> list[str]:\n    \"\"\"Split a text into its lines at \"\\\\n\", \"\\\\r\\\\n\" and a lone \"\\\\r\" alone.\n\n    Every line number of the analysis counts lines this way. A form feed, a vertical tab,\n    U+0085, U+2028 and the other characters str.splitlines() also breaks at stay inside\n    their line.\n\n    Examples:\n        \"a\\\\r\\\\nb\\\\rc\\\\n\" -> [\"a\", \"b\", \"c\"]\n        \"a\\\\n\\\\f\\\\nb\"      -> [\"a\", \"\\\\f\", \"b\"]\n        \"\"              -> []\n\n    Args:\n        text: The text to split.\n\n    Returns:\n        The lines without their line breaks. A text that ends in a line break has no\n        empty line after it.\n    \"\"\"\n    line_list = lone_cr_to_lf(text).replace(\"\\r\\n\", \"\\n\").split(\"\\n\")\n    if line_list[-1] == \"\":\n        line_list.pop()\n    return line_list",
+      "target_name": "line_list_of",
+      "target_start_line": 168
+    }
+  ],
+  "same_file_usages": [
+    {
+      "lines": [
+        68,
+        200,
+        229,
+        235,
+        238,
+        240,
+        272
+      ],
+      "name": "_Field",
+      "target_name": "_Field",
+      "target_start_line": 49
+    },
+    {
+      "lines": [
+        71,
+        84,
+        85,
+        95,
+        123,
+        185
+      ],
+      "name": "_Statement",
+      "target_name": "_Statement",
+      "target_start_line": 38
+    },
+    {
+      "lines": [
+        92
+      ],
+      "name": "_STATEMENT_HEAD_RE.match",
+      "target_name": "_STATEMENT_HEAD_RE",
+      "target_start_line": 35
+    },
+    {
+      "lines": [
+        92,
+        102,
+        106,
+        120
+      ],
+      "name": "_CONTINUE_COLUMN",
+      "target_name": "_CONTINUE_COLUMN",
+      "target_start_line": 7
+    },
+    {
+      "lines": [
+        105
+      ],
+      "name": "_Statement.end_line",
+      "target_name": "end_line",
+      "target_start_line": 46
+    },
+    {
+      "lines": [
+        106
+      ],
+      "name": "_CONTINUE_START_COLUMN",
+      "target_name": "_CONTINUE_START_COLUMN",
+      "target_start_line": 9
+    },
+    {
+      "lines": [
+        117
+      ],
+      "name": "_Statement.operand_text",
+      "target_name": "operand_text",
+      "target_start_line": 44
+    },
+    {
+      "lines": [
+        177
+      ],
+      "name": "_value_list",
+      "target_name": "_value_list",
+      "target_start_line": 165
+    },
+    {
+      "lines": [
+        179
+      ],
+      "name": "_EXTATT_ATTRIBUTE_TUPLE",
+      "target_name": "_EXTATT_ATTRIBUTE_TUPLE",
+      "target_start_line": 18
+    },
+    {
+      "lines": [
+        182
+      ],
+      "name": "_ATTRIBUTE_TUPLE",
+      "target_name": "_ATTRIBUTE_TUPLE",
+      "target_start_line": 13
+    },
+    {
+      "lines": [
+        185,
+        196,
+        199,
+        213,
+        219,
+        222
+      ],
+      "name": "_Map",
+      "target_name": "_Map",
+      "target_start_line": 60
+    },
+    {
+      "lines": [
+        202
+      ],
+      "name": "_operand_dict",
+      "target_name": "_operand_dict",
+      "target_start_line": 130
+    },
+    {
+      "lines": [
+        207,
+        212,
+        225
+      ],
+      "name": "_NAME_RE.fullmatch",
+      "target_name": "_NAME_RE",
+      "target_start_line": 33
+    },
+    {
+      "lines": [
+        215
+      ],
+      "name": "_attribute_list",
+      "target_name": "_attribute_list",
+      "target_start_line": 170
+    },
+    {
+      "lines": [
+        224
+      ],
+      "name": "_Map.end_line",
+      "target_name": "end_line",
+      "target_start_line": 67
+    },
+    {
+      "lines": [
+        235,
+        239
+      ],
+      "name": "_Map.field_list.append",
+      "target_name": "field_list",
+      "target_start_line": 68
+    },
+    {
+      "lines": [
+        290,
+        306
+      ],
+      "name": "_Field.member_list",
+      "target_name": "member_list",
+      "target_start_line": 57
+    },
+    {
+      "lines": [
+        292
+      ],
+      "name": "_LENGTH_LETTER",
+      "target_name": "_LENGTH_LETTER",
+      "target_start_line": 22
+    },
+    {
+      "lines": [
+        293
+      ],
+      "name": "_FLAG_LETTER",
+      "target_name": "_FLAG_LETTER",
+      "target_start_line": 23
+    },
+    {
+      "lines": [
+        294
+      ],
+      "name": "_ATTRIBUTE_LETTER",
+      "target_name": "_ATTRIBUTE_LETTER",
+      "target_start_line": 24
+    },
+    {
+      "lines": [
+        295,
+        307,
+        333
+      ],
+      "name": "_INPUT_LETTER",
+      "target_name": "_INPUT_LETTER",
+      "target_start_line": 25
+    },
+    {
+      "lines": [
+        297,
+        307,
+        333
+      ],
+      "name": "_OUTPUT_LETTER",
+      "target_name": "_OUTPUT_LETTER",
+      "target_start_line": 26
+    },
+    {
+      "lines": [
+        300,
+        308,
+        334
+      ],
+      "name": "_item_definition",
+      "target_name": "_item_definition",
+      "target_start_line": 245
+    },
+    {
+      "lines": [
+        301
+      ],
+      "name": "_Field.end_line",
+      "target_name": "end_line",
+      "target_start_line": 56
+    },
+    {
+      "lines": [
+        301
+      ],
+      "name": "_Field.start_line",
+      "target_name": "start_line",
+      "target_start_line": 55
+    },
+    {
+      "lines": [
+        301
+      ],
+      "name": "_Field.name",
+      "target_name": "name",
+      "target_start_line": 53
+    },
+    {
+      "lines": [
+        329
+      ],
+      "name": "_read_map_list",
+      "target_name": "_read_map_list",
+      "target_start_line": 185
+    },
+    {
+      "lines": [
+        329
+      ],
+      "name": "_statement_list",
+      "target_name": "_statement_list",
+      "target_start_line": 71
+    },
+    {
+      "lines": [
+        335
+      ],
+      "name": "_RECORD_LEVEL",
+      "target_name": "_RECORD_LEVEL",
+      "target_start_line": 29
+    },
+    {
+      "lines": [
+        338
+      ],
+      "name": "_FIELD_LEVEL",
+      "target_name": "_FIELD_LEVEL",
+      "target_start_line": 30
+    },
+    {
+      "lines": [
+        339
+      ],
+      "name": "_field_definition_list",
+      "target_name": "_field_definition_list",
+      "target_start_line": 271
+    }
+  ],
+  "caller_usages": [
+    {
+      "lines": [
+        217
+      ],
+      "name": "read_bms_source",
+      "file": "codetwine/codetwine/parsers/ts_parser_py/ts_parser.py",
+      "usage_context": "        parse_result = (cobol_source, content)\n    elif ext in BMS_EXT_SET:\n        # Read the maps of the BMS macros\n        parse_result = (read_bms_source(content.decode(\"utf-8\")), content)\n    elif ext in R_MARKDOWN_EXT_SET:\n        # Parse the R code chunks of the document, everything else blanked; a chunk\n        # whose code runs on past its end is blanked as well"
+    }
+  ]
+}

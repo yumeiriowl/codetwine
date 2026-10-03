@@ -1,0 +1,86 @@
+{
+  "file": "codetwine/codetwine/utils/project_cache_py/project_cache.py",
+  "language": "py",
+  "detected_encoding": null,
+  "definitions": [
+    {
+      "name": "CacheValue",
+      "type": "expression_statement",
+      "start_line": 3,
+      "end_line": 3,
+      "context": "CacheValue = TypeVar(\"CacheValue\")"
+    },
+    {
+      "name": "project_cache_value",
+      "type": "function_definition",
+      "start_line": 6,
+      "end_line": 34,
+      "context": "def project_cache_value(\n    cache_dict: dict[str, tuple[set[str], CacheValue]],\n    cache_key: str,\n    project_file_set: set[str],\n) -> CacheValue | None:\n    \"\"\"Return the value a cache keeps under a key for a project file set.\n\n    A value kept with an equal set that is another object is kept with\n    project_file_set from then on.\n\n    Args:\n        cache_dict: A {key: (project file set the value was built for, value)} cache.\n        cache_key: The key of the value.\n        project_file_set: Relative paths of the project files that have a language.\n\n    Returns:\n        The value, None when the cache has none under the key or it was built for\n        another project file set.\n    \"\"\"\n    cache_entry = cache_dict.get(cache_key)\n    if cache_entry is None:\n        return None\n    cache_file_set, value = cache_entry\n    if cache_file_set is project_file_set:\n        return value\n    if cache_file_set == project_file_set:\n        cache_dict[cache_key] = (project_file_set, value)\n        return value\n    return None"
+    }
+  ],
+  "callee_usages": [],
+  "same_file_usages": [
+    {
+      "lines": [
+        7,
+        10
+      ],
+      "name": "CacheValue",
+      "target_name": "CacheValue",
+      "target_start_line": 3
+    }
+  ],
+  "caller_usages": [
+    {
+      "lines": [
+        144,
+        776
+      ],
+      "name": "project_cache_value",
+      "file": "codetwine/codetwine/cobol_file_index_py/cobol_file_index.py",
+      "usage_context": "    Returns:\n        The CobolFileIndex of the COBOL files in project_file_set.\n    \"\"\"\n    file_index = project_cache_value(file_index_cache, project_dir, project_file_set)\n    if file_index is not None:\n        return file_index\n\n...\n    \"\"\"\n    # == Step 1: Cache ========================================================\n    cache_key = os.path.abspath(os.path.join(project_dir, file_rel))\n    target_list = project_cache_value(reference_target_cache, cache_key, project_file_set)\n    if target_list is not None:\n        return target_list\n"
+    },
+    {
+      "lines": [
+        213,
+        956
+      ],
+      "name": "project_cache_value",
+      "file": "codetwine/codetwine/csharp_namespace_index_py/csharp_namespace_index.py",
+      "usage_context": "    Returns:\n        The CsharpNamespaceIndex of the C# files in project_file_set.\n    \"\"\"\n    namespace_index = project_cache_value(namespace_index_cache, project_dir, project_file_set)\n    if namespace_index is not None:\n        return namespace_index\n\n...\n    \"\"\"\n    # == Step 1: Cache ========================================================\n    cache_key = os.path.abspath(os.path.join(project_dir, file_rel))\n    target_list = project_cache_value(csharp_target_cache, cache_key, project_file_set)\n    if target_list is not None:\n        return target_list\n"
+    },
+    {
+      "lines": [
+        167
+      ],
+      "name": "project_cache_value",
+      "file": "codetwine/codetwine/import_binding_py/import_binding.py",
+      "usage_context": "        The ImportBinder, kept until the project file set changes or\n        clear_import_binder_cache() is called.\n    \"\"\"\n    binder = project_cache_value(_binder_cache, project_dir, project_file_set)\n    if binder is not None:\n        return binder\n    binder = ImportBinder(project_dir, project_file_set)"
+    },
+    {
+      "lines": [
+        483
+      ],
+      "name": "project_cache_value",
+      "file": "codetwine/codetwine/import_reference_py/import_reference.py",
+      "usage_context": "    \"\"\"\n    # == Step 1: Cache ========================================================\n    cache_key = os.path.abspath(os.path.join(project_dir, file_rel))\n    target_list = project_cache_value(import_target_cache, cache_key, project_file_set)\n    if target_list is not None:\n        return target_list\n"
+    },
+    {
+      "lines": [
+        524,
+        857
+      ],
+      "name": "project_cache_value",
+      "file": "codetwine/codetwine/r_name_index_py/r_name_index.py",
+      "usage_context": "    Returns:\n        The RNameIndex of the R files in project_file_set.\n    \"\"\"\n    name_index = project_cache_value(r_name_index_cache, project_dir, project_file_set)\n    if name_index is not None:\n        return name_index\n\n...\n    \"\"\"\n    # == Step 1: Cache ========================================================\n    cache_key = os.path.abspath(os.path.join(project_dir, file_rel))\n    target_list = project_cache_value(r_target_cache, cache_key, project_file_set)\n    if target_list is not None:\n        return target_list\n"
+    },
+    {
+      "lines": [
+        486
+      ],
+      "name": "project_cache_value",
+      "file": "codetwine/codetwine/rust_module_tree_py/rust_module_tree.py",
+      "usage_context": "    Returns:\n        The RustModuleTree of the .rs files in project_file_set.\n    \"\"\"\n    module_tree = project_cache_value(module_tree_cache, project_dir, project_file_set)\n    if module_tree is not None:\n        return module_tree\n"
+    }
+  ]
+}

@@ -1,0 +1,596 @@
+{
+  "file": "codetwine/codetwine/rust_module_tree_py/rust_module_tree.py",
+  "language": "py",
+  "detected_encoding": null,
+  "definitions": [
+    {
+      "name": "logger",
+      "type": "expression_statement",
+      "start_line": 16,
+      "end_line": 16,
+      "context": "logger = logging.getLogger(__name__)"
+    },
+    {
+      "name": "_OWN_DIR_FILE_NAME_TUPLE",
+      "type": "expression_statement",
+      "start_line": 19,
+      "end_line": 19,
+      "context": "_OWN_DIR_FILE_NAME_TUPLE = (\"mod.rs\", \"lib.rs\", \"main.rs\")"
+    },
+    {
+      "name": "_MAX_USE_HOP",
+      "type": "expression_statement",
+      "start_line": 22,
+      "end_line": 22,
+      "context": "_MAX_USE_HOP = 8"
+    },
+    {
+      "name": "module_tree_cache",
+      "type": "expression_statement",
+      "start_line": 25,
+      "end_line": 25,
+      "context": "module_tree_cache: dict[str, tuple[set[str], \"RustModuleTree\"]] = {}"
+    },
+    {
+      "name": "_join_path",
+      "type": "function_definition",
+      "start_line": 28,
+      "end_line": 36,
+      "context": "def _join_path(*part_tuple: str) -> str:\n    \"\"\"Join relative path parts with \"/\" and normalize \".\" and \"..\".\n\n    Examples:\n        (\"src\", \"util\", \"mod.rs\")   -> \"src/util/mod.rs\"\n        (\"\", \"lib.rs\")              -> \"lib.rs\"\n        (\"src/a\", \"../b.rs\")        -> \"src/b.rs\"\n    \"\"\"\n    return os.path.normpath(\"/\".join(p for p in part_tuple if p)).replace(\"\\\\\", \"/\")"
+    },
+    {
+      "name": "_ModuleFile",
+      "type": "class_definition",
+      "start_line": 39,
+      "end_line": 52,
+      "context": "@dataclass\nclass _ModuleFile:\n    \"\"\"Top-level contents of one .rs file.\"\"\"\n\n    # Names of top-level definitions\n    definition_name_set: set[str] = field(default_factory=set)\n    # Bound name -> segments of its use path\n    use_dict: dict[str, list[str]] = field(default_factory=dict)\n    # Segments of glob imports (use a::*)\n    glob_list: list[list[str]] = field(default_factory=list)\n    # (module name, #[path] value) of each mod declaration without a body\n    mod_list: list[tuple[str, str | None]] = field(default_factory=list)\n    # Name of a top-level enum -> names of its variants\n    variant_dict: dict[str, list[str]] = field(default_factory=dict)"
+    },
+    {
+      "name": "definition_name_set",
+      "type": "expression_statement",
+      "start_line": 44,
+      "end_line": 44,
+      "context": "    definition_name_set: set[str] = field(default_factory=set)"
+    },
+    {
+      "name": "use_dict",
+      "type": "expression_statement",
+      "start_line": 46,
+      "end_line": 46,
+      "context": "    use_dict: dict[str, list[str]] = field(default_factory=dict)"
+    },
+    {
+      "name": "glob_list",
+      "type": "expression_statement",
+      "start_line": 48,
+      "end_line": 48,
+      "context": "    glob_list: list[list[str]] = field(default_factory=list)"
+    },
+    {
+      "name": "mod_list",
+      "type": "expression_statement",
+      "start_line": 50,
+      "end_line": 50,
+      "context": "    mod_list: list[tuple[str, str | None]] = field(default_factory=list)"
+    },
+    {
+      "name": "variant_dict",
+      "type": "expression_statement",
+      "start_line": 52,
+      "end_line": 52,
+      "context": "    variant_dict: dict[str, list[str]] = field(default_factory=dict)"
+    },
+    {
+      "name": "_enum_variant",
+      "type": "function_definition",
+      "start_line": 55,
+      "end_line": 74,
+      "context": "def _enum_variant(node: Node) -> tuple[str, list[str]] | None:\n    \"\"\"Read the name of an enum and the names of its variants.\n\n    Args:\n        node: An enum_item node.\n\n    Returns:\n        (enum name, variant names in the order written), None when the enum has no\n        name or no body.\n    \"\"\"\n    name_node = node.child_by_field_name(\"name\")\n    body_node = node.child_by_field_name(\"body\")\n    if name_node is None or body_node is None:\n        return None\n    variant_name_list: list[str] = []\n    for child in body_node.named_children:\n        variant_name_node = child.child_by_field_name(\"name\") if child.type == \"enum_variant\" else None\n        if variant_name_node is not None:\n            variant_name_list.append(variant_name_node.text.decode(\"utf-8\"))\n    return name_node.text.decode(\"utf-8\"), variant_name_list"
+    },
+    {
+      "name": "_read_module_file",
+      "type": "function_definition",
+      "start_line": 77,
+      "end_line": 111,
+      "context": "def _read_module_file(file_abs: str) -> _ModuleFile:\n    \"\"\"Parse a .rs file and collect its top-level definitions, use declarations, mod\n    declarations and enum variants.\n\n    Args:\n        file_abs: Absolute path of the .rs file.\n\n    Returns:\n        A _ModuleFile.\n    \"\"\"\n    root_node = parse_file(file_abs)[0]\n    module_file = _ModuleFile()\n\n    definition_list = extract_definitions(root_node, EXT_TO_DEFINITION_DICT[\"rs\"])\n    module_file.definition_name_set = {\n        d.name for d in select_top_level_definitions(definition_list)\n        if d.type not in ATTACHED_DEFINITION_TYPE_SET\n    }\n\n    for child in root_node.children:\n        if child.type == \"mod_item\":\n            declaration = mod_declaration(child)\n            if declaration is not None:\n                module_file.mod_list.append(declaration)\n        elif child.type == \"enum_item\":\n            enum_variant = _enum_variant(child)\n            if enum_variant is not None:\n                module_file.variant_dict[enum_variant[0]] = enum_variant[1]\n        elif child.type in (\"use_declaration\", \"extern_crate_declaration\"):\n            for module, name, _, _ in rust_import_list(child):\n                if name == \"*\":\n                    module_file.glob_list.append(module.split(\"::\"))\n                elif name:\n                    module_file.use_dict[name] = module.split(\"::\")\n    return module_file"
+    },
+    {
+      "name": "_ancestor_dir_set",
+      "type": "function_definition",
+      "start_line": 114,
+      "end_line": 134,
+      "context": "def _ancestor_dir_set(file_rel_set: set[str]) -> set[str]:\n    \"\"\"Return the directories that hold the files and all their parent directories.\n\n    Examples:\n        {\"a/b/x.rs\", \"c.rs\"} -> {\"a/b\", \"a\", \"\"}\n\n    Args:\n        file_rel_set: Relative file paths.\n\n    Returns:\n        Relative directory paths; \"\" is the project root.\n    \"\"\"\n    dir_set: set[str] = set()\n    for file_rel in file_rel_set:\n        directory = os.path.dirname(file_rel)\n        while directory not in dir_set:\n            dir_set.add(directory)\n            if not directory:\n                break\n            directory = os.path.dirname(directory)\n    return dir_set"
+    },
+    {
+      "name": "_read_cargo_package_dict",
+      "type": "function_definition",
+      "start_line": 137,
+      "end_line": 162,
+      "context": "def _read_cargo_package_dict(project_dir: str, rs_file_set: set[str]) -> dict[str, dict]:\n    \"\"\"Read the Cargo.toml files of the project that have a [package] table.\n\n    A Cargo.toml is looked for in every directory that holds a .rs file and in their parents.\n\n    Args:\n        project_dir: Absolute path to the project root.\n        rs_file_set: Relative paths of the .rs files of the project.\n\n    Returns:\n        A {package directory relative path: parsed Cargo.toml} dict.\n    \"\"\"\n    cargo_package_dict: dict[str, dict] = {}\n    for directory in sorted(_ancestor_dir_set(rs_file_set)):\n        cargo_path = os.path.join(project_dir, directory, \"Cargo.toml\")\n        if not os.path.isfile(cargo_path):\n            continue\n        try:\n            with open(cargo_path, \"rb\") as f:\n                cargo_dict = tomllib.load(f)\n        except (OSError, tomllib.TOMLDecodeError) as e:\n            logger.warning(f\"Failed to read {cargo_path}: {e}\")\n            continue\n        if isinstance(cargo_dict.get(\"package\"), dict):\n            cargo_package_dict[directory] = cargo_dict\n    return cargo_package_dict"
+    },
+    {
+      "name": "_crate_lib_dict",
+      "type": "function_definition",
+      "start_line": 165,
+      "end_line": 184,
+      "context": "def _crate_lib_dict(cargo_package_dict: dict[str, dict], rs_file_set: set[str]) -> dict[str, str]:\n    \"\"\"Map each crate name to its library root file.\n\n    Args:\n        cargo_package_dict: Return value of _read_cargo_package_dict.\n        rs_file_set: Relative paths of the .rs files of the project.\n\n    Returns:\n        A {crate name: library root file relative path} dict. The crate name is\n        [lib] name, or [package] name with \"-\" replaced by \"_\".\n    \"\"\"\n    crate_lib_dict: dict[str, str] = {}\n    for directory, cargo_dict in cargo_package_dict.items():\n        package = cargo_dict[\"package\"]\n        lib = cargo_dict.get(\"lib\") if isinstance(cargo_dict.get(\"lib\"), dict) else {}\n        crate_name = str(lib.get(\"name\") or package.get(\"name\", \"\")).replace(\"-\", \"_\")\n        lib_rel = _join_path(directory, str(lib.get(\"path\", \"src/lib.rs\")))\n        if crate_name and lib_rel in rs_file_set:\n            crate_lib_dict[crate_name] = lib_rel\n    return crate_lib_dict"
+    },
+    {
+      "name": "RustModuleTree",
+      "type": "class_definition",
+      "start_line": 187,
+      "end_line": 470,
+      "context": "class RustModuleTree:\n    \"\"\"The module tree of the .rs files of a project, built from their mod declarations.\n\n    A file with no parent module is a crate root (lib.rs, main.rs, a file under\n    tests/, examples/, benches/, build.rs, etc.).\n    \"\"\"\n\n    def __init__(self, project_dir: str, rs_file_set: set[str]) -> None:\n        \"\"\"Parse every .rs file and link each mod declaration to its file.\n\n        Args:\n            project_dir: Absolute path to the project root.\n            rs_file_set: Relative paths of the .rs files of the project.\n        \"\"\"\n        self.module_file_dict: dict[str, _ModuleFile] = {\n            file_rel: _read_module_file(os.path.join(project_dir, file_rel))\n            for file_rel in sorted(rs_file_set)\n        }\n        self.child_dict: dict[str, dict[str, str]] = {f: {} for f in self.module_file_dict}\n        self.parent_dict: dict[str, str] = {}\n        cargo_package_dict = _read_cargo_package_dict(project_dir, rs_file_set)\n        self.crate_lib_dict = _crate_lib_dict(cargo_package_dict, rs_file_set)\n        # Package directory -> whether the package is edition 2015 (the edition when none is written)\n        self._edition_2015_dict = {\n            directory: cargo_dict[\"package\"].get(\"edition\", \"2015\") == \"2015\"\n            for directory, cargo_dict in cargo_package_dict.items()\n        }\n        # (file, segments) -> result of resolve, for calls from outside the tree\n        self._resolve_cache: dict[tuple[str, tuple[str, ...]], tuple[str | None, tuple[str, ...]]] = {}\n        self._link_modules()\n\n    def _link_modules(self) -> None:\n        \"\"\"Fill child_dict and parent_dict from the mod declarations.\n\n        mod name; is looked up as <dir>/name.rs and <dir>/name/mod.rs, where <dir> is\n        the file's directory for mod.rs / lib.rs / main.rs and <dir>/<file stem> otherwise;\n        #[path = \"...\"] is taken relative to the file's directory. A declaration\n        that none of these match is then looked up in the file's directory, when\n        that file has no parent yet.\n        When two declarations share a name (#[cfg] alternatives), the first one is the\n        child, and every matched file gets the declaring file as its parent.\n        \"\"\"\n        fallback_list: list[tuple[str, str, list[str]]] = []\n        for file_rel, module_file in self.module_file_dict.items():\n            directory, file_name = os.path.split(file_rel)\n            if file_name in _OWN_DIR_FILE_NAME_TUPLE:\n                own_dir = directory\n            else:\n                own_dir = _join_path(directory, file_name[:-3])\n            for name, path_value in module_file.mod_list:\n                if path_value:\n                    candidate_list = [_join_path(directory, path_value)]\n                else:\n                    candidate_list = [_join_path(own_dir, name + \".rs\"), _join_path(own_dir, name, \"mod.rs\")]\n                target = next(\n                    (c for c in candidate_list if c in self.module_file_dict and c != file_rel), None,\n                )\n                if target is not None:\n                    self._link(file_rel, name, target)\n                elif not path_value and own_dir != directory:\n                    fallback_list.append((file_rel, name, [\n                        _join_path(directory, name + \".rs\"), _join_path(directory, name, \"mod.rs\"),\n                    ]))\n\n        for file_rel, name, candidate_list in fallback_list:\n            target = next(\n                (c for c in candidate_list\n                 if c in self.module_file_dict and c != file_rel and c not in self.parent_dict),\n                None,\n            )\n            if target is not None:\n                self._link(file_rel, name, target)\n\n    def _link(self, parent_rel: str, name: str, child_rel: str) -> None:\n        \"\"\"Register child_rel as the module name of parent_rel.\"\"\"\n        self.child_dict[parent_rel].setdefault(name, child_rel)\n        self.parent_dict.setdefault(child_rel, parent_rel)\n\n    def crate_root(self, file_rel: str) -> str:\n        \"\"\"Return the crate root file of a file by following its parent modules.\n\n        Args:\n            file_rel: Relative path of a .rs file of the project.\n\n        Returns:\n            Relative path of the file with no parent module reached from file_rel.\n        \"\"\"\n        visit_set = {file_rel}\n        while file_rel in self.parent_dict:\n            file_rel = self.parent_dict[file_rel]\n            if file_rel in visit_set:\n                break\n            visit_set.add(file_rel)\n        return file_rel\n\n    def _is_edition_2015(self, file_rel: str) -> bool:\n        \"\"\"Return whether the nearest package above the file is edition 2015.\n\n        Args:\n            file_rel: Relative path of a .rs file of the project.\n\n        Returns:\n            False when no Cargo.toml with a [package] table is above the file.\n        \"\"\"\n        directory = os.path.dirname(file_rel)\n        while True:\n            if directory in self._edition_2015_dict:\n                return self._edition_2015_dict[directory]\n            if not directory:\n                return False\n            directory = os.path.dirname(directory)\n\n    def _is_found(\n        self, target_rel: str | None, rest_list: list[str], segment_list: list[str],\n    ) -> bool:\n        \"\"\"Return whether resolving through a glob import reached what segment_list names.\n\n        Args:\n            target_rel: File returned by resolve / _walk.\n            rest_list: Segments returned with it.\n            segment_list: Segments that were looked up behind the glob path.\n\n        Returns:\n            True when the glob path was consumed and then either the first segment was\n            consumed as a module, or target_rel defines the first remaining segment\n            (the segments after it being the same as in segment_list).\n        \"\"\"\n        if target_rel is None:\n            return False\n        if len(rest_list) < len(segment_list):\n            return rest_list == segment_list[len(segment_list) - len(rest_list):]\n        return (\n            len(rest_list) == len(segment_list)\n            and rest_list[1:] == segment_list[1:]\n            and rest_list[0] in self.module_file_dict[target_rel].definition_name_set\n        )\n\n    def resolve(\n        self,\n        file_rel: str,\n        segment_list: list[str],\n        hop: int = 0,\n        visit_set: set[tuple[str, tuple[str, ...]]] | None = None,\n    ) -> tuple[str | None, list[str]]:\n        \"\"\"Resolve a path written in a file to the file that defines what it names.\n\n        The first segment is looked up in this order:\n            \"\" (a leading \"::\")     -> the library root of the crate the next segment\n                                       names, else the crate root in an edition 2015 package\n            crate / self / super    -> the crate root / this module / the parent module\n            a child module          -> that module's file\n            a name bound by use     -> the path of that use declaration\n            a definition of the file -> the file itself\n            a crate of the project  -> the crate's library root (Cargo.toml)\n            a name of a glob import (use super::*) -> the module the glob path leads to\n            a child module of the crate root, in an edition 2015 package\n\n        A call without visit_set is cached per (file, segments).\n\n        Args:\n            file_rel: Relative path of the file the path is written in.\n            segment_list: Segments of the path (e.g. [\"crate\", \"util\", \"log\"]).\n            hop: Number of use declarations followed so far.\n            visit_set: (file, segments) pairs already looked up in this resolution;\n                a pair looked up again resolves to None.\n\n        Returns:\n            (file relative path, segments not consumed by modules). The file is None\n            when the path does not lead into the project (std, an external crate, etc.).\n        \"\"\"\n        if not segment_list or file_rel not in self.module_file_dict:\n            return None, segment_list\n        state = (file_rel, tuple(segment_list))\n        if visit_set is None:\n            if state not in self._resolve_cache:\n                target_rel, rest_list = self._resolve_head(file_rel, segment_list, hop, {state})\n                self._resolve_cache[state] = (target_rel, tuple(rest_list))\n            target_rel, rest_tuple = self._resolve_cache[state]\n            return target_rel, list(rest_tuple)\n        if state in visit_set:\n            return None, segment_list\n        visit_set.add(state)\n        return self._resolve_head(file_rel, segment_list, hop, visit_set)\n\n    def _resolve_head(\n        self,\n        file_rel: str,\n        segment_list: list[str],\n        hop: int,\n        visit_set: set[tuple[str, tuple[str, ...]]],\n    ) -> tuple[str | None, list[str]]:\n        \"\"\"Look up the first segment of a path in the order described in resolve.\"\"\"\n        head = segment_list[0]\n        module_file = self.module_file_dict[file_rel]\n        if head == \"\":\n            if len(segment_list) > 1 and segment_list[1] in self.crate_lib_dict:\n                return self._walk(\n                    self.crate_lib_dict[segment_list[1]], segment_list[2:], hop, visit_set,\n                )\n            if self._is_edition_2015(file_rel):\n                return self._walk(self.crate_root(file_rel), segment_list[1:], hop, visit_set)\n            return None, segment_list\n        if head == \"crate\":\n            return self._walk(self.crate_root(file_rel), segment_list[1:], hop, visit_set)\n        if head in (\"self\", \"super\") or head in self.child_dict[file_rel]:\n            return self._walk(file_rel, segment_list, hop, visit_set)\n        use_list = module_file.use_dict.get(head)\n        if use_list is not None and use_list != [head] and hop < _MAX_USE_HOP:\n            return self.resolve(file_rel, use_list + segment_list[1:], hop + 1, visit_set)\n        if head in module_file.definition_name_set:\n            return file_rel, segment_list\n        if head in self.crate_lib_dict:\n            return self._walk(self.crate_lib_dict[head], segment_list[1:], hop, visit_set)\n        if hop < _MAX_USE_HOP:\n            for glob in module_file.glob_list:\n                target_rel, rest_list = self.resolve(file_rel, glob + segment_list, hop + 1, visit_set)\n                if self._is_found(target_rel, rest_list, segment_list):\n                    return target_rel, rest_list\n        root_rel = self.crate_root(file_rel)\n        if root_rel != file_rel and head in self.child_dict[root_rel] and self._is_edition_2015(file_rel):\n            return self._walk(root_rel, segment_list, hop, visit_set)\n        return None, segment_list\n\n    def _walk(\n        self,\n        file_rel: str,\n        segment_list: list[str],\n        hop: int,\n        visit_set: set[tuple[str, tuple[str, ...]]],\n    ) -> tuple[str | None, list[str]]:\n        \"\"\"Follow the segments through child and parent modules starting from a file.\n\n        When the first remaining segment is not defined in the reached file, it is\n        followed through that file's use declarations (re-exports) and glob imports.\n\n        Args:\n            file_rel: Relative path of the module file to start from.\n            segment_list: Segments to follow (self / super / module names / item names).\n            hop: Number of use declarations followed so far.\n            visit_set: (file, segments) pairs already looked up in this resolution.\n\n        Returns:\n            (file relative path, segments not consumed by modules). The file is None\n            when super goes above a crate root.\n        \"\"\"\n        current_rel = file_rel\n        rest_list = list(segment_list)\n        while rest_list:\n            segment = rest_list[0]\n            if segment == \"super\":\n                if current_rel not in self.parent_dict:\n                    return None, rest_list\n                current_rel = self.parent_dict[current_rel]\n            elif segment in self.child_dict[current_rel]:\n                current_rel = self.child_dict[current_rel][segment]\n            elif segment != \"self\":\n                break\n            rest_list.pop(0)\n\n        if not rest_list or rest_list[0] == \"*\" or hop >= _MAX_USE_HOP:\n            return current_rel, rest_list\n        module_file = self.module_file_dict[current_rel]\n        name = rest_list[0]\n        if name in module_file.definition_name_set:\n            return current_rel, rest_list\n\n        # The name is brought into the module by a use declaration (pub use a::Name)\n        use_list = module_file.use_dict.get(name)\n        if use_list is not None:\n            target_rel, target_rest_list = self.resolve(\n                current_rel, use_list + rest_list[1:], hop + 1, visit_set,\n            )\n            if target_rel is not None:\n                return target_rel, target_rest_list\n            return current_rel, rest_list\n\n        # The name comes from a glob import (pub use a::*) of a module that has it\n        for glob in module_file.glob_list:\n            target_rel, target_rest_list = self.resolve(\n                current_rel, glob + rest_list, hop + 1, visit_set,\n            )\n            if self._is_found(target_rel, target_rest_list, rest_list):\n                return target_rel, target_rest_list\n        return current_rel, rest_list"
+    },
+    {
+      "name": "__init__",
+      "type": "function_definition",
+      "start_line": 194,
+      "end_line": 216,
+      "context": "    def __init__(self, project_dir: str, rs_file_set: set[str]) -> None:\n        \"\"\"Parse every .rs file and link each mod declaration to its file.\n\n        Args:\n            project_dir: Absolute path to the project root.\n            rs_file_set: Relative paths of the .rs files of the project.\n        \"\"\"\n        self.module_file_dict: dict[str, _ModuleFile] = {\n            file_rel: _read_module_file(os.path.join(project_dir, file_rel))\n            for file_rel in sorted(rs_file_set)\n        }\n        self.child_dict: dict[str, dict[str, str]] = {f: {} for f in self.module_file_dict}\n        self.parent_dict: dict[str, str] = {}\n        cargo_package_dict = _read_cargo_package_dict(project_dir, rs_file_set)\n        self.crate_lib_dict = _crate_lib_dict(cargo_package_dict, rs_file_set)\n        # Package directory -> whether the package is edition 2015 (the edition when none is written)\n        self._edition_2015_dict = {\n            directory: cargo_dict[\"package\"].get(\"edition\", \"2015\") == \"2015\"\n            for directory, cargo_dict in cargo_package_dict.items()\n        }\n        # (file, segments) -> result of resolve, for calls from outside the tree\n        self._resolve_cache: dict[tuple[str, tuple[str, ...]], tuple[str | None, tuple[str, ...]]] = {}\n        self._link_modules()"
+    },
+    {
+      "name": "_link_modules",
+      "type": "function_definition",
+      "start_line": 218,
+      "end_line": 258,
+      "context": "    def _link_modules(self) -> None:\n        \"\"\"Fill child_dict and parent_dict from the mod declarations.\n\n        mod name; is looked up as <dir>/name.rs and <dir>/name/mod.rs, where <dir> is\n        the file's directory for mod.rs / lib.rs / main.rs and <dir>/<file stem> otherwise;\n        #[path = \"...\"] is taken relative to the file's directory. A declaration\n        that none of these match is then looked up in the file's directory, when\n        that file has no parent yet.\n        When two declarations share a name (#[cfg] alternatives), the first one is the\n        child, and every matched file gets the declaring file as its parent.\n        \"\"\"\n        fallback_list: list[tuple[str, str, list[str]]] = []\n        for file_rel, module_file in self.module_file_dict.items():\n            directory, file_name = os.path.split(file_rel)\n            if file_name in _OWN_DIR_FILE_NAME_TUPLE:\n                own_dir = directory\n            else:\n                own_dir = _join_path(directory, file_name[:-3])\n            for name, path_value in module_file.mod_list:\n                if path_value:\n                    candidate_list = [_join_path(directory, path_value)]\n                else:\n                    candidate_list = [_join_path(own_dir, name + \".rs\"), _join_path(own_dir, name, \"mod.rs\")]\n                target = next(\n                    (c for c in candidate_list if c in self.module_file_dict and c != file_rel), None,\n                )\n                if target is not None:\n                    self._link(file_rel, name, target)\n                elif not path_value and own_dir != directory:\n                    fallback_list.append((file_rel, name, [\n                        _join_path(directory, name + \".rs\"), _join_path(directory, name, \"mod.rs\"),\n                    ]))\n\n        for file_rel, name, candidate_list in fallback_list:\n            target = next(\n                (c for c in candidate_list\n                 if c in self.module_file_dict and c != file_rel and c not in self.parent_dict),\n                None,\n            )\n            if target is not None:\n                self._link(file_rel, name, target)"
+    },
+    {
+      "name": "_link",
+      "type": "function_definition",
+      "start_line": 260,
+      "end_line": 263,
+      "context": "    def _link(self, parent_rel: str, name: str, child_rel: str) -> None:\n        \"\"\"Register child_rel as the module name of parent_rel.\"\"\"\n        self.child_dict[parent_rel].setdefault(name, child_rel)\n        self.parent_dict.setdefault(child_rel, parent_rel)"
+    },
+    {
+      "name": "crate_root",
+      "type": "function_definition",
+      "start_line": 265,
+      "end_line": 280,
+      "context": "    def crate_root(self, file_rel: str) -> str:\n        \"\"\"Return the crate root file of a file by following its parent modules.\n\n        Args:\n            file_rel: Relative path of a .rs file of the project.\n\n        Returns:\n            Relative path of the file with no parent module reached from file_rel.\n        \"\"\"\n        visit_set = {file_rel}\n        while file_rel in self.parent_dict:\n            file_rel = self.parent_dict[file_rel]\n            if file_rel in visit_set:\n                break\n            visit_set.add(file_rel)\n        return file_rel"
+    },
+    {
+      "name": "_is_edition_2015",
+      "type": "function_definition",
+      "start_line": 282,
+      "end_line": 297,
+      "context": "    def _is_edition_2015(self, file_rel: str) -> bool:\n        \"\"\"Return whether the nearest package above the file is edition 2015.\n\n        Args:\n            file_rel: Relative path of a .rs file of the project.\n\n        Returns:\n            False when no Cargo.toml with a [package] table is above the file.\n        \"\"\"\n        directory = os.path.dirname(file_rel)\n        while True:\n            if directory in self._edition_2015_dict:\n                return self._edition_2015_dict[directory]\n            if not directory:\n                return False\n            directory = os.path.dirname(directory)"
+    },
+    {
+      "name": "_is_found",
+      "type": "function_definition",
+      "start_line": 299,
+      "end_line": 322,
+      "context": "    def _is_found(\n        self, target_rel: str | None, rest_list: list[str], segment_list: list[str],\n    ) -> bool:\n        \"\"\"Return whether resolving through a glob import reached what segment_list names.\n\n        Args:\n            target_rel: File returned by resolve / _walk.\n            rest_list: Segments returned with it.\n            segment_list: Segments that were looked up behind the glob path.\n\n        Returns:\n            True when the glob path was consumed and then either the first segment was\n            consumed as a module, or target_rel defines the first remaining segment\n            (the segments after it being the same as in segment_list).\n        \"\"\"\n        if target_rel is None:\n            return False\n        if len(rest_list) < len(segment_list):\n            return rest_list == segment_list[len(segment_list) - len(rest_list):]\n        return (\n            len(rest_list) == len(segment_list)\n            and rest_list[1:] == segment_list[1:]\n            and rest_list[0] in self.module_file_dict[target_rel].definition_name_set\n        )"
+    },
+    {
+      "name": "resolve",
+      "type": "function_definition",
+      "start_line": 324,
+      "end_line": 369,
+      "context": "    def resolve(\n        self,\n        file_rel: str,\n        segment_list: list[str],\n        hop: int = 0,\n        visit_set: set[tuple[str, tuple[str, ...]]] | None = None,\n    ) -> tuple[str | None, list[str]]:\n        \"\"\"Resolve a path written in a file to the file that defines what it names.\n\n        The first segment is looked up in this order:\n            \"\" (a leading \"::\")     -> the library root of the crate the next segment\n                                       names, else the crate root in an edition 2015 package\n            crate / self / super    -> the crate root / this module / the parent module\n            a child module          -> that module's file\n            a name bound by use     -> the path of that use declaration\n            a definition of the file -> the file itself\n            a crate of the project  -> the crate's library root (Cargo.toml)\n            a name of a glob import (use super::*) -> the module the glob path leads to\n            a child module of the crate root, in an edition 2015 package\n\n        A call without visit_set is cached per (file, segments).\n\n        Args:\n            file_rel: Relative path of the file the path is written in.\n            segment_list: Segments of the path (e.g. [\"crate\", \"util\", \"log\"]).\n            hop: Number of use declarations followed so far.\n            visit_set: (file, segments) pairs already looked up in this resolution;\n                a pair looked up again resolves to None.\n\n        Returns:\n            (file relative path, segments not consumed by modules). The file is None\n            when the path does not lead into the project (std, an external crate, etc.).\n        \"\"\"\n        if not segment_list or file_rel not in self.module_file_dict:\n            return None, segment_list\n        state = (file_rel, tuple(segment_list))\n        if visit_set is None:\n            if state not in self._resolve_cache:\n                target_rel, rest_list = self._resolve_head(file_rel, segment_list, hop, {state})\n                self._resolve_cache[state] = (target_rel, tuple(rest_list))\n            target_rel, rest_tuple = self._resolve_cache[state]\n            return target_rel, list(rest_tuple)\n        if state in visit_set:\n            return None, segment_list\n        visit_set.add(state)\n        return self._resolve_head(file_rel, segment_list, hop, visit_set)"
+    },
+    {
+      "name": "_resolve_head",
+      "type": "function_definition",
+      "start_line": 371,
+      "end_line": 408,
+      "context": "    def _resolve_head(\n        self,\n        file_rel: str,\n        segment_list: list[str],\n        hop: int,\n        visit_set: set[tuple[str, tuple[str, ...]]],\n    ) -> tuple[str | None, list[str]]:\n        \"\"\"Look up the first segment of a path in the order described in resolve.\"\"\"\n        head = segment_list[0]\n        module_file = self.module_file_dict[file_rel]\n        if head == \"\":\n            if len(segment_list) > 1 and segment_list[1] in self.crate_lib_dict:\n                return self._walk(\n                    self.crate_lib_dict[segment_list[1]], segment_list[2:], hop, visit_set,\n                )\n            if self._is_edition_2015(file_rel):\n                return self._walk(self.crate_root(file_rel), segment_list[1:], hop, visit_set)\n            return None, segment_list\n        if head == \"crate\":\n            return self._walk(self.crate_root(file_rel), segment_list[1:], hop, visit_set)\n        if head in (\"self\", \"super\") or head in self.child_dict[file_rel]:\n            return self._walk(file_rel, segment_list, hop, visit_set)\n        use_list = module_file.use_dict.get(head)\n        if use_list is not None and use_list != [head] and hop < _MAX_USE_HOP:\n            return self.resolve(file_rel, use_list + segment_list[1:], hop + 1, visit_set)\n        if head in module_file.definition_name_set:\n            return file_rel, segment_list\n        if head in self.crate_lib_dict:\n            return self._walk(self.crate_lib_dict[head], segment_list[1:], hop, visit_set)\n        if hop < _MAX_USE_HOP:\n            for glob in module_file.glob_list:\n                target_rel, rest_list = self.resolve(file_rel, glob + segment_list, hop + 1, visit_set)\n                if self._is_found(target_rel, rest_list, segment_list):\n                    return target_rel, rest_list\n        root_rel = self.crate_root(file_rel)\n        if root_rel != file_rel and head in self.child_dict[root_rel] and self._is_edition_2015(file_rel):\n            return self._walk(root_rel, segment_list, hop, visit_set)\n        return None, segment_list"
+    },
+    {
+      "name": "_walk",
+      "type": "function_definition",
+      "start_line": 410,
+      "end_line": 470,
+      "context": "    def _walk(\n        self,\n        file_rel: str,\n        segment_list: list[str],\n        hop: int,\n        visit_set: set[tuple[str, tuple[str, ...]]],\n    ) -> tuple[str | None, list[str]]:\n        \"\"\"Follow the segments through child and parent modules starting from a file.\n\n        When the first remaining segment is not defined in the reached file, it is\n        followed through that file's use declarations (re-exports) and glob imports.\n\n        Args:\n            file_rel: Relative path of the module file to start from.\n            segment_list: Segments to follow (self / super / module names / item names).\n            hop: Number of use declarations followed so far.\n            visit_set: (file, segments) pairs already looked up in this resolution.\n\n        Returns:\n            (file relative path, segments not consumed by modules). The file is None\n            when super goes above a crate root.\n        \"\"\"\n        current_rel = file_rel\n        rest_list = list(segment_list)\n        while rest_list:\n            segment = rest_list[0]\n            if segment == \"super\":\n                if current_rel not in self.parent_dict:\n                    return None, rest_list\n                current_rel = self.parent_dict[current_rel]\n            elif segment in self.child_dict[current_rel]:\n                current_rel = self.child_dict[current_rel][segment]\n            elif segment != \"self\":\n                break\n            rest_list.pop(0)\n\n        if not rest_list or rest_list[0] == \"*\" or hop >= _MAX_USE_HOP:\n            return current_rel, rest_list\n        module_file = self.module_file_dict[current_rel]\n        name = rest_list[0]\n        if name in module_file.definition_name_set:\n            return current_rel, rest_list\n\n        # The name is brought into the module by a use declaration (pub use a::Name)\n        use_list = module_file.use_dict.get(name)\n        if use_list is not None:\n            target_rel, target_rest_list = self.resolve(\n                current_rel, use_list + rest_list[1:], hop + 1, visit_set,\n            )\n            if target_rel is not None:\n                return target_rel, target_rest_list\n            return current_rel, rest_list\n\n        # The name comes from a glob import (pub use a::*) of a module that has it\n        for glob in module_file.glob_list:\n            target_rel, target_rest_list = self.resolve(\n                current_rel, glob + rest_list, hop + 1, visit_set,\n            )\n            if self._is_found(target_rel, target_rest_list, rest_list):\n                return target_rel, target_rest_list\n        return current_rel, rest_list"
+    },
+    {
+      "name": "_get_module_tree",
+      "type": "function_definition",
+      "start_line": 473,
+      "end_line": 492,
+      "context": "def _get_module_tree(project_dir: str, project_file_set: set[str]) -> RustModuleTree:\n    \"\"\"Return the module tree of the project, building it on the first call.\n\n    The tree is kept in module_tree_cache until the project file set changes or the\n    cache is cleared.\n\n    Args:\n        project_dir: Absolute path to the project root.\n        project_file_set: Relative paths of the project files that have a language.\n\n    Returns:\n        The RustModuleTree of the .rs files in project_file_set.\n    \"\"\"\n    module_tree = project_cache_value(module_tree_cache, project_dir, project_file_set)\n    if module_tree is not None:\n        return module_tree\n\n    module_tree = RustModuleTree(project_dir, {f for f in project_file_set if f.endswith(\".rs\")})\n    module_tree_cache[project_dir] = (project_file_set, module_tree)\n    return module_tree"
+    },
+    {
+      "name": "_is_path_attribute",
+      "type": "function_definition",
+      "start_line": 495,
+      "end_line": 497,
+      "context": "def _is_path_attribute(module: str) -> bool:\n    \"\"\"Return whether an ImportInfo module is the value of a #[path] attribute (\"unix.rs\").\"\"\"\n    return \".\" in module or \"/\" in module"
+    },
+    {
+      "name": "_resolve_import",
+      "type": "function_definition",
+      "start_line": 500,
+      "end_line": 522,
+      "context": "def _resolve_import(\n    module: str,\n    current_file_rel: str,\n    project_file_set: set[str],\n    project_dir: str,\n) -> tuple[str | None, list[str]]:\n    \"\"\"Resolve a module path of a Rust import through the module tree of the project.\n\n    Args:\n        module: A module string of an ImportInfo (segments joined with \"::\").\n        current_file_rel: Relative path of the file the import is written in.\n        project_file_set: Set of file paths within the project.\n        project_dir: Absolute path to the project root.\n\n    Returns:\n        (file relative path, segments not consumed by modules). The file is None\n        when the path leads outside the project or to the current file itself.\n    \"\"\"\n    module_tree = _get_module_tree(project_dir, project_file_set)\n    target_rel, rest_list = module_tree.resolve(current_file_rel, module.split(\"::\"))\n    if target_rel == current_file_rel:\n        return None, rest_list\n    return target_rel, rest_list"
+    },
+    {
+      "name": "resolve_rust_module_path",
+      "type": "function_definition",
+      "start_line": 525,
+      "end_line": 553,
+      "context": "def resolve_rust_module_path(\n    module: str,\n    current_file_rel: str,\n    project_file_set: set[str],\n    project_dir: str,\n) -> str | None:\n    \"\"\"Resolve a module path of a Rust import to a file within the project.\n\n    Examples (module -> file):\n        \"crate::config::Settings\"   -> \"src/config.rs\"\n        \"self::util\"                -> \"src/util.rs\" or \"src/util/mod.rs\"\n        \"unix.rs\" (#[path] value)   -> \"src/unix.rs\" (relative to the current file's directory)\n        \"std::collections::HashMap\" -> None\n\n    Args:\n        module: A module string of an ImportInfo (segments joined with \"::\",\n            or the value of a #[path] attribute).\n        current_file_rel: Relative path of the file the import is written in.\n        project_file_set: Set of file paths within the project.\n        project_dir: Absolute path to the project root.\n\n    Returns:\n        A project-internal file path. None when the path leads outside the project\n        or to the current file itself.\n    \"\"\"\n    if _is_path_attribute(module):\n        target_rel = _join_path(os.path.dirname(current_file_rel), module)\n        return target_rel if target_rel in project_file_set and target_rel != current_file_rel else None\n    return _resolve_import(module, current_file_rel, project_file_set, project_dir)[0]"
+    },
+    {
+      "name": "rust_import_name_dict",
+      "type": "function_definition",
+      "start_line": 556,
+      "end_line": 620,
+      "context": "def rust_import_name_dict(\n    module: str,\n    name_list: list[str],\n    current_file_rel: str,\n    project_file_set: set[str],\n    project_dir: str,\n) -> dict[str, str | None]:\n    \"\"\"Return the names a Rust import binds that refer to a definition, with the path the\n    definition has in the resolved file.\n\n    A name that refers to a module is left out. \"*\" is kept when the path is a module\n    of another file (use a::*); when the path is a top-level enum (use a::Enum::*),\n    the names of its variants are returned in its place. An import that leads to the\n    current file gives its names when the first segment left over is a top-level\n    definition of the file. An import whose first segment left over is a name a use\n    declaration of the resolved file binds (pub use std::fmt::Write) gives no names.\n\n    Examples (module, name_list -> result):\n        \"crate::config::Settings\", [\"Settings\"]          -> {\"Settings\": \"Settings\"}\n        \"crate::shape::Circle\", [\"Round\"]                 -> {\"Round\": \"Circle\"}\n        \"crate::flags::gen_bash\", [\"gen_bash\"]\n            (flags has pub use self::bash::generate as gen_bash)   -> {\"gen_bash\": \"generate\"}\n        \"Settings::new\", [\"Settings::new\"]                -> {\"Settings::new\": \"Settings::new\"}\n        \"self::config\", [\"config\"]                        -> {}\n        \"crate::util\", [\"*\"]                              -> {\"*\": None}\n        \"crate::shape::Kind\", [\"*\"]    -> {\"Round\": \"Kind::Round\", \"Square\": \"Kind::Square\"}\n        \"self::parse\", [\"self::parse\"] (the current file defines parse)\n                                                          -> {\"self::parse\": \"parse\"}\n        \"crate::prelude::Write\", [\"Write\"] (prelude has pub use std::fmt::Write)  -> {}\n\n    Args:\n        module: A module string of an ImportInfo.\n        name_list: ImportInfo.names of the import.\n        current_file_rel: Relative path of the file the import is written in.\n        project_file_set: Set of file paths within the project.\n        project_dir: Absolute path to the project root.\n\n    Returns:\n        A {bound name: path of the definition in the resolved file (\"::\"-joined)} dict.\n        The value is None for \"*\". Empty when the import does not resolve.\n    \"\"\"\n    if _is_path_attribute(module):\n        return {}\n    module_tree = _get_module_tree(project_dir, project_file_set)\n    target_rel, rest_list = module_tree.resolve(current_file_rel, module.split(\"::\"))\n    if target_rel is None:\n        return {}\n    module_file = module_tree.module_file_dict[target_rel]\n    is_definition = bool(rest_list) and rest_list[0] in module_file.definition_name_set\n    if not is_definition and (\n        target_rel == current_file_rel or (rest_list and rest_list[0] in module_file.use_dict)\n    ):\n        return {}\n\n    name_dict: dict[str, str | None] = {}\n    for name in name_list:\n        if name == \"*\":\n            if not rest_list:\n                name_dict[name] = None\n            elif len(rest_list) == 1:\n                for variant_name in module_file.variant_dict.get(rest_list[0], []):\n                    name_dict.setdefault(variant_name, f\"{rest_list[0]}::{variant_name}\")\n        elif rest_list:\n            name_dict[name] = \"::\".join(rest_list)\n    return name_dict"
+    }
+  ],
+  "callee_usages": [
+    {
+      "lines": [
+        87
+      ],
+      "name": "parse_file",
+      "from": "codetwine/codetwine/parsers/ts_parser_py/ts_parser.py",
+      "target_context": "def parse_file(file_path: str) -> tuple[Node | CobolSource, bytes]:\n    \"\"\"Read a file, parse it with tree-sitter, and return (AST root node, byte content).\n\n    The file is decoded by read_source() and parsed as UTF-8, whatever encoding it is\n    stored in; the byte content is that UTF-8 text, and the text of every node decodes\n    as UTF-8. Line numbers are those of line_list_of() over the file.\n\n    For a COBOL file the first element is a CobolSource (read_cobol_source) in place of\n    the root node, and for a BMS source the CobolSource of its symbolic maps\n    (read_bms_source); extract_definitions(), extract_imports() and extract_usages()\n    take it as they take a root node. The language is the one language_ext() gives.\n\n    For an R Markdown or Quarto file the root node is the tree of its R code chunks\n    (r_chunk_code), each node at the position its code has in the file; the byte content\n    is the whole file. A chunk whose code does not end inside the chunk (an open \"{\", an\n    operator at its end) is left out of the tree.\n\n    For a C or C++ file a macro name written between a class keyword and a class name\n    (class EXPORT Shape { ... }) is read as spaces (_parse_c_family); the byte content\n    is the whole file, and class_macro_cache holds those names and their lines.\n\n    Parse results are cached at module level; a file found in the cache is not parsed again.\n    The cache holds at most PARSE_CACHE_MAX_FILES entries; when it is full, the least\n    recently used entry is discarded and that file is parsed again the next time it is\n    requested. PARSE_CACHE_MAX_FILES = 0 disables the limit.\n\n    Args:\n        file_path: Absolute path of the file to parse.\n\n    Returns:\n        A (root_node, content) tuple.\n    \"\"\"\n    # Return from cache if available, marking the entry as most recently used\n    cache_entry = parse_cache.get(file_path)\n    if cache_entry is not None:\n        parse_cache.move_to_end(file_path)\n        return cache_entry\n\n    # Get the corresponding language from the file extension\n    ext = language_ext(file_path)\n\n    # Read the file as UTF-8 bytes\n    content = read_utf8_content(file_path)\n\n    if ext in COBOL_EXT_SET:\n        # Split the COBOL text into statements and parse each of them\n        cobol_source = read_cobol_source(content.decode(\"utf-8\"), EXT_TO_LANGUAGE_DICT[ext])\n        parse_result = (cobol_source, content)\n    elif ext in BMS_EXT_SET:\n        # Read the maps of the BMS macros\n        parse_result = (read_bms_source(content.decode(\"utf-8\")), content)\n    elif ext in R_MARKDOWN_EXT_SET:\n        # Parse the R code chunks of the document, everything else blanked; a chunk\n        # whose code runs on past its end is blanked as well\n        language = EXT_TO_LANGUAGE_DICT[ext]\n        chunk_code = r_chunk_code(content, lambda code: _is_whole_code(code, language))\n        tree = Parser(language).parse(chunk_code)\n        parse_result = (tree.root_node, content)\n    elif ext in C_FAMILY_EXT_SET:\n        # Parse with the macro names in front of class names blanked\n        root_node, class_macro_cache[file_path] = _parse_c_family(content, EXT_TO_LANGUAGE_DICT[ext])\n        parse_result = (root_node, content)\n    else:\n        # Parse with tree-sitter to generate the AST\n        tree = Parser(EXT_TO_LANGUAGE_DICT[ext]).parse(content)\n        parse_result = (tree.root_node, content)\n\n    # Store in cache and drop the oldest entries once the limit is exceeded\n    parse_cache[file_path] = parse_result\n    if PARSE_CACHE_MAX_FILES > 0:\n        while len(parse_cache) > PARSE_CACHE_MAX_FILES:\n            parse_cache.popitem(last=False)\n    return parse_result",
+      "target_name": "parse_file",
+      "target_start_line": 167
+    },
+    {
+      "lines": [
+        90
+      ],
+      "name": "extract_definitions",
+      "from": "codetwine/codetwine/extractors/definitions_py/definitions.py",
+      "target_context": "def extract_definitions(\n    root_node: Node | CobolSource,\n    definition_dict: dict[str, str],\n) -> list[DefinitionInfo]:\n    \"\"\"Extract definitions (functions, classes, variables, types, etc.) from the AST and return them in line-number order.\n\n    For a CobolSource its definitions are returned: programs, ENTRY names, sections,\n    paragraphs, data items, index names and descriptions of files, with the line of the\n    name, and the level number and whether it is a group item for a data item.\n\n    For an R file (definition_dict is R_DEFINITION_DICT) the definitions\n    r_definition_list() reads are returned: top-level assignments, the names setClass\n    and the like are given, and the members of R6Class and setRefClass.\n\n    definition_dict structure:\n        key = AST node type (e.g. \"function_definition\")\n        value = one of the following:\n          - Child node type name (standard pattern): obtains the name from a direct child.\n            e.g. \"identifier\" -> searches node.children for a child with type==\"identifier\"\n          - \"__sentinel__\" format sentinel value (special pattern): the names are read by\n            a dedicated extraction function.\n            e.g. \"__assignment__\" -> expression_statement > assignment > identifier\n\n    A node that defines several names (int a, b; / X, Y = 1, 2 / const { a, b } = obj)\n    gives one definition per name, all with the line range of the node.\n\n    If no name is obtained (e.g. a C/C++ declaration is a function prototype),\n    child nodes are added to the queue and BFS continues. This allows detection of\n    definitions like function_declarator nested inside.\n\n    Args:\n        root_node: The AST root node covering the entire file, or the CobolSource of a COBOL file.\n        definition_dict: Per-language definition node settings.\n\n    Returns:\n        A list of DefinitionInfo sorted by line number in ascending order.\n    \"\"\"\n    if isinstance(root_node, CobolSource):\n        return [\n            DefinitionInfo(\n                definition.name, definition.type, definition.start_line, definition.end_line,\n                definition.name_line, definition.level, definition.is_group,\n            )\n            for definition in root_node.definition_list\n        ]\n    if definition_dict is R_DEFINITION_DICT:\n        return [\n            DefinitionInfo(definition.name, definition.type, definition.start_line, definition.end_line)\n            for definition in r_definition_list(root_node)\n        ]\n\n    definition_list: list[DefinitionInfo] = []\n\n    # BFS traversal of the AST using a deque\n    node_queue = deque([root_node])\n\n    while node_queue:\n        node = node_queue.popleft()\n        if node.type not in definition_dict:\n            # If not a definition node, add children to the queue to dig deeper, except\n            # into the body of a function written as a value, whose declarations are local\n            if node.type not in _LOCAL_BODY_TYPE_SET or _is_call_in_place(node):\n                node_queue.extend(node.children)\n            continue\n\n        # A decorated definition (e.g. @property) is named and typed after the\n        # function / class inside it and keeps the line range including the decorator\n        inner_node = _decorated_inner_node(node, definition_dict) if node.type == \"decorated_definition\" else node\n        name_list = definition_name_list(inner_node, definition_dict) if inner_node else []\n        if node.type == \"preproc_def\":\n            # Exclude #include guard #define directives\n            name_list = [name for name in name_list if not _INCLUDE_GUARD_RE.match(name)]\n        if not name_list:\n            # When no name is obtained, descend into child nodes to continue search\n            node_queue.extend(node.children)\n            continue\n\n        # The definition covers the declaration its node is the declarator of\n        extent_node = _extent_node(node, definition_dict)\n        start_line, end_line = _line_range(extent_node)\n        for name in name_list:\n            definition_list.append(DefinitionInfo(\n                name=name, type=inner_node.type, start_line=start_line, end_line=end_line,\n                start_byte=extent_node.start_byte, end_byte=extent_node.end_byte,\n            ))\n\n        # Continue traversal inside container-type definitions (e.g. namespace),\n        # and inside the type a declaration is written with\n        if inner_node.type in CONTAINER_DEFINITION_TYPE_SET:\n            node_queue.extend(inner_node.children)\n        elif inner_node.type in _TYPE_FIELD_DEFINITION_TYPE_SET:\n            type_node = inner_node.child_by_field_name(\"type\")\n            if type_node is not None:\n                node_queue.append(type_node)\n        elif inner_node.type == \"expression_statement\":\n            # The entries of an object a CommonJS module exports\n            export_assignment = commonjs_export_assignment(inner_node)\n            if export_assignment is not None and export_assignment[1].type == \"object\":\n                node_queue.extend(export_assignment[1].children)\n\n    return sorted(definition_list, key=lambda definition: definition.start_line)",
+      "target_name": "extract_definitions",
+      "target_start_line": 126
+    },
+    {
+      "lines": [
+        90
+      ],
+      "name": "EXT_TO_DEFINITION_DICT",
+      "from": "codetwine/codetwine/config/settings_py/settings.py",
+      "target_context": "EXT_TO_DEFINITION_DICT: dict[str, dict[str, str]] = _expand_ext_aliases(\n    {ext: lang_config.definition_dict for ext, lang_config in _LANG_REGISTRY.items()}\n)",
+      "target_name": "EXT_TO_DEFINITION_DICT",
+      "target_start_line": 1151
+    },
+    {
+      "lines": [
+        92
+      ],
+      "name": "select_top_level_definitions",
+      "from": "codetwine/codetwine/extractors/definitions_py/definitions.py",
+      "target_context": "def select_top_level_definitions(\n    definition_list: list[DefinitionInfo],\n) -> list[DefinitionInfo]:\n    \"\"\"Keep only definitions that are not members of another definition.\n\n    Members of a class, an impl block or a trait (methods, constructors, fields) are left out.\n    The definitions inside a container in OPEN_DEFINITION_TYPE_SET (a C++ namespace, a\n    C / C++ enum) are kept, and a definition of a type in BARE_NAME_DEFINITION_TYPE_SET\n    is kept wherever it is.\n\n    Args:\n        definition_list: Definitions of a single file, sorted by start_line.\n\n    Returns:\n        The outermost definitions, sorted by start_line.\n    \"\"\"\n    outer_list: list[DefinitionInfo] = []\n    member_end = 0\n    for definition in definition_list:\n        if definition.type in BARE_NAME_DEFINITION_TYPE_SET:\n            outer_list.append(definition)\n            continue\n        # Skip definitions that start within the range of a container with members\n        if definition.start_line <= member_end:\n            continue\n        outer_list.append(definition)\n        if (\n            definition.type in CONTAINER_DEFINITION_TYPE_SET\n            and definition.type not in OPEN_DEFINITION_TYPE_SET\n        ):\n            member_end = definition.end_line\n    return outer_list",
+      "target_name": "select_top_level_definitions",
+      "target_start_line": 229
+    },
+    {
+      "lines": [
+        93
+      ],
+      "name": "ATTACHED_DEFINITION_TYPE_SET",
+      "from": "codetwine/codetwine/extractors/definitions_py/definitions.py",
+      "target_context": "ATTACHED_DEFINITION_TYPE_SET = {\"impl_item\"}",
+      "target_name": "ATTACHED_DEFINITION_TYPE_SET",
+      "target_start_line": 77
+    },
+    {
+      "lines": [
+        98
+      ],
+      "name": "mod_declaration",
+      "from": "codetwine/codetwine/extractors/rust_path_py/rust_path.py",
+      "target_context": "def mod_declaration(node: Node) -> tuple[str, str | None] | None:\n    \"\"\"Read a module declaration without a body (mod name;).\n\n    Examples:\n        mod config;                          -> (\"config\", None)\n        mod r#type;                          -> (\"type\", None)\n        #[path = \"unix.rs\"] mod imp;         -> (\"imp\", \"unix.rs\")\n        mod tests { ... }                    -> None\n\n    Args:\n        node: A mod_item node.\n\n    Returns:\n        (module name, value of its #[path] attribute or None), or None when the\n        node is not a module declaration without a body.\n    \"\"\"\n    if node.type != \"mod_item\" or node.child_by_field_name(\"body\") is not None:\n        return None\n    name_node = node.child_by_field_name(\"name\")\n    if name_node is None:\n        return None\n\n    # Look through the attributes written right before the declaration for #[path = \"...\"]\n    path_value = None\n    sibling = node.prev_named_sibling\n    while sibling is not None and sibling.type in (\"attribute_item\", \"line_comment\", \"block_comment\"):\n        if sibling.type == \"attribute_item\":\n            for attribute in sibling.named_children:\n                key = attribute.named_children[0] if attribute.named_children else None\n                value = attribute.child_by_field_name(\"value\")\n                if key is not None and key.text == b\"path\" and value is not None:\n                    for part in value.named_children:\n                        if part.type == \"string_content\":\n                            path_value = part.text.decode(\"utf-8\")\n        sibling = sibling.prev_named_sibling\n    return _segment_text(name_node), path_value",
+      "target_name": "mod_declaration",
+      "target_start_line": 452
+    },
+    {
+      "lines": [
+        106
+      ],
+      "name": "rust_import_list",
+      "from": "codetwine/codetwine/extractors/rust_path_py/rust_path.py",
+      "target_context": "def rust_import_list(node: Node, use_cache_dict: UseCacheDict | None = None) -> list[ImportEntry]:\n    \"\"\"Return the module paths a Rust node brings into use, for extract_imports.\n\n    Handles:\n        use_declaration          -> one entry per imported name (expand_use_tree)\n        mod_item without a body  -> (\"self::<name>\", name), or (the #[path] value, name)\n        extern_crate_declaration -> (crate name, bound name)\n        scoped_identifier / scoped_type_identifier\n                                 -> (path, path as written) for the outermost path\n                                    outside use declarations and visibility modifiers\n        token_tree               -> (path, path as written) for each path written in\n                                    the arguments of a macro\n\n    Args:\n        node: A node captured by @path_item.\n        use_cache_dict: Cache of the use declarations of the blocks and inline modules\n            of the file the node belongs to, shared by the calls for one syntax tree;\n            None for a call of its own.\n\n    Returns:\n        (module, name bound in the file, original name when renamed, lines) entries.\n        module joins the segments with \"::\"; a glob import has the name \"*\" and an\n        import renamed to \"_\" has the name None. A path is rewritten into a path from\n        the file's module (_module_path). lines is the (first line, last line) the\n        name is bound for: the block or inline module a use declaration is written\n        in, the lines of a path (of the macro arguments it is written in) whose first\n        segment such a use declaration binds, and None for the whole file.\n    \"\"\"\n    reader = _IMPORT_READER_DICT.get(node.type)\n    return reader(node, {} if use_cache_dict is None else use_cache_dict) if reader else []",
+      "target_name": "rust_import_list",
+      "target_start_line": 608
+    },
+    {
+      "lines": [
+        486
+      ],
+      "name": "project_cache_value",
+      "from": "codetwine/codetwine/utils/project_cache_py/project_cache.py",
+      "target_context": "def project_cache_value(\n    cache_dict: dict[str, tuple[set[str], CacheValue]],\n    cache_key: str,\n    project_file_set: set[str],\n) -> CacheValue | None:\n    \"\"\"Return the value a cache keeps under a key for a project file set.\n\n    A value kept with an equal set that is another object is kept with\n    project_file_set from then on.\n\n    Args:\n        cache_dict: A {key: (project file set the value was built for, value)} cache.\n        cache_key: The key of the value.\n        project_file_set: Relative paths of the project files that have a language.\n\n    Returns:\n        The value, None when the cache has none under the key or it was built for\n        another project file set.\n    \"\"\"\n    cache_entry = cache_dict.get(cache_key)\n    if cache_entry is None:\n        return None\n    cache_file_set, value = cache_entry\n    if cache_file_set is project_file_set:\n        return value\n    if cache_file_set == project_file_set:\n        cache_dict[cache_key] = (project_file_set, value)\n        return value\n    return None",
+      "target_name": "project_cache_value",
+      "target_start_line": 6
+    }
+  ],
+  "same_file_usages": [
+    {
+      "lines": [
+        77,
+        88,
+        111,
+        201
+      ],
+      "name": "_ModuleFile",
+      "target_name": "_ModuleFile",
+      "target_start_line": 39
+    },
+    {
+      "lines": [
+        91
+      ],
+      "name": "_ModuleFile.definition_name_set",
+      "target_name": "definition_name_set",
+      "target_start_line": 44
+    },
+    {
+      "lines": [
+        100
+      ],
+      "name": "_ModuleFile.mod_list.append",
+      "target_name": "mod_list",
+      "target_start_line": 50
+    },
+    {
+      "lines": [
+        102
+      ],
+      "name": "_enum_variant",
+      "target_name": "_enum_variant",
+      "target_start_line": 55
+    },
+    {
+      "lines": [
+        104
+      ],
+      "name": "_ModuleFile.variant_dict",
+      "target_name": "variant_dict",
+      "target_start_line": 52
+    },
+    {
+      "lines": [
+        108
+      ],
+      "name": "_ModuleFile.glob_list.append",
+      "target_name": "glob_list",
+      "target_start_line": 48
+    },
+    {
+      "lines": [
+        110
+      ],
+      "name": "_ModuleFile.use_dict",
+      "target_name": "use_dict",
+      "target_start_line": 46
+    },
+    {
+      "lines": [
+        150
+      ],
+      "name": "_ancestor_dir_set",
+      "target_name": "_ancestor_dir_set",
+      "target_start_line": 114
+    },
+    {
+      "lines": [
+        158
+      ],
+      "name": "logger.warning",
+      "target_name": "logger",
+      "target_start_line": 16
+    },
+    {
+      "lines": [
+        181,
+        235,
+        238,
+        240,
+        248,
+        551
+      ],
+      "name": "_join_path",
+      "target_name": "_join_path",
+      "target_start_line": 28
+    },
+    {
+      "lines": [
+        202
+      ],
+      "name": "_read_module_file",
+      "target_name": "_read_module_file",
+      "target_start_line": 77
+    },
+    {
+      "lines": [
+        207
+      ],
+      "name": "_read_cargo_package_dict",
+      "target_name": "_read_cargo_package_dict",
+      "target_start_line": 137
+    },
+    {
+      "lines": [
+        208
+      ],
+      "name": "_crate_lib_dict",
+      "target_name": "_crate_lib_dict",
+      "target_start_line": 165
+    },
+    {
+      "lines": [
+        216
+      ],
+      "name": "_link_modules",
+      "target_name": "_link_modules",
+      "target_start_line": 218
+    },
+    {
+      "lines": [
+        232
+      ],
+      "name": "_OWN_DIR_FILE_NAME_TUPLE",
+      "target_name": "_OWN_DIR_FILE_NAME_TUPLE",
+      "target_start_line": 19
+    },
+    {
+      "lines": [
+        245,
+        258
+      ],
+      "name": "_link",
+      "target_name": "_link",
+      "target_start_line": 260
+    },
+    {
+      "lines": [
+        362,
+        369
+      ],
+      "name": "_resolve_head",
+      "target_name": "_resolve_head",
+      "target_start_line": 371
+    },
+    {
+      "lines": [
+        383,
+        387,
+        390,
+        392,
+        399,
+        407
+      ],
+      "name": "_walk",
+      "target_name": "_walk",
+      "target_start_line": 410
+    },
+    {
+      "lines": [
+        386,
+        406
+      ],
+      "name": "_is_edition_2015",
+      "target_name": "_is_edition_2015",
+      "target_start_line": 282
+    },
+    {
+      "lines": [
+        387,
+        390,
+        405
+      ],
+      "name": "crate_root",
+      "target_name": "crate_root",
+      "target_start_line": 265
+    },
+    {
+      "lines": [
+        394,
+        400,
+        446
+      ],
+      "name": "_MAX_USE_HOP",
+      "target_name": "_MAX_USE_HOP",
+      "target_start_line": 22
+    },
+    {
+      "lines": [
+        395,
+        402,
+        456,
+        465
+      ],
+      "name": "resolve",
+      "target_name": "resolve",
+      "target_start_line": 324
+    },
+    {
+      "lines": [
+        403,
+        468
+      ],
+      "name": "_is_found",
+      "target_name": "_is_found",
+      "target_start_line": 299
+    },
+    {
+      "lines": [
+        473,
+        490,
+        491,
+        492
+      ],
+      "name": "RustModuleTree",
+      "target_name": "RustModuleTree",
+      "target_start_line": 187
+    },
+    {
+      "lines": [
+        486,
+        491
+      ],
+      "name": "module_tree_cache",
+      "target_name": "module_tree_cache",
+      "target_start_line": 25
+    },
+    {
+      "lines": [
+        518,
+        599
+      ],
+      "name": "_get_module_tree",
+      "target_name": "_get_module_tree",
+      "target_start_line": 473
+    },
+    {
+      "lines": [
+        550,
+        597
+      ],
+      "name": "_is_path_attribute",
+      "target_name": "_is_path_attribute",
+      "target_start_line": 495
+    },
+    {
+      "lines": [
+        553
+      ],
+      "name": "_resolve_import",
+      "target_name": "_resolve_import",
+      "target_start_line": 500
+    }
+  ],
+  "caller_usages": [
+    {
+      "lines": [
+        361
+      ],
+      "name": "module_tree_cache.clear",
+      "file": "codetwine/codetwine/extractors/dependency_graph_py/dependency_graph.py",
+      "usage_context": "        all_file_list = _filter_text_file_list(project_dir, file_list)\n\n    # Forget the indexes and the resolved references of an earlier analysis\n    module_tree_cache.clear()\n    file_index_cache.clear()\n    namespace_index_cache.clear()\n    r_name_index_cache.clear()"
+    },
+    {
+      "lines": [
+        608
+      ],
+      "name": "rust_import_name_dict",
+      "file": "codetwine/codetwine/import_binding_py/import_binding.py",
+      "usage_context": "        module_file = self._resolve(import_info.module, file_rel)\n        if module_file is not None:\n            file_binding.import_file_set.add(module_file)\n        name_dict = rust_import_name_dict(\n            import_info.module, import_info.names, file_rel, self.project_file_set,\n            self.project_dir,\n        )"
+    },
+    {
+      "lines": [
+        348
+      ],
+      "name": "resolve_rust_module_path",
+      "file": "codetwine/codetwine/import_to_path_py/import_to_path.py",
+      "usage_context": "    if resolve_config.get(\"module_tree\"):\n        if project_dir is None:\n            return None\n        return resolve_rust_module_path(module, current_file_rel, project_file_set, project_dir)\n\n    if resolve_config.get(\"name_index\"):\n        if project_dir is None:"
+    },
+    {
+      "lines": [
+        338
+      ],
+      "name": "module_tree_cache.clear",
+      "file": "codetwine/codetwine/pipeline_py/pipeline.py",
+      "usage_context": "    # caches, C# namespace index and reference caches and R name index and reference\n    # caches to free memory\n    parse_cache.clear()\n    module_tree_cache.clear()\n    file_index_cache.clear()\n    reference_target_cache.clear()\n    namespace_index_cache.clear()"
+    }
+  ]
+}

@@ -1,0 +1,747 @@
+{
+  "file": "codetwine/codetwine/import_reference_py/import_reference.py",
+  "language": "py",
+  "detected_encoding": null,
+  "definitions": [
+    {
+      "name": "_MODULE_PATH_ROOT_SET",
+      "type": "expression_statement",
+      "start_line": 33,
+      "end_line": 33,
+      "context": "_MODULE_PATH_ROOT_SET = {\"crate\", \"self\", \"super\", \"Self\", \"\"}"
+    },
+    {
+      "name": "_INSIDE",
+      "type": "expression_statement",
+      "start_line": 36,
+      "end_line": 36,
+      "context": "_INSIDE = \"inside\""
+    },
+    {
+      "name": "_HIDDEN",
+      "type": "expression_statement",
+      "start_line": 37,
+      "end_line": 37,
+      "context": "_HIDDEN = \"hidden\""
+    },
+    {
+      "name": "import_target_cache",
+      "type": "expression_statement",
+      "start_line": 41,
+      "end_line": 41,
+      "context": "import_target_cache: dict[str, tuple[set[str], list[\"ImportReferenceTarget\"]]] = {}"
+    },
+    {
+      "name": "ImportReferenceTarget",
+      "type": "class_definition",
+      "start_line": 44,
+      "end_line": 51,
+      "context": "@dataclass\nclass ImportReferenceTarget:\n    \"\"\"The definition one reference of a file resolves to.\"\"\"\n\n    name: str               # Name of the usage as the referring file writes it\n    line: int               # Line of the reference (1-based)\n    file_rel: str           # Relative path of the file with the definition\n    definition_name: str    # Name the definition is looked up by in file_rel"
+    },
+    {
+      "name": "name",
+      "type": "expression_statement",
+      "start_line": 48,
+      "end_line": 48,
+      "context": "    name: str               # Name of the usage as the referring file writes it"
+    },
+    {
+      "name": "line",
+      "type": "expression_statement",
+      "start_line": 49,
+      "end_line": 49,
+      "context": "    line: int               # Line of the reference (1-based)"
+    },
+    {
+      "name": "file_rel",
+      "type": "expression_statement",
+      "start_line": 50,
+      "end_line": 50,
+      "context": "    file_rel: str           # Relative path of the file with the definition"
+    },
+    {
+      "name": "definition_name",
+      "type": "expression_statement",
+      "start_line": 51,
+      "end_line": 51,
+      "context": "    definition_name: str    # Name the definition is looked up by in file_rel"
+    },
+    {
+      "name": "_own_name_set",
+      "type": "function_definition",
+      "start_line": 54,
+      "end_line": 103,
+      "context": "def _own_name_set(\n    definition_list: list[DefinitionInfo],\n    symbol_dict: dict[str, SymbolBinding],\n    import_line_dict: dict[str, set[int]],\n    file_import_line_dict: dict[str, set[int]],\n) -> set[str]:\n    \"\"\"Return the names the file defines itself and refers to by those names.\n\n    A name an import statement binds is not such a name, also when the import leads\n    outside the project: a definition written on the line of an import statement that\n    binds its name for the whole file (const path = require(\"path\")) is the import\n    itself, and a name defined only inside another definition gives way to the\n    import. A name the file defines at its top level apart from the import stays its\n    own.\n\n    Args:\n        definition_list: The definitions of the file (extract_definitions).\n        symbol_dict: The names of the file that come from other project files.\n        import_line_dict: Name an import statement of the file binds -> lines of those\n            statements.\n        file_import_line_dict: The same for the statements that bind their names for\n            the whole file.\n\n    Returns:\n        The definition names of the file, without the names of symbol_dict, the names\n        described above and the names carried only by definitions in\n        ATTACHED_DEFINITION_TYPE_SET or TRANSPARENT_DEFINITION_TYPE_SET.\n    \"\"\"\n    def is_own(definition: DefinitionInfo) -> bool:\n        \"\"\"Return whether a definition gives a name of the file apart from its import statements.\"\"\"\n        return (\n            bool(definition.name)\n            and definition.type not in ATTACHED_DEFINITION_TYPE_SET\n            and definition.type not in TRANSPARENT_DEFINITION_TYPE_SET\n            and definition.name not in symbol_dict\n            and not any(\n                definition.start_line <= line <= definition.end_line\n                for line in file_import_line_dict.get(definition.name, ())\n            )\n        )\n\n    top_level_name_set = {\n        definition.name\n        for definition in select_top_level_definitions(definition_list) if is_own(definition)\n    }\n    return {\n        definition.name for definition in definition_list\n        if is_own(definition)\n        and (definition.name not in import_line_dict or definition.name in top_level_name_set)\n    }"
+    },
+    {
+      "name": "_import_target_list",
+      "type": "function_definition",
+      "start_line": 106,
+      "end_line": 161,
+      "context": "def _import_target_list(\n    usage_name: str,\n    root_name: str,\n    line: int,\n    binding: SymbolBinding,\n    binder: ImportBinder,\n) -> list[\"ImportReferenceTarget\"]:\n    \"\"\"Build the targets of a usage whose first name an import statement binds.\n\n    Examples (usage -> file, definition_name):\n        \"mk\" (from pkg import make as mk)         -> pkg/core.py, \"make\"\n        \"hh.clamp\" (import pkg.helpers as hh)     -> pkg/helpers.py, \"clamp\"\n        \"pkg.Engine.build\" (import pkg)           -> pkg/core.py, \"Engine.build\"\n        \"express\" (const express = require(\"./lib/express\"), which has\n            module.exports = createApplication)   -> lib/express.js, \"createApplication\"\n        \"Settings::new\" (use crate::config::Settings) -> src/config.rs, \"Settings::new\"\n        \"list_push\" (#include \"list.h\")           -> include/list.h, \"list_push\"\n                                                     and src/list.c, \"list_push\"\n\n    Args:\n        usage_name: Name of the usage, starting with root_name.\n        root_name: The bound name the usage starts from.\n        line: Line of the usage (1-based).\n        binding: What root_name stands for.\n        binder: The ImportBinder of the project.\n\n    Returns:\n        The target of the definition the name leads to, then one target per file that\n        defines a function the first one only declares (ImportBinder.implement_file_list).\n        A name that stands for a file is followed through the parts written after it\n        (member_binding), and stands for the default export of a JS/TS file when they\n        name nothing of it; the definition_name is the name of the definition reached\n        and the parts left over. A member of a C++ class that only a base class defines\n        leads to the base class (ImportBinder.inherit_binding).\n    \"\"\"\n    rest = usage_name[len(root_name):]\n    if binding.name is not None:\n        definition_name = binding.name + rest\n    else:\n        part_list = [part for part in symbol_part_list(rest) if part]\n        binding, part_list = binder.member_binding(binding, part_list)\n        if binding.name is None:\n            # The value of a JS/TS module is its default export\n            binding = binder.default_binding(binding.file_rel) or binding\n        name_part_list = ([binding.name] if binding.name else []) + part_list\n        definition_name = \".\".join(name_part_list) or usage_name\n\n    target_file, definition_name = binder.inherit_binding(binding.file_rel, definition_name)\n    target_list = [ImportReferenceTarget(usage_name, line, target_file, definition_name)]\n    target_list.extend(\n        ImportReferenceTarget(usage_name, line, implement_file, implement_name)\n        for implement_file, implement_name in binder.implement_file_list(\n            target_file, definition_name,\n        )\n    )\n    return target_list"
+    },
+    {
+      "name": "_scope_binding",
+      "type": "function_definition",
+      "start_line": 164,
+      "end_line": 193,
+      "context": "def _scope_binding(\n    scope_binding_dict: dict[str, list[ScopeBinding]], usage_name: str, line: int,\n) -> ScopeBinding | None:\n    \"\"\"Return the binding of the smallest range of lines around a usage that binds the name it starts from.\n\n    Args:\n        scope_binding_dict: First part of a bound name -> the bindings of the names\n            that start with it (ImportBinder.scope_binding_list).\n        usage_name: Name of the usage.\n        line: Line of the usage (1-based).\n\n    Returns:\n        The binding whose lines hold the line and whose name is a leading part of\n        usage_name (cut at \".\" or \"::\"); of several, the one with the fewest lines,\n        then the one with the longest name, then the first. None when there is none.\n    \"\"\"\n    match_list = [\n        scope_binding\n        for scope_binding in scope_binding_dict.get(symbol_part_list(usage_name)[0], [])\n        if scope_binding.start_line <= line <= scope_binding.end_line\n        and usage_root_name(usage_name, (scope_binding.name,)) == scope_binding.name\n    ]\n    if not match_list:\n        return None\n    return min(\n        match_list,\n        key=lambda scope_binding: (\n            scope_binding.end_line - scope_binding.start_line, -len(scope_binding.name),\n        ),\n    )"
+    },
+    {
+      "name": "_member_scope_dict",
+      "type": "function_definition",
+      "start_line": 196,
+      "end_line": 208,
+      "context": "def _member_scope_dict(\n    member_scope_list: list[tuple[int, int, dict[str, SymbolBinding]]],\n) -> dict[str, list[tuple[int, int, SymbolBinding]]]:\n    \"\"\"Return the members of ImportBinder.member_scope_list by their names.\n\n    Returns:\n        {member name: [(first line, last line, the member), ...]}.\n    \"\"\"\n    scope_dict: dict[str, list[tuple[int, int, SymbolBinding]]] = {}\n    for start_line, end_line, member_dict in member_scope_list:\n        for name, binding in member_dict.items():\n            scope_dict.setdefault(name, []).append((start_line, end_line, binding))\n    return scope_dict"
+    },
+    {
+      "name": "_member_scope_binding",
+      "type": "function_definition",
+      "start_line": 211,
+      "end_line": 232,
+      "context": "def _member_scope_binding(\n    member_scope_dict: dict[str, list[tuple[int, int, SymbolBinding]]], usage_name: str, line: int,\n) -> SymbolBinding | None:\n    \"\"\"Return the member a usage names by its first part alone on the line it is written on.\n\n    Args:\n        member_scope_dict: The result of _member_scope_dict.\n        usage_name: Name of the usage.\n        line: Line of the usage (1-based).\n\n    Returns:\n        The member of the smallest range of lines around the line that has the first\n        part of usage_name as a member, None when there is none.\n    \"\"\"\n    match_list = [\n        (end_line - start_line, binding)\n        for start_line, end_line, binding in member_scope_dict.get(symbol_part_list(usage_name)[0], ())\n        if start_line <= line <= end_line\n    ]\n    if not match_list:\n        return None\n    return min(match_list, key=lambda match: match[0])[1]"
+    },
+    {
+      "name": "_pattern_reference_function",
+      "type": "function_definition",
+      "start_line": 235,
+      "end_line": 282,
+      "context": "def _pattern_reference_function(\n    file_ext: str,\n    definition_list: list[DefinitionInfo],\n    binding_dict: dict[str, SymbolBinding],\n    project_dir: str,\n) -> Callable[[str], bool] | None:\n    \"\"\"Return the function that tells whether a name written in a pattern refers to a definition.\n\n    Rust: MAX in \"MAX => ...\" refers to the constant MAX when the file can write that\n    name, and Dark to the variant after use Tone::*; any other name is bound by the\n    pattern.\n\n    Args:\n        file_ext: Extension whose language settings the file is analyzed with.\n        definition_list: The definitions of the file.\n        binding_dict: Name the file can write -> what it stands for in the project.\n        project_dir: Absolute path to the project root.\n\n    Returns:\n        The function, which looks each name up once; None for a language without\n        pattern_reference_types.\n    \"\"\"\n    usage_node_types = EXT_TO_USAGE_NODE_TYPE_DICT.get(file_ext) or {}\n    reference_type_set = usage_node_types.get(\"pattern_reference_types\")\n    if reference_type_set is None:\n        return None\n    variant_type_set = usage_node_types.get(\"pattern_variant_types\", set())\n    own_reference_name_set = {\n        definition.name for definition in definition_list if definition.type in reference_type_set\n    }\n    answer_dict: dict[str, bool] = {}\n\n    def is_reference_name(name: str) -> bool:\n        \"\"\"Return whether the name refers to a constant, a static, a struct or a variant.\"\"\"\n        if name not in answer_dict:\n            binding = binding_dict.get(name)\n            answer = name in own_reference_name_set\n            if not answer and binding is not None and binding.name is not None:\n                definition = file_definition(binding.file_rel, binding.name, project_dir)\n                last_part = symbol_part_list(binding.name)[-1]\n                answer = definition is not None and (\n                    (definition.type in reference_type_set and definition.name == last_part)\n                    or (definition.type in variant_type_set and definition.name != last_part)\n                )\n            answer_dict[name] = answer\n        return answer_dict[name]\n\n    return is_reference_name"
+    },
+    {
+      "name": "_closed_module_scope",
+      "type": "function_definition",
+      "start_line": 285,
+      "end_line": 306,
+      "context": "def _closed_module_scope(\n    module_scope_list: list[tuple[int, int, bool]], line: int,\n) -> tuple[int, int] | None:\n    \"\"\"Return the lines outside which the names of a file are not visible from a line.\n\n    Args:\n        module_scope_list: The result of ImportBinder.module_scope_list.\n        line: A line of the file (1-based).\n\n    Returns:\n        (first line, last line) of the innermost module around the line that does not\n        take over the names of the module around it; the modules that do are passed\n        through. None when the names of the whole file are visible.\n    \"\"\"\n    around_list = sorted(\n        (scope for scope in module_scope_list if scope[0] <= line <= scope[1]),\n        key=lambda scope: scope[1] - scope[0],\n    )\n    for start_line, end_line, is_open in around_list:\n        if not is_open:\n            return start_line, end_line\n    return None"
+    },
+    {
+      "name": "_module_visibility",
+      "type": "function_definition",
+      "start_line": 309,
+      "end_line": 351,
+      "context": "def _module_visibility(\n    module_scope_list: list[tuple[int, int, bool]],\n    usage: UsageInfo,\n    root_name: str,\n    definition_list: list[DefinitionInfo],\n    top_level_name_set: set[str],\n    symbol_dict: dict[str, SymbolBinding],\n) -> str | None:\n    \"\"\"Tell whether the module around a usage hides the name the usage starts from.\n\n    Rust: inside mod name { ... } without use super::*, a top-level name of the file\n    and a name a use declaration of the file binds are not visible; a name defined\n    inside the module is. A path from a module (crate::, self::, super::), a path that\n    is bound as a whole and a name that is neither (a member of a type) are not judged.\n\n    Args:\n        module_scope_list: The result of ImportBinder.module_scope_list.\n        usage: The usage.\n        root_name: The name of symbol_dict the usage starts from, or its first part.\n        definition_list: The definitions of the file.\n        top_level_name_set: The top-level definition names of the file.\n        symbol_dict: The names of the file that come from other project files.\n\n    Returns:\n        _INSIDE when the name is defined inside the module that closes the view,\n        _HIDDEN when it is a name of outside that module, None when the name is not\n        judged or no module closes the view.\n    \"\"\"\n    first_part = symbol_part_list(usage.name)[0]\n    if first_part in _MODULE_PATH_ROOT_SET or len(symbol_part_list(root_name)) != 1:\n        return None\n    closed_scope = _closed_module_scope(module_scope_list, usage.line)\n    if closed_scope is None:\n        return None\n    if any(\n        definition.name == first_part\n        and closed_scope[0] <= definition.start_line <= closed_scope[1]\n        for definition in definition_list\n    ):\n        return _INSIDE\n    if first_part in top_level_name_set or root_name in symbol_dict:\n        return _HIDDEN\n    return None"
+    },
+    {
+      "name": "clear_import_reference_cache",
+      "type": "function_definition",
+      "start_line": 354,
+      "end_line": 356,
+      "context": "def clear_import_reference_cache() -> None:\n    \"\"\"Forget the resolved references of every project.\"\"\"\n    import_target_cache.clear()"
+    },
+    {
+      "name": "_usage_list",
+      "type": "function_definition",
+      "start_line": 359,
+      "end_line": 438,
+      "context": "def _usage_list(\n    root_node: Node,\n    file_ext: str,\n    symbol_dict: dict[str, SymbolBinding],\n    own_name_set: set[str],\n    scope_binding_list: list[ScopeBinding],\n    import_line_dict: dict[str, set[int]],\n    member_name_set: set[str],\n    own_type_name_set: set[str],\n    is_class_name: Callable[[str], bool],\n    is_reference_name: Callable[[str], bool] | None,\n) -> list[UsageInfo]:\n    \"\"\"Return the usages of the names a file can resolve.\n\n    The names of symbol_dict, own_name_set, scope_binding_list and member_name_set are\n    tracked, and the variables that stand for an object of a type of symbol_dict or of\n    own_type_name_set: a variable declared with such a type, and a variable given an\n    object of one inside a function. Such a variable is named after the type on the\n    lines it counts for (Genre genre; genre.label -> Genre.label; e = Engine();\n    e.run() -> Engine.run); elsewhere its name is a usage only when it is tracked as\n    another kind of name.\n\n    Args:\n        root_node: The AST root node of the file.\n        file_ext: Extension whose language settings the file is analyzed with.\n        symbol_dict: The names of the file that come from other project files.\n        own_name_set: The names the file defines itself (_own_name_set).\n        scope_binding_list: The names bound for a range of lines of the file.\n        import_line_dict: Name an import statement of the file binds -> lines of those\n            statements.\n        member_name_set: The names of ImportBinder.member_scope_list of the file.\n        own_type_name_set: The names of the types the file defines itself.\n        is_class_name: Returns whether a name, as the file writes it, names a type an\n            object is made of (read for a language with typed_alias_class_only).\n        is_reference_name: Returns whether a name written in a pattern refers to a\n            definition instead of binding the name; None for a language without\n            pattern_reference_types.\n\n    Returns:\n        The usages in line order, without duplicates.\n    \"\"\"\n    usage_node_types = EXT_TO_USAGE_NODE_TYPE_DICT.get(file_ext) or {}\n    type_name_set = set(symbol_dict) | own_type_name_set\n\n    def is_type_name(name: str) -> bool:\n        \"\"\"Return whether a name written where an object is made names a tracked type.\"\"\"\n        if usage_root_name(name, type_name_set) not in type_name_set:\n            return False\n        return is_class_name(name) if usage_node_types.get(\"typed_alias_class_only\") else True\n\n    alias_list = [\n        alias for alias in [\n            *extract_typed_aliases(root_node, type_name_set, usage_node_types),\n            *extract_value_aliases(root_node, usage_node_types, is_type_name),\n        ]\n        if alias.name not in symbol_dict\n    ]\n    alias_name_set = {alias.name for alias in alias_list}\n    # The names that are a usage also where no alias counts for them\n    plain_name_set = (\n        own_name_set | member_name_set\n        | {scope_binding.name for scope_binding in scope_binding_list}\n    )\n    track_name_set = set(symbol_dict) | alias_name_set | plain_name_set\n\n    usage_list: list[UsageInfo] = []\n    for usage in extract_usages(\n        root_node, track_name_set, usage_node_types or None,\n        member_names=own_name_set, alias_list=alias_list, import_line_dict=import_line_dict,\n        is_reference_name=is_reference_name,\n    ):\n        root_name = usage_root_name(usage.name, track_name_set)\n        if root_name in alias_name_set:\n            type_name = typed_alias_type(alias_list, root_name, usage.line)\n            if type_name is not None:\n                usage.name = type_name + usage.name[len(root_name):]\n            elif root_name not in plain_name_set:\n                continue\n        usage_list.append(usage)\n    return deduplicate_usage_list(usage_list)"
+    },
+    {
+      "name": "import_reference_target_list",
+      "type": "function_definition",
+      "start_line": 441,
+      "end_line": 580,
+      "context": "def import_reference_target_list(\n    file_rel: str,\n    project_file_set: set[str],\n    project_dir: str,\n) -> list[ImportReferenceTarget]:\n    \"\"\"Resolve each reference of a file to the definition it names, through its import statements.\n\n    A name the import statements bind to a project file leads to the file that defines\n    it (ImportBinder.symbol_dict); so does a name visible without an import statement\n    (Java / Kotlin: same package, SQL: whole project). A variable declared with such a\n    type is named after the type. Every other name the file defines itself leads to\n    the file itself, also when it is written after self / this (_own_name_set).\n    A name bound for a range of lines (ImportBinder.scope_binding_list: an import\n    statement written in a function, a JS/TS export statement with a source, a Rust\n    use declaration in a block) leads to what it is bound to on those lines before\n    any of the above, and to nothing when it is bound to nothing of the project.\n    Inside a Rust inline module without use super::*, a name of the file outside the\n    module leads to nothing (ImportBinder.module_scope_list).\n    Inside a C++ function defined as a member of a class outside the class, a member\n    of the class or of a base class written by its name alone leads to that member\n    (ImportBinder.member_scope_list), before a name of the import statements.\n\n    Processing flow:\n    1. Return the targets of import_target_cache when they were resolved with the same\n       project file set\n    2. Map the names of the import statements to the files they come from\n    3. Collect the names the file defines itself\n    4. Turn each usage of those names into a target\n\n    Args:\n        file_rel: Relative path of the file.\n        project_file_set: Relative paths of the project files that have a language.\n        project_dir: Absolute path to the project root.\n\n    Returns:\n        One target per usage, in the order extract_usages() returns them. A target\n        whose file_rel is the file itself is a reference to a definition of the file.\n        The targets are kept in import_target_cache until the project file set\n        changes or the cache is cleared.\n    \"\"\"\n    # == Step 1: Cache ========================================================\n    cache_key = os.path.abspath(os.path.join(project_dir, file_rel))\n    target_list = project_cache_value(import_target_cache, cache_key, project_file_set)\n    if target_list is not None:\n        return target_list\n\n    # == Step 2: Names of the import statements ===============================\n    file_abs = os.path.join(project_dir, file_rel)\n    file_ext = language_ext(file_abs)\n    root_node = parse_file(file_abs)[0]\n    binder = import_binder(project_dir, project_file_set)\n    symbol_dict = binder.symbol_dict(file_rel)\n    import_line_dict = binder.import_line_dict(file_rel)\n    scope_binding_list = binder.scope_binding_list(file_rel)\n    scope_binding_dict: dict[str, list[ScopeBinding]] = {}\n    for scope_binding in scope_binding_list:\n        scope_binding_dict.setdefault(\n            symbol_part_list(scope_binding.name)[0], [],\n        ).append(scope_binding)\n\n    # == Step 3: Names of the file itself =====================================\n    definition_list = file_definition_list(file_abs, EXT_TO_DEFINITION_DICT[file_ext])\n    own_name_set = _own_name_set(\n        definition_list, symbol_dict, import_line_dict,\n        binder.import_line_dict(file_rel, is_whole_file=True),\n    )\n    own_type_name_set = {\n        definition.name for definition in definition_list\n        if definition.type in CLASS_DEFINITION_TYPE_SET and definition.name in own_name_set\n    }\n\n    def is_class_name(name: str) -> bool:\n        \"\"\"Return whether a name, as the file writes it, names a type an object is made of.\"\"\"\n        if name in own_type_name_set:\n            return True\n        root_name = usage_root_name(name, symbol_dict)\n        if root_name not in symbol_dict:\n            return False\n        target = _import_target_list(name, root_name, 0, symbol_dict[root_name], binder)[0]\n        definition = file_definition(target.file_rel, target.definition_name, project_dir)\n        return (\n            definition is not None and definition.type in CLASS_DEFINITION_TYPE_SET\n            and definition.name == symbol_part_list(target.definition_name)[-1]\n        )\n\n    # == Step 4: Targets ======================================================\n    member_scope_dict = _member_scope_dict(binder.member_scope_list(file_rel))\n    binding_dict = {\n        **{\n            scope_binding.name: scope_binding.binding\n            for scope_binding in scope_binding_list if scope_binding.binding is not None\n        },\n        **symbol_dict,\n    }\n    usage_list = _usage_list(\n        root_node, file_ext, symbol_dict, own_name_set, scope_binding_list, import_line_dict,\n        set(member_scope_dict), own_type_name_set, is_class_name,\n        _pattern_reference_function(file_ext, definition_list, binding_dict, project_dir),\n    )\n    module_scope_list = binder.module_scope_list(file_rel)\n    top_level_name_set = set(binder.top_level_name_list(file_rel)) if module_scope_list else set()\n    # A macro name read as spaces in front of a class name is a usage of the macro, and\n    # a member read where its module is required a usage of the member\n    extra_usage_list = [\n        UsageInfo(name=name, line=line)\n        for name, line in [*class_macro_cache.get(file_abs, ()), *binder.use_list(file_rel)]\n    ]\n    if extra_usage_list:\n        usage_list = deduplicate_usage_list(usage_list + extra_usage_list)\n\n    target_list = []\n    for usage in usage_list:\n        scope_binding = _scope_binding(scope_binding_dict, usage.name, usage.line)\n        member_binding = _member_scope_binding(member_scope_dict, usage.name, usage.line)\n        root_name = usage_root_name(usage.name, symbol_dict)\n        visibility = _module_visibility(\n            module_scope_list, usage, root_name, definition_list, top_level_name_set, symbol_dict,\n        ) if module_scope_list else None\n        if scope_binding is not None:\n            if scope_binding.binding is not None:\n                target_list.extend(_import_target_list(\n                    usage.name, scope_binding.name, usage.line, scope_binding.binding, binder,\n                ))\n        elif member_binding is not None:\n            target_list.extend(_import_target_list(\n                usage.name, symbol_part_list(usage.name)[0], usage.line, member_binding, binder,\n            ))\n        elif visibility == _HIDDEN:\n            continue\n        elif visibility == _INSIDE:\n            target_list.append(ImportReferenceTarget(usage.name, usage.line, file_rel, usage.name))\n        elif root_name in symbol_dict:\n            target_list.extend(_import_target_list(\n                usage.name, root_name, usage.line, symbol_dict[root_name], binder,\n            ))\n        elif usage_root_name(usage.name, own_name_set) in own_name_set:\n            target_list.append(ImportReferenceTarget(usage.name, usage.line, file_rel, usage.name))\n\n    import_target_cache[cache_key] = (project_file_set, target_list)\n    return target_list"
+    }
+  ],
+  "callee_usages": [
+    {
+      "lines": [
+        55,
+        82,
+        237,
+        313
+      ],
+      "name": "DefinitionInfo",
+      "from": "codetwine/codetwine/extractors/definitions_py/definitions.py",
+      "target_context": "@dataclass\nclass DefinitionInfo:\n    \"\"\"Data class holding information about a single definition.\"\"\"\n\n    name: str                                     # Definition name (function / class / variable / type, etc.)\n    type: str                                     # AST node type (\"function_definition\" / \"expression_statement\", etc.)\n    start_line: int                               # Start line number of the definition (1-based)\n    end_line: int                                 # End line number of the definition\n    name_line: int | None = None                  # Line the name is written on (COBOL, BMS)\n    level: int | None = None                      # Level number of a data item (COBOL, BMS)\n    is_group: bool | None = None                  # Whether a data item is a group item (COBOL, BMS)\n    # Byte range of the definition in the UTF-8 text parse_file() returns; None for a\n    # COBOL, BMS or R definition\n    start_byte: int | None = None\n    end_byte: int | None = None",
+      "target_name": "DefinitionInfo",
+      "target_start_line": 109
+    },
+    {
+      "lines": [
+        56,
+        110,
+        146,
+        197,
+        198,
+        204,
+        212,
+        213,
+        238,
+        315,
+        362
+      ],
+      "name": "SymbolBinding",
+      "from": "codetwine/codetwine/import_binding_py/import_binding.py",
+      "target_context": "@dataclass(frozen=True)\nclass SymbolBinding:\n    \"\"\"What a name bound by an import statement stands for.\"\"\"\n\n    file_rel: str       # Relative path of the project file the name comes from\n    # Name of the definition in file_rel; None when the name stands for the file as a\n    # whole (a module, a namespace import)\n    name: str | None",
+      "target_name": "SymbolBinding",
+      "target_start_line": 67
+    },
+    {
+      "lines": [
+        85,
+        88,
+        91
+      ],
+      "name": "DefinitionInfo.name",
+      "from": "codetwine/codetwine/extractors/definitions_py/definitions.py",
+      "target_context": "name: str",
+      "target_name": "name",
+      "target_start_line": 113
+    },
+    {
+      "lines": [
+        86
+      ],
+      "name": "ATTACHED_DEFINITION_TYPE_SET",
+      "from": "codetwine/codetwine/extractors/definitions_py/definitions.py",
+      "target_context": "ATTACHED_DEFINITION_TYPE_SET = {\"impl_item\"}",
+      "target_name": "ATTACHED_DEFINITION_TYPE_SET",
+      "target_start_line": 77
+    },
+    {
+      "lines": [
+        86,
+        87
+      ],
+      "name": "DefinitionInfo.type",
+      "from": "codetwine/codetwine/extractors/definitions_py/definitions.py",
+      "target_context": "type: str",
+      "target_name": "type",
+      "target_start_line": 114
+    },
+    {
+      "lines": [
+        87
+      ],
+      "name": "TRANSPARENT_DEFINITION_TYPE_SET",
+      "from": "codetwine/codetwine/extractors/definitions_py/definitions.py",
+      "target_context": "TRANSPARENT_DEFINITION_TYPE_SET = {\"namespace_definition\"}",
+      "target_name": "TRANSPARENT_DEFINITION_TYPE_SET",
+      "target_start_line": 64
+    },
+    {
+      "lines": [
+        90
+      ],
+      "name": "DefinitionInfo.end_line",
+      "from": "codetwine/codetwine/extractors/definitions_py/definitions.py",
+      "target_context": "end_line: int",
+      "target_name": "end_line",
+      "target_start_line": 116
+    },
+    {
+      "lines": [
+        90
+      ],
+      "name": "DefinitionInfo.start_line",
+      "from": "codetwine/codetwine/extractors/definitions_py/definitions.py",
+      "target_context": "start_line: int",
+      "target_name": "start_line",
+      "target_start_line": 115
+    },
+    {
+      "lines": [
+        97
+      ],
+      "name": "select_top_level_definitions",
+      "from": "codetwine/codetwine/extractors/definitions_py/definitions.py",
+      "target_context": "def select_top_level_definitions(\n    definition_list: list[DefinitionInfo],\n) -> list[DefinitionInfo]:\n    \"\"\"Keep only definitions that are not members of another definition.\n\n    Members of a class, an impl block or a trait (methods, constructors, fields) are left out.\n    The definitions inside a container in OPEN_DEFINITION_TYPE_SET (a C++ namespace, a\n    C / C++ enum) are kept, and a definition of a type in BARE_NAME_DEFINITION_TYPE_SET\n    is kept wherever it is.\n\n    Args:\n        definition_list: Definitions of a single file, sorted by start_line.\n\n    Returns:\n        The outermost definitions, sorted by start_line.\n    \"\"\"\n    outer_list: list[DefinitionInfo] = []\n    member_end = 0\n    for definition in definition_list:\n        if definition.type in BARE_NAME_DEFINITION_TYPE_SET:\n            outer_list.append(definition)\n            continue\n        # Skip definitions that start within the range of a container with members\n        if definition.start_line <= member_end:\n            continue\n        outer_list.append(definition)\n        if (\n            definition.type in CONTAINER_DEFINITION_TYPE_SET\n            and definition.type not in OPEN_DEFINITION_TYPE_SET\n        ):\n            member_end = definition.end_line\n    return outer_list",
+      "target_name": "select_top_level_definitions",
+      "target_start_line": 229
+    },
+    {
+      "lines": [
+        111
+      ],
+      "name": "ImportBinder",
+      "from": "codetwine/codetwine/import_binding_py/import_binding.py",
+      "target_context": "class ImportBinder:\n    \"\"\"Maps the names the import statements of the files of a project bind to their definitions.\n\n    A name is followed through the files that only pass it on (a Python __init__.py\n    that imports it, a JS/TS file that re-exports it, a header that includes another)\n    to the file that defines it.\n    \"\"\"\n\n    def __init__(self, project_dir: str, project_file_set: set[str]) -> None:\n        \"\"\"Remember the project; the files are read when their names are first asked for.\n\n        Args:\n            project_dir: Absolute path to the project root.\n            project_file_set: Relative paths of the project files that have a language.\n        \"\"\"\n        self.project_dir = project_dir\n        self.project_file_set = project_file_set\n        self.source_root_set = detect_source_roots(project_file_set)\n        self._file_binding_dict: dict[str, _FileBinding] = {}\n        self._take_over_file_dict: dict[str, list[str]] = {}\n        self._visible_dict: dict[str, dict[str, SymbolBinding]] = {}\n        self._export_dict: dict[str, dict[str, SymbolBinding]] = {}\n        self._symbol_dict: dict[str, dict[str, SymbolBinding]] = {}\n        self._top_level_name_dict: dict[str, list[str]] = {}\n        # Package key -> files of the package, built on first use (Java, Kotlin)\n        self._package_file_dict: dict[str, list[str]] | None = None\n        self._file_package_dict: dict[str, str] = {}\n        # Function name -> files that define it, built on first use (C / C++)\n        self._implement_file_dict: dict[str, list[str]] | None = None\n        self._implement_list_dict: dict[tuple[str, str], list[tuple[str, str]]] = {}\n        # \"Type::member\" -> files with an impl block of the type that defines the\n        # member, built on first use (Rust)\n        self._impl_member_file_dict: dict[str, list[str]] | None = None\n        self._scope_binding_dict: dict[str, list[ScopeBinding]] = {}\n        # (file, path of a class in it) -> member name -> the member, with the members\n        # of its base classes (C++)\n        self._class_member_dict: dict[tuple[str, str], dict[str, SymbolBinding]] = {}\n        # File -> what was read from its syntax tree\n        self._tree_fact_dict: dict[str, _TreeFact] = {}\n        # File -> names \"from file import *\" takes from it (Python)\n        self._star_name_dict: dict[str, set[str]] = {}\n\n    # == Names of one file ====================================================\n\n    def _file_ext(self, file_rel: str) -> str:\n        \"\"\"Return the extension whose language settings a file is analyzed with.\"\"\"\n        return language_ext(os.path.join(self.project_dir, file_rel))\n\n    def _bind_kind(self, file_rel: str) -> str | None:\n        \"\"\"Return the \"bind\" value of the resolve config of a file, None when it has none.\"\"\"\n        return EXT_TO_IMPORT_RESOLVE_DICT.get(self._file_ext(file_rel), {}).get(\"bind\")\n\n    def top_level_name_list(self, file_rel: str) -> list[str]:\n        \"\"\"Return the top-level definition names of a file (top_level_definition_names).\n\n        A file whose definitions cannot be read has none; the exception is logged.\n        \"\"\"\n        name_list = self._top_level_name_dict.get(file_rel)\n        if name_list is None:\n            try:\n                name_list = top_level_definition_names(file_rel, self.project_dir)\n            except Exception as e:\n                logger.warning(\n                    f\"The definitions of {file_rel} cannot be read; its names are not linked: \"\n                    f\"{type(e).__name__}: {e}\"\n                )\n                name_list = []\n            self._top_level_name_dict[file_rel] = name_list\n        return name_list\n\n    def _tree_fact(self, file_rel: str) -> _TreeFact:\n        \"\"\"Return what the binder reads from the syntax tree of a file, read once per file.\n\n        The file is parsed once: its import statements, what its \"bind\" value needs\n        (_TREE_FACT_FUNCTION_DICT) and its definitions (file_definition_list) are all\n        read from that one tree.\n\n        Raises:\n            Exception: Whatever parsing the file or reading its import statements raises.\n        \"\"\"\n        tree_fact = self._tree_fact_dict.get(file_rel)\n        if tree_fact is not None:\n            return tree_fact\n        file_abs = os.path.join(self.project_dir, file_rel)\n        file_ext = self._file_ext(file_rel)\n        root_node = parse_file(file_abs)[0]\n        language, import_query_str = get_import_params(file_ext)\n        tree_fact = _TreeFact(\n            import_info_list=extract_imports(\n                root_node, language, import_query_str,\n                EXT_TO_USAGE_NODE_TYPE_DICT.get(file_ext, {}).get(\"scope_types\"),\n            ) if language is not None and import_query_str else [],\n            line_count=root_node.end_point[0] + 1,\n        )\n        fact_function = _TREE_FACT_FUNCTION_DICT.get(self._bind_kind(file_rel))\n        if fact_function is not None:\n            fact_function(root_node, tree_fact)\n        file_definition_list(file_abs, EXT_TO_DEFINITION_DICT[file_ext])\n        self._tree_fact_dict[file_rel] = tree_fact\n        return tree_fact\n\n    def _definition_list(self, file_rel: str) -> list[DefinitionInfo]:\n        \"\"\"Return the definitions of a file (file_definition_list).\"\"\"\n        return file_definition_list(\n            os.path.join(self.project_dir, file_rel),\n            EXT_TO_DEFINITION_DICT[self._file_ext(file_rel)],\n        )\n\n    def _resolve(self, module: str, file_rel: str) -> str | None:\n        \"\"\"Resolve a module string written in a file to a project file.\"\"\"\n        return resolve_module_to_project_path(\n            module, file_rel, self.project_file_set, self.source_root_set, self.project_dir,\n        )\n\n    def _file_binding(self, file_rel: str) -> _FileBinding:\n        \"\"\"Return what the import statements of a file bind, read once per file.\n\n        A file whose import statements cannot be read binds nothing; the exception is\n        logged.\n        \"\"\"\n        file_binding = self._file_binding_dict.get(file_rel)\n        if file_binding is not None:\n            return file_binding\n\n        bind_function = _BIND_FUNCTION_DICT.get(self._bind_kind(file_rel))\n        file_binding = _FileBinding()\n        # Registered before it is filled: a file that leads back to itself gets it as it is\n        self._file_binding_dict[file_rel] = file_binding\n        if bind_function is None:\n            return file_binding\n\n        try:\n            tree_fact = self._tree_fact(file_rel)\n            import_info_list = tree_fact.import_info_list\n            for import_info in import_info_list:\n                for name in [*import_info.names, import_info.module_alias]:\n                    if not name:\n                        continue\n                    file_binding.import_line_dict.setdefault(name, set()).add(import_info.line)\n                    if import_info.scope_line_tuple is None:\n                        file_binding.file_import_line_dict.setdefault(\n                            name, set(),\n                        ).add(import_info.line)\n            bind_function(self, file_rel, import_info_list, tree_fact, file_binding)\n        except Exception as e:\n            logger.warning(\n                f\"The import statements of {file_rel} cannot be read; its names are not \"\n                f\"linked: {type(e).__name__}: {e}\"\n            )\n        file_binding.import_file_set.discard(file_rel)\n        return file_binding\n\n    # == Binding per language ==================================================\n\n    @staticmethod\n    def _bind_name(\n        file_binding: _FileBinding, import_info: ImportInfo, name: str,\n        binding: SymbolBinding | None,\n    ) -> None:\n        \"\"\"Bind a name of an import statement of a Python or JS/TS file.\n\n        A statement that gives lines (ImportInfo.scope_line_tuple) binds the name for\n        those lines, also when it stands for nothing of the project; any other\n        statement for the whole file. The name of an export statement with a source\n        is passed on to the files importing the file as well.\n\n        Args:\n            file_binding: The bindings of the file; modified in place.\n            import_info: The import statement.\n            name: The name the statement binds.\n            binding: What the name stands for; None when it stands for nothing of the\n                project.\n        \"\"\"\n        line_tuple = import_info.scope_line_tuple\n        if line_tuple is not None:\n            file_binding.scope_binding_list.append(ScopeBinding(name, *line_tuple, binding))\n        elif binding is not None:\n            file_binding.name_dict[name] = binding\n        if import_info.is_export and binding is not None:\n            file_binding.export_dict[name] = binding\n\n    def _bind_module(\n        self, file_rel: str, import_info_list: list[ImportInfo], tree_fact: _TreeFact,\n        file_binding: _FileBinding,\n    ) -> None:\n        \"\"\"Read the bindings of the import statements of a Python file.\n\n        import a.b.c            -> \"a.b.c\", and \"a\" / \"a.b\" when they are packages of\n                                   the project\n        import a.b.c as m       -> \"m\"\n        from m import n as k    -> \"k\": the name n of m, or the module m.n when m has\n                                   no script of its own\n        from m import *         -> the names of m its __all__ lists, or every name of m\n                                   that does not start with \"_\" (star_name_set)\n        A statement written inside a function binds its names for the lines of the\n        function (_bind_name). The __all__ of the file itself is read as well.\n        \"\"\"\n        file_binding.all_name_list = tree_fact.all_name_list\n        for import_info in import_info_list:\n            module_file = self._resolve(import_info.module, file_rel)\n            if module_file is not None:\n                file_binding.import_file_set.add(module_file)\n\n            if not import_info.names:\n                if import_info.module_alias:\n                    self._bind_name(\n                        file_binding, import_info, import_info.module_alias,\n                        SymbolBinding(module_file, None) if module_file is not None else None,\n                    )\n                    continue\n                part_list = import_info.module.split(\".\")\n                for part_count in range(1, len(part_list) + 1):\n                    package = \".\".join(part_list[:part_count])\n                    package_file = self._resolve(package, file_rel)\n                    self._bind_name(\n                        file_binding, import_info, package,\n                        SymbolBinding(package_file, None) if package_file is not None else None,\n                    )\n                continue\n\n            alias_dict = import_info.alias_map or {}\n            for name in import_info.names:\n                original_name = alias_dict.get(name, name)\n                if name == \"*\":\n                    if module_file is not None:\n                        file_binding.wildcard_list.append(module_file)\n                    continue\n                binding: SymbolBinding | None = None\n                if module_file is not None:\n                    binding = SymbolBinding(module_file, original_name)\n                else:\n                    module_part_file = self._resolve(\n                        _join_module(import_info.module, original_name), file_rel,\n                    )\n                    if module_part_file is not None:\n                        binding = SymbolBinding(module_part_file, None)\n                        file_binding.import_file_set.add(module_part_file)\n                self._bind_name(file_binding, import_info, name, binding)\n\n    def _bind_export(\n        self, file_rel: str, import_info_list: list[ImportInfo], tree_fact: _TreeFact,\n        file_binding: _FileBinding,\n    ) -> None:\n        \"\"\"Read the bindings of the import and export statements of a JS/TS file.\n\n        import d from \"./m\"              -> \"d\": the default export of m\n        import { a as b } from \"./m\"     -> \"b\": the name a of m\n        import * as M from \"./m\"         -> \"M\": the file m\n        const u = require(\"./m\")         -> \"u\": the file m\n        export { a as b } from \"./m\"     -> \"b\": the name a of m, for the files importing\n                                            this one and on the lines of the statement\n        export * from \"./m\"              -> every name of m, for the files importing this one\n        export { p as q } / export default p  -> \"q\" / \"default\": the name p of the file\n                                            itself, for the files importing this one\n        module.exports = require(\"./m\")  -> the default export and every name of m, for\n                                            the files importing this one\n        require(\"./m\").run()             -> \"run\": the name run of m, on the lines of the\n                                            access, where it is a usage of the name\n        import(\"./m\").then((u) => ...)   -> \"u\": the file m, on the lines of the callback\n        An import or require() written inside a function binds its names for the lines\n        of the function (_bind_name).\n        \"\"\"\n        file_binding.is_wildcard_local = False\n        for import_info in import_info_list:\n            module_file = self._resolve(import_info.module, file_rel)\n            if module_file is not None:\n                file_binding.import_file_set.add(module_file)\n            if import_info.module_alias:\n                self._bind_name(\n                    file_binding, import_info, import_info.module_alias,\n                    SymbolBinding(module_file, None) if module_file is not None else None,\n                )\n            alias_dict = import_info.alias_map or {}\n            for name in import_info.names:\n                if name == \"*\":\n                    if module_file is not None:\n                        file_binding.wildcard_list.append(module_file)\n                    continue\n                self._bind_name(\n                    file_binding, import_info, name,\n                    SymbolBinding(module_file, alias_dict.get(name, name))\n                    if module_file is not None else None,\n                )\n                if import_info.is_use:\n                    file_binding.use_list.append((name, import_info.line))\n        for export_name, local_name in tree_fact.local_export_dict.items():\n            file_binding.export_alias_dict[export_name] = SymbolBinding(file_rel, local_name)\n        for module in tree_fact.module_export_list:\n            module_file = self._resolve(module, file_rel)\n            if module_file is not None:\n                file_binding.export_alias_dict.setdefault(\n                    DEFAULT_EXPORT_NAME, SymbolBinding(module_file, DEFAULT_EXPORT_NAME),\n                )\n                file_binding.wildcard_list.append(module_file)\n\n    def _bind_include(\n        self, file_rel: str, import_info_list: list[ImportInfo], tree_fact: _TreeFact,\n        file_binding: _FileBinding,\n    ) -> None:\n        \"\"\"Read the bindings of the #include directives of a C/C++ file: every name of each file.\n\n        The lines of each function defined as a member of a class outside the class\n        (int Shape::count() { ... }) and the lines of each class are kept with the name\n        of the class (member_scope_list).\n        \"\"\"\n        for import_info in import_info_list:\n            include_file = self._resolve(import_info.module, file_rel)\n            if include_file is not None:\n                file_binding.import_file_set.add(include_file)\n                file_binding.wildcard_list.append(include_file)\n        for definition in self._definition_list(file_rel):\n            part_list = definition.name.split(\"::\")\n            if definition.type in _FUNCTION_BODY_TYPE_SET and len(part_list) > 1:\n                file_binding.member_scope_list.append(\n                    (part_list[-2], definition.start_line, definition.end_line)\n                )\n            elif definition.type in _CLASS_NODE_TYPE_SET:\n                file_binding.member_scope_list.append(\n                    (definition.name, definition.start_line, definition.end_line)\n                )\n\n    def _bind_path(\n        self, file_rel: str, import_info_list: list[ImportInfo], tree_fact: _TreeFact,\n        file_binding: _FileBinding,\n    ) -> None:\n        \"\"\"Read the bindings of the use declarations and paths of a Rust file (rust_import_name_dict).\n\n        use a::Name [as N]; / a::Name   -> \"Name\" (\"N\") / \"a::Name\": the definition Name of a\n        use a::*;                       -> every name of the file of module a\n        use a::Enum::*;                 -> each variant of Enum\n        A declaration written in a block or an inline module, and a path whose first\n        segment such a declaration binds, is bound for the lines ImportInfo gives\n        (scope_binding_list, scope_wildcard_list); a name that leads to no definition\n        of the project stands for nothing on those lines. A name that leads to a definition\n        of the file itself is bound in scope_binding_list as well, for the whole file\n        when ImportInfo gives no lines; a variant bound for the whole file gives way to\n        a name of name_dict and to a top-level definition of the file.\n        \"\"\"\n        file_binding.module_scope_list = tree_fact.module_scope_list\n        file_line_tuple = (1, tree_fact.line_count)\n        variant_binding_list: list[ScopeBinding] = []\n        for import_info in import_info_list:\n            variant_binding_list.extend(\n                self._bind_path_import(file_rel, import_info, file_line_tuple, file_binding)\n            )\n\n        # The variants of an enum of the file itself, taken over for the whole file\n        top_level_name_set = set(self.top_level_name_list(file_rel))\n        variant_binding_list.extend(\n            ScopeBinding(name, *file_line_tuple, binding)\n            for name, binding in file_binding.wildcard_name_dict.items()\n            if binding.file_rel == file_rel\n            and name not in file_binding.name_dict and name not in top_level_name_set\n        )\n        file_binding.scope_binding_list.extend(variant_binding_list)\n\n    def _bind_path_import(\n        self, file_rel: str, import_info: ImportInfo, file_line_tuple: tuple[int, int],\n        file_binding: _FileBinding,\n    ) -> list[ScopeBinding]:\n        \"\"\"Read the bindings of one use declaration or path of a Rust file (_bind_path).\n\n        Args:\n            file_rel: Relative path of the file.\n            import_info: The import.\n            file_line_tuple: (first line, last line) of the file.\n            file_binding: The bindings of the file; modified in place.\n\n        Returns:\n            The variants of an enum the import takes over for a range of lines.\n        \"\"\"\n        module_file = self._resolve(import_info.module, file_rel)\n        if module_file is not None:\n            file_binding.import_file_set.add(module_file)\n        name_dict = rust_import_name_dict(\n            import_info.module, import_info.names, file_rel, self.project_file_set,\n            self.project_dir,\n        )\n        target_file = module_file or file_rel\n        line_tuple = import_info.scope_line_tuple\n        variant_binding_list: list[ScopeBinding] = []\n        for name, original_name in name_dict.items():\n            binding = SymbolBinding(target_file, original_name)\n            if name == \"*\":\n                if line_tuple is None:\n                    file_binding.wildcard_list.append(target_file)\n                else:\n                    file_binding.scope_wildcard_list.append((target_file, *line_tuple))\n            elif name not in import_info.names:\n                # A variant of an enum the import takes over as a whole\n                if line_tuple is None:\n                    file_binding.wildcard_name_dict.setdefault(name, binding)\n                else:\n                    variant_binding_list.append(ScopeBinding(name, *line_tuple, binding))\n            elif line_tuple is None and target_file != file_rel:\n                file_binding.name_dict[name] = binding\n            else:\n                file_binding.scope_binding_list.append(\n                    ScopeBinding(name, *(line_tuple or file_line_tuple), binding)\n                )\n        if line_tuple is not None:\n            file_binding.scope_binding_list.extend(\n                ScopeBinding(name, *line_tuple, None)\n                for name in import_info.names if name != \"*\" and name not in name_dict\n            )\n        return variant_binding_list\n\n    def _bind_package(\n        self, file_rel: str, import_info_list: list[ImportInfo], tree_fact: _TreeFact,\n        file_binding: _FileBinding,\n    ) -> None:\n        \"\"\"Read the bindings of the import statements of a Java or Kotlin file.\n\n        import a.b.C [as D]      -> \"C\" (\"D\"): the type, function or property C of package a.b\n        import a.b.C.Inner       -> \"Inner\": the member Inner of C\n        import static a.b.C.m    -> \"m\": the member m of C\n        import a.b.*             -> every name of the files of package a.b\n        import static a.b.C.*    -> every member of C\n        \"\"\"\n        for import_info in import_info_list:\n            part_list = import_info.module.split(\".\")\n            if \"*\" in import_info.names:\n                package_file_list = self._package_file_list(import_info.module)\n                if package_file_list:\n                    file_binding.wildcard_list.extend(\n                        other_rel for other_rel in package_file_list if other_rel != file_rel\n                    )\n                    continue\n                type_tuple = self._resolve_qualified_name(part_list, file_rel)\n                if type_tuple is not None:\n                    type_file, type_path = type_tuple\n                    for member_name in self._member_name_list(type_file, type_path):\n                        file_binding.name_dict.setdefault(\n                            member_name, SymbolBinding(type_file, f\"{type_path}.{member_name}\"),\n                        )\n                continue\n            type_tuple = self._resolve_qualified_name(part_list, file_rel)\n            if type_tuple is not None:\n                type_file, type_path = type_tuple\n                local_name = import_info.module_alias or part_list[-1]\n                file_binding.name_dict[local_name] = SymbolBinding(type_file, type_path)\n                file_binding.import_file_set.add(type_file)\n\n    # == Packages (Java, Kotlin) ==============================================\n\n    def _package_index(self) -> dict[str, list[str]]:\n        \"\"\"Return {package key: files of the package}, built from the package statements once.\n\n        The key of a file with a package statement is the package name; of a file\n        without one, \"/\" and its directory. The top-level names of each file are read\n        while it is parsed (top_level_name_list).\n        \"\"\"\n        if self._package_file_dict is not None:\n            return self._package_file_dict\n        package_file_dict: dict[str, list[str]] = {}\n        for file_rel in sorted(self.project_file_set):\n            if self._bind_kind(file_rel) != \"package\":\n                continue\n            try:\n                package = self._tree_fact(file_rel).package_name\n            except Exception as e:\n                logger.warning(\n                    f\"The package of {file_rel} cannot be read: {type(e).__name__}: {e}\"\n                )\n                continue\n            self.top_level_name_list(file_rel)\n            package_key = package if package is not None else \"/\" + os.path.dirname(file_rel)\n            self._file_package_dict[file_rel] = package_key\n            package_file_dict.setdefault(package_key, []).append(file_rel)\n        self._package_file_dict = package_file_dict\n        return package_file_dict\n\n    def _package_file_list(self, package: str) -> list[str]:\n        \"\"\"Return the files of a package, in path order.\"\"\"\n        return self._package_index().get(package, [])\n\n    def _resolve_qualified_name(\n        self, part_list: list[str], file_rel: str,\n    ) -> tuple[str, str] | None:\n        \"\"\"Resolve a qualified name written in an import statement to a definition.\n\n        The longest leading part that is a package of the project is taken as the\n        package; the next part is looked up among the top-level names of its files.\n\n        Examples (package com.acme.model with User.java):\n            [\"com\", \"acme\", \"model\", \"User\"]             -> (\"…/User.java\", \"User\")\n            [\"com\", \"acme\", \"model\", \"User\", \"Builder\"]  -> (\"…/User.java\", \"User.Builder\")\n\n        Args:\n            part_list: The parts of the name.\n            file_rel: Relative path of the file the import is written in.\n\n        Returns:\n            (file, path of the definition in the file), None when no package of the\n            project defines the name. Of several files that define it, the one named\n            like it comes first, then the one nearest to file_rel.\n        \"\"\"\n        for package_part_count in range(len(part_list) - 1, 0, -1):\n            package_file_list = self._package_file_list(\".\".join(part_list[:package_part_count]))\n            rest_list = part_list[package_part_count:]\n            candidate_list = [\n                other_rel for other_rel in package_file_list\n                if other_rel != file_rel and rest_list[0] in self.top_level_name_list(other_rel)\n            ]\n            if not candidate_list:\n                continue\n            same_name_list = [\n                other_rel for other_rel in candidate_list\n                if os.path.splitext(os.path.basename(other_rel))[0] == rest_list[0]\n            ]\n            return nearest_first(same_name_list or candidate_list, file_rel)[0], \".\".join(rest_list)\n        return None\n\n    def _member_name_list(self, file_rel: str, type_path: str) -> list[str]:\n        \"\"\"Return the names of the definitions written inside a type of a file.\n\n        Args:\n            file_rel: Relative path of the file.\n            type_path: Path of the type in the file (\"User\", \"User.Builder\").\n\n        Returns:\n            The names of the definitions inside the lines of the container definitions\n            named like the last part of type_path, without duplicates.\n        \"\"\"\n        type_name = type_path.split(\".\")[-1]\n        definition_list = self._definition_list(file_rel)\n        member_name_list: list[str] = []\n        for owner in definition_list:\n            if owner.name != type_name or owner.type not in CONTAINER_DEFINITION_TYPE_SET:\n                continue\n            for definition in definition_list:\n                if definition is not owner and owner.start_line <= definition.start_line <= owner.end_line:\n                    member_name_list.append(definition.name)\n        return list(dict.fromkeys(member_name_list))\n\n    def _implicit_file_list(self, file_rel: str) -> list[str]:\n        \"\"\"Return the files whose names a file can write without an import statement.\n\n        \"package\" visibility (Java / Kotlin): the other files of its package.\n        \"project\" visibility (SQL): every other file of its language.\n\n        Returns:\n            Relative paths in path order, without the file itself.\n        \"\"\"\n        file_ext = self._file_ext(file_rel)\n        scope = EXT_TO_IMPLICIT_VISIBILITY_DICT.get(file_ext)\n        if scope == \"package\":\n            self._package_index()\n            package_key = self._file_package_dict.get(file_rel)\n            return [\n                other_rel for other_rel in self._package_file_list(package_key or \"\")\n                if other_rel != file_rel\n            ]\n        if scope == \"project\":\n            return [\n                other_rel for other_rel in sorted(self.project_file_set)\n                if other_rel != file_rel and self._file_ext(other_rel) == file_ext\n            ]\n        return []\n\n    # == Following a name to its definition ===================================\n\n    def _module_part_file(self, file_rel: str, name: str) -> str | None:\n        \"\"\"Return the module of a Python package that has a name, None when there is none.\n\n        Args:\n            file_rel: Relative path of the __init__.py of the package.\n            name: Name of the module inside the package.\n        \"\"\"\n        if os.path.basename(file_rel) != _PACKAGE_INIT_FILE_NAME:\n            return None\n        return self._resolve(\".\" + name, file_rel)\n\n    def _take_over_file_list(self, file_rel: str) -> list[str]:\n        \"\"\"Return a file and the files whose every name it passes on, read once per file.\n\n        Returns:\n            The file itself, then the files it takes over as a whole (from m import *,\n            #include, export *) and the ones those take over, each once, in the order\n            they are reached following the first of them first. The file alone when\n            its \"bind\" is in _OWN_NAME_EXPORT_BIND_SET.\n        \"\"\"\n        take_over_file_list = self._take_over_file_dict.get(file_rel)\n        if take_over_file_list is not None:\n            return take_over_file_list\n        take_over_file_list = []\n        visit_set: set[str] = set()\n        file_stack = [file_rel]\n        while file_stack:\n            current_rel = file_stack.pop()\n            if current_rel in visit_set:\n                continue\n            visit_set.add(current_rel)\n            take_over_file_list.append(current_rel)\n            if self._bind_kind(current_rel) not in _OWN_NAME_EXPORT_BIND_SET:\n                file_stack.extend(reversed(self._file_binding(current_rel).wildcard_list))\n        self._take_over_file_dict[file_rel] = take_over_file_list\n        return take_over_file_list\n\n    def _direct_name_dict(self, file_rel: str) -> dict[str, SymbolBinding]:\n        \"\"\"Return the names another file can take from a file itself, as they are written.\n\n        In order, an earlier one kept for a name given twice: the names its export\n        statements with a source pass on, its top-level definitions, the names it\n        exports under another name, the names its import statements bind for the\n        whole file. Of a file whose \"bind\" is in _OWN_NAME_EXPORT_BIND_SET, its\n        top-level definitions only.\n\n        Returns:\n            {name: the file and the name it stands for, not followed further}.\n        \"\"\"\n        own_name_dict = {\n            name: SymbolBinding(file_rel, name) for name in self.top_level_name_list(file_rel)\n        }\n        if self._bind_kind(file_rel) in _OWN_NAME_EXPORT_BIND_SET:\n            return own_name_dict\n        file_binding = self._file_binding(file_rel)\n        return {\n            **file_binding.name_dict, **file_binding.export_alias_dict,\n            **own_name_dict, **file_binding.export_dict,\n        }\n\n    def _visible_name_dict(self, file_rel: str) -> dict[str, SymbolBinding]:\n        \"\"\"Return every name another file can take from a file, as it is written, read once per file.\n\n        Returns:\n            The names of the file itself and of each file it passes on as a whole\n            (_direct_name_dict over _take_over_file_list); the first file that gives a\n            name is kept. The bindings are not followed further.\n        \"\"\"\n        visible_dict = self._visible_dict.get(file_rel)\n        if visible_dict is not None:\n            return visible_dict\n        visible_dict = {}\n        for take_over_file in self._take_over_file_list(file_rel):\n            for name, binding in self._direct_name_dict(take_over_file).items():\n                visible_dict.setdefault(name, binding)\n        self._visible_dict[file_rel] = visible_dict\n        return visible_dict\n\n    def star_name_set(self, file_rel: str) -> set[str]:\n        \"\"\"Return the names \"from file import *\" takes from a Python file.\n\n        A file with an __all__ written with constants gives the names it lists; any\n        other file gives the names it defines, the names its import statements bind\n        and the names it takes with \"from other import *\" itself, without the names\n        that start with \"_\". The files that take over one another are worked out\n        together, so the result does not depend on which of them is asked first.\n\n        Args:\n            file_rel: Relative path of the file.\n\n        Returns:\n            The names. Looked up once per file.\n        \"\"\"\n        star_name_set = self._star_name_dict.get(file_rel)\n        if star_name_set is not None:\n            return star_name_set\n        file_list = self._take_over_file_list(file_rel)\n        direct_dict = {other_rel: set(self._direct_name_dict(other_rel)) for other_rel in file_list}\n        name_dict: dict[str, set[str]] = {other_rel: set() for other_rel in file_list}\n        is_change = True\n        while is_change:\n            is_change = False\n            for other_rel in file_list:\n                file_binding = self._file_binding(other_rel)\n                if file_binding.all_name_list is not None:\n                    name_set = set(file_binding.all_name_list)\n                else:\n                    name_set = set(direct_dict[other_rel])\n                    for wildcard_file in file_binding.wildcard_list:\n                        name_set |= name_dict.get(wildcard_file, set())\n                    name_set = {name for name in name_set if not name.startswith(\"_\")}\n                if name_set != name_dict[other_rel]:\n                    name_dict[other_rel] = name_set\n                    is_change = True\n        self._star_name_dict.update(name_dict)\n        return name_dict[file_rel]\n\n    def _export_name_dict(self, file_rel: str) -> dict[str, SymbolBinding]:\n        \"\"\"Return every name another file can take from a file, followed to its definition.\n\n        These are the names of _visible_name_dict, each followed to the file that\n        defines it (_follow). Read once per file.\n        \"\"\"\n        export_dict = self._export_dict.get(file_rel)\n        if export_dict is not None:\n            return export_dict\n        visible_dict = self._visible_name_dict(file_rel)\n        export_dict = {name: self._follow(binding) for name, binding in visible_dict.items()}\n        if export_dict == visible_dict:\n            export_dict = visible_dict\n        self._export_dict[file_rel] = export_dict\n        return export_dict\n\n    def _follow(self, binding: SymbolBinding) -> SymbolBinding:\n        \"\"\"Follow a binding through the files that pass its name on to the file that defines it.\n\n        Each step looks the name up among the names of the file the binding names\n        (_visible_name_dict). A name that file defines itself ends the walk; a name\n        it has not ends it with the module of that name when the file is the script\n        of a Python package, else with the binding reached. Bindings that lead back\n        to one another end the walk at the first one reached twice.\n\n        Args:\n            binding: A binding as an import or export statement writes it.\n\n        Returns:\n            The binding of the definition, or of the file when the name stands for a\n            file as a whole.\n        \"\"\"\n        visit_set: set[SymbolBinding] = set()\n        while binding.name is not None and binding not in visit_set:\n            visit_set.add(binding)\n            next_binding = self._visible_name_dict(binding.file_rel).get(binding.name)\n            if next_binding is None:\n                module_part_file = self._module_part_file(binding.file_rel, binding.name)\n                if module_part_file is not None:\n                    return SymbolBinding(module_part_file, None)\n                return binding\n            if next_binding == binding:\n                return binding\n            binding = next_binding\n        return binding\n\n    def member_binding(\n        self, binding: SymbolBinding, part_list: list[str],\n    ) -> tuple[SymbolBinding, list[str]]:\n        \"\"\"Follow the parts written after a name that stands for a file.\n\n        Examples (pkg/__init__.py imports Engine from pkg/core.py):\n            (pkg/__init__.py, None), [\"Engine\", \"run\"] -> ((pkg/core.py, \"Engine\"), [\"run\"])\n            (pkg/__init__.py, None), [\"core\", \"COUNT\"] -> ((pkg/core.py, \"COUNT\"), [])\n\n        Args:\n            binding: The binding of the first part of a usage name.\n            part_list: The parts after it.\n\n        Returns:\n            (binding reached, parts left over). The binding is returned as it is when\n            it names a definition or the next part is no name of its file.\n        \"\"\"\n        while binding.name is None and part_list:\n            part_binding = self._export_name_dict(binding.file_rel).get(part_list[0])\n            if part_binding is None:\n                module_part_file = self._module_part_file(binding.file_rel, part_list[0])\n                if module_part_file is None:\n                    break\n                part_binding = SymbolBinding(module_part_file, None)\n            binding = part_binding\n            part_list = part_list[1:]\n        return binding, part_list\n\n    def default_binding(self, file_rel: str) -> SymbolBinding | None:\n        \"\"\"Return the definition the default export of a JS/TS file leads to.\n\n        Args:\n            file_rel: Relative path of the file.\n\n        Returns:\n            The binding of DEFAULT_EXPORT_NAME among the names of the file (export\n            default, module.exports = ...), None when it has none or is a file of\n            another language.\n        \"\"\"\n        if self._bind_kind(file_rel) != \"export\":\n            return None\n        return self._export_name_dict(file_rel).get(DEFAULT_EXPORT_NAME)\n\n    # == Declarations and their definitions (C / C++) =========================\n\n    def _implement_index(self) -> dict[str, list[str]]:\n        \"\"\"Return {function name: files with a function definition of that name}, built once.\n\n        The files whose \"bind\" is \"include\" are read. A member defined outside its\n        class is found under its name with each number of leading scopes\n        (geo::Shape::count -> \"geo::Shape::count\", \"Shape::count\").\n        \"\"\"\n        if self._implement_file_dict is not None:\n            return self._implement_file_dict\n        implement_file_dict: dict[str, list[str]] = {}\n        for file_rel in sorted(self.project_file_set):\n            if self._bind_kind(file_rel) != \"include\":\n                continue\n            try:\n                # The import statements are read from the same tree as the definitions\n                self._tree_fact(file_rel)\n                definition_list = self._definition_list(file_rel)\n            except Exception as e:\n                logger.warning(\n                    f\"The definitions of {file_rel} cannot be read: {type(e).__name__}: {e}\"\n                )\n                continue\n            for definition in definition_list:\n                if definition.type not in _FUNCTION_BODY_TYPE_SET:\n                    continue\n                part_list = definition.name.split(\"::\")\n                for start in range(max(1, len(part_list) - 1)):\n                    file_list = implement_file_dict.setdefault(\"::\".join(part_list[start:]), [])\n                    if file_rel not in file_list:\n                        file_list.append(file_rel)\n        self._implement_file_dict = implement_file_dict\n        return implement_file_dict\n\n    def implement_file_list(self, file_rel: str, definition_name: str) -> list[tuple[str, str]]:\n        \"\"\"Return the other files that define what a name of a file names.\n\n        C / C++: the files that define a function a header only declares. Rust: the\n        files with an impl block that defines a member of a type of the file.\n\n        Examples:\n            (\"include/list.h\", \"list_push\")    -> [(\"src/list.c\", \"list_push\")]\n            (\"include/shape.hpp\", \"Shape.area\") -> [(\"src/shape.cpp\", \"Shape::area\")]\n            (\"src/shape.rs\", \"Circle::extra\")  -> [(\"src/shape_ext.rs\", \"Circle::extra\")]\n\n        Args:\n            file_rel: Relative path of the file a usage leads to.\n            definition_name: Name the definition is looked up by in file_rel.\n\n        Returns:\n            (file, name of the definition in it) of each such file, in path order\n            (_find_implement_file_list, _find_impl_member_file_list). Empty for a file\n            of a language without an entry in _IMPLEMENT_FUNCTION_DICT. Looked up once\n            per file and name.\n        \"\"\"\n        find_function = _IMPLEMENT_FUNCTION_DICT.get(self._bind_kind(file_rel))\n        if find_function is None:\n            return []\n        implement_key = (file_rel, definition_name)\n        if implement_key not in self._implement_list_dict:\n            self._implement_list_dict[implement_key] = find_function(\n                self, file_rel, definition_name,\n            )\n        return self._implement_list_dict[implement_key]\n\n    def _find_implement_file_list(\n        self, file_rel: str, definition_name: str,\n    ) -> list[tuple[str, str]]:\n        \"\"\"Look up the files that define a function a C / C++ file only declares (implement_file_list).\"\"\"\n        definition = file_definition(file_rel, definition_name, self.project_dir)\n        if definition is None or definition.type not in _FUNCTION_DECLARE_TYPE_SET:\n            return []\n        # A member is defined outside its class under the name of the class and its own\n        part_list = symbol_part_list(definition_name)\n        implement_name = \"::\".join([*part_list[-2:-1], definition.name])\n        return [\n            (implement_file, implement_name)\n            for implement_file in self._implement_index().get(implement_name, [])\n            if implement_file != file_rel and file_rel in self._take_over_file_list(implement_file)\n        ]\n\n    # == Members of a class, used by name inside a member defined outside it (C++) ==\n\n    def _base_name_list(self, file_rel: str, class_name: str) -> list[str]:\n        \"\"\"Return the names of the base classes of a class of a file (_base_class_name_dict).\"\"\"\n        return self._tree_fact(file_rel).base_name_dict.get(class_name, [])\n\n    def _class_member_binding_dict(\n        self, class_file: str, class_path: str,\n    ) -> dict[str, SymbolBinding]:\n        \"\"\"Return the members of a class and of its base classes, looked up once per class.\n\n        Args:\n            class_file: Relative path of the file that defines the class.\n            class_path: Path of the class in the file (\"Shape\", \"Outer.Inner\").\n\n        Returns:\n            {member name: the member as \"class_path.member\" of the file of its class}.\n            A member of the class itself comes before a member of the same name of a\n            base class, and an earlier base class before a later one. A base class is\n            looked up among the top-level names of class_file, then among the names it\n            takes from other files.\n        \"\"\"\n        class_key = (class_file, class_path)\n        member_dict = self._class_member_dict.get(class_key)\n        if member_dict is not None:\n            return member_dict\n        # Registered before it is filled: a class that leads back to itself gets it as it is\n        member_dict = {}\n        self._class_member_dict[class_key] = member_dict\n        try:\n            for member_name in self._member_name_list(class_file, class_path):\n                member_dict[member_name] = SymbolBinding(class_file, f\"{class_path}.{member_name}\")\n            base_name_list = self._base_name_list(class_file, class_path.split(\".\")[-1])\n        except Exception as e:\n            logger.warning(\n                f\"The members of {class_path} of {class_file} cannot be read: \"\n                f\"{type(e).__name__}: {e}\"\n            )\n            return member_dict\n        own_name_set = set(self.top_level_name_list(class_file))\n        for base_name in base_name_list:\n            base_binding = (\n                SymbolBinding(class_file, base_name) if base_name in own_name_set\n                else self.symbol_dict(class_file).get(base_name)\n            )\n            if base_binding is None or base_binding.name is None:\n                continue\n            base_member_dict = self._class_member_binding_dict(\n                base_binding.file_rel, base_binding.name,\n            )\n            for member_name, binding in base_member_dict.items():\n                member_dict.setdefault(member_name, binding)\n        return member_dict\n\n    def member_scope_list(\n        self, file_rel: str,\n    ) -> list[tuple[int, int, dict[str, SymbolBinding]]]:\n        \"\"\"Return the members a file can write by name alone, for the lines they can be written on.\n\n        C++: inside a function defined as a member of a class outside the class\n        (int Shape::count() { ... }) and inside a class, a member of the class or of\n        one of its base classes is written without the class. Of a class the file\n        defines itself only the members of other files are given: the file refers to\n        its own definitions by their names.\n\n        Args:\n            file_rel: Relative path of the file.\n\n        Returns:\n            (first line, last line, {member name: the member}) of each such function\n            and class, in line order. Empty for a file without one.\n        \"\"\"\n        scope_list: list[tuple[int, int, dict[str, SymbolBinding]]] = []\n        file_binding = self._file_binding(file_rel)\n        if not file_binding.member_scope_list:\n            return scope_list\n        symbol_dict = self.symbol_dict(file_rel)\n        own_name_set = set(self.top_level_name_list(file_rel))\n        for class_name, start_line, end_line in file_binding.member_scope_list:\n            class_binding = symbol_dict.get(class_name)\n            if (\n                class_binding is None and class_name in own_name_set\n                and self._base_name_list(file_rel, class_name)\n            ):\n                class_binding = SymbolBinding(file_rel, class_name)\n            if class_binding is None or class_binding.name is None:\n                continue\n            member_dict = {\n                name: binding\n                for name, binding in self._class_member_binding_dict(\n                    class_binding.file_rel, class_binding.name,\n                ).items()\n                if binding.file_rel != file_rel\n            }\n            if member_dict:\n                scope_list.append((start_line, end_line, member_dict))\n        return scope_list\n\n    def inherit_binding(self, file_rel: str, definition_name: str) -> tuple[str, str]:\n        \"\"\"Return where a member written with a class leads when a base class defines it.\n\n        Examples (class Comment : public Node; Node declares Value):\n            (\"xml.h\", \"Comment.Value\")  -> (\"xml.h\", \"Node.Value\")\n            (\"xml.h\", \"Comment.Kind\")   -> (\"xml.h\", \"Comment.Kind\")  (its own member)\n            (\"xml.h\", \"Comment\")        -> (\"xml.h\", \"Comment\")\n\n        Args:\n            file_rel: Relative path of the file a usage leads to.\n            definition_name: Name the definition is looked up by in file_rel.\n\n        Returns:\n            (file, name) of the member of the base class when the first part of\n            definition_name names a C++ class of file_rel and the second part a member\n            only a base class has; else the arguments as they are.\n        \"\"\"\n        if self._bind_kind(file_rel) != \"include\":\n            return file_rel, definition_name\n        part_list = symbol_part_list(definition_name)\n        if len(part_list) < 2:\n            return file_rel, definition_name\n        class_definition = file_definition(file_rel, part_list[0], self.project_dir)\n        if class_definition is None or class_definition.type not in _CLASS_NODE_TYPE_SET:\n            return file_rel, definition_name\n        binding = self._class_member_binding_dict(file_rel, part_list[0]).get(part_list[1])\n        own_binding = SymbolBinding(file_rel, f\"{part_list[0]}.{part_list[1]}\")\n        if binding is None or binding == own_binding or binding.name is None:\n            return file_rel, definition_name\n        rest_part_list = [binding.name, *part_list[2:]]\n        return binding.file_rel, \".\".join(rest_part_list)\n\n    # == Members defined in the impl blocks of other files (Rust) ============\n\n    def _impl_member_index(self) -> dict[str, list[str]]:\n        \"\"\"Return {\"Type::member\": files with an impl block of Type that defines member}, built once.\n\n        The files whose \"bind\" is \"path\" are read.\n        \"\"\"\n        if self._impl_member_file_dict is not None:\n            return self._impl_member_file_dict\n        impl_member_file_dict: dict[str, list[str]] = {}\n        for file_rel in sorted(self.project_file_set):\n            if self._bind_kind(file_rel) != \"path\":\n                continue\n            try:\n                # The import statements are read from the same tree as the definitions\n                self._tree_fact(file_rel)\n                definition_list = self._definition_list(file_rel)\n            except Exception as e:\n                logger.warning(\n                    f\"The definitions of {file_rel} cannot be read: {type(e).__name__}: {e}\"\n                )\n                continue\n            for owner in definition_list:\n                if owner.type not in ATTACHED_DEFINITION_TYPE_SET:\n                    continue\n                for definition in definition_list:\n                    if definition is owner or not (\n                        owner.start_line <= definition.start_line <= owner.end_line\n                    ):\n                        continue\n                    file_list = impl_member_file_dict.setdefault(\n                        f\"{owner.name}::{definition.name}\", [],\n                    )\n                    if file_rel not in file_list:\n                        file_list.append(file_rel)\n        self._impl_member_file_dict = impl_member_file_dict\n        return impl_member_file_dict\n\n    def _find_impl_member_file_list(\n        self, file_rel: str, definition_name: str,\n    ) -> list[tuple[str, str]]:\n        \"\"\"Look up the files whose impl blocks define a member of a type of a Rust file (implement_file_list).\n\n        Examples (src/shape_ext.rs has use crate::shape::Circle; impl Circle { fn extra() }):\n            (\"src/shape.rs\", \"Circle::extra\")  -> [(\"src/shape_ext.rs\", \"Circle::extra\")]\n            (\"src/shape.rs\", \"Circle\")         -> []\n\n        Args:\n            file_rel: Relative path of the file that defines the type.\n            definition_name: Path of the member in file_rel (\"Type::member\").\n\n        Returns:\n            (file, \"Type::member\") of each other file that has an impl block of the\n            type with the member and binds a name to the type of file_rel, in path order.\n        \"\"\"\n        part_list = symbol_part_list(definition_name)\n        if len(part_list) < 2:\n            return []\n        member_name = \"::\".join(part_list[-2:])\n        type_binding = SymbolBinding(file_rel, \"::\".join(part_list[:-1]))\n        return [\n            (impl_file, member_name)\n            for impl_file in self._impl_member_index().get(member_name, [])\n            if impl_file != file_rel and type_binding in self.symbol_dict(impl_file).values()\n        ]\n\n    # == Public: names of a file ==============================================\n\n    def symbol_dict(self, file_rel: str) -> dict[str, SymbolBinding]:\n        \"\"\"Return the names a file can write that come from other project files.\n\n        In order: the names its import statements bind for the whole file; the names\n        visible without an import statement (_implicit_file_list); the names of the\n        definitions and files it takes over as a whole. A later group does not replace\n        a name of an earlier one, and the last two leave out the names the file defines\n        at its top level.\n\n        Args:\n            file_rel: Relative path of the file.\n\n        Returns:\n            {name: binding followed to the file that defines it}, without the names\n            that lead to the file itself.\n        \"\"\"\n        symbol_dict = self._symbol_dict.get(file_rel)\n        if symbol_dict is not None:\n            return symbol_dict\n        symbol_dict = {}\n        file_binding = self._file_binding(file_rel)\n        own_name_set = set(self.top_level_name_list(file_rel))\n\n        for name, binding in file_binding.name_dict.items():\n            target_binding = self._follow(binding)\n            if target_binding.file_rel != file_rel:\n                symbol_dict[name] = target_binding\n\n        for other_rel in self._implicit_file_list(file_rel):\n            for name in self.top_level_name_list(other_rel):\n                if name not in own_name_set:\n                    symbol_dict.setdefault(name, SymbolBinding(other_rel, name))\n\n        if file_binding.is_wildcard_local:\n            for name, binding in file_binding.wildcard_name_dict.items():\n                if name not in own_name_set and binding.file_rel != file_rel:\n                    symbol_dict.setdefault(name, binding)\n            is_star = self._bind_kind(file_rel) in _STAR_NAME_BIND_SET\n            for wildcard_file in file_binding.wildcard_list:\n                export_name_dict = self._export_name_dict(wildcard_file)\n                if is_star:\n                    star_name_set = self.star_name_set(wildcard_file)\n                    export_name_dict = {\n                        name: binding for name, binding in export_name_dict.items()\n                        if name in star_name_set\n                    }\n                    # A name __all__ lists that is a module of the package\n                    for name in sorted(star_name_set - set(export_name_dict)):\n                        module_part_file = self._module_part_file(wildcard_file, name)\n                        if module_part_file is not None:\n                            export_name_dict[name] = SymbolBinding(module_part_file, None)\n                for name, binding in export_name_dict.items():\n                    if name not in own_name_set and binding.file_rel != file_rel:\n                        symbol_dict.setdefault(name, binding)\n\n        self._symbol_dict[file_rel] = symbol_dict\n        return symbol_dict\n\n    def scope_binding_list(self, file_rel: str) -> list[ScopeBinding]:\n        \"\"\"Return what the names bound for a range of lines of a file stand for.\n\n        In order: the names its import statements bind for a range of lines; then, for\n        each file it takes over as a whole for a range of lines, every name of that\n        file that does not lead to the file itself.\n\n        Args:\n            file_rel: Relative path of the file.\n\n        Returns:\n            The bindings, each followed to the file that defines the name, without\n            duplicates. Empty for a file whose import statements bind every name for\n            the whole file.\n        \"\"\"\n        scope_binding_list = self._scope_binding_dict.get(file_rel)\n        if scope_binding_list is not None:\n            return scope_binding_list\n        file_binding = self._file_binding(file_rel)\n        scope_binding_list = [\n            ScopeBinding(\n                scope_binding.name, scope_binding.start_line, scope_binding.end_line,\n                scope_binding.binding and self._follow(scope_binding.binding),\n            )\n            for scope_binding in file_binding.scope_binding_list\n        ]\n        for wildcard_file, start_line, end_line in file_binding.scope_wildcard_list:\n            for name, binding in self._export_name_dict(wildcard_file).items():\n                if binding.file_rel != file_rel:\n                    scope_binding_list.append(ScopeBinding(name, start_line, end_line, binding))\n        scope_binding_list = list(dict.fromkeys(scope_binding_list))\n        self._scope_binding_dict[file_rel] = scope_binding_list\n        return scope_binding_list\n\n    def module_scope_list(self, file_rel: str) -> list[tuple[int, int, bool]]:\n        \"\"\"Return the inline modules of a file and whether each takes over the names around it.\n\n        Args:\n            file_rel: Relative path of the file.\n\n        Returns:\n            (first line, last line, True when the module has use super::*) of each\n            inline module (Rust: mod name { ... }). Empty for a file of a language\n            without inline modules.\n        \"\"\"\n        return self._file_binding(file_rel).module_scope_list\n\n    def use_list(self, file_rel: str) -> list[tuple[str, int]]:\n        \"\"\"Return the names the import statements of a file use where they are written.\n\n        Args:\n            file_rel: Relative path of the file.\n\n        Returns:\n            (name, line) of each such name (JS/TS: the member of require(\"./m\").run()).\n        \"\"\"\n        return self._file_binding(file_rel).use_list\n\n    def import_file_set(self, file_rel: str) -> set[str]:\n        \"\"\"Return the project files the import statements of a file resolve to.\n\n        Args:\n            file_rel: Relative path of the file.\n\n        Returns:\n            Relative paths, without the file itself.\n        \"\"\"\n        return set(self._file_binding(file_rel).import_file_set)\n\n    def import_line_dict(self, file_rel: str, is_whole_file: bool = False) -> dict[str, set[int]]:\n        \"\"\"Return the lines of the import statements of a file by the names they bind.\n\n        Args:\n            file_rel: Relative path of the file.\n            is_whole_file: True to leave out the statements that bind their names for\n                a range of lines (ImportInfo.scope_line_tuple).\n\n        Returns:\n            {name an import statement binds: lines of those statements (1-based)},\n            also for the names that lead outside the project.\n        \"\"\"\n        file_binding = self._file_binding(file_rel)\n        return file_binding.file_import_line_dict if is_whole_file else file_binding.import_line_dict",
+      "target_name": "ImportBinder",
+      "target_start_line": 234
+    },
+    {
+      "lines": [
+        142,
+        143,
+        147,
+        150
+      ],
+      "name": "SymbolBinding.name",
+      "from": "codetwine/codetwine/import_binding_py/import_binding.py",
+      "target_context": "name: str | None",
+      "target_name": "name",
+      "target_start_line": 74
+    },
+    {
+      "lines": [
+        145,
+        182,
+        227,
+        274,
+        337,
+        338,
+        498,
+        523,
+        566
+      ],
+      "name": "symbol_part_list",
+      "from": "codetwine/codetwine/extractors/usages_py/usages.py",
+      "target_context": "def symbol_part_list(name: str) -> list[str]:\n    \"\"\"Split a usage name into its parts.\n\n    Examples:\n        \"helper.process\"      -> [\"helper\", \"process\"]\n        \"config::Settings\"    -> [\"config\", \"Settings\"]\n\n    Args:\n        name: A usage name (UsageInfo.name).\n\n    Returns:\n        The parts separated by \".\" or \"::\".\n    \"\"\"\n    return _SYMBOL_SEPARATOR_RE.split(name)",
+      "target_name": "symbol_part_list",
+      "target_start_line": 41
+    },
+    {
+      "lines": [
+        146
+      ],
+      "name": "ImportBinder.member_binding",
+      "from": "codetwine/codetwine/import_binding_py/import_binding.py",
+      "target_context": "def member_binding(\n        self, binding: SymbolBinding, part_list: list[str],\n    ) -> tuple[SymbolBinding, list[str]]:\n        \"\"\"Follow the parts written after a name that stands for a file.\n\n        Examples (pkg/__init__.py imports Engine from pkg/core.py):\n            (pkg/__init__.py, None), [\"Engine\", \"run\"] -> ((pkg/core.py, \"Engine\"), [\"run\"])\n            (pkg/__init__.py, None), [\"core\", \"COUNT\"] -> ((pkg/core.py, \"COUNT\"), [])\n\n        Args:\n            binding: The binding of the first part of a usage name.\n            part_list: The parts after it.\n\n        Returns:\n            (binding reached, parts left over). The binding is returned as it is when\n            it names a definition or the next part is no name of its file.\n        \"\"\"\n        while binding.name is None and part_list:\n            part_binding = self._export_name_dict(binding.file_rel).get(part_list[0])\n            if part_binding is None:\n                module_part_file = self._module_part_file(binding.file_rel, part_list[0])\n                if module_part_file is None:\n                    break\n                part_binding = SymbolBinding(module_part_file, None)\n            binding = part_binding\n            part_list = part_list[1:]\n        return binding, part_list",
+      "target_name": "member_binding",
+      "target_start_line": 959
+    },
+    {
+      "lines": [
+        149
+      ],
+      "name": "ImportBinder.default_binding",
+      "from": "codetwine/codetwine/import_binding_py/import_binding.py",
+      "target_context": "def default_binding(self, file_rel: str) -> SymbolBinding | None:\n        \"\"\"Return the definition the default export of a JS/TS file leads to.\n\n        Args:\n            file_rel: Relative path of the file.\n\n        Returns:\n            The binding of DEFAULT_EXPORT_NAME among the names of the file (export\n            default, module.exports = ...), None when it has none or is a file of\n            another language.\n        \"\"\"\n        if self._bind_kind(file_rel) != \"export\":\n            return None\n        return self._export_name_dict(file_rel).get(DEFAULT_EXPORT_NAME)",
+      "target_name": "default_binding",
+      "target_start_line": 987
+    },
+    {
+      "lines": [
+        149,
+        153
+      ],
+      "name": "SymbolBinding.file_rel",
+      "from": "codetwine/codetwine/import_binding_py/import_binding.py",
+      "target_context": "file_rel: str",
+      "target_name": "file_rel",
+      "target_start_line": 71
+    },
+    {
+      "lines": [
+        153
+      ],
+      "name": "ImportBinder.inherit_binding",
+      "from": "codetwine/codetwine/import_binding_py/import_binding.py",
+      "target_context": "def inherit_binding(self, file_rel: str, definition_name: str) -> tuple[str, str]:\n        \"\"\"Return where a member written with a class leads when a base class defines it.\n\n        Examples (class Comment : public Node; Node declares Value):\n            (\"xml.h\", \"Comment.Value\")  -> (\"xml.h\", \"Node.Value\")\n            (\"xml.h\", \"Comment.Kind\")   -> (\"xml.h\", \"Comment.Kind\")  (its own member)\n            (\"xml.h\", \"Comment\")        -> (\"xml.h\", \"Comment\")\n\n        Args:\n            file_rel: Relative path of the file a usage leads to.\n            definition_name: Name the definition is looked up by in file_rel.\n\n        Returns:\n            (file, name) of the member of the base class when the first part of\n            definition_name names a C++ class of file_rel and the second part a member\n            only a base class has; else the arguments as they are.\n        \"\"\"\n        if self._bind_kind(file_rel) != \"include\":\n            return file_rel, definition_name\n        part_list = symbol_part_list(definition_name)\n        if len(part_list) < 2:\n            return file_rel, definition_name\n        class_definition = file_definition(file_rel, part_list[0], self.project_dir)\n        if class_definition is None or class_definition.type not in _CLASS_NODE_TYPE_SET:\n            return file_rel, definition_name\n        binding = self._class_member_binding_dict(file_rel, part_list[0]).get(part_list[1])\n        own_binding = SymbolBinding(file_rel, f\"{part_list[0]}.{part_list[1]}\")\n        if binding is None or binding == own_binding or binding.name is None:\n            return file_rel, definition_name\n        rest_part_list = [binding.name, *part_list[2:]]\n        return binding.file_rel, \".\".join(rest_part_list)",
+      "target_name": "inherit_binding",
+      "target_start_line": 1182
+    },
+    {
+      "lines": [
+        157
+      ],
+      "name": "ImportBinder.implement_file_list",
+      "from": "codetwine/codetwine/import_binding_py/import_binding.py",
+      "target_context": "def implement_file_list(self, file_rel: str, definition_name: str) -> list[tuple[str, str]]:\n        \"\"\"Return the other files that define what a name of a file names.\n\n        C / C++: the files that define a function a header only declares. Rust: the\n        files with an impl block that defines a member of a type of the file.\n\n        Examples:\n            (\"include/list.h\", \"list_push\")    -> [(\"src/list.c\", \"list_push\")]\n            (\"include/shape.hpp\", \"Shape.area\") -> [(\"src/shape.cpp\", \"Shape::area\")]\n            (\"src/shape.rs\", \"Circle::extra\")  -> [(\"src/shape_ext.rs\", \"Circle::extra\")]\n\n        Args:\n            file_rel: Relative path of the file a usage leads to.\n            definition_name: Name the definition is looked up by in file_rel.\n\n        Returns:\n            (file, name of the definition in it) of each such file, in path order\n            (_find_implement_file_list, _find_impl_member_file_list). Empty for a file\n            of a language without an entry in _IMPLEMENT_FUNCTION_DICT. Looked up once\n            per file and name.\n        \"\"\"\n        find_function = _IMPLEMENT_FUNCTION_DICT.get(self._bind_kind(file_rel))\n        if find_function is None:\n            return []\n        implement_key = (file_rel, definition_name)\n        if implement_key not in self._implement_list_dict:\n            self._implement_list_dict[implement_key] = find_function(\n                self, file_rel, definition_name,\n            )\n        return self._implement_list_dict[implement_key]",
+      "target_name": "implement_file_list",
+      "target_start_line": 1037
+    },
+    {
+      "lines": [
+        165,
+        166,
+        364,
+        495
+      ],
+      "name": "ScopeBinding",
+      "from": "codetwine/codetwine/import_binding_py/import_binding.py",
+      "target_context": "@dataclass(frozen=True)\nclass ScopeBinding:\n    \"\"\"What a name stands for on a range of lines of a file.\"\"\"\n\n    name: str           # The bound name\n    start_line: int     # First line the name is bound for (1-based)\n    end_line: int       # Last line the name is bound for\n    # What the name stands for; None when it stands for nothing of the project\n    binding: SymbolBinding | None",
+      "target_name": "ScopeBinding",
+      "target_start_line": 77
+    },
+    {
+      "lines": [
+        184,
+        405,
+        430,
+        516,
+        555,
+        576
+      ],
+      "name": "usage_root_name",
+      "from": "codetwine/codetwine/extractors/usages_py/usages.py",
+      "target_context": "def usage_root_name(name: str, tracked_name_set: Container[str]) -> str:\n    \"\"\"Return the tracked name a usage name starts from.\n\n    Examples (tracked names {\"helper\", \"super::ENCODINGS\"}):\n        \"helper.process\"               -> \"helper\"\n        \"super::ENCODINGS\"             -> \"super::ENCODINGS\"\n        \"super::ENCODINGS.trim_end\"    -> \"super::ENCODINGS\"\n\n    Args:\n        name: A usage name (UsageInfo.name).\n        tracked_name_set: The names whose usages were tracked (a set or a dict keyed by name).\n\n    Returns:\n        The longest leading part of name (cut at \".\" or \"::\") that is tracked,\n        or the first part when none is.\n    \"\"\"\n    return _track_root(name, tracked_name_set) or symbol_part_list(name)[0]",
+      "target_name": "usage_root_name",
+      "target_start_line": 81
+    },
+    {
+      "lines": [
+        257,
+        400
+      ],
+      "name": "EXT_TO_USAGE_NODE_TYPE_DICT.get",
+      "from": "codetwine/codetwine/config/settings_py/settings.py",
+      "target_context": "EXT_TO_USAGE_NODE_TYPE_DICT: dict[str, dict | None] = _expand_ext_aliases(\n    {ext: lang_config.usage_node_type_dict for ext, lang_config in _LANG_REGISTRY.items()}\n)",
+      "target_name": "EXT_TO_USAGE_NODE_TYPE_DICT",
+      "target_start_line": 1306
+    },
+    {
+      "lines": [
+        273,
+        520
+      ],
+      "name": "file_definition",
+      "from": "codetwine/codetwine/extractors/definition_source_py/definition_source.py",
+      "target_context": "def file_definition(\n    file_rel: str, name: str, project_dir: str,\n) -> DefinitionInfo | None:\n    \"\"\"Return the definition of a file that a name names (find_definition).\n\n    Args:\n        file_rel: Path of the file relative to the project root.\n        name: Name of the definition, its parts joined with \".\" or \"::\".\n        project_dir: Absolute path to the project root.\n\n    Returns:\n        The definition. None when the name names no definition of the file, and for a\n        file whose definitions are not read by extract_definitions() from a syntax\n        tree (COBOL, BMS, R, a file without a language).\n    \"\"\"\n    definition_tuple = source_definition(file_rel, name, project_dir)\n    return definition_tuple[0] if definition_tuple is not None else None",
+      "target_name": "file_definition",
+      "target_start_line": 183
+    },
+    {
+      "lines": [
+        311,
+        370,
+        424,
+        545
+      ],
+      "name": "UsageInfo",
+      "from": "codetwine/codetwine/extractors/usages_py/usages.py",
+      "target_context": "@dataclass\nclass UsageInfo:\n    \"\"\"Data class holding information about a single symbol usage location.\"\"\"\n\n    name: str    # The symbol name being used\n    line: int    # Line number of the usage location (1-based)",
+      "target_name": "UsageInfo",
+      "target_start_line": 33
+    },
+    {
+      "lines": [
+        337
+      ],
+      "name": "UsageInfo.name",
+      "from": "codetwine/codetwine/extractors/usages_py/usages.py",
+      "target_context": "name: str",
+      "target_name": "name",
+      "target_start_line": 37
+    },
+    {
+      "lines": [
+        340
+      ],
+      "name": "UsageInfo.line",
+      "from": "codetwine/codetwine/extractors/usages_py/usages.py",
+      "target_context": "line: int",
+      "target_name": "line",
+      "target_start_line": 38
+    },
+    {
+      "lines": [
+        411
+      ],
+      "name": "extract_typed_aliases",
+      "from": "codetwine/codetwine/extractors/usages_py/usages.py",
+      "target_context": "def extract_typed_aliases(\n    root_node: Node,\n    imported_names: set[str],\n    usage_node_types: dict,\n) -> list[TypedAlias]:\n    \"\"\"Traverse the AST to find the variables declared with a tracked type.\n\n    Detects variables declared with an imported type (e.g. Genre) such as genre.\n    A variable counts for the lines of the innermost scope_types node around its\n    declaration (a function), or for the whole file when there is none (a field). A\n    declaration written in an opaque_types node (Python: a class body) is not read.\n\n    Supported AST patterns (typed_alias_parent_types):\n      Java:   field_declaration / local_variable_declaration / formal_parameter\n      Kotlin: property_declaration / parameter\n      C/C++:  declaration / parameter_declaration\n      Python: e: Engine = ... / a parameter e: Engine\n      TS:     const e: Engine = ... / a parameter e: Engine\n    A node type in typed_alias_name_field_dict names its variable in that field (\"\" for\n    its first named child) and its type in the field \"type\".\n\n    Args:\n        root_node: The AST root node covering the entire file.\n        imported_names: Set of type names to track.\n        usage_node_types: The EXT_TO_USAGE_NODE_TYPE_DICT entry of the language.\n\n    Returns:\n        One TypedAlias per variable whose type name is in imported_names, or starts\n        with a name of it (\"core.Engine\"), in no particular order.\n    \"\"\"\n    typed_alias_parent_types = usage_node_types.get(\"typed_alias_parent_types\", set())\n    if not typed_alias_parent_types:\n        return []\n    scope_types = usage_node_types.get(\"scope_types\", set())\n    opaque_types = usage_node_types.get(\"opaque_types\", set())\n    name_field_dict = usage_node_types.get(\"typed_alias_name_field_dict\", {})\n\n    alias_list: list[TypedAlias] = []\n    stack = [root_node]\n\n    while stack:\n        node = stack.pop()\n\n        if node.type in typed_alias_parent_types:\n            if node.type in name_field_dict:\n                type_name, var_names = _field_type_and_var(node, name_field_dict[node.type])\n            else:\n                type_name, var_names = _extract_type_and_var(node)\n            scope_node = (\n                _scope_node(node, scope_types, root_node, opaque_types)\n                if type_name and _track_root(type_name, imported_names) is not None else None\n            )\n            if scope_node is not None:\n                for var_name in var_names:\n                    if var_name != type_name:\n                        alias_list.append(TypedAlias(\n                            var_name, type_name,\n                            scope_node.start_point[0] + 1, scope_node.end_point[0] + 1,\n                        ))\n\n        stack.extend(node.children)\n\n    return alias_list",
+      "target_name": "extract_typed_aliases",
+      "target_start_line": 789
+    },
+    {
+      "lines": [
+        412
+      ],
+      "name": "extract_value_aliases",
+      "from": "codetwine/codetwine/extractors/usages_py/usages.py",
+      "target_context": "def extract_value_aliases(\n    root_node: Node,\n    usage_node_types: dict,\n    is_type_name: Callable[[str], bool],\n) -> list[TypedAlias]:\n    \"\"\"Traverse the AST to find the variables given an object of a tracked type.\n\n    e = Engine() (Python) and const e = new Engine() (JS / TS) make e stand for Engine\n    from the line of the assignment to the end of the innermost scope_types node around\n    it (a function). A later assignment of any other value to the same variable ends\n    that: it gives a TypedAlias without a type for its own lines. An assignment outside\n    every scope_types node is not read.\n\n    Settings read:\n        typed_alias_value_dict: node type -> (field of the variable, field of the value;\n            \"\" for the first named child)\n        typed_alias_new_dict:   node type of a value that makes an object -> field\n            naming its type\n\n    Args:\n        root_node: The AST root node covering the entire file.\n        usage_node_types: The EXT_TO_USAGE_NODE_TYPE_DICT entry of the language.\n        is_type_name: Returns whether a name written as the type names a tracked type.\n\n    Returns:\n        The TypedAlias of every assignment to a variable that is given an object of a\n        tracked type somewhere in its scope, in no particular order.\n    \"\"\"\n    value_dict = usage_node_types.get(\"typed_alias_value_dict\", {})\n    if not value_dict or not usage_node_types.get(\"typed_alias_new_dict\"):\n        return []\n    scope_types = usage_node_types.get(\"scope_types\", set())\n\n    alias_list: list[TypedAlias] = []\n    stack = [root_node]\n    while stack:\n        node = stack.pop()\n        stack.extend(node.children)\n        field_tuple = value_dict.get(node.type)\n        if field_tuple is None:\n            continue\n        name_field, value_field = field_tuple\n        name_node = node.child_by_field_name(name_field)\n        value_node = (\n            node.child_by_field_name(value_field) if value_field\n            else next(iter(node.named_children), None)\n        )\n        # Python: with Engine() as e holds the name in an as_pattern_target\n        if name_node is not None and name_node.type != \"identifier\" and name_node.named_child_count == 1:\n            name_node = name_node.named_children[0]\n        if name_node is None or name_node.type != \"identifier\" or value_node is None:\n            continue\n        scope_node = _scope_node(\n            node, scope_types, root_node, usage_node_types.get(\"opaque_types\", set()),\n        )\n        if scope_node is None or scope_node is root_node:\n            continue\n        type_name = _new_type_name(value_node, usage_node_types)\n        if type_name is not None and not is_type_name(type_name):\n            type_name = None\n        alias_list.append(TypedAlias(\n            name_node.text.decode(\"utf-8\"), type_name,\n            node.start_point[0] + 1, scope_node.end_point[0] + 1,\n        ))\n\n    typed_key_set = {\n        (alias.name, alias.end_line) for alias in alias_list if alias.type_name is not None\n    }\n    return [alias for alias in alias_list if (alias.name, alias.end_line) in typed_key_set]",
+      "target_name": "extract_value_aliases",
+      "target_start_line": 883
+    },
+    {
+      "lines": [
+        425
+      ],
+      "name": "extract_usages",
+      "from": "codetwine/codetwine/extractors/usages_py/usages.py",
+      "target_context": "def extract_usages(\n    root_node: Node | CobolSource,\n    imported_names: set[str],\n    usage_node_types: dict | None = None,\n    member_names: set[str] | None = None,\n    alias_list: list[\"TypedAlias\"] | None = None,\n    import_line_dict: dict[str, set[int]] | None = None,\n    is_reference_name: Callable[[str], bool] | None = None,\n) -> list[UsageInfo]:\n    \"\"\"Extract usage locations of imported names from the AST and return them.\n\n    Traverses the AST via depth-first search (DFS) and detects the following kinds:\n    - Nodes in call_types (function calls)\n    - Nodes in attribute_types (attribute access), named by the chain of names they\n      write (helper.process.run); a chain written after self / this is named without it\n    - identifier nodes (simple variable references), and nodes in identifier_types\n    - type_identifier / namespace_identifier nodes (type / namespace references)\n      Java: \"User\" in User user = new User() is a type_identifier\n      C/C++: \"Point\" in struct Point p is a type_identifier\n    - qualified_identifier nodes (C++: geo::Shape::count), named from their first\n      tracked part on\n    - Nodes in path_types (Rust paths such as config::Settings::new), recorded\n      with the whole path as the name; the paths in the arguments of a macro\n      (macro_argument_types) are read the same way\n\n    A name is not a usage where a scope around it (scope_types) binds it as a\n    parameter or a local variable. A name an import statement binds inside a scope\n    (import_line_dict) is no local variable of it.\n\n    Duplicate and redundant entries are removed at the end by deduplicate_usage_list.\n\n    For a CobolSource the places the file refers to the names are returned; names are\n    compared without regard to upper and lower case, and usage_node_types is not read.\n\n    Args:\n        root_node: The AST root node covering the entire file, or the CobolSource of a COBOL file.\n        imported_names: Set of names whose usage is to be tracked. A name may have several\n                        parts (\"pkg.core\"); a usage starts from the longest tracked name.\n        usage_node_types: Per-language node type settings dict, obtained from EXT_TO_USAGE_NODE_TYPE_DICT in config.py.\n                          Returns an empty list when None (for languages with no usage tracking defined).\n                          Required keys: \"call_types\", \"attribute_types\", \"skip_parent_types\"\n                          Optional key: \"skip_parent_types_for_type_ref\" (uses skip_parent_types if absent)\n                          Optional key: \"skip_name_field_types\" (when the parent is this type,\n                            only the name-field child is skipped; the value side is detected as a usage)\n                          Optional key: \"identifier_parent_types\" (when set, an identifier is a usage\n                            only when its parent is one of these types)\n                          Optional key: \"identifier_types\" (node types read like an identifier)\n                          Optional key: \"path_types\" (node types of a path written with \"::\")\n                          Optional key: \"macro_argument_types\" (node types of macro arguments,\n                            whose paths are read from loose tokens)\n                          Optional keys: \"self_names\" / \"self_types\" (identifier texts / node\n                            types that stand for the object a member is written on)\n                          Optional keys: \"scope_types\", \"scope_body_dict\", \"scope_binding_dict\",\n                            \"local_binding_dict\", \"pattern_types\", \"pattern_field_dict\",\n                            \"opaque_types\", \"unbind_types\"\n                            (how the names bound inside a function are found, see _local_name_set)\n        member_names: Names tracked when they are written after self / this. None for none.\n        alias_list: Variables declared with a tracked type (extract_typed_aliases); such a\n                    name stays a usage on the lines it is declared for, where a scope\n                    binds it. None for none.\n        import_line_dict: Name an import statement binds -> lines of those statements.\n                    None for none.\n        is_reference_name: Returns whether a name written in a pattern refers to a\n                    definition instead of binding the name. None when no name does.\n\n    Returns:\n        A list of UsageInfo (deduplicated).\n    \"\"\"\n    if isinstance(root_node, CobolSource):\n        return [\n            UsageInfo(name=name, line=line)\n            for name, line in root_node.usage_line_list(imported_names)\n        ]\n    if not usage_node_types:\n        return []\n\n    setting = _UsageSetting(\n        name_set=imported_names,\n        member_name_set=member_names or set(),\n        alias_list=alias_list or [],\n        usage_node_types=usage_node_types,\n        import_line_dict=import_line_dict or {},\n        is_reference_name=is_reference_name,\n    )\n\n    # Retrieve per-language node types from the settings\n    call_types: set[str] = usage_node_types[\"call_types\"]\n    attribute_types: set[str] = usage_node_types[\"attribute_types\"]\n    skip_parent_types: set[str] = usage_node_types[\"skip_parent_types\"]\n    skip_parent_types_for_type_ref: set[str] = usage_node_types.get(\n        \"skip_parent_types_for_type_ref\", skip_parent_types\n    )\n    identifier_types: set[str] = {\"identifier\"} | setting.type_set(\"identifier_types\")\n    path_types: set[str] = setting.type_set(\"path_types\")\n    macro_argument_types: set[str] = setting.type_set(\"macro_argument_types\")\n\n    usage_list: list[UsageInfo] = []\n    # DFS traversal of the AST using a stack\n    node_stack = [root_node]\n\n    while node_stack:\n        node = node_stack.pop()\n        usage: UsageInfo | None = None\n\n        # Process function call nodes\n        if node.type in call_types:\n            usage = _parse_call_node(node, setting)\n\n        elif node.type in attribute_types:\n            # Process only standalone attribute access (exclude function part of a call)\n            if not _is_function_part_of_call(node, call_types):\n                usage = _parse_attribute_node(node, setting)\n\n        elif node.type == \"qualified_identifier\":\n            # Process only the outermost qualified name outside import / package declarations\n            parent = node.parent\n            if not parent or (\n                parent.type != \"qualified_identifier\"\n                and parent.type not in skip_parent_types_for_type_ref\n                and parent.type not in call_types\n            ):\n                usage = _qualified_usage(node, setting)\n\n        elif node.type in path_types:\n            # Process only the outermost path outside import statements (Rust: a::b::c)\n            parent = node.parent\n            if not parent or (\n                parent.type not in path_types and parent.type not in skip_parent_types_for_type_ref\n            ):\n                usage = _parse_path_node(node, imported_names)\n\n        elif node.type in macro_argument_types:\n            # Process the paths written as loose tokens in the arguments of a macro\n            for first_node, segment_list in macro_path_list(node):\n                name = \"::\".join(segment_list)\n                if name in imported_names or segment_list[0] in imported_names:\n                    usage_list.append(UsageInfo(name=name, line=first_node.start_point[0] + 1))\n\n        elif node.type in _TYPE_REFERENCE_NODE_TYPE_SET:\n            # Process type reference nodes.\n            # Use the type-reference skip list for checking (only import statements and scope resolution are skipped).\n            # Unlike the identifier skip_parent_types, type references in parameters and method declarations\n            # are detected as dependencies.\n            parent = node.parent\n            if not parent or parent.type not in skip_parent_types_for_type_ref:\n                name = node.text.decode(\"utf-8\")\n                if name in imported_names:\n                    usage = UsageInfo(name=name, line=node.start_point[0] + 1)\n\n        elif node.type in identifier_types:\n            # Process simple identifier nodes\n            usage = _parse_identifier_node(node, setting)\n\n        if usage:\n            usage_list.append(usage)\n\n        # Add child nodes to the stack to continue traversal\n        node_stack.extend(node.children)\n\n    # Remove duplicate and redundant entries and return\n    return deduplicate_usage_list(usage_list)",
+      "target_name": "extract_usages",
+      "target_start_line": 372
+    },
+    {
+      "lines": [
+        432
+      ],
+      "name": "typed_alias_type",
+      "from": "codetwine/codetwine/extractors/usages_py/usages.py",
+      "target_context": "def typed_alias_type(alias_list: list[TypedAlias], name: str, line: int) -> str | None:\n    \"\"\"Return the type a variable name stands for on a line.\n\n    Args:\n        alias_list: The aliases of a file (extract_typed_aliases, extract_value_aliases).\n        name: A variable name.\n        line: Line the name is written on (1-based).\n\n    Returns:\n        The type of typed_alias(); None when there is no such alias or it has no type.\n    \"\"\"\n    alias = typed_alias(alias_list, name, line)\n    return alias.type_name if alias is not None else None",
+      "target_name": "typed_alias_type",
+      "target_start_line": 975
+    },
+    {
+      "lines": [
+        438,
+        549
+      ],
+      "name": "deduplicate_usage_list",
+      "from": "codetwine/codetwine/extractors/usages_py/usages.py",
+      "target_context": "def deduplicate_usage_list(usage_list: list[UsageInfo]) -> list[UsageInfo]:\n    \"\"\"Remove redundant entries within the same line and eliminate duplicates.\n\n    When both \"module\" and \"module.attr\" (or \"module::item\") exist on the same line,\n    the more detailed name is kept and \"module\" is removed.\n    Entries with duplicate (name, line) pairs are also removed.\n\n    Args:\n        usage_list: A UsageInfo list that may contain duplicates.\n\n    Returns:\n        A deduplicated UsageInfo list (sorted by line number in ascending order).\n    \"\"\"\n    # Group by line number\n    by_line_dict: dict[int, list[UsageInfo]] = {}\n    for usage in usage_list:\n        by_line_dict.setdefault(usage.line, []).append(usage)\n\n    seen_key_set: set[tuple] = set()\n    unique_list: list[UsageInfo] = []\n\n    # Process each group in ascending line-number order\n    for line in sorted(by_line_dict):\n        line_usage_list = by_line_dict[line]\n        shorter_name_set = _leading_part_set({usage.name for usage in line_usage_list})\n\n        for usage in line_usage_list:\n            # Exclude the shorter name if a more detailed name (usage.name.xxx) exists on the same line\n            if usage.name in shorter_name_set:\n                continue\n\n            # Also remove entries with duplicate (name, line) pairs\n            entry_key = (usage.name, usage.line)\n            if entry_key not in seen_key_set:\n                seen_key_set.add(entry_key)\n                unique_list.append(usage)\n\n    return unique_list",
+      "target_name": "deduplicate_usage_list",
+      "target_start_line": 555
+    },
+    {
+      "lines": [
+        483
+      ],
+      "name": "project_cache_value",
+      "from": "codetwine/codetwine/utils/project_cache_py/project_cache.py",
+      "target_context": "def project_cache_value(\n    cache_dict: dict[str, tuple[set[str], CacheValue]],\n    cache_key: str,\n    project_file_set: set[str],\n) -> CacheValue | None:\n    \"\"\"Return the value a cache keeps under a key for a project file set.\n\n    A value kept with an equal set that is another object is kept with\n    project_file_set from then on.\n\n    Args:\n        cache_dict: A {key: (project file set the value was built for, value)} cache.\n        cache_key: The key of the value.\n        project_file_set: Relative paths of the project files that have a language.\n\n    Returns:\n        The value, None when the cache has none under the key or it was built for\n        another project file set.\n    \"\"\"\n    cache_entry = cache_dict.get(cache_key)\n    if cache_entry is None:\n        return None\n    cache_file_set, value = cache_entry\n    if cache_file_set is project_file_set:\n        return value\n    if cache_file_set == project_file_set:\n        cache_dict[cache_key] = (project_file_set, value)\n        return value\n    return None",
+      "target_name": "project_cache_value",
+      "target_start_line": 6
+    },
+    {
+      "lines": [
+        489
+      ],
+      "name": "language_ext",
+      "from": "codetwine/codetwine/config/settings_py/settings.py",
+      "target_context": "def language_ext(path: str) -> str:\n    \"\"\"Return the extension whose language settings a file is analyzed with.\n\n    A file recorded by set_copy_target_ext() gets the extension recorded for it, and a\n    file recorded by set_no_language_file() none. Every other file gets its own\n    extension when it is a key of EXT_TO_DEFINITION_DICT; the extensions of the\n    languages with ignore_ext_case are matched in any case.\n\n    Examples:\n        \"src/app.py\"          -> \"py\"\n        \"src/MAIN.Cbl\"        -> \"cbl\"\n        \"R/utils.R\"           -> \"r\"\n        \"config.yaml\"         -> \"\"\n        \"dcl/DCLCUST.dcl\"     -> \"cpy\" (when a COPY statement names it)\n        \"docs/notes.qmd\"      -> \"\" (when it has no R code chunk)\n\n    Args:\n        path: A file path. A relative path is taken from the current directory when\n            it is looked up among the recorded files.\n\n    Returns:\n        The extension (without the dot, a key of EXT_TO_DEFINITION_DICT), or \"\" for a\n        file without a language.\n    \"\"\"\n    path_abs = os.path.abspath(path)\n    copy_target_ext = _copy_target_ext_dict.get(path_abs)\n    if copy_target_ext:\n        return copy_target_ext\n    if path_abs in _no_language_path_set:\n        return \"\"\n    ext = os.path.splitext(path)[1].lstrip(\".\")\n    if ext in EXT_TO_DEFINITION_DICT:\n        return ext\n    if ext.lower() in _IGNORE_CASE_EXT_SET:\n        return ext.lower()\n    return \"\"",
+      "target_name": "language_ext",
+      "target_start_line": 1241
+    },
+    {
+      "lines": [
+        490
+      ],
+      "name": "parse_file",
+      "from": "codetwine/codetwine/parsers/ts_parser_py/ts_parser.py",
+      "target_context": "def parse_file(file_path: str) -> tuple[Node | CobolSource, bytes]:\n    \"\"\"Read a file, parse it with tree-sitter, and return (AST root node, byte content).\n\n    The file is decoded by read_source() and parsed as UTF-8, whatever encoding it is\n    stored in; the byte content is that UTF-8 text, and the text of every node decodes\n    as UTF-8. Line numbers are those of line_list_of() over the file.\n\n    For a COBOL file the first element is a CobolSource (read_cobol_source) in place of\n    the root node, and for a BMS source the CobolSource of its symbolic maps\n    (read_bms_source); extract_definitions(), extract_imports() and extract_usages()\n    take it as they take a root node. The language is the one language_ext() gives.\n\n    For an R Markdown or Quarto file the root node is the tree of its R code chunks\n    (r_chunk_code), each node at the position its code has in the file; the byte content\n    is the whole file. A chunk whose code does not end inside the chunk (an open \"{\", an\n    operator at its end) is left out of the tree.\n\n    For a C or C++ file a macro name written between a class keyword and a class name\n    (class EXPORT Shape { ... }) is read as spaces (_parse_c_family); the byte content\n    is the whole file, and class_macro_cache holds those names and their lines.\n\n    Parse results are cached at module level; a file found in the cache is not parsed again.\n    The cache holds at most PARSE_CACHE_MAX_FILES entries; when it is full, the least\n    recently used entry is discarded and that file is parsed again the next time it is\n    requested. PARSE_CACHE_MAX_FILES = 0 disables the limit.\n\n    Args:\n        file_path: Absolute path of the file to parse.\n\n    Returns:\n        A (root_node, content) tuple.\n    \"\"\"\n    # Return from cache if available, marking the entry as most recently used\n    cache_entry = parse_cache.get(file_path)\n    if cache_entry is not None:\n        parse_cache.move_to_end(file_path)\n        return cache_entry\n\n    # Get the corresponding language from the file extension\n    ext = language_ext(file_path)\n\n    # Read the file as UTF-8 bytes\n    content = read_utf8_content(file_path)\n\n    if ext in COBOL_EXT_SET:\n        # Split the COBOL text into statements and parse each of them\n        cobol_source = read_cobol_source(content.decode(\"utf-8\"), EXT_TO_LANGUAGE_DICT[ext])\n        parse_result = (cobol_source, content)\n    elif ext in BMS_EXT_SET:\n        # Read the maps of the BMS macros\n        parse_result = (read_bms_source(content.decode(\"utf-8\")), content)\n    elif ext in R_MARKDOWN_EXT_SET:\n        # Parse the R code chunks of the document, everything else blanked; a chunk\n        # whose code runs on past its end is blanked as well\n        language = EXT_TO_LANGUAGE_DICT[ext]\n        chunk_code = r_chunk_code(content, lambda code: _is_whole_code(code, language))\n        tree = Parser(language).parse(chunk_code)\n        parse_result = (tree.root_node, content)\n    elif ext in C_FAMILY_EXT_SET:\n        # Parse with the macro names in front of class names blanked\n        root_node, class_macro_cache[file_path] = _parse_c_family(content, EXT_TO_LANGUAGE_DICT[ext])\n        parse_result = (root_node, content)\n    else:\n        # Parse with tree-sitter to generate the AST\n        tree = Parser(EXT_TO_LANGUAGE_DICT[ext]).parse(content)\n        parse_result = (tree.root_node, content)\n\n    # Store in cache and drop the oldest entries once the limit is exceeded\n    parse_cache[file_path] = parse_result\n    if PARSE_CACHE_MAX_FILES > 0:\n        while len(parse_cache) > PARSE_CACHE_MAX_FILES:\n            parse_cache.popitem(last=False)\n    return parse_result",
+      "target_name": "parse_file",
+      "target_start_line": 167
+    },
+    {
+      "lines": [
+        491
+      ],
+      "name": "import_binder",
+      "from": "codetwine/codetwine/import_binding_py/import_binding.py",
+      "target_context": "def import_binder(project_dir: str, project_file_set: set[str]) -> \"ImportBinder\":\n    \"\"\"Return the binder of a project, built once per project file set.\n\n    Args:\n        project_dir: Absolute path to the project root.\n        project_file_set: Relative paths of the project files that have a language.\n\n    Returns:\n        The ImportBinder, kept until the project file set changes or\n        clear_import_binder_cache() is called.\n    \"\"\"\n    binder = project_cache_value(_binder_cache, project_dir, project_file_set)\n    if binder is not None:\n        return binder\n    binder = ImportBinder(project_dir, project_file_set)\n    _binder_cache[project_dir] = (project_file_set, binder)\n    return binder",
+      "target_name": "import_binder",
+      "target_start_line": 156
+    },
+    {
+      "lines": [
+        502
+      ],
+      "name": "file_definition_list",
+      "from": "codetwine/codetwine/extractors/definition_source_py/definition_source.py",
+      "target_context": "def file_definition_list(absolute_path: str, definition_dict: dict[str, str]) -> list[DefinitionInfo]:\n    \"\"\"Return the definitions of a file (extract_definitions), read once per file.\n\n    The file is parsed the first time; the definitions are kept without its syntax\n    tree until clear_definition_source_cache() is called.\n\n    Args:\n        absolute_path: Absolute path of the file.\n        definition_dict: Definition node settings of its language.\n\n    Returns:\n        The definitions sorted by start_line. The list is shared: it is not to be modified.\n    \"\"\"\n    definition_list = _definition_list_cache.get(absolute_path)\n    if definition_list is None:\n        definition_list = extract_definitions(parse_file(absolute_path)[0], definition_dict)\n        _definition_list_cache[absolute_path] = definition_list\n    return definition_list",
+      "target_name": "file_definition_list",
+      "target_start_line": 37
+    },
+    {
+      "lines": [
+        502
+      ],
+      "name": "EXT_TO_DEFINITION_DICT",
+      "from": "codetwine/codetwine/config/settings_py/settings.py",
+      "target_context": "EXT_TO_DEFINITION_DICT: dict[str, dict[str, str]] = _expand_ext_aliases(\n    {ext: lang_config.definition_dict for ext, lang_config in _LANG_REGISTRY.items()}\n)",
+      "target_name": "EXT_TO_DEFINITION_DICT",
+      "target_start_line": 1151
+    },
+    {
+      "lines": [
+        509,
+        522
+      ],
+      "name": "CLASS_DEFINITION_TYPE_SET",
+      "from": "codetwine/codetwine/extractors/definitions_py/definitions.py",
+      "target_context": "CLASS_DEFINITION_TYPE_SET = {\n    \"class_definition\",            # Python\n    \"class_declaration\",           # Java / Kotlin / JS / TS\n    \"abstract_class_declaration\",  # TS\n    \"class_specifier\",             # C++\n    \"struct_specifier\",            # C / C++\n    \"union_specifier\",             # C / C++\n    \"interface_declaration\",       # Java / TS\n    \"enum_declaration\",            # Java / TS\n    \"record_declaration\",          # Java\n    \"object_declaration\",          # Kotlin\n}",
+      "target_name": "CLASS_DEFINITION_TYPE_SET",
+      "target_start_line": 44
+    },
+    {
+      "lines": [
+        546
+      ],
+      "name": "class_macro_cache.get",
+      "from": "codetwine/codetwine/parsers/ts_parser_py/ts_parser.py",
+      "target_context": "class_macro_cache: dict[str, list[tuple[str, int]]] = {}",
+      "target_name": "class_macro_cache",
+      "target_start_line": 48
+    }
+  ],
+  "same_file_usages": [
+    {
+      "lines": [
+        154,
+        156,
+        445,
+        571,
+        577
+      ],
+      "name": "ImportReferenceTarget",
+      "target_name": "ImportReferenceTarget",
+      "target_start_line": 44
+    },
+    {
+      "lines": [
+        338
+      ],
+      "name": "_MODULE_PATH_ROOT_SET",
+      "target_name": "_MODULE_PATH_ROOT_SET",
+      "target_start_line": 33
+    },
+    {
+      "lines": [
+        340
+      ],
+      "name": "_closed_module_scope",
+      "target_name": "_closed_module_scope",
+      "target_start_line": 285
+    },
+    {
+      "lines": [
+        348,
+        570
+      ],
+      "name": "_INSIDE",
+      "target_name": "_INSIDE",
+      "target_start_line": 36
+    },
+    {
+      "lines": [
+        350,
+        568
+      ],
+      "name": "_HIDDEN",
+      "target_name": "_HIDDEN",
+      "target_start_line": 37
+    },
+    {
+      "lines": [
+        356
+      ],
+      "name": "import_target_cache.clear",
+      "target_name": "import_target_cache",
+      "target_start_line": 41
+    },
+    {
+      "lines": [
+        483,
+        579
+      ],
+      "name": "import_target_cache",
+      "target_name": "import_target_cache",
+      "target_start_line": 41
+    },
+    {
+      "lines": [
+        503
+      ],
+      "name": "_own_name_set",
+      "target_name": "_own_name_set",
+      "target_start_line": 54
+    },
+    {
+      "lines": [
+        519,
+        561,
+        565,
+        573
+      ],
+      "name": "_import_target_list",
+      "target_name": "_import_target_list",
+      "target_start_line": 106
+    },
+    {
+      "lines": [
+        527
+      ],
+      "name": "_member_scope_dict",
+      "target_name": "_member_scope_dict",
+      "target_start_line": 196
+    },
+    {
+      "lines": [
+        535
+      ],
+      "name": "_usage_list",
+      "target_name": "_usage_list",
+      "target_start_line": 359
+    },
+    {
+      "lines": [
+        538
+      ],
+      "name": "_pattern_reference_function",
+      "target_name": "_pattern_reference_function",
+      "target_start_line": 235
+    },
+    {
+      "lines": [
+        553
+      ],
+      "name": "_scope_binding",
+      "target_name": "_scope_binding",
+      "target_start_line": 164
+    },
+    {
+      "lines": [
+        554
+      ],
+      "name": "_member_scope_binding",
+      "target_name": "_member_scope_binding",
+      "target_start_line": 211
+    },
+    {
+      "lines": [
+        556
+      ],
+      "name": "_module_visibility",
+      "target_name": "_module_visibility",
+      "target_start_line": 309
+    }
+  ],
+  "caller_usages": [
+    {
+      "lines": [
+        368
+      ],
+      "name": "clear_import_reference_cache",
+      "file": "codetwine/codetwine/extractors/dependency_graph_py/dependency_graph.py",
+      "usage_context": "    reference_target_cache.clear()\n    csharp_target_cache.clear()\n    r_target_cache.clear()\n    clear_import_reference_cache()\n    clear_import_binder_cache()\n    clear_import_path_cache()\n    clear_definition_source_cache()"
+    },
+    {
+      "lines": [
+        156,
+        167,
+        298,
+        300
+      ],
+      "name": "ImportReferenceTarget",
+      "file": "codetwine/codetwine/extractors/usage_analysis_py/usage_analysis.py",
+      "usage_context": "\ndef _name_own_range_function(\n    definition_list: list[DefinitionInfo], root_node: Node | CobolSource,\n) -> Callable[[CsharpReferenceTarget | ImportReferenceTarget], list[tuple[int, int]]]:\n    \"\"\"Return the function giving the lines of the definitions the name of a reference names.\n\n    These are the lines of the member a name with several parts names (Cfg.Max -> Max),\n...\n    range_dict = _definition_range_dict(definition_list)\n\n    def name_range_list(\n        target: CsharpReferenceTarget | ImportReferenceTarget,\n    ) -> list[tuple[int, int]]:\n        \"\"\"Return the lines of the definitions the name of a reference names.\"\"\"\n        part_list = symbol_part_list(target.definition_name)"
+    },
+    {
+      "lines": [
+        302
+      ],
+      "name": "ImportReferenceTarget.definition_name",
+      "file": "codetwine/codetwine/extractors/usage_analysis_py/usage_analysis.py",
+      "usage_context": "    \"\"\"Return the function giving the definition named by the definition_name of a target (source_definition).\"\"\"\n    def named_definition(target: ImportReferenceTarget) -> _TargetDefinition:\n        \"\"\"Return the definition named by the definition_name of a target.\"\"\"\n        return _source_target_definition(target.file_rel, target.definition_name, project_dir)\n\n    return named_definition\n"
+    },
+    {
+      "lines": [
+        302
+      ],
+      "name": "ImportReferenceTarget.file_rel",
+      "file": "codetwine/codetwine/extractors/usage_analysis_py/usage_analysis.py",
+      "usage_context": "    \"\"\"Return the function giving the definition named by the definition_name of a target (source_definition).\"\"\"\n    def named_definition(target: ImportReferenceTarget) -> _TargetDefinition:\n        \"\"\"Return the definition named by the definition_name of a target.\"\"\"\n        return _source_target_definition(target.file_rel, target.definition_name, project_dir)\n\n    return named_definition\n"
+    },
+    {
+      "lines": [
+        11
+      ],
+      "name": "ImportReferenceTarget",
+      "file": "codetwine/codetwine/reference_target_py/reference_target.py",
+      "usage_context": "\n# A reference of a file resolved to its definition\nReferenceTarget = (\n    CobolReferenceTarget | CsharpReferenceTarget | RReferenceTarget | ImportReferenceTarget\n)\n\n# Reference kind of a language (EXT_TO_REFERENCE_KIND_DICT) -> function that resolves the"
+    },
+    {
+      "lines": [
+        20
+      ],
+      "name": "import_reference_target_list",
+      "file": "codetwine/codetwine/reference_target_py/reference_target.py",
+      "usage_context": "    \"cobol\":  cobol_reference_target_list,\n    \"csharp\": csharp_reference_target_list,\n    \"r\":      r_reference_target_list,\n    \"import\": import_reference_target_list,\n}\n\n"
+    }
+  ]
+}

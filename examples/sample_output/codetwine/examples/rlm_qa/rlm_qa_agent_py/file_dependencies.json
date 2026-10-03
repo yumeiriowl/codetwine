@@ -1,5 +1,7 @@
 {
   "file": "codetwine/examples/rlm_qa/rlm_qa_agent_py/rlm_qa_agent.py",
+  "language": "py",
+  "detected_encoding": null,
   "definitions": [
     {
       "name": "LLM_MODEL",
@@ -62,21 +64,21 @@
       "type": "function_definition",
       "start_line": 159,
       "end_line": 180,
-      "context": "def build_doc_schema(store: knowledge_store.Store) -> str:\n    \"\"\"\n    Extract the doc section list from the first file that has one\n    and dynamically generate text to embed in instructions.\n\n    Args:\n        store: An open knowledge store\n\n    Returns:\n        Text listing doc sections\n    \"\"\"\n    sections = []\n    for file_entry in store.iter_entries():\n        doc = file_entry.get(\"doc\") or {}\n        if doc.get(\"sections\"):\n            sections = doc[\"sections\"]\n            break\n\n    section_rows = [f\"| `{s['id']}` | {s['title']} |\" for s in sections]\n    section_table = \"| id | title |\\n|---|---|\\n\" + \"\\n\".join(section_rows)\n\n    return \"**doc.sections list for this project (each section has content in its content field):**\\n\" + section_table"
+      "context": "def build_doc_schema(store: knowledge_store.Store) -> str:\n    \"\"\"\n    Extract the doc section list from the first file that has one\n    and dynamically generate text to embed in instructions.\n\n    Args:\n        store: An open knowledge store\n\n    Returns:\n        Text listing doc sections\n    \"\"\"\n    section_list = []\n    for file_entry in store.iter_entries():\n        doc = file_entry.get(\"doc\") or {}\n        if doc.get(\"sections\"):\n            section_list = doc[\"sections\"]\n            break\n\n    section_row_list = [f\"| `{section['id']}` | {section['title']} |\" for section in section_list]\n    section_table = \"| id | title |\\n|---|---|\\n\" + \"\\n\".join(section_row_list)\n\n    return \"**doc.sections list for this project (each section has content in its content field):**\\n\" + section_table"
     },
     {
       "name": "load_project",
       "type": "function_definition",
       "start_line": 183,
       "end_line": 208,
-      "context": "def load_project(knowledge_path: str) -> dict:\n    \"\"\"Open the knowledge file, give the store to qa_tools, and build project_data.\n\n    A \".sqlite\" path is queried per file; any other path is read as\n    project_knowledge.json. Both answer the same questions.\n\n    project_data is what the RLM sandbox receives, so it carries only the file graph and\n    one summary per file. The definitions, source code and design documents stay behind\n    the tools, which run on the host.\n\n    Args:\n        knowledge_path: File path to project_knowledge.json or project_knowledge.sqlite.\n\n    Returns:\n        A dict with \"project_name\" / \"project_dependencies\" keys.\n    \"\"\"\n    qa_tools.store = knowledge_store.open_store(knowledge_path)\n\n    project_data = {\n        \"project_name\": qa_tools.store.project_name,\n        \"project_dependencies\": qa_tools.store.dependencies(),\n    }\n\n    print(f\"[OK] Loaded {len(project_data['project_dependencies'])} files \"\n          f\"from project '{project_data['project_name']}'\")\n    return project_data"
+      "context": "def load_project(knowledge_path: str) -> dict:\n    \"\"\"Open the knowledge file, give the store to qa_tools, and build project_data.\n\n    A \".sqlite\" path is queried per file; any other path is read as\n    project_knowledge.json. Both answer the same questions.\n\n    project_data, which the RLM sandbox receives, carries only the file graph and\n    one summary per file. The definitions, source code and design documents stay behind\n    the tools, which run on the host.\n\n    Args:\n        knowledge_path: File path to project_knowledge.json or project_knowledge.sqlite.\n\n    Returns:\n        A dict with \"project_name\" / \"project_dependencies\" keys.\n    \"\"\"\n    qa_tools.store = knowledge_store.open_store(knowledge_path)\n\n    project_data = {\n        \"project_name\": qa_tools.store.project_name,\n        \"project_dependencies\": qa_tools.store.dependencies(),\n    }\n\n    print(f\"[OK] Loaded {len(project_data['project_dependencies'])} files \"\n          f\"from project '{project_data['project_name']}'\")\n    return project_data"
     },
     {
       "name": "create_interpreter",
       "type": "function_definition",
       "start_line": 211,
       "end_line": 246,
-      "context": "def create_interpreter() -> PythonInterpreter:\n    \"\"\"Create a PythonInterpreter configured with --node-modules-dir=false and --allow-read for Deno 2.x.\n\n    Returns:\n        PythonInterpreter: Interpreter with Deno command configured\n    \"\"\"\n    # Get the path to runner.js\n    primitives_dir = os.path.dirname(inspect.getfile(PythonInterpreter))\n    runner_path = os.path.join(primitives_dir, \"runner.js\")\n\n    # Locate Deno cache directory\n    deno_dir = os.environ.get(\"DENO_DIR\")\n    if not deno_dir:\n        try:\n            result = subprocess.run(\n                [\"deno\", \"info\", \"--json\"],\n                capture_output=True, text=True, check=False,\n            )\n            if result.returncode == 0:\n                deno_dir = json.loads(result.stdout).get(\"denoDir\")\n        except FileNotFoundError:\n            pass\n    if not deno_dir:\n        deno_dir = os.path.expanduser(\"~/.cache/deno\")\n\n    # Set DENO_DIR environment variable\n    os.environ[\"DENO_DIR\"] = deno_dir\n\n    deno_command = [\n        \"deno\", \"run\",\n        \"--node-modules-dir=false\",\n        f\"--allow-read={runner_path},{deno_dir}\",\n        runner_path,\n    ]\n\n    return PythonInterpreter(deno_command=deno_command)"
+      "context": "def create_interpreter() -> PythonInterpreter:\n    \"\"\"Create a PythonInterpreter configured with --node-modules-dir=false and --allow-read for Deno 2.x.\n\n    Returns:\n        PythonInterpreter: Interpreter with Deno command configured\n    \"\"\"\n    # Get the path to runner.js\n    primitives_dir = os.path.dirname(inspect.getfile(PythonInterpreter))\n    runner_path = os.path.join(primitives_dir, \"runner.js\")\n\n    # Locate Deno cache directory\n    deno_dir = os.environ.get(\"DENO_DIR\")\n    if not deno_dir:\n        try:\n            deno_info = subprocess.run(\n                [\"deno\", \"info\", \"--json\"],\n                capture_output=True, text=True, check=False,\n            )\n            if deno_info.returncode == 0:\n                deno_dir = json.loads(deno_info.stdout).get(\"denoDir\")\n        except FileNotFoundError:\n            pass\n    if not deno_dir:\n        deno_dir = os.path.expanduser(\"~/.cache/deno\")\n\n    # Set DENO_DIR environment variable\n    os.environ[\"DENO_DIR\"] = deno_dir\n\n    deno_command = [\n        \"deno\", \"run\",\n        \"--node-modules-dir=false\",\n        f\"--allow-read={runner_path},{deno_dir}\",\n        runner_path,\n    ]\n\n    return PythonInterpreter(deno_command=deno_command)"
     },
     {
       "name": "create_qa_agent",
@@ -90,7 +92,7 @@
       "type": "function_definition",
       "start_line": 304,
       "end_line": 319,
-      "context": "def ask(rlm: dspy.RLM, question: str) -> str:\n    \"\"\"\n    Answer a question using dspy.RLM.\n\n    Args:\n        rlm: dspy.RLM instance\n        question: User's question\n\n    Returns:\n        Answer text\n    \"\"\"\n    result = rlm(\n        project_data=project_data,\n        question=question,\n    )\n    return result.answer"
+      "context": "def ask(rlm: dspy.RLM, question: str) -> str:\n    \"\"\"\n    Answer a question using dspy.RLM.\n\n    Args:\n        rlm: dspy.RLM instance\n        question: User's question\n\n    Returns:\n        Answer text\n    \"\"\"\n    prediction = rlm(\n        project_data=project_data,\n        question=question,\n    )\n    return prediction.answer"
     },
     {
       "name": "main",
@@ -107,7 +109,19 @@
       ],
       "name": "knowledge_store.Store",
       "from": "codetwine/examples/rlm_qa/knowledge_store_py/knowledge_store.py",
-      "target_context": "Store = JsonStore | SqliteStore"
+      "target_context": "Store = JsonStore | SqliteStore",
+      "target_name": "Store",
+      "target_start_line": 100
+    },
+    {
+      "lines": [
+        171
+      ],
+      "name": "knowledge_store.Store.iter_entries",
+      "from": "codetwine/examples/rlm_qa/knowledge_store_py/knowledge_store.py",
+      "target_context": "Store = JsonStore | SqliteStore",
+      "target_name": "Store",
+      "target_start_line": 100
     },
     {
       "lines": [
@@ -115,7 +129,9 @@
       ],
       "name": "knowledge_store.open_store",
       "from": "codetwine/examples/rlm_qa/knowledge_store_py/knowledge_store.py",
-      "target_context": "def open_store(knowledge_path: str) -> Store:\n    \"\"\"Open a knowledge file, choosing the store from the path's extension.\n\n    Args:\n        knowledge_path: File path to project_knowledge.json or project_knowledge.sqlite.\n\n    Returns:\n        A SqliteStore for a \".sqlite\" path, a JsonStore otherwise.\n    \"\"\"\n    if knowledge_path.endswith(\".sqlite\"):\n        return SqliteStore(knowledge_path)\n    return JsonStore(knowledge_path)"
+      "target_context": "def open_store(knowledge_path: str) -> Store:\n    \"\"\"Open a knowledge file, choosing the store from the path's extension.\n\n    Args:\n        knowledge_path: File path to project_knowledge.json or project_knowledge.sqlite.\n\n    Returns:\n        A SqliteStore for a \".sqlite\" path, a JsonStore otherwise.\n    \"\"\"\n    if knowledge_path.endswith(\".sqlite\"):\n        return SqliteStore(knowledge_path)\n    return JsonStore(knowledge_path)",
+      "target_name": "open_store",
+      "target_start_line": 103
     },
     {
       "lines": [
@@ -124,7 +140,9 @@
       ],
       "name": "qa_tools.store",
       "from": "codetwine/examples/rlm_qa/qa_tools_py/qa_tools.py",
-      "target_context": "store = None"
+      "target_context": "store = None",
+      "target_name": "store",
+      "target_start_line": 9
     },
     {
       "lines": [
@@ -132,7 +150,9 @@
       ],
       "name": "qa_tools.store.project_name",
       "from": "codetwine/examples/rlm_qa/qa_tools_py/qa_tools.py",
-      "target_context": "project_name = store.project_name"
+      "target_context": "store = None",
+      "target_name": "store",
+      "target_start_line": 9
     },
     {
       "lines": [
@@ -140,7 +160,9 @@
       ],
       "name": "qa_tools.store.dependencies",
       "from": "codetwine/examples/rlm_qa/qa_tools_py/qa_tools.py",
-      "target_context": null
+      "target_context": "store = None",
+      "target_name": "store",
+      "target_start_line": 9
     },
     {
       "lines": [
@@ -148,7 +170,9 @@
       ],
       "name": "qa_tools.get_file_detail",
       "from": "codetwine/examples/rlm_qa/qa_tools_py/qa_tools.py",
-      "target_context": "def get_file_detail(file: str) -> dict:\n    \"\"\"\n    Get one file's definitions, dependency usages and design document.\n\n    This is the detail that project_data does not carry. Call it for the files you have\n    narrowed down to, not for every file.\n\n    Args:\n        file: File path exactly as it appears in project_data[\"project_dependencies\"][][\"file\"]\n\n    Returns:\n        {\n            \"file\": str,\n            \"file_dependencies\": {\n                \"definitions\":   [{\"name\", \"type\", \"start_line\", \"end_line\", \"context\"}],\n                \"callee_usages\": [{\"lines\", \"name\", \"from\", \"target_context\"}],\n                \"caller_usages\": [{\"lines\", \"name\", \"file\", \"usage_context\"}]\n            },\n            \"doc\": {\"summary\": str, \"sections\": [{\"id\", \"title\", \"content\"}]}\n        }\n        {\"error\": str} when the file is not in the project.\n\n    Usage:\n        detail = get_file_detail(\"myproject/config_py/config.py\")\n        for d in detail[\"file_dependencies\"][\"definitions\"]:\n            print(d[\"name\"], d[\"start_line\"], d[\"end_line\"])\n        print(detail[\"doc\"][\"summary\"])\n    \"\"\"\n    if store is None:\n        return {\"error\": \"store not initialized. Call load_project() first.\"}\n    entry = store.entry(file)\n    if entry is None:\n        return {\"error\": f\"File '{file}' not found\"}\n    return entry"
+      "target_context": "def get_file_detail(file: str) -> dict:\n    \"\"\"\n    Get one file's definitions, dependency usages and design document.\n\n    This is the detail that project_data does not carry. Call it for the files you have\n    narrowed down to, not for every file.\n\n    Args:\n        file: File path exactly as it appears in project_data[\"project_dependencies\"][][\"file\"]\n\n    Returns:\n        {\n            \"file\": str,\n            \"file_dependencies\": {\n                \"definitions\":   [{\"name\", \"type\", \"start_line\", \"end_line\", \"context\"}],\n                \"callee_usages\": [{\"lines\", \"name\", \"from\", \"target_context\"}],\n                \"caller_usages\": [{\"lines\", \"name\", \"file\", \"usage_context\"}]\n            },\n            \"doc\": {\"summary\": str, \"sections\": [{\"id\", \"title\", \"content\"}]}\n        }\n        {\"error\": str} when the file is not in the project.\n\n    Usage:\n        detail = get_file_detail(\"myproject/config_py/config.py\")\n        for d in detail[\"file_dependencies\"][\"definitions\"]:\n            print(d[\"name\"], d[\"start_line\"], d[\"end_line\"])\n        print(detail[\"doc\"][\"summary\"])\n    \"\"\"\n    if store is None:\n        return {\"error\": \"store not initialized. Call load_project() first.\"}\n    entry = store.entry(file)\n    if entry is None:\n        return {\"error\": f\"File '{file}' not found\"}\n    return entry",
+      "target_name": "get_file_detail",
+      "target_start_line": 51
     },
     {
       "lines": [
@@ -156,7 +180,9 @@
       ],
       "name": "qa_tools.search_text",
       "from": "codetwine/examples/rlm_qa/qa_tools_py/qa_tools.py",
-      "target_context": "def search_text(keyword: str, limit: int = SEARCH_HIT_LIMIT) -> list:\n    \"\"\"\n    Search the whole project for a keyword and return where it appears.\n\n    Searches design document summaries and sections, definition source code, and the\n    source of the symbols each file depends on. The match is case-insensitive.\n\n    Args:\n        keyword: The text to look for\n        limit: Maximum number of hits to return (default 40)\n\n    Returns:\n        List of {\"kind\": str, \"file\": str, \"name\": str} dicts.\n        kind is one of \"summary\", \"section\", \"definition\", \"callee\", \"caller\".\n\n    Usage:\n        for hit in search_text(\"retry\"):\n            print(hit[\"kind\"], hit[\"file\"], hit[\"name\"])\n    \"\"\"\n    if store is None:\n        return [{\"error\": \"store not initialized. Call load_project() first.\"}]\n\n    kw = keyword.lower()\n    hits = []\n\n    def add(kind: str, file: str, name: str) -> bool:\n        \"\"\"Record one hit and report whether the limit has been reached.\"\"\"\n        hits.append({\"kind\": kind, \"file\": file, \"name\": name})\n        return len(hits) >= limit\n\n    for entry in store.iter_entries():\n        file_path = entry[\"file\"]\n        doc = entry.get(\"doc\") or {}\n        deps = entry.get(\"file_dependencies\") or {}\n\n        if kw in (doc.get(\"summary\") or \"\").lower():\n            if add(\"summary\", file_path, \"\"):\n                return hits\n        for section in doc.get(\"sections\", []):\n            if kw in section.get(\"content\", \"\").lower():\n                if add(\"section\", file_path, section.get(\"title\", \"\")):\n                    return hits\n        for d in deps.get(\"definitions\", []):\n            if kw in (d.get(\"context\") or \"\").lower():\n                if add(\"definition\", file_path, d[\"name\"]):\n                    return hits\n        for u in deps.get(\"callee_usages\", []):\n            if kw in (u.get(\"target_context\") or \"\").lower():\n                if add(\"callee\", file_path, f\"{u['name']} from {u['from']}\"):\n                    return hits\n        for c in deps.get(\"caller_usages\", []):\n            if kw in (c.get(\"usage_context\") or \"\").lower():\n                if add(\"caller\", c[\"file\"], f\"{c['name']} in {file_path}\"):\n                    return hits\n\n    return hits"
+      "target_context": "def search_text(keyword: str, limit: int = SEARCH_HIT_LIMIT) -> list:\n    \"\"\"\n    Search the whole project for a keyword and return where it appears.\n\n    Searches design document summaries and sections, definition source code, and the\n    source of the symbols each file depends on. The match is case-insensitive.\n\n    Args:\n        keyword: The text to look for\n        limit: Maximum number of hits to return (default 40)\n\n    Returns:\n        List of {\"kind\": str, \"file\": str, \"name\": str} dicts.\n        kind is one of \"summary\", \"section\", \"definition\", \"callee\", \"caller\".\n\n    Usage:\n        for hit in search_text(\"retry\"):\n            print(hit[\"kind\"], hit[\"file\"], hit[\"name\"])\n    \"\"\"\n    if store is None:\n        return [{\"error\": \"store not initialized. Call load_project() first.\"}]\n\n    keyword_lower = keyword.lower()\n    hit_list = []\n\n    def add_hit(kind: str, file: str, name: str) -> bool:\n        \"\"\"Record one hit and report whether the limit has been reached.\"\"\"\n        hit_list.append({\"kind\": kind, \"file\": file, \"name\": name})\n        return len(hit_list) >= limit\n\n    for entry in store.iter_entries():\n        file_path = entry[\"file\"]\n        doc = entry.get(\"doc\") or {}\n        deps = entry.get(\"file_dependencies\") or {}\n\n        if keyword_lower in (doc.get(\"summary\") or \"\").lower():\n            if add_hit(\"summary\", file_path, \"\"):\n                return hit_list\n        for section in doc.get(\"sections\", []):\n            if keyword_lower in section.get(\"content\", \"\").lower():\n                if add_hit(\"section\", file_path, section.get(\"title\", \"\")):\n                    return hit_list\n        for definition in deps.get(\"definitions\", []):\n            if keyword_lower in (definition.get(\"context\") or \"\").lower():\n                if add_hit(\"definition\", file_path, definition[\"name\"]):\n                    return hit_list\n        for usage in deps.get(\"callee_usages\", []):\n            if keyword_lower in (usage.get(\"target_context\") or \"\").lower():\n                if add_hit(\"callee\", file_path, f\"{usage['name']} from {usage['from']}\"):\n                    return hit_list\n        for caller_usage in deps.get(\"caller_usages\", []):\n            if keyword_lower in (caller_usage.get(\"usage_context\") or \"\").lower():\n                if add_hit(\"caller\", caller_usage[\"file\"], f\"{caller_usage['name']} in {file_path}\"):\n                    return hit_list\n\n    return hit_list",
+      "target_name": "search_text",
+      "target_start_line": 87
     },
     {
       "lines": [
@@ -164,7 +190,9 @@
       ],
       "name": "qa_tools.read_source_file",
       "from": "codetwine/examples/rlm_qa/qa_tools_py/qa_tools.py",
-      "target_context": "def read_source_file(path: str) -> str:\n    \"\"\"\n    Read a source file copied into the output directory.\n\n    Args:\n        path: Path as listed in the JSON file field\n              (e.g. \"code_anarizer/extract_imports/extract_imports.py\")\n\n    Returns:\n        File content as a string. An error message on read failure.\n\n    Usage:\n        # Example: get line numbers of a function definition and extract that portion\n        detail = get_file_detail(\"myproject/extract_imports_py/extract_imports.py\")\n        defn = [d for d in detail[\"file_dependencies\"][\"definitions\"] if d[\"name\"] == \"extract_imports\"][0]\n        code = read_source_file(detail[\"file\"])\n        lines = code.split(\"\\\\n\")\n        function_code = \"\\\\n\".join(lines[defn[\"start_line\"]-1:defn[\"end_line\"]])\n        print(function_code)\n    \"\"\"\n    if store is None:\n        return \"Error: store not initialized. Call load_project() first.\"\n\n    # Strip leading project_name/ from the file field\n    project_name = store.project_name\n    if project_name and path.startswith(project_name + \"/\"):\n        path = path[len(project_name) + 1:]\n\n    full_path = os.path.join(store.base_dir, path)\n\n    try:\n        with open(full_path, \"r\", encoding=\"utf-8\") as f:\n            return f.read()\n    except OSError as e:\n        return f\"Error reading {path}: {e}\""
+      "target_context": "def read_source_file(path: str) -> str:\n    \"\"\"\n    Read a source file copied into the output directory.\n\n    Args:\n        path: Path as listed in the JSON file field\n              (e.g. \"code_anarizer/extract_imports/extract_imports.py\")\n\n    Returns:\n        File content as a string. An error message on read failure.\n\n    Usage:\n        # Example: get line numbers of a function definition and extract that portion\n        detail = get_file_detail(\"myproject/extract_imports_py/extract_imports.py\")\n        defn = [d for d in detail[\"file_dependencies\"][\"definitions\"] if d[\"name\"] == \"extract_imports\"][0]\n        code = read_source_file(detail[\"file\"])\n        lines = code.split(\"\\\\n\")\n        function_code = \"\\\\n\".join(lines[defn[\"start_line\"]-1:defn[\"end_line\"]])\n        print(function_code)\n    \"\"\"\n    if store is None:\n        return \"Error: store not initialized. Call load_project() first.\"\n\n    # Strip leading project_name/ from the file field\n    project_name = store.project_name\n    if project_name and path.startswith(project_name + \"/\"):\n        path = path[len(project_name) + 1:]\n\n    full_path = os.path.join(store.base_dir, path)\n\n    try:\n        return read_source_text(full_path)\n    except OSError as e:\n        return f\"Error reading {path}: {e}\"",
+      "target_name": "read_source_file",
+      "target_start_line": 15
     },
     {
       "lines": [
@@ -172,7 +200,9 @@
       ],
       "name": "qa_tools.get_files_using",
       "from": "codetwine/examples/rlm_qa/qa_tools_py/qa_tools.py",
-      "target_context": "def get_files_using(target_file: str) -> list:\n    \"\"\"\n    Get files that depend on the specified file (dependents).\n    Traverses callee_usages of all files and collects entries whose from field partially matches target_file.\n\n    Args:\n        target_file: File path to search for (partial match)\n\n    Returns:\n        List in [{\"file\": str, \"usage\": dict}, ...] format\n\n    Usage:\n        users = get_files_using(\"ts_parser/ts_parser.py\")\n        for u in users:\n            print(f\"{u['file']} uses {u['usage']['name']}\")\n    \"\"\"\n    if store is None:\n        return [{\"error\": \"store not initialized. Call load_project() first.\"}]\n\n    # Traverse callee_usages across all files, collecting entries that partially match target_file\n    results = []\n    for entry in store.iter_entries():\n        for usage in (entry.get(\"file_dependencies\") or {}).get(\"callee_usages\", []):\n            if target_file in usage.get(\"from\", \"\"):\n                results.append({\n                    \"file\": entry[\"file\"],\n                    \"usage\": usage\n                })\n    return results"
+      "target_context": "def get_files_using(target_file: str) -> list:\n    \"\"\"\n    Get files that depend on the specified file (dependents).\n    Traverses callee_usages of all files and collects entries whose from field partially matches target_file.\n\n    Args:\n        target_file: File path to search for (partial match)\n\n    Returns:\n        List in [{\"file\": str, \"usage\": dict}, ...] format\n\n    Usage:\n        users = get_files_using(\"ts_parser/ts_parser.py\")\n        for u in users:\n            print(f\"{u['file']} uses {u['usage']['name']}\")\n    \"\"\"\n    if store is None:\n        return [{\"error\": \"store not initialized. Call load_project() first.\"}]\n\n    # Traverse callee_usages across all files, collecting entries that partially match target_file\n    user_list = []\n    for entry in store.iter_entries():\n        for usage in (entry.get(\"file_dependencies\") or {}).get(\"callee_usages\", []):\n            if target_file in usage.get(\"from\", \"\"):\n                user_list.append({\n                    \"file\": entry[\"file\"],\n                    \"usage\": usage\n                })\n    return user_list",
+      "target_name": "get_files_using",
+      "target_start_line": 145
     },
     {
       "lines": [
@@ -180,7 +210,127 @@
       ],
       "name": "qa_tools.graph_search",
       "from": "codetwine/examples/rlm_qa/qa_tools_py/qa_tools.py",
-      "target_context": "def graph_search(name: str, hops: int = 1, direction: str = \"both\") -> dict:\n    \"\"\"\n    BFS search for dependencies within N hops from the specified definition name.\n    Treats definitions as nodes and dependencies as edges.\n\n    Args:\n        name: Definition name (exact match search; falls back to partial match if not found)\n        hops: Number of hops to search (1=direct dependencies only, 2=up to dependencies of dependencies)\n        direction: \"outgoing\" (dependencies), \"incoming\" (dependents), \"both\"\n\n    Returns:\n        {\n            \"start\": \"file:name\",       # Start node\n            \"hops\": int,\n            \"direction\": str,\n            \"nodes\": [                  # List of found definitions\n                {\"key\": \"file:name\", \"file\": str, \"name\": str, \"type\": str,\n                 \"hop\": int, \"via\": \"outgoing\"|\"incoming\"}\n            ],\n            \"edges\": [                  # List of edges\n                {\"source\": \"file:name\", \"target\": \"file:name\", \"hop\": int}\n            ]\n        }\n\n    Usage:\n        # Search direct dependencies and dependents of extract_imports (1 hop)\n        result = graph_search(\"extract_imports\", hops=1, direction=\"both\")\n        for r in result[\"nodes\"]:\n            print(f\"  hop {r['hop']}: {r['key']} ({r['via']})\")\n\n        # Search only dependents within 2 hops from node_text\n        result = graph_search(\"node_text\", hops=2, direction=\"incoming\")\n        for r in result[\"nodes\"]:\n            print(f\"  hop {r['hop']}: {r['name']} in {r['file']}\")\n    \"\"\"\n    if store is None:\n        return {\"error\": \"store not loaded. Call load_project() first.\"}\n\n    # Cache of the file entries this search touches, so each file is read at most once\n    entry_cache: dict[str, dict | None] = {}\n\n    def deps_of(file_path: str) -> dict:\n        \"\"\"Return one file's file_dependencies, reading it through the store once.\"\"\"\n        if file_path not in entry_cache:\n            entry_cache[file_path] = store.entry(file_path)\n        entry = entry_cache[file_path]\n        return (entry or {}).get(\"file_dependencies\", {})\n\n    # Search for start definition (exact match -> partial match fallback)\n    candidates = store.find_definitions(name)\n    if not candidates:\n        candidates = store.find_definitions(name, partial=True)\n    if not candidates:\n        return {\"error\": f\"Definition '{name}' not found\"}\n\n    start_file = candidates[0][\"file\"]\n    start_name = candidates[0][\"name\"]\n    start_key = f\"{start_file}:{start_name}\"\n\n    # BFS search\n    visited = {start_key}\n    queue = deque([(start_key, start_file, start_name, 0)])\n    nodes = []\n    edges = []\n    seen_edges = set()\n\n    while queue:\n        current_key, current_file, current_name, current_hop = queue.popleft()\n        if current_hop >= hops:\n            continue\n\n        deps = deps_of(current_file)\n        if not deps:\n            continue\n\n        # Get line range of the current definition\n        current_def = None\n        for d in deps.get(\"definitions\", []):\n            if d[\"name\"] == current_name:\n                current_def = d\n                break\n\n        next_hop = current_hop + 1\n\n        # Outgoing: other definitions used by this definition (callee_usages)\n        if direction in (\"outgoing\", \"both\"):\n            for usage in deps.get(\"callee_usages\", []):\n                # Check if usage lines are within the current definition's line range\n                if current_def:\n                    in_range = any(\n                        current_def[\"start_line\"] <= line <= current_def[\"end_line\"]\n                        for line in usage.get(\"lines\", [])\n                    )\n                elif current_name == \"__module__\":\n                    all_defs = deps.get(\"definitions\", [])\n                    in_range = any(\n                        not any(d[\"start_line\"] <= line <= d[\"end_line\"] for d in all_defs)\n                        for line in usage.get(\"lines\", [])\n                    )\n                else:\n                    in_range = False\n\n                if not in_range:\n                    continue\n\n                target_file = usage.get(\"from\", \"\")\n                target_name = usage.get(\"name\", \"\")\n                target_key = f\"{target_file}:{target_name}\"\n\n                # Get the type of the target definition\n                target_type = \"\"\n                for d in deps_of(target_file).get(\"definitions\", []):\n                    if d[\"name\"] == target_name:\n                        target_type = d.get(\"type\", \"\")\n                        break\n\n                edge_id = (current_key, target_key, \"outgoing\")\n                if edge_id not in seen_edges:\n                    seen_edges.add(edge_id)\n                    edges.append({\n                        \"source\": current_key,\n                        \"target\": target_key,\n                        \"hop\": next_hop\n                    })\n\n                if target_key not in visited:\n                    visited.add(target_key)\n                    nodes.append({\n                        \"key\": target_key,\n                        \"file\": target_file,\n                        \"name\": target_name,\n                        \"type\": target_type,\n                        \"hop\": next_hop,\n                        \"via\": \"outgoing\"\n                    })\n                    queue.append((target_key, target_file, target_name, next_hop))\n\n        # Incoming: other definitions that use this definition (caller_usages)\n        if direction in (\"incoming\", \"both\"):\n            for usage in deps.get(\"caller_usages\", []):\n                if usage.get(\"name\") != current_name:\n                    continue\n\n                source_file = usage.get(\"file\", \"\")\n                source_deps = deps_of(source_file)\n\n                # Identify which definition in the source file is using it\n                source_name = \"__module__\"\n                source_type = \"\"\n                if source_deps:\n                    for line in usage.get(\"lines\", []):\n                        for d in source_deps.get(\"definitions\", []):\n                            if d[\"start_line\"] <= line <= d[\"end_line\"]:\n                                source_name = d[\"name\"]\n                                source_type = d.get(\"type\", \"\")\n                                break\n                        if source_name != \"__module__\":\n                            break\n\n                source_key = f\"{source_file}:{source_name}\"\n\n                edge_id = (source_key, current_key, \"incoming\")\n                if edge_id not in seen_edges:\n                    seen_edges.add(edge_id)\n                    edges.append({\n                        \"source\": source_key,\n                        \"target\": current_key,\n                        \"hop\": next_hop\n                    })\n\n                if source_key not in visited:\n                    visited.add(source_key)\n                    nodes.append({\n                        \"key\": source_key,\n                        \"file\": source_file,\n                        \"name\": source_name,\n                        \"type\": source_type,\n                        \"hop\": next_hop,\n                        \"via\": \"incoming\"\n                    })\n                    queue.append((source_key, source_file, source_name, next_hop))\n\n    return {\n        \"start\": start_key,\n        \"hops\": hops,\n        \"direction\": direction,\n        \"nodes\": nodes,\n        \"edges\": edges\n    }"
+      "target_context": "def graph_search(name: str, hops: int = 1, direction: str = \"both\") -> dict:\n    \"\"\"\n    BFS search for dependencies within N hops from the specified definition name.\n    Treats definitions as nodes and dependencies as edges.\n\n    Args:\n        name: Definition name (exact match search; falls back to partial match if not found)\n        hops: Number of hops to search (1=direct dependencies only, 2=up to dependencies of dependencies)\n        direction: \"outgoing\" (dependencies), \"incoming\" (dependents), \"both\"\n\n    Returns:\n        {\n            \"start\": \"file:name\",       # Start node\n            \"hops\": int,\n            \"direction\": str,\n            \"nodes\": [                  # List of found definitions\n                {\"key\": \"file:name\", \"file\": str, \"name\": str, \"type\": str,\n                 \"hop\": int, \"via\": \"outgoing\"|\"incoming\"}\n            ],\n            \"edges\": [                  # List of edges\n                {\"source\": \"file:name\", \"target\": \"file:name\", \"hop\": int}\n            ]\n        }\n\n    Usage:\n        # Search direct dependencies and dependents of extract_imports (1 hop)\n        result = graph_search(\"extract_imports\", hops=1, direction=\"both\")\n        for r in result[\"nodes\"]:\n            print(f\"  hop {r['hop']}: {r['key']} ({r['via']})\")\n\n        # Search only dependents within 2 hops from node_text\n        result = graph_search(\"node_text\", hops=2, direction=\"incoming\")\n        for r in result[\"nodes\"]:\n            print(f\"  hop {r['hop']}: {r['name']} in {r['file']}\")\n    \"\"\"\n    if store is None:\n        return {\"error\": \"store not loaded. Call load_project() first.\"}\n\n    # Cache of the file entries this search touches, so each file is read at most once\n    entry_cache: dict[str, dict | None] = {}\n\n    def deps_of(file_path: str) -> dict:\n        \"\"\"Return one file's file_dependencies, reading it through the store once.\"\"\"\n        if file_path not in entry_cache:\n            entry_cache[file_path] = store.entry(file_path)\n        entry = entry_cache[file_path]\n        return (entry or {}).get(\"file_dependencies\", {})\n\n    # Search for start definition (exact match -> partial match fallback)\n    candidate_list = store.find_definitions(name)\n    if not candidate_list:\n        candidate_list = store.find_definitions(name, partial=True)\n    if not candidate_list:\n        return {\"error\": f\"Definition '{name}' not found\"}\n\n    start_file = candidate_list[0][\"file\"]\n    start_name = candidate_list[0][\"name\"]\n    start_key = f\"{start_file}:{start_name}\"\n\n    # BFS search\n    visit_set = {start_key}\n    queue = deque([(start_key, start_file, start_name, 0)])\n    node_list = []\n    edge_list = []\n    edge_id_set = set()\n\n    def record(\n        source_key: str, target_key: str, via: str, hop: int,\n        node_file: str, node_name: str, node_type: str,\n    ) -> None:\n        \"\"\"Record one edge, and the node at its far end when it has not been visited.\"\"\"\n        edge_id = (source_key, target_key, via)\n        if edge_id not in edge_id_set:\n            edge_id_set.add(edge_id)\n            edge_list.append({\n                \"source\": source_key,\n                \"target\": target_key,\n                \"hop\": hop\n            })\n\n        node_key = f\"{node_file}:{node_name}\"\n        if node_key not in visit_set:\n            visit_set.add(node_key)\n            node_list.append({\n                \"key\": node_key,\n                \"file\": node_file,\n                \"name\": node_name,\n                \"type\": node_type,\n                \"hop\": hop,\n                \"via\": via\n            })\n            queue.append((node_key, node_file, node_name, hop))\n\n    while queue:\n        current_key, current_file, current_name, current_hop = queue.popleft()\n        if current_hop >= hops:\n            continue\n\n        deps = deps_of(current_file)\n        if not deps:\n            continue\n\n        definition_list = deps.get(\"definitions\", [])\n        current_definition = _find_definition(definition_list, current_name)\n        next_hop = current_hop + 1\n\n        # Outgoing: other definitions used by this definition (callee_usages)\n        if direction in (\"outgoing\", \"both\"):\n            for usage in deps.get(\"callee_usages\", []):\n                if not _is_usage_in(usage, current_definition, current_name, definition_list):\n                    continue\n                target_file = usage.get(\"from\", \"\")\n                target_name = usage.get(\"name\", \"\")\n                target_definition = _find_definition(\n                    deps_of(target_file).get(\"definitions\", []), target_name\n                )\n                target_type = target_definition.get(\"type\", \"\") if target_definition else \"\"\n                record(\n                    current_key, f\"{target_file}:{target_name}\", \"outgoing\", next_hop,\n                    target_file, target_name, target_type,\n                )\n\n        # Incoming: other definitions that use this definition (caller_usages)\n        if direction in (\"incoming\", \"both\"):\n            for usage in deps.get(\"caller_usages\", []):\n                if usage.get(\"name\") != current_name:\n                    continue\n                source_file = usage.get(\"file\", \"\")\n                source_name, source_type = _enclosing_definition(usage, deps_of(source_file))\n                record(\n                    f\"{source_file}:{source_name}\", current_key, \"incoming\", next_hop,\n                    source_file, source_name, source_type,\n                )\n\n    return {\n        \"start\": start_key,\n        \"hops\": hops,\n        \"direction\": direction,\n        \"nodes\": node_list,\n        \"edges\": edge_list\n    }",
+      "target_name": "graph_search",
+      "target_start_line": 235
+    }
+  ],
+  "same_file_usages": [
+    {
+      "lines": [
+        260,
+        261,
+        316
+      ],
+      "name": "project_data",
+      "target_name": "project_data",
+      "target_start_line": 56
+    },
+    {
+      "lines": [
+        261
+      ],
+      "name": "load_project",
+      "target_name": "load_project",
+      "target_start_line": 183
+    },
+    {
+      "lines": [
+        264,
+        265
+      ],
+      "name": "LLM_API_BASE",
+      "target_name": "LLM_API_BASE",
+      "target_start_line": 44
+    },
+    {
+      "lines": [
+        264,
+        265
+      ],
+      "name": "LLM_API_KEY",
+      "target_name": "LLM_API_KEY",
+      "target_start_line": 40
+    },
+    {
+      "lines": [
+        264
+      ],
+      "name": "LLM_MODEL",
+      "target_name": "LLM_MODEL",
+      "target_start_line": 34
+    },
+    {
+      "lines": [
+        265
+      ],
+      "name": "SUB_LLM_MODEL",
+      "target_name": "SUB_LLM_MODEL",
+      "target_start_line": 37
+    },
+    {
+      "lines": [
+        268
+      ],
+      "name": "build_doc_schema",
+      "target_name": "build_doc_schema",
+      "target_start_line": 159
+    },
+    {
+      "lines": [
+        270
+      ],
+      "name": "INSTRUCTIONS_TEMPLATE.replace",
+      "target_name": "INSTRUCTIONS_TEMPLATE",
+      "target_start_line": 63
+    },
+    {
+      "lines": [
+        272
+      ],
+      "name": "OUTPUT_LANGUAGE",
+      "target_name": "OUTPUT_LANGUAGE",
+      "target_start_line": 47
+    },
+    {
+      "lines": [
+        281
+      ],
+      "name": "create_interpreter",
+      "target_name": "create_interpreter",
+      "target_start_line": 211
+    },
+    {
+      "lines": [
+        324
+      ],
+      "name": "TARGET_KNOWLEDGE_PATH",
+      "target_name": "TARGET_KNOWLEDGE_PATH",
+      "target_start_line": 52
+    },
+    {
+      "lines": [
+        333
+      ],
+      "name": "create_qa_agent",
+      "target_name": "create_qa_agent",
+      "target_start_line": 249
+    },
+    {
+      "lines": [
+        349
+      ],
+      "name": "ask",
+      "target_name": "ask",
+      "target_start_line": 304
+    },
+    {
+      "lines": [
+        361
+      ],
+      "name": "main",
+      "target_name": "main",
+      "target_start_line": 322
     }
   ],
   "caller_usages": []

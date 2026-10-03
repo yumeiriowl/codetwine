@@ -1,0 +1,2480 @@
+{
+  "file": "codetwine/codetwine/parsers/cobol_format_py/cobol_format.py",
+  "language": "py",
+  "detected_encoding": null,
+  "definitions": [
+    {
+      "name": "_INDICATOR_COLUMN",
+      "type": "expression_statement",
+      "start_line": 8,
+      "end_line": 8,
+      "context": "_INDICATOR_COLUMN = 6"
+    },
+    {
+      "name": "_CODE_START_COLUMN",
+      "type": "expression_statement",
+      "start_line": 10,
+      "end_line": 10,
+      "context": "_CODE_START_COLUMN = 7"
+    },
+    {
+      "name": "_CODE_END_COLUMN",
+      "type": "expression_statement",
+      "start_line": 12,
+      "end_line": 12,
+      "context": "_CODE_END_COLUMN = 72"
+    },
+    {
+      "name": "_LINE_END_COLUMN",
+      "type": "expression_statement",
+      "start_line": 14,
+      "end_line": 14,
+      "context": "_LINE_END_COLUMN = 80"
+    },
+    {
+      "name": "_TAB_SIZE",
+      "type": "expression_statement",
+      "start_line": 16,
+      "end_line": 16,
+      "context": "_TAB_SIZE = 8"
+    },
+    {
+      "name": "_WIDE_CLASS_SET",
+      "type": "expression_statement",
+      "start_line": 19,
+      "end_line": 19,
+      "context": "_WIDE_CLASS_SET = {\"W\", \"F\"}"
+    },
+    {
+      "name": "_AMBIGUOUS_CLASS",
+      "type": "expression_statement",
+      "start_line": 21,
+      "end_line": 21,
+      "context": "_AMBIGUOUS_CLASS = \"A\""
+    },
+    {
+      "name": "_WIDE_STAND_IN",
+      "type": "expression_statement",
+      "start_line": 23,
+      "end_line": 23,
+      "context": "_WIDE_STAND_IN = \"\\u3013\""
+    },
+    {
+      "name": "_INDICATOR_CHAR_SET",
+      "type": "expression_statement",
+      "start_line": 26,
+      "end_line": 26,
+      "context": "_INDICATOR_CHAR_SET = set(\" */-dD$\")"
+    },
+    {
+      "name": "_COMMENT_INDICATOR_CHAR_SET",
+      "type": "expression_statement",
+      "start_line": 28,
+      "end_line": 28,
+      "context": "_COMMENT_INDICATOR_CHAR_SET = set(\"*/\")"
+    },
+    {
+      "name": "_NO_CODE_INDICATOR_CHAR_SET",
+      "type": "expression_statement",
+      "start_line": 30,
+      "end_line": 30,
+      "context": "_NO_CODE_INDICATOR_CHAR_SET = set(\"*/dD$\")"
+    },
+    {
+      "name": "_LEFT_MARGIN",
+      "type": "expression_statement",
+      "start_line": 33,
+      "end_line": 33,
+      "context": "_LEFT_MARGIN = \" \" * _CODE_START_COLUMN"
+    },
+    {
+      "name": "_CODE_WIDTH",
+      "type": "expression_statement",
+      "start_line": 35,
+      "end_line": 35,
+      "context": "_CODE_WIDTH = _CODE_END_COLUMN - _CODE_START_COLUMN"
+    },
+    {
+      "name": "_DIRECTIVE_START_RE",
+      "type": "expression_statement",
+      "start_line": 38,
+      "end_line": 38,
+      "context": "_DIRECTIVE_START_RE = re.compile(r\"(?:>>|[$@][A-Za-z][A-Za-z\\-]*(?!\\S))\")"
+    },
+    {
+      "name": "_COMMENT_START",
+      "type": "expression_statement",
+      "start_line": 40,
+      "end_line": 40,
+      "context": "_COMMENT_START = \"*\""
+    },
+    {
+      "name": "_INLINE_COMMENT_START",
+      "type": "expression_statement",
+      "start_line": 42,
+      "end_line": 42,
+      "context": "_INLINE_COMMENT_START = \"*>\""
+    },
+    {
+      "name": "_OPERAND_END_CHAR_SET",
+      "type": "expression_statement",
+      "start_line": 44,
+      "end_line": 44,
+      "context": "_OPERAND_END_CHAR_SET = {\")\", '\"', \"'\"}"
+    },
+    {
+      "name": "_LEVEL_SEQUENCE_AREA_RE",
+      "type": "expression_statement",
+      "start_line": 47,
+      "end_line": 47,
+      "context": "_LEVEL_SEQUENCE_AREA_RE = re.compile(r\"\\s*(\\d{1,2})\\s*\")"
+    },
+    {
+      "name": "_WORD_SEQUENCE_AREA_RE",
+      "type": "expression_statement",
+      "start_line": 49,
+      "end_line": 49,
+      "context": "_WORD_SEQUENCE_AREA_RE = re.compile(r\"\\s*[A-Za-z0-9][A-Za-z0-9\\-]*\\s+\\S\")"
+    },
+    {
+      "name": "_RECORD_LEVEL_RANGE",
+      "type": "expression_statement",
+      "start_line": 51,
+      "end_line": 51,
+      "context": "_RECORD_LEVEL_RANGE = range(1, 50)"
+    },
+    {
+      "name": "_OTHER_LEVEL_SET",
+      "type": "expression_statement",
+      "start_line": 53,
+      "end_line": 53,
+      "context": "_OTHER_LEVEL_SET = {66, 77, 78, 88}"
+    },
+    {
+      "name": "_OPTION_LINE_RE",
+      "type": "expression_statement",
+      "start_line": 56,
+      "end_line": 56,
+      "context": "_OPTION_LINE_RE = re.compile(r\"^(?:CBL|PROCESS)\\s\", re.IGNORECASE)"
+    },
+    {
+      "name": "_FORMAT_DIRECTIVE_RE",
+      "type": "expression_statement",
+      "start_line": 58,
+      "end_line": 61,
+      "context": "_FORMAT_DIRECTIVE_RE = re.compile(\n    r\"^(?:>>\\s*SOURCE\\s+(?:FORMAT\\s+)?(?:IS\\s+)?|\\$\\s*SET\\s+SOURCEFORMAT\\W*)(FREE|FIXED|VARIABLE)\",\n    re.IGNORECASE,\n)"
+    },
+    {
+      "name": "_SPACE_RE",
+      "type": "expression_statement",
+      "start_line": 64,
+      "end_line": 64,
+      "context": "_SPACE_RE = re.compile(r\"\\s+\")"
+    },
+    {
+      "name": "_LITERAL_START_RE",
+      "type": "expression_statement",
+      "start_line": 65,
+      "end_line": 65,
+      "context": "_LITERAL_START_RE = re.compile(r\"[A-Za-z]{0,2}[\\\"']\")"
+    },
+    {
+      "name": "_PSEUDO_TEXT_RE",
+      "type": "expression_statement",
+      "start_line": 66,
+      "end_line": 66,
+      "context": "_PSEUDO_TEXT_RE = re.compile(r\"==.*?==\")"
+    },
+    {
+      "name": "_NAME_TAG_PATTERN",
+      "type": "expression_statement",
+      "start_line": 67,
+      "end_line": 67,
+      "context": "_NAME_TAG_PATTERN = r\":[A-Za-z0-9\\-]+:\""
+    },
+    {
+      "name": "_WORD_RE",
+      "type": "expression_statement",
+      "start_line": 68,
+      "end_line": 71,
+      "context": "_WORD_RE = re.compile(\n    rf\"(?:{_NAME_TAG_PATTERN}|[A-Za-z0-9_]|[^\\x00-\\x7f\\s])\"\n    rf\"(?:[A-Za-z0-9_\\-]|[^\\x00-\\x7f\\s]|{_NAME_TAG_PATTERN})*\"\n)"
+    },
+    {
+      "name": "_PICTURE_RE",
+      "type": "expression_statement",
+      "start_line": 72,
+      "end_line": 72,
+      "context": "_PICTURE_RE = re.compile(r\"\\S+\")"
+    },
+    {
+      "name": "GRAMMAR_NAME_RE",
+      "type": "expression_statement",
+      "start_line": 74,
+      "end_line": 74,
+      "context": "GRAMMAR_NAME_RE = re.compile(r\"[A-Za-z0-9\\-]+\")"
+    },
+    {
+      "name": "_PICTURE_WORD_SET",
+      "type": "expression_statement",
+      "start_line": 77,
+      "end_line": 77,
+      "context": "_PICTURE_WORD_SET = {\"PIC\", \"PICTURE\"}"
+    },
+    {
+      "name": "_NO_CODE_WORD_SET",
+      "type": "expression_statement",
+      "start_line": 79,
+      "end_line": 79,
+      "context": "_NO_CODE_WORD_SET = {\"EJECT\", \"SKIP1\", \"SKIP2\", \"SKIP3\"}"
+    },
+    {
+      "name": "_QUALIFIER_WORD_SET",
+      "type": "expression_statement",
+      "start_line": 81,
+      "end_line": 81,
+      "context": "_QUALIFIER_WORD_SET = {\"OF\", \"IN\"}"
+    },
+    {
+      "name": "_IDENTIFICATION_WORD_SET",
+      "type": "expression_statement",
+      "start_line": 83,
+      "end_line": 83,
+      "context": "_IDENTIFICATION_WORD_SET = {\"IDENTIFICATION\", \"ID\"}"
+    },
+    {
+      "name": "_DATA_SECTION_WORD_SET",
+      "type": "expression_statement",
+      "start_line": 85,
+      "end_line": 87,
+      "context": "_DATA_SECTION_WORD_SET = {\n    \"FILE\", \"WORKING-STORAGE\", \"LOCAL-STORAGE\", \"LINKAGE\", \"SCREEN\", \"REPORT\",\n}"
+    },
+    {
+      "name": "_NO_UNIT_SECTION_WORD_SET",
+      "type": "expression_statement",
+      "start_line": 89,
+      "end_line": 89,
+      "context": "_NO_UNIT_SECTION_WORD_SET = {\"SCREEN\", \"REPORT\"}"
+    },
+    {
+      "name": "_FILE_ENTRY_WORD_SET",
+      "type": "expression_statement",
+      "start_line": 91,
+      "end_line": 91,
+      "context": "_FILE_ENTRY_WORD_SET = {\"FD\", \"SD\"}"
+    },
+    {
+      "name": "_OPERATOR_CHAR_SET",
+      "type": "expression_statement",
+      "start_line": 93,
+      "end_line": 93,
+      "context": "_OPERATOR_CHAR_SET = set(\"=<>\")"
+    },
+    {
+      "name": "_SEPARATOR_TEXT_SET",
+      "type": "expression_statement",
+      "start_line": 95,
+      "end_line": 95,
+      "context": "_SEPARATOR_TEXT_SET = {\",\", \";\"}"
+    },
+    {
+      "name": "IDENTIFICATION_DIVISION",
+      "type": "expression_statement",
+      "start_line": 98,
+      "end_line": 98,
+      "context": "IDENTIFICATION_DIVISION = \"IDENTIFICATION\""
+    },
+    {
+      "name": "ENVIRONMENT_DIVISION",
+      "type": "expression_statement",
+      "start_line": 99,
+      "end_line": 99,
+      "context": "ENVIRONMENT_DIVISION = \"ENVIRONMENT\""
+    },
+    {
+      "name": "DATA_DIVISION",
+      "type": "expression_statement",
+      "start_line": 100,
+      "end_line": 100,
+      "context": "DATA_DIVISION = \"DATA\""
+    },
+    {
+      "name": "PROCEDURE_DIVISION",
+      "type": "expression_statement",
+      "start_line": 101,
+      "end_line": 101,
+      "context": "PROCEDURE_DIVISION = \"PROCEDURE\""
+    },
+    {
+      "name": "_DIVISION_WORD_SET",
+      "type": "expression_statement",
+      "start_line": 102,
+      "end_line": 102,
+      "context": "_DIVISION_WORD_SET = {ENVIRONMENT_DIVISION, DATA_DIVISION, PROCEDURE_DIVISION}"
+    },
+    {
+      "name": "_DIRECTIVE_MODE",
+      "type": "expression_statement",
+      "start_line": 106,
+      "end_line": 106,
+      "context": "_DIRECTIVE_MODE = \"directive\""
+    },
+    {
+      "name": "_FREE_MODE",
+      "type": "expression_statement",
+      "start_line": 108,
+      "end_line": 108,
+      "context": "_FREE_MODE = \"free\""
+    },
+    {
+      "name": "_FIXED_MODE",
+      "type": "expression_statement",
+      "start_line": 110,
+      "end_line": 110,
+      "context": "_FIXED_MODE = \"fixed\""
+    },
+    {
+      "name": "_VARIABLE_MODE",
+      "type": "expression_statement",
+      "start_line": 112,
+      "end_line": 112,
+      "context": "_VARIABLE_MODE = \"variable\""
+    },
+    {
+      "name": "_NO_TEXT_BEYOND",
+      "type": "expression_statement",
+      "start_line": 116,
+      "end_line": 116,
+      "context": "_NO_TEXT_BEYOND = \"\""
+    },
+    {
+      "name": "_TAG_BEYOND",
+      "type": "expression_statement",
+      "start_line": 118,
+      "end_line": 118,
+      "context": "_TAG_BEYOND = \"tag\""
+    },
+    {
+      "name": "_CODE_BEYOND",
+      "type": "expression_statement",
+      "start_line": 120,
+      "end_line": 120,
+      "context": "_CODE_BEYOND = \"code\""
+    },
+    {
+      "name": "ITEM_UNIT",
+      "type": "expression_statement",
+      "start_line": 124,
+      "end_line": 124,
+      "context": "ITEM_UNIT = \"item\""
+    },
+    {
+      "name": "FILE_UNIT",
+      "type": "expression_statement",
+      "start_line": 126,
+      "end_line": 126,
+      "context": "FILE_UNIT = \"file\""
+    },
+    {
+      "name": "SELECT_UNIT",
+      "type": "expression_statement",
+      "start_line": 128,
+      "end_line": 128,
+      "context": "SELECT_UNIT = \"select\""
+    },
+    {
+      "name": "PROCEDURE_UNIT",
+      "type": "expression_statement",
+      "start_line": 130,
+      "end_line": 130,
+      "context": "PROCEDURE_UNIT = \"procedure\""
+    },
+    {
+      "name": "_IDENTIFICATION_LINE",
+      "type": "expression_statement",
+      "start_line": 133,
+      "end_line": 133,
+      "context": "_IDENTIFICATION_LINE = \"IDENTIFICATION DIVISION.\""
+    },
+    {
+      "name": "_START_LINE_DICT",
+      "type": "expression_statement",
+      "start_line": 134,
+      "end_line": 141,
+      "context": "_START_LINE_DICT = {\n    ITEM_UNIT: [_IDENTIFICATION_LINE, \"DATA DIVISION.\", \"WORKING-STORAGE SECTION.\"],\n    FILE_UNIT: [_IDENTIFICATION_LINE, \"DATA DIVISION.\", \"FILE SECTION.\"],\n    SELECT_UNIT: [\n        _IDENTIFICATION_LINE, \"ENVIRONMENT DIVISION.\", \"INPUT-OUTPUT SECTION.\", \"FILE-CONTROL.\",\n    ],\n    PROCEDURE_UNIT: [_IDENTIFICATION_LINE, \"PROCEDURE DIVISION.\"],\n}"
+    },
+    {
+      "name": "_FILLER_ITEM_LINE",
+      "type": "expression_statement",
+      "start_line": 143,
+      "end_line": 143,
+      "context": "_FILLER_ITEM_LINE = \"01 FILLER PIC X.\""
+    },
+    {
+      "name": "_CONTINUE_LINE",
+      "type": "expression_statement",
+      "start_line": 145,
+      "end_line": 145,
+      "context": "_CONTINUE_LINE = \"CONTINUE.\""
+    },
+    {
+      "name": "_STAND_IN_PREFIX",
+      "type": "expression_statement",
+      "start_line": 148,
+      "end_line": 148,
+      "context": "_STAND_IN_PREFIX = \"QX\""
+    },
+    {
+      "name": "_STAND_IN_PREFIX_CHAR",
+      "type": "expression_statement",
+      "start_line": 150,
+      "end_line": 150,
+      "context": "_STAND_IN_PREFIX_CHAR = \"Q\""
+    },
+    {
+      "name": "_Token",
+      "type": "class_definition",
+      "start_line": 153,
+      "end_line": 169,
+      "context": "@dataclass\nclass _Token:\n    \"\"\"One token of the code of a COBOL source file.\"\"\"\n\n    # \"word\" / \"literal\" / \"picture\" / \"pseudo\" / \"period\" / \"other\"\n    kind: str\n    text: str\n    # Line of the source the token starts on (1-based)\n    line: int\n    # Column of the code text of the line the token starts at\n    column: int = 0\n    # Whether whitespace or a line start comes before the token\n    has_gap: bool = True\n    # Whether the token continues the last token of the line before it\n    is_glue: bool = False\n    # Index of the token among the tokens of the file\n    position: int = 0"
+    },
+    {
+      "name": "kind",
+      "type": "expression_statement",
+      "start_line": 158,
+      "end_line": 158,
+      "context": "    kind: str"
+    },
+    {
+      "name": "text",
+      "type": "expression_statement",
+      "start_line": 159,
+      "end_line": 159,
+      "context": "    text: str"
+    },
+    {
+      "name": "line",
+      "type": "expression_statement",
+      "start_line": 161,
+      "end_line": 161,
+      "context": "    line: int"
+    },
+    {
+      "name": "column",
+      "type": "expression_statement",
+      "start_line": 163,
+      "end_line": 163,
+      "context": "    column: int = 0"
+    },
+    {
+      "name": "has_gap",
+      "type": "expression_statement",
+      "start_line": 165,
+      "end_line": 165,
+      "context": "    has_gap: bool = True"
+    },
+    {
+      "name": "is_glue",
+      "type": "expression_statement",
+      "start_line": 167,
+      "end_line": 167,
+      "context": "    is_glue: bool = False"
+    },
+    {
+      "name": "position",
+      "type": "expression_statement",
+      "start_line": 169,
+      "end_line": 169,
+      "context": "    position: int = 0"
+    },
+    {
+      "name": "CobolUnit",
+      "type": "class_definition",
+      "start_line": 172,
+      "end_line": 190,
+      "context": "@dataclass\nclass CobolUnit:\n    \"\"\"One statement of a COBOL file as fixed-format text the grammar reads.\"\"\"\n\n    # ITEM_UNIT / FILE_UNIT / SELECT_UNIT / PROCEDURE_UNIT\n    kind: str\n    # The header lines of a program, then the statement: comments removed, every\n    # name written in ASCII, no EXEC block, no COPY statement\n    text: str\n    # Source line (1-based) of each line of text; 0 for a line that is added\n    origin_line_list: list[int]\n    # (word as written in the source, source line) of the words of the statement\n    word_list: list[tuple[str, int]]\n    # Index of the first and of the last token of the statement among the tokens of the file\n    start_position: int = 0\n    end_position: int = 0\n    # Whether a token other than a period or a separator follows the first word after\n    # the first token of the statement without a blank between them\n    has_name_suffix: bool = False"
+    },
+    {
+      "name": "kind",
+      "type": "expression_statement",
+      "start_line": 177,
+      "end_line": 177,
+      "context": "    kind: str"
+    },
+    {
+      "name": "text",
+      "type": "expression_statement",
+      "start_line": 180,
+      "end_line": 180,
+      "context": "    text: str"
+    },
+    {
+      "name": "origin_line_list",
+      "type": "expression_statement",
+      "start_line": 182,
+      "end_line": 182,
+      "context": "    origin_line_list: list[int]"
+    },
+    {
+      "name": "word_list",
+      "type": "expression_statement",
+      "start_line": 184,
+      "end_line": 184,
+      "context": "    word_list: list[tuple[str, int]]"
+    },
+    {
+      "name": "start_position",
+      "type": "expression_statement",
+      "start_line": 186,
+      "end_line": 186,
+      "context": "    start_position: int = 0"
+    },
+    {
+      "name": "end_position",
+      "type": "expression_statement",
+      "start_line": 187,
+      "end_line": 187,
+      "context": "    end_position: int = 0"
+    },
+    {
+      "name": "has_name_suffix",
+      "type": "expression_statement",
+      "start_line": 190,
+      "end_line": 190,
+      "context": "    has_name_suffix: bool = False"
+    },
+    {
+      "name": "CobolCopy",
+      "type": "class_definition",
+      "start_line": 193,
+      "end_line": 204,
+      "context": "@dataclass\nclass CobolCopy:\n    \"\"\"One COPY statement or EXEC SQL INCLUDE.\"\"\"\n\n    name: str      # Name of the copybook\n    line: int      # Source line of the statement (1-based)\n    end_line: int  # Last source line of the statement\n    position: int  # Index of its first token (COPY / EXEC) among the tokens of the file\n    library: str = \"\"  # Library name of COPY ... OF library\n    # REPLACING operands as (position, replaced text, replacement text);\n    # position is \"\" / \"LEADING\" / \"TRAILING\"\n    replacing_list: list[tuple[str, str, str]] = field(default_factory=list)"
+    },
+    {
+      "name": "name",
+      "type": "expression_statement",
+      "start_line": 197,
+      "end_line": 197,
+      "context": "    name: str      # Name of the copybook"
+    },
+    {
+      "name": "line",
+      "type": "expression_statement",
+      "start_line": 198,
+      "end_line": 198,
+      "context": "    line: int      # Source line of the statement (1-based)"
+    },
+    {
+      "name": "end_line",
+      "type": "expression_statement",
+      "start_line": 199,
+      "end_line": 199,
+      "context": "    end_line: int  # Last source line of the statement"
+    },
+    {
+      "name": "position",
+      "type": "expression_statement",
+      "start_line": 200,
+      "end_line": 200,
+      "context": "    position: int  # Index of its first token (COPY / EXEC) among the tokens of the file"
+    },
+    {
+      "name": "library",
+      "type": "expression_statement",
+      "start_line": 201,
+      "end_line": 201,
+      "context": "    library: str = \"\"  # Library name of COPY ... OF library"
+    },
+    {
+      "name": "replacing_list",
+      "type": "expression_statement",
+      "start_line": 204,
+      "end_line": 204,
+      "context": "    replacing_list: list[tuple[str, str, str]] = field(default_factory=list)"
+    },
+    {
+      "name": "CobolText",
+      "type": "class_definition",
+      "start_line": 207,
+      "end_line": 234,
+      "context": "@dataclass\nclass CobolText:\n    \"\"\"A COBOL source file split into the units the grammar reads and what is read without it.\"\"\"\n\n    # Data items, descriptions of files, SELECT entries and sentences of the\n    # procedure division, in source order\n    unit_list: list[CobolUnit] = field(default_factory=list)\n    # Stand-in name written in the units (upper case) -> the name written in the source\n    name_dict: dict[str, str] = field(default_factory=dict)\n    # (name, line of the start of the program, line of the name) of each PROGRAM-ID\n    program_list: list[tuple[str, int, int]] = field(default_factory=list)\n    # (name, source line) of each END PROGRAM\n    program_end_list: list[tuple[str, int]] = field(default_factory=list)\n    # (name, source line) of each ENTRY statement\n    entry_list: list[tuple[str, int]] = field(default_factory=list)\n    # COPY statements and EXEC SQL INCLUDE\n    copy_list: list[CobolCopy] = field(default_factory=list)\n    # (name, whether it is a literal, source line) of each CALL statement and of each\n    # EXEC CICS command with PROGRAM(name); a name that is not a literal is a data item\n    call_list: list[tuple[str, bool, int]] = field(default_factory=list)\n    # (word, source line, names that qualify it) of the words of the statements that are\n    # in no unit; X OF Y IN Z gives X the names (Y, Z), and :Y.X in an EXEC block gives X (Y,)\n    word_list: list[tuple[str, int, tuple[str, ...]]] = field(default_factory=list)\n    # Source lines that hold code, in ascending order\n    code_line_list: list[int] = field(default_factory=list)\n    # Index of the first token of each statement that is in no unit (division and\n    # section headers, PROGRAM-ID, ...) among the tokens of the file, in ascending order\n    other_statement_position_list: list[int] = field(default_factory=list)"
+    },
+    {
+      "name": "unit_list",
+      "type": "expression_statement",
+      "start_line": 213,
+      "end_line": 213,
+      "context": "    unit_list: list[CobolUnit] = field(default_factory=list)"
+    },
+    {
+      "name": "name_dict",
+      "type": "expression_statement",
+      "start_line": 215,
+      "end_line": 215,
+      "context": "    name_dict: dict[str, str] = field(default_factory=dict)"
+    },
+    {
+      "name": "program_list",
+      "type": "expression_statement",
+      "start_line": 217,
+      "end_line": 217,
+      "context": "    program_list: list[tuple[str, int, int]] = field(default_factory=list)"
+    },
+    {
+      "name": "program_end_list",
+      "type": "expression_statement",
+      "start_line": 219,
+      "end_line": 219,
+      "context": "    program_end_list: list[tuple[str, int]] = field(default_factory=list)"
+    },
+    {
+      "name": "entry_list",
+      "type": "expression_statement",
+      "start_line": 221,
+      "end_line": 221,
+      "context": "    entry_list: list[tuple[str, int]] = field(default_factory=list)"
+    },
+    {
+      "name": "copy_list",
+      "type": "expression_statement",
+      "start_line": 223,
+      "end_line": 223,
+      "context": "    copy_list: list[CobolCopy] = field(default_factory=list)"
+    },
+    {
+      "name": "call_list",
+      "type": "expression_statement",
+      "start_line": 226,
+      "end_line": 226,
+      "context": "    call_list: list[tuple[str, bool, int]] = field(default_factory=list)"
+    },
+    {
+      "name": "word_list",
+      "type": "expression_statement",
+      "start_line": 229,
+      "end_line": 229,
+      "context": "    word_list: list[tuple[str, int, tuple[str, ...]]] = field(default_factory=list)"
+    },
+    {
+      "name": "code_line_list",
+      "type": "expression_statement",
+      "start_line": 231,
+      "end_line": 231,
+      "context": "    code_line_list: list[int] = field(default_factory=list)"
+    },
+    {
+      "name": "other_statement_position_list",
+      "type": "expression_statement",
+      "start_line": 234,
+      "end_line": 234,
+      "context": "    other_statement_position_list: list[int] = field(default_factory=list)"
+    },
+    {
+      "name": "_char_width",
+      "type": "function_definition",
+      "start_line": 237,
+      "end_line": 239,
+      "context": "def _char_width(char: str) -> int:\n    \"\"\"Return the number of columns a character takes (2 for a full-width character).\"\"\"\n    return 2 if unicodedata.east_asian_width(char) in _WIDE_CLASS_SET else 1"
+    },
+    {
+      "name": "_column_line_list",
+      "type": "function_definition",
+      "start_line": 242,
+      "end_line": 269,
+      "context": "def _column_line_list(line_list: list[str]) -> list[str]:\n    \"\"\"Return the lines of a file as their columns are counted.\n\n    In a file that holds a full-width character, each ambiguous-width character (East\n    Asian width class A: \"※\", \"①\", \"→\", \"■\", Greek and Cyrillic letters) is written\n    as a full-width one, which takes two columns. The lines of any other file are\n    returned as they are.\n\n    Args:\n        line_list: The lines of the file without tab characters.\n\n    Returns:\n        One line per line, each with as many characters as the line it stands for.\n    \"\"\"\n    class_set = {\n        unicodedata.east_asian_width(char)\n        for line in line_list if not line.isascii()\n        for char in line if not char.isascii()\n    }\n    if _AMBIGUOUS_CLASS not in class_set or not class_set & _WIDE_CLASS_SET:\n        return line_list\n    return [\n        line if line.isascii() else \"\".join(\n            _WIDE_STAND_IN if unicodedata.east_asian_width(char) == _AMBIGUOUS_CLASS else char\n            for char in line\n        )\n        for line in line_list\n    ]"
+    },
+    {
+      "name": "_line_width",
+      "type": "function_definition",
+      "start_line": 272,
+      "end_line": 276,
+      "context": "def _line_width(line: str) -> int:\n    \"\"\"Return the number of columns a line takes.\"\"\"\n    if line.isascii():\n        return len(line)\n    return sum(_char_width(char) for char in line)"
+    },
+    {
+      "name": "_column_slice",
+      "type": "function_definition",
+      "start_line": 279,
+      "end_line": 304,
+      "context": "def _column_slice(line: str, start: int, end: int | None) -> str:\n    \"\"\"Return the characters of a line that start in the columns from start up to end.\n\n    Examples:\n        (\"000100 MOVE A TO B.\", 7, 72)  -> \"MOVE A TO B.\"\n        (\"       01 顧客 PIC X.  0001\", 7, 22) -> \"01 顧客 PIC X.  \"\n\n    Args:\n        line: One line without tab characters.\n        start: First column (0-based).\n        end: Column after the last one. None takes the line to its end.\n\n    Returns:\n        The characters in that column range.\n    \"\"\"\n    if line.isascii():\n        return line[start:end]\n    char_list: list[str] = []\n    column = 0\n    for char in line:\n        if end is not None and column >= end:\n            break\n        if column >= start:\n            char_list.append(char)\n        column += _char_width(char)\n    return \"\".join(char_list)"
+    },
+    {
+      "name": "_indicator",
+      "type": "function_definition",
+      "start_line": 307,
+      "end_line": 309,
+      "context": "def _indicator(line: str) -> str:\n    \"\"\"Return the character in the indicator column of a line, or \"\" when no character starts there.\"\"\"\n    return _column_slice(line, _INDICATOR_COLUMN, _CODE_START_COLUMN)"
+    },
+    {
+      "name": "_is_directive_line",
+      "type": "function_definition",
+      "start_line": 312,
+      "end_line": 332,
+      "context": "def _is_directive_line(line: str) -> bool:\n    \"\"\"Return whether a line is a compiler directive.\n\n    Examples:\n        \">>SOURCE FORMAT IS FREE\"          -> True\n        \"      $IF DEBUG DEFINED\"          -> True\n        \"000100 @OPTIONS MAIN\"             -> True\n        \"@BA01  PROGRAM-ID. SEQ.\"          -> False\n        \"           @USAGE@.\"              -> False\n\n    Args:\n        line: One line without tab characters.\n\n    Returns:\n        True when a directive (_DIRECTIVE_START_RE) is first in the line or first from\n        the indicator column.\n    \"\"\"\n    return any(\n        _DIRECTIVE_START_RE.match(text.lstrip())\n        for text in (line, _column_slice(line, _INDICATOR_COLUMN, None))\n    )"
+    },
+    {
+      "name": "_format_directive",
+      "type": "function_definition",
+      "start_line": 335,
+      "end_line": 352,
+      "context": "def _format_directive(line: str, is_free: bool = False) -> str | None:\n    \"\"\"Return the source format a directive line names (\"FREE\" / \"FIXED\" / \"VARIABLE\").\n\n    Examples:\n        \"       >>SOURCE FORMAT IS FREE\"   -> \"FREE\"\n        \"$SET SOURCEFORMAT\\\"FIXED\\\"\"       -> \"FIXED\"\n        \"       MOVE A TO B.\"              -> None\n\n    Args:\n        line: One line. The directive starts the line; in a fixed-format line it can\n            start the code area as well.\n        is_free: Whether the line is a free-format line.\n    \"\"\"\n    text = line.strip()\n    if not is_free and not _DIRECTIVE_START_RE.match(text) and _indicator(line) == \" \":\n        text = _column_slice(line, _CODE_START_COLUMN, None).strip()\n    directive_match = _FORMAT_DIRECTIVE_RE.match(text)\n    return directive_match.group(1).upper() if directive_match else None"
+    },
+    {
+      "name": "_is_fixed_line",
+      "type": "function_definition",
+      "start_line": 355,
+      "end_line": 366,
+      "context": "def _is_fixed_line(line: str) -> bool:\n    \"\"\"Return whether a line can be a line of fixed-format source.\n\n    A line is one when it is blank, ends before the indicator column, is a compiler\n    option line or a directive line, or holds one of the indicator characters in the\n    indicator column. Columns are counted with a full-width character as two.\n    \"\"\"\n    if not line.strip() or _line_width(line) <= _INDICATOR_COLUMN:\n        return True\n    if _OPTION_LINE_RE.match(line) or _is_directive_line(line):\n        return True\n    return _indicator(line) in _INDICATOR_CHAR_SET"
+    },
+    {
+      "name": "_fixed_code_text",
+      "type": "function_definition",
+      "start_line": 369,
+      "end_line": 380,
+      "context": "def _fixed_code_text(line: str) -> str:\n    \"\"\"Return the text a line holds from column 8 when it is read as a fixed-format line with code.\n\n    Returns:\n        The text from column 8 without the blanks around it; \"\" for a line that holds\n        no code in fixed format (a comment, debug, directive or compiler option line).\n    \"\"\"\n    if _OPTION_LINE_RE.match(line) or _is_directive_line(line):\n        return \"\"\n    if _indicator(line) in _NO_CODE_INDICATOR_CHAR_SET:\n        return \"\"\n    return _column_slice(line, _CODE_START_COLUMN, None).strip()"
+    },
+    {
+      "name": "_has_code_in_sequence_area",
+      "type": "function_definition",
+      "start_line": 383,
+      "end_line": 409,
+      "context": "def _has_code_in_sequence_area(line: str) -> bool:\n    \"\"\"Return whether columns 1 to 6 of a line hold code, not a sequence number.\n\n    Examples:\n        \"000100 01  WS-A PIC X.\"    -> False\n        \"CHG001     MOVE A TO B.\"   -> False\n        \"01 WS-DATE.\"               -> True (a word and the start of the next one)\n        \"    05 WS-YEAR PIC 9(4).\"  -> True (a level number)\n\n    Args:\n        line: One line without tab characters that can be a fixed-format line.\n\n    Returns:\n        True when the columns hold a word followed by other text, on a line that is\n        not a comment line; or a level number alone, on a line with code after column 7.\n        False for a directive line and a compiler option line.\n    \"\"\"\n    if _OPTION_LINE_RE.match(line) or _is_directive_line(line):\n        return False\n    sequence_area = _column_slice(line, 0, _INDICATOR_COLUMN)\n    if _WORD_SEQUENCE_AREA_RE.match(sequence_area):\n        return _indicator(line) not in _COMMENT_INDICATOR_CHAR_SET\n    level_match = _LEVEL_SEQUENCE_AREA_RE.fullmatch(sequence_area)\n    if level_match is None or not _fixed_code_text(line):\n        return False\n    level = int(level_match.group(1))\n    return level in _RECORD_LEVEL_RANGE or level in _OTHER_LEVEL_SET"
+    },
+    {
+      "name": "_is_free_start",
+      "type": "function_definition",
+      "start_line": 412,
+      "end_line": 433,
+      "context": "def _is_free_start(line_list: list[str]) -> bool:\n    \"\"\"Return whether the lines before the first format directive are free-format source.\n\n    Args:\n        line_list: The lines of the file without tab characters.\n\n    Returns:\n        True when one of those lines cannot be a line of fixed-format source\n        (_is_fixed_line), holds code in columns 1 to 6 (_has_code_in_sequence_area), or\n        is the first line with code and has \"-\" in the indicator column.\n    \"\"\"\n    has_code = False\n    for line in line_list:\n        if _format_directive(line) is not None:\n            return False\n        if not _is_fixed_line(line) or _has_code_in_sequence_area(line):\n            return True\n        if not has_code and _fixed_code_text(line):\n            if _indicator(line) == \"-\":\n                return True\n            has_code = True\n    return False"
+    },
+    {
+      "name": "_line_mode_list",
+      "type": "function_definition",
+      "start_line": 436,
+      "end_line": 462,
+      "context": "def _line_mode_list(line_list: list[str]) -> list[str]:\n    \"\"\"Return how each line of a file is read.\n\n    The source format follows the format directives of the file; before the first\n    directive it is free format when a line cannot be fixed format.\n\n    Args:\n        line_list: The lines of the file without tab characters.\n\n    Returns:\n        One line mode per line: _DIRECTIVE_MODE for a format directive, else the mode\n        of the format the line is in (_FREE_MODE / _FIXED_MODE / _VARIABLE_MODE).\n    \"\"\"\n    is_free = _is_free_start(line_list)\n    is_variable = False\n    mode_list: list[str] = []\n    for line in line_list:\n        directive = _format_directive(line, is_free)\n        if directive is not None:\n            is_free = directive == \"FREE\"\n            is_variable = directive == \"VARIABLE\"\n            mode_list.append(_DIRECTIVE_MODE)\n        elif is_free:\n            mode_list.append(_FREE_MODE)\n        else:\n            mode_list.append(_VARIABLE_MODE if is_variable else _FIXED_MODE)\n    return mode_list"
+    },
+    {
+      "name": "_code_area_end_state",
+      "type": "function_definition",
+      "start_line": 465,
+      "end_line": 494,
+      "context": "def _code_area_end_state(code_area_text: str) -> str:\n    \"\"\"Return what is open at the end of the code area of a line.\n\n    Examples:\n        \"MOVE 'AB' TO C\"      -> \"\"\n        \"DISPLAY 'ABC\"        -> \"'\"\n        \"MOVE A TO B *> note\" -> \"*>\"\n\n    Args:\n        code_area_text: Columns 8 to 72 of a fixed-format line that continues no literal.\n\n    Returns:\n        The quote of a literal left open, \"*>\" when a floating comment has started,\n        \"\" otherwise.\n    \"\"\"\n    quote = \"\"\n    position = 0\n    while position < len(code_area_text):\n        char = code_area_text[position]\n        if quote:\n            if char == quote and code_area_text.startswith(quote, position + 1):\n                position += 1\n            elif char == quote:\n                quote = \"\"\n        elif char in \"\\\"'\":\n            quote = char\n        elif code_area_text.startswith(\"*>\", position):\n            return \"*>\"\n        position += 1\n    return quote"
+    },
+    {
+      "name": "_beyond_code_area",
+      "type": "function_definition",
+      "start_line": 497,
+      "end_line": 541,
+      "context": "def _beyond_code_area(line: str, is_next_continuation: bool) -> str:\n    \"\"\"Return what a fixed-format line holds after column 72.\n\n    Examples (the text from column 60):\n        \"... MOVE A TO B.             00010000\"  -> _TAG_BEYOND\n        \"... MOVE A TO OUTPUT-NAME.CHG00001\"     -> _TAG_BEYOND (the sentence ends at column 72)\n        \"... MOVE CUSTOMER-NAME TO OUT-NAME.\"    -> _CODE_BEYOND (a word runs past column 72)\n        \"... DISPLAY 'A LONG TEXT THAT GOES ON'\" -> _CODE_BEYOND (a literal runs past column 72)\n        \"... MOVE A TO B.   *> a remark\"         -> _NO_TEXT_BEYOND\n        \"... DISPLAY 'A LONG TEXT THAT GOES\"     -> _NO_TEXT_BEYOND (the next line continues it)\n\n    Args:\n        line: A fixed-format line with code, without tab characters.\n        is_next_continuation: Whether the next line is a continuation line.\n\n    Returns:\n        _NO_TEXT_BEYOND when nothing but blanks or a floating comment is past column 72,\n        or when a literal is open from before column 72 to the end of the line, the line\n        ends by column 80 and the next line continues it; _TAG_BEYOND when the text past\n        column 72 ends by column 80, no literal is open at column 72, and column 72 is\n        blank, ends a sentence (\".\") or the text past it is digits only; _CODE_BEYOND\n        otherwise.\n    \"\"\"\n    width = _line_width(line.rstrip())\n    if width <= _CODE_END_COLUMN:\n        return _NO_TEXT_BEYOND\n    code_area_text = _column_slice(line, _CODE_START_COLUMN, _CODE_END_COLUMN)\n    end_state = _code_area_end_state(code_area_text)\n    beyond_text = _column_slice(line, _CODE_END_COLUMN, None).strip()\n    if end_state == \"*>\" or (not end_state and beyond_text.startswith(\"*>\")):\n        return _NO_TEXT_BEYOND\n    is_literal_continuation = (\n        end_state\n        and is_next_continuation\n        and width <= _LINE_END_COLUMN\n        and _code_area_end_state(code_area_text + beyond_text) == end_state\n    )\n    if is_literal_continuation:\n        return _NO_TEXT_BEYOND\n    is_tag = (\n        not end_state\n        and width <= _LINE_END_COLUMN\n        and (code_area_text.endswith((\" \", \".\")) or beyond_text.isdigit())\n    )\n    return _TAG_BEYOND if is_tag else _CODE_BEYOND"
+    },
+    {
+      "name": "_has_right_margin",
+      "type": "function_definition",
+      "start_line": 544,
+      "end_line": 567,
+      "context": "def _has_right_margin(fixed_line_list: list[str]) -> bool:\n    \"\"\"Return whether the code area of the fixed-format lines of a file ends at column 72.\n\n    The lines with code whose text runs past column 72 are counted: a line whose text\n    there is an identification field (_TAG_BEYOND) counts for the right margin, a\n    line with code there (_CODE_BEYOND) against it.\n\n    Args:\n        fixed_line_list: The fixed-format lines of the file (_FIXED_MODE) without tab characters.\n\n    Returns:\n        False when more of those lines hold code past column 72 than an identification field.\n    \"\"\"\n    tag_count = code_count = 0\n    for index, line in enumerate(fixed_line_list):\n        if _indicator(line) in _NO_CODE_INDICATOR_CHAR_SET:\n            continue\n        if _OPTION_LINE_RE.match(line) or _is_directive_line(line):\n            continue\n        next_line = fixed_line_list[index + 1] if index + 1 < len(fixed_line_list) else \"\"\n        beyond = _beyond_code_area(line, _indicator(next_line) == \"-\")\n        tag_count += beyond == _TAG_BEYOND\n        code_count += beyond == _CODE_BEYOND\n    return tag_count >= code_count"
+    },
+    {
+      "name": "_is_free_comment_line",
+      "type": "function_definition",
+      "start_line": 570,
+      "end_line": 585,
+      "context": "def _is_free_comment_line(line: str, last_code_text: str) -> bool:\n    \"\"\"Return whether a free-format line that starts with \"*\" is a comment line.\n\n    \"*>\" starts a comment anywhere, and \"*\" in column 1 a comment line. An indented \"*\"\n    carries on the expression of the line before it (COMPUTE X = A / * B) when that\n    line ends with an operand and does not end its sentence; any other indented \"*\"\n    line is a comment.\n\n    Args:\n        line: A free-format line whose first character after its blanks is \"*\".\n        last_code_text: The code of the last line with code before it; \"\" for none.\n    \"\"\"\n    if line.startswith(_COMMENT_START) or line.strip().startswith(_INLINE_COMMENT_START):\n        return True\n    operand_text = last_code_text.split(_INLINE_COMMENT_START, 1)[0].rstrip()\n    return not (operand_text and (operand_text[-1].isalnum() or operand_text[-1] in _OPERAND_END_CHAR_SET))"
+    },
+    {
+      "name": "_code_text_list",
+      "type": "function_definition",
+      "start_line": 588,
+      "end_line": 647,
+      "context": "def _code_text_list(line_list: list[str]) -> list[tuple[str, bool]]:\n    \"\"\"Return the code of each line and whether the line continues the one before it.\n\n    Comment lines, debug lines, directive lines and compiler option lines hold no code.\n    A free-format line that starts with \"*\" is a comment line unless it carries on an\n    expression (_is_free_comment_line).\n    A compiler option line starts in column 1, or comes before the first line with code.\n    Columns are counted with a full-width character as two, and in a file that holds\n    one, an ambiguous-width character as two as well (_column_line_list).\n    The source format follows the format directives of the file (_line_mode_list).\n    The code area of the fixed-format lines ends at column 72 when the file has the\n    right margin (_has_right_margin), and at the end of the line otherwise.\n\n    Args:\n        line_list: The lines of the file without tab characters.\n\n    Returns:\n        One (code text, is continuation) tuple per line; the code text is \"\" for a\n        line without code.\n    \"\"\"\n    column_line_list = _column_line_list(line_list)\n    mode_list = _line_mode_list(column_line_list)\n    has_margin = _has_right_margin(\n        [line for line, mode in zip(column_line_list, mode_list) if mode == _FIXED_MODE]\n    )\n\n    code_text_list: list[tuple[str, bool]] = []\n    has_code = False\n    last_code_text = \"\"\n    for line, column_line, mode in zip(line_list, column_line_list, mode_list):\n        code_text, is_continuation = \"\", False\n        if mode == _FREE_MODE:\n            start_text = line.strip()\n            is_comment = (\n                start_text.startswith(_COMMENT_START)\n                and _is_free_comment_line(line, last_code_text)\n            )\n            if not (is_comment or _DIRECTIVE_START_RE.match(start_text)):\n                code_text = line\n        elif (\n            mode != _DIRECTIVE_MODE\n            and not _OPTION_LINE_RE.match(column_line)\n            and not _is_directive_line(column_line)\n        ):\n            indicator = _indicator(column_line)\n            if indicator not in _NO_CODE_INDICATOR_CHAR_SET:\n                code_end = _CODE_END_COLUMN if mode == _FIXED_MODE and has_margin else None\n                # The characters of the line at the positions the code has in column_line\n                start = len(_column_slice(column_line, 0, _CODE_START_COLUMN))\n                end = start + len(_column_slice(column_line, _CODE_START_COLUMN, code_end))\n                code_text = line[start:end]\n                is_continuation = indicator == \"-\"\n\n        if not has_code and _OPTION_LINE_RE.match(code_text.strip() + \" \"):\n            code_text = \"\"\n        has_code = has_code or bool(code_text.strip())\n        if code_text.strip():\n            last_code_text = code_text\n        code_text_list.append((code_text, is_continuation))\n    return code_text_list"
+    },
+    {
+      "name": "code_text_list",
+      "type": "function_definition",
+      "start_line": 650,
+      "end_line": 668,
+      "context": "def code_text_list(line_list: list[str]) -> list[str]:\n    \"\"\"Return the code of each line of a COBOL source file, as the file is analyzed.\n\n    Examples:\n        [\"000100 PROGRAM-ID. MAIN.\", \"000200* note\"] -> [\"PROGRAM-ID. MAIN.\", \"\"]\n        [\"MOVE A TO B.\", \"MAIN-PARA.\"]              -> [\"MOVE A TO B.\", \"MAIN-PARA.\"]\n\n    Args:\n        line_list: Lines of the file, or a run of them, without line breaks. Tab\n            characters are expanded as split_cobol_source() expands them.\n\n    Returns:\n        One string per line: columns 8 to 72 of a fixed-format line (to its end where the\n        file has no right margin: most of its lines whose text runs past column 72 hold\n        code there, not an identification field in columns 73 to 80), the whole of a\n        free-format line, \"\" for a line that holds no code. The source format and the\n        right margin are decided from the lines given.\n    \"\"\"\n    return [text for text, _ in _code_text_list([line.expandtabs(_TAB_SIZE) for line in line_list])]"
+    },
+    {
+      "name": "_literal_end",
+      "type": "function_definition",
+      "start_line": 671,
+      "end_line": 692,
+      "context": "def _literal_end(code_text: str, start: int, quote: str) -> int | None:\n    \"\"\"Return the position after the quote that ends a literal, or None when the line ends first.\n\n    A quote written twice is a quote character of the literal.\n\n    Args:\n        code_text: The code of one line.\n        start: Position of the first character of the literal content.\n        quote: The quote character the literal starts with.\n\n    Returns:\n        Position after the closing quote. None when the literal is not closed on the line.\n    \"\"\"\n    position = start\n    while True:\n        position = code_text.find(quote, position)\n        if position < 0:\n            return None\n        if code_text.startswith(quote, position + 1):\n            position += 2\n            continue\n        return position + 1"
+    },
+    {
+      "name": "_is_picture_position",
+      "type": "function_definition",
+      "start_line": 695,
+      "end_line": 706,
+      "context": "def _is_picture_position(token_list: list[_Token]) -> bool:\n    \"\"\"Return whether the next token is a picture string (after PIC / PICTURE [IS]).\"\"\"\n    if not token_list or token_list[-1].kind != \"word\":\n        return False\n    last_word = token_list[-1].text.upper()\n    if last_word in _PICTURE_WORD_SET:\n        return True\n    return (\n        last_word == \"IS\"\n        and len(token_list) > 1\n        and token_list[-2].text.upper() in _PICTURE_WORD_SET\n    )"
+    },
+    {
+      "name": "_picture_token",
+      "type": "function_definition",
+      "start_line": 709,
+      "end_line": 728,
+      "context": "def _picture_token(code_text: str, position: int, line: int) -> tuple[_Token, int]:\n    \"\"\"Read a picture string and return it with the position after it.\n\n    A period that ends the picture string and the statement is left for the next token.\n    Characters outside ASCII are written as \"9\".\n\n    Args:\n        code_text: The code of one line.\n        position: Position of the first character of the picture string.\n        line: Source line of code_text (1-based).\n\n    Returns:\n        A (token, position after the token) tuple.\n    \"\"\"\n    text = _PICTURE_RE.match(code_text, position).group(0)\n    if len(text) > 1 and text.endswith((\".\", \",\", \";\")):\n        text = text[:-1]\n    end = position + len(text)\n    text = \"\".join(char if char.isascii() else \"9\" for char in text)\n    return _Token(\"picture\", text, line, position), end"
+    },
+    {
+      "name": "_line_token_list",
+      "type": "function_definition",
+      "start_line": 731,
+      "end_line": 785,
+      "context": "def _line_token_list(\n    code_text: str, line: int, is_continuation: bool, open_literal: _Token | None,\n    last_token_list: list[_Token],\n) -> tuple[list[_Token], _Token | None]:\n    \"\"\"Split the code of one line into tokens.\n\n    Args:\n        code_text: The code of the line.\n        line: Source line of code_text (1-based).\n        is_continuation: Whether the line continues the line before it.\n        open_literal: The literal the line before left without a closing quote, or None.\n        last_token_list: The last two tokens before this line (read to find a picture string).\n\n    Returns:\n        A (tokens of the line, literal left without a closing quote or None) tuple.\n        The text of open_literal is extended in place when this line continues it.\n    \"\"\"\n    token_list: list[_Token] = []\n    position = 0\n    has_gap = True\n\n    # The rest of a literal the line before did not close\n    if open_literal is not None:\n        quote = open_literal.text[-1]\n        start = len(code_text) - len(code_text.lstrip())\n        if code_text.startswith(quote, start):\n            start += 1\n        end = _literal_end(code_text, start, quote)\n        if end is None:\n            open_literal.text = open_literal.text[:-1] + code_text[start:].rstrip() + quote\n            return token_list, open_literal\n        open_literal.text = open_literal.text[:-1] + code_text[start:end]\n        position = end\n        has_gap = False\n\n    is_glue = is_continuation and open_literal is None\n    while position < len(code_text):\n        space_match = _SPACE_RE.match(code_text, position)\n        if space_match:\n            position = space_match.end()\n            has_gap = True\n            continue\n        if code_text.startswith(\"*>\", position):\n            break\n\n        token, position, open_literal = _next_token(\n            code_text, position, line, (last_token_list + token_list)[-2:],\n        )\n        token.has_gap = has_gap\n        token.is_glue = is_glue\n        token_list.append(token)\n        has_gap, is_glue = False, False\n        if open_literal is not None:\n            return token_list, open_literal\n    return token_list, None"
+    },
+    {
+      "name": "_next_token",
+      "type": "function_definition",
+      "start_line": 788,
+      "end_line": 835,
+      "context": "def _next_token(\n    code_text: str, position: int, line: int, last_token_list: list[_Token],\n) -> tuple[_Token, int, _Token | None]:\n    \"\"\"Read the token that starts at a position of the code of one line.\n\n    Args:\n        code_text: The code of the line.\n        position: Position of the first character of the token.\n        line: Source line of code_text (1-based).\n        last_token_list: The last two tokens before the position.\n\n    Returns:\n        A (token, position after the token, the token when it is a literal without a\n        closing quote or None) tuple. A literal without a closing quote is closed in\n        the token text, the letters before the quote of a literal are written in upper\n        case, and \"<>\" is written as \"NOT =\".\n    \"\"\"\n    if _is_picture_position(last_token_list):\n        token, end = _picture_token(code_text, position, line)\n        return token, end, None\n\n    literal_match = _LITERAL_START_RE.match(code_text, position)\n    if literal_match:\n        quote = literal_match.group(0)[-1]\n        prefix = literal_match.group(0)[:-1].upper()\n        end = _literal_end(code_text, literal_match.end(), quote)\n        if end is None:\n            text = prefix + code_text[literal_match.end() - 1:].rstrip() + quote\n            token = _Token(\"literal\", text, line, position)\n            return token, len(code_text), token\n        text = prefix + code_text[literal_match.end() - 1:end]\n        return _Token(\"literal\", text, line, position), end, None\n\n    if code_text.startswith(\"<>\", position):\n        return _Token(\"other\", \"NOT =\", line, position), position + 2, None\n\n    pseudo_match = _PSEUDO_TEXT_RE.match(code_text, position)\n    if pseudo_match:\n        return _Token(\"pseudo\", pseudo_match.group(0), line, position), pseudo_match.end(), None\n\n    word_match = _WORD_RE.match(code_text, position)\n    if word_match:\n        return _Token(\"word\", word_match.group(0), line, position), word_match.end(), None\n\n    char = code_text[position]\n    next_char = code_text[position + 1:position + 2]\n    kind = \"period\" if char == \".\" and (not next_char or next_char.isspace()) else \"other\"\n    return _Token(kind, char, line, position), position + 1, None"
+    },
+    {
+      "name": "_source_token_list",
+      "type": "function_definition",
+      "start_line": 838,
+      "end_line": 867,
+      "context": "def _source_token_list(line_list: list[str]) -> list[_Token]:\n    \"\"\"Split the code of a COBOL source file into tokens.\n\n    A literal continued on the next line is one token on the line it starts on. A word\n    continued on the next line is one token as well.\n\n    Args:\n        line_list: The lines of the file without tab characters.\n\n    Returns:\n        The tokens in source order, each with its index as its position.\n    \"\"\"\n    token_list: list[_Token] = []\n    open_literal: _Token | None = None\n    for index, (code_text, is_continuation) in enumerate(_code_text_list(line_list)):\n        if not code_text.strip():\n            continue\n        if not is_continuation:\n            open_literal = None\n        line_token_list, open_literal = _line_token_list(\n            code_text, index + 1, is_continuation, open_literal, token_list[-2:],\n        )\n        for token in line_token_list:\n            if token.is_glue and token_list and token.kind == token_list[-1].kind == \"word\":\n                token_list[-1].text += token.text\n            else:\n                token_list.append(token)\n    for position, token in enumerate(token_list):\n        token.position = position\n    return token_list"
+    },
+    {
+      "name": "_word",
+      "type": "function_definition",
+      "start_line": 870,
+      "end_line": 874,
+      "context": "def _word(token_list: list[_Token], index: int) -> str:\n    \"\"\"Return the upper-case text of the word at an index, or \"\" when it is not a word.\"\"\"\n    if 0 <= index < len(token_list) and token_list[index].kind == \"word\":\n        return token_list[index].text.upper()\n    return \"\""
+    },
+    {
+      "name": "_statement_end",
+      "type": "function_definition",
+      "start_line": 877,
+      "end_line": 882,
+      "context": "def _statement_end(token_list: list[_Token], start: int) -> int:\n    \"\"\"Return the index of the period that ends the statement, or the token count without one.\"\"\"\n    for index in range(start, len(token_list)):\n        if token_list[index].kind == \"period\":\n            return index\n    return len(token_list)"
+    },
+    {
+      "name": "_exec_end",
+      "type": "function_definition",
+      "start_line": 885,
+      "end_line": 895,
+      "context": "def _exec_end(token_list: list[_Token], index: int) -> int | None:\n    \"\"\"Return the index of the END-EXEC of the EXEC block at an index, or None without one.\n\n    Args:\n        token_list: The tokens of the file.\n        index: Index of the word EXEC; the word after it names the kind of the block.\n    \"\"\"\n    for end in range(index + 2, len(token_list)):\n        if _word(token_list, end) == \"END-EXEC\":\n            return end\n    return None"
+    },
+    {
+      "name": "_replacing_list",
+      "type": "function_definition",
+      "start_line": 898,
+      "end_line": 928,
+      "context": "def _replacing_list(token_list: list[_Token]) -> list[tuple[str, str, str]]:\n    \"\"\"Read the operands of a REPLACING phrase whose texts are one word each.\n\n    Examples:\n        ==:PFX:== BY ==WS==             -> [(\"\", \":PFX:\", \"WS\")]\n        OLD-NAME BY NEW-NAME            -> [(\"\", \"OLD-NAME\", \"NEW-NAME\")]\n        LEADING ==IN== BY ==OUT==       -> [(\"LEADING\", \"IN\", \"OUT\")]\n\n    Args:\n        token_list: The tokens after the word REPLACING up to the end of the statement.\n\n    Returns:\n        (position, replaced text, replacement text) tuples; position is \"\" / \"LEADING\" /\n        \"TRAILING\". An operand whose text is not one word is left out.\n    \"\"\"\n    def operand_text(token: _Token) -> str:\n        \"\"\"Return the text of one operand without its pseudo-text delimiters.\"\"\"\n        return token.text[2:-2].strip() if token.kind == \"pseudo\" else token.text\n\n    replacing_list: list[tuple[str, str, str]] = []\n    for index in range(1, len(token_list) - 1):\n        if _word(token_list, index) != \"BY\":\n            continue\n        position = _word(token_list, index - 2)\n        if position not in (\"LEADING\", \"TRAILING\"):\n            position = \"\"\n        old_text = operand_text(token_list[index - 1])\n        new_text = operand_text(token_list[index + 1])\n        if old_text and new_text and not _SPACE_RE.search(old_text + new_text):\n            replacing_list.append((position, old_text, new_text))\n    return replacing_list"
+    },
+    {
+      "name": "literal_value",
+      "type": "function_definition",
+      "start_line": 931,
+      "end_line": 941,
+      "context": "def literal_value(text: str) -> str:\n    \"\"\"Return the content of a literal, or the text itself when it is not one.\n\n    Examples:\n        '\"TAXCALC\"'  -> \"TAXCALC\"\n        \"X'0A'\"      -> \"0A\"\n        \"TAXCALC\"    -> \"TAXCALC\"\n    \"\"\"\n    if len(text) >= 2 and text[-1] in \"\\\"'\" and text[-1] in text[:-1]:\n        return text[text.index(text[-1]) + 1:-1].strip()\n    return text"
+    },
+    {
+      "name": "qualifier_tuple",
+      "type": "function_definition",
+      "start_line": 944,
+      "end_line": 969,
+      "context": "def qualifier_tuple(word_list: list[str], index: int) -> tuple[str, ...]:\n    \"\"\"Return the names that qualify the word at an index (X OF Y IN Z).\n\n    Examples (words, index):\n        ([\"MOVE\", \"CODE-X\", \"OF\", \"REC-A\", \"IN\", \"FILE-B\"], 1) -> (\"REC-A\", \"FILE-B\")\n        ([\"MOVE\", \"CODE-X\", \"OF\", \"REC-A\", \"IN\", \"FILE-B\"], 3) -> (\"FILE-B\",)\n        ([\"MOVE\", \"CODE-X\", \"TO\", \"OUT-X\"], 1)                  -> ()\n\n    Args:\n        word_list: The tokens of a statement in source order: the text of a word, \"\"\n            for a token that is not a word.\n        index: Index of the word.\n\n    Returns:\n        The words after each OF / IN that follows the word, in order.\n    \"\"\"\n    qualifier_list: list[str] = []\n    position = index\n    while (\n        position + 2 < len(word_list)\n        and word_list[position + 1].upper() in _QUALIFIER_WORD_SET\n        and word_list[position + 2]\n    ):\n        qualifier_list.append(word_list[position + 2])\n        position += 2\n    return tuple(qualifier_list)"
+    },
+    {
+      "name": "_host_structure_name",
+      "type": "function_definition",
+      "start_line": 972,
+      "end_line": 995,
+      "context": "def _host_structure_name(token_list: list[_Token], index: int) -> str:\n    \"\"\"Return the host structure that qualifies a word of an EXEC block (:STRUCT.NAME).\n\n    Examples (tokens, the index of NAME):\n        : DCL-CUST . CUST-ID  -> \"DCL-CUST\"\n        : CUST-ID             -> \"\"\n\n    Args:\n        token_list: The tokens of an EXEC block.\n        index: Index of a word token.\n\n    Returns:\n        The structure name. \"\" when the word is not written as :STRUCT.NAME.\n    \"\"\"\n    if index < 3:\n        return \"\"\n    colon_token, structure_token, dot_token = token_list[index - 3:index]\n    is_host_structure = (\n        colon_token.text == \":\"\n        and structure_token.kind == \"word\"\n        and dot_token.text == \".\"\n        and not (structure_token.has_gap or dot_token.has_gap or token_list[index].has_gap)\n    )\n    return structure_token.text if is_host_structure else \"\""
+    },
+    {
+      "name": "_is_level_number",
+      "type": "function_definition",
+      "start_line": 998,
+      "end_line": 1000,
+      "context": "def _is_level_number(word: str) -> bool:\n    \"\"\"Return whether a word is a level number (decimal digits only).\"\"\"\n    return word.isdecimal()"
+    },
+    {
+      "name": "_is_division_header",
+      "type": "function_definition",
+      "start_line": 1003,
+      "end_line": 1008,
+      "context": "def _is_division_header(token_list: list[_Token], index: int) -> bool:\n    \"\"\"Return whether the tokens at an index are the first two words of a division header.\"\"\"\n    if _word(token_list, index + 1) != \"DIVISION\":\n        return False\n    word = _word(token_list, index)\n    return word in _IDENTIFICATION_WORD_SET or word in _DIVISION_WORD_SET"
+    },
+    {
+      "name": "_first_statement_start",
+      "type": "function_definition",
+      "start_line": 1011,
+      "end_line": 1032,
+      "context": "def _first_statement_start(token_list: list[_Token]) -> int:\n    \"\"\"Return the index of the first token that is in no EXEC block and no COPY statement.\n\n    Args:\n        token_list: The tokens of the file.\n\n    Returns:\n        The index; the number of tokens when every token is in one of them.\n    \"\"\"\n    index = 0\n    while index < len(token_list):\n        word = _word(token_list, index)\n        exec_end = _exec_end(token_list, index) if word == \"EXEC\" else None\n        if word == \"COPY\":\n            index = _statement_end(token_list, index) + 1\n        elif exec_end is not None:\n            index = exec_end + 1\n        elif token_list[index].kind == \"period\":\n            index += 1\n        else:\n            break\n    return min(index, len(token_list))"
+    },
+    {
+      "name": "_start_division",
+      "type": "function_definition",
+      "start_line": 1035,
+      "end_line": 1066,
+      "context": "def _start_division(token_list: list[_Token]) -> str:\n    \"\"\"Return the division the first statement of a file belongs to.\n\n    The statement is the first one after the EXEC blocks and COPY statements the\n    file starts with.\n\n    Examples (first tokens of the file):\n        IDENTIFICATION DIVISION.    -> \"IDENTIFICATION\"\n        PROGRAM-ID. SUB1.           -> \"IDENTIFICATION\"\n        01 CUST-RECORD.             -> \"DATA\"\n        FD CUST-FILE.               -> \"DATA\"\n        LINKAGE SECTION.            -> \"DATA\"\n        SELECT CUST-FILE ASSIGN ... -> \"ENVIRONMENT\"\n        READ-PARA.                  -> \"PROCEDURE\"\n\n    Args:\n        token_list: The tokens of the file.\n\n    Returns:\n        One of the division names of this module.\n    \"\"\"\n    start = _first_statement_start(token_list)\n    first_word, second_word = _word(token_list, start), _word(token_list, start + 1)\n    if first_word == \"PROGRAM-ID\" or _is_division_header(token_list, start):\n        return IDENTIFICATION_DIVISION\n    if _is_level_number(first_word) or first_word in _FILE_ENTRY_WORD_SET:\n        return DATA_DIVISION\n    if first_word in _DATA_SECTION_WORD_SET and second_word == \"SECTION\":\n        return DATA_DIVISION\n    if first_word == \"SELECT\":\n        return ENVIRONMENT_DIVISION\n    return PROCEDURE_DIVISION"
+    },
+    {
+      "name": "_call_name_token",
+      "type": "function_definition",
+      "start_line": 1069,
+      "end_line": 1096,
+      "context": "def _call_name_token(token_list: list[_Token], index: int) -> _Token | None:\n    \"\"\"Return the token that names the program of a CALL or ENTRY at an index.\n\n    Examples (tokens from the index):\n        CALL \"SUB1\" USING A        -> \"SUB1\"\n        CALL WS-PGM USING A        -> WS-PGM\n        CALL STATIC \"cJSON_Parse\"  -> \"cJSON_Parse\"\n        ENTRY \"ALT1\" USING A       -> \"ALT1\"\n\n    Args:\n        token_list: The tokens of a sentence.\n        index: Index of a token of the sentence.\n\n    Returns:\n        The word or literal after CALL / ENTRY; for CALL, the literal after the word\n        of a call convention. None when the token at the index is not CALL or ENTRY,\n        or no word or literal follows it.\n    \"\"\"\n    word = _word(token_list, index)\n    if word not in (\"CALL\", \"ENTRY\") or index + 1 >= len(token_list):\n        return None\n    name_token = token_list[index + 1]\n    if name_token.kind not in (\"word\", \"literal\"):\n        return None\n    after_token = token_list[index + 2] if index + 2 < len(token_list) else None\n    if word == \"CALL\" and name_token.kind == \"word\" and after_token and after_token.kind == \"literal\":\n        return after_token\n    return name_token"
+    },
+    {
+      "name": "_Split",
+      "type": "class_definition",
+      "start_line": 1099,
+      "end_line": 1387,
+      "context": "class _Split:\n    \"\"\"Split of the tokens of one file into the statements of the units.\n\n    What is read without the grammar (programs, COPY, CALL, EXEC, ENTRY) is recorded\n    in cobol_text.\n    \"\"\"\n\n    def __init__(self, token_list: list[_Token], cobol_text: CobolText) -> None:\n        \"\"\"\n        Args:\n            token_list: The tokens of the file in source order.\n            cobol_text: Record of what is read without the grammar.\n        \"\"\"\n        self.token_list = token_list\n        self.cobol_text = cobol_text\n        self.division = _start_division(token_list)\n        # Word before SECTION in the last section header of the data division\n        self.section = \"\"\n        # Line of the header of an identification division that has no PROGRAM-ID yet\n        self.program_start_line = 0\n        # Whether no identification division header and no PROGRAM-ID has been read\n        self.is_prologue = True\n        # (unit kind, tokens of the statement) of each unit\n        self.unit_token_list: list[tuple[str, list[_Token]]] = []\n\n    def run(self) -> list[tuple[str, list[_Token]]]:\n        \"\"\"Read every statement and return the (unit kind, tokens) of each unit.\"\"\"\n        index = 0\n        while index < len(self.token_list):\n            statement_token_list, index = self._statement(index)\n            if any(token.kind != \"period\" for token in statement_token_list):\n                unit_count = len(self.unit_token_list)\n                index = self._read_statement(statement_token_list, index)\n                if len(self.unit_token_list) == unit_count:\n                    self.cobol_text.other_statement_position_list.append(\n                        statement_token_list[0].position\n                    )\n        return self.unit_token_list\n\n    def _record_word_list(self, token_list: list[_Token]) -> None:\n        \"\"\"Record the words of tokens that are in no unit, with the names that qualify them.\"\"\"\n        text_list = [token.text if token.kind == \"word\" else \"\" for token in token_list]\n        for index, token in enumerate(token_list):\n            if token.kind == \"word\":\n                self.cobol_text.word_list.append(\n                    (token.text, token.line, qualifier_tuple(text_list, index))\n                )\n\n    def _statement(self, index: int) -> tuple[list[_Token], int]:\n        \"\"\"Collect the tokens of the statement that starts at an index.\n\n        The statement ends with its period, or before PROGRAM-ID, END PROGRAM or a\n        division header.\n        COPY statements and EXEC blocks inside it are read and left out, except in an\n        identification division; EJECT, SKIP1 to SKIP3 and TITLE at its start are left out.\n\n        Args:\n            index: Index of the first token of the statement.\n\n        Returns:\n            A (tokens of the statement, index after the statement) tuple.\n        \"\"\"\n        token_list = self.token_list\n        statement_token_list: list[_Token] = []\n        while index < len(token_list):\n            word, next_word = _word(token_list, index), _word(token_list, index + 1)\n            is_code = self.division != IDENTIFICATION_DIVISION or self.is_prologue\n            if statement_token_list and (\n                _is_division_header(token_list, index)\n                or word == \"PROGRAM-ID\"\n                or (word == \"END\" and next_word == \"PROGRAM\")\n            ):\n                break\n            exec_end = _exec_end(token_list, index) if word == \"EXEC\" and next_word else None\n            if word == \"COPY\" and is_code:\n                index = self._read_copy(index)\n            elif exec_end is not None and is_code:\n                index = self._read_exec(index, exec_end, statement_token_list)\n            elif not statement_token_list and word in _NO_CODE_WORD_SET:\n                index += 1\n            elif not statement_token_list and word == \"TITLE\" and is_code:\n                index += 2\n            else:\n                statement_token_list.append(token_list[index])\n                index += 1\n                if statement_token_list[-1].kind == \"period\":\n                    break\n        return statement_token_list, index\n\n    def _read_statement(self, statement_token_list: list[_Token], index: int) -> int:\n        \"\"\"Read one statement into a unit or into cobol_text.\n\n        Args:\n            statement_token_list: The tokens of the statement.\n            index: Index of the token after the statement.\n\n        Returns:\n            Index of the next token to read.\n        \"\"\"\n        first_word = _word(statement_token_list, 0)\n        second_word = _word(statement_token_list, 1)\n        line = statement_token_list[0].line\n\n        if _is_division_header(statement_token_list, 0):\n            if first_word in _IDENTIFICATION_WORD_SET:\n                self.division = IDENTIFICATION_DIVISION\n                self.program_start_line = line\n                self.is_prologue = False\n            else:\n                self.division = first_word\n                self._record_word_list(statement_token_list[2:])\n            self.section = \"\"\n            return index\n        if first_word == \"PROGRAM-ID\":\n            return self._read_program(statement_token_list, index)\n        if first_word == \"END\" and second_word == \"PROGRAM\":\n            if len(statement_token_list) > 2:\n                name = literal_value(statement_token_list[2].text)\n                self.cobol_text.program_end_list.append((name, line))\n            return index\n        if first_word == \"REPLACE\":\n            return index\n\n        if self.division == ENVIRONMENT_DIVISION:\n            self._read_environment(statement_token_list)\n        elif self.division == DATA_DIVISION:\n            self._read_data(statement_token_list)\n        elif self.division == PROCEDURE_DIVISION:\n            self._read_procedure(statement_token_list)\n        return index\n\n    def _read_program(self, statement_token_list: list[_Token], index: int) -> int:\n        \"\"\"Record the program a PROGRAM-ID paragraph names and return the index after it.\"\"\"\n        line = statement_token_list[0].line\n        name_token_list = statement_token_list[1:]\n        if all(token.kind == \"period\" for token in name_token_list):\n            name_token_list, index = self._statement(index)\n        name_token = next(\n            (token for token in name_token_list if token.kind in (\"word\", \"literal\")), None,\n        )\n        if name_token is not None:\n            self.cobol_text.program_list.append(\n                (literal_value(name_token.text), self.program_start_line or line, name_token.line)\n            )\n        self.program_start_line = 0\n        self.is_prologue = False\n        self.division = IDENTIFICATION_DIVISION\n        return index\n\n    def _read_environment(self, statement_token_list: list[_Token]) -> None:\n        \"\"\"Read a statement of the environment division: a SELECT entry is a unit.\"\"\"\n        if _word(statement_token_list, 0) == \"SELECT\":\n            self.unit_token_list.append((SELECT_UNIT, statement_token_list))\n        else:\n            self._record_word_list(statement_token_list)\n\n    def _read_data(self, statement_token_list: list[_Token]) -> None:\n        \"\"\"Read a statement of the data division.\n\n        A data item and the description of a file are units. The statements of the\n        SCREEN and REPORT sections are in no unit.\n        \"\"\"\n        first_word = _word(statement_token_list, 0)\n        if first_word in _DATA_SECTION_WORD_SET and _word(statement_token_list, 1) == \"SECTION\":\n            self.section = first_word\n        elif self.section in _NO_UNIT_SECTION_WORD_SET:\n            self._record_word_list(statement_token_list)\n        elif _is_level_number(first_word):\n            self.unit_token_list.append((ITEM_UNIT, statement_token_list))\n        elif first_word in _FILE_ENTRY_WORD_SET:\n            self.unit_token_list.append((FILE_UNIT, statement_token_list))\n        else:\n            self._record_word_list(statement_token_list)\n\n    def _read_procedure(self, statement_token_list: list[_Token]) -> None:\n        \"\"\"Read a sentence of the procedure division.\n\n        DECLARATIVES. / END DECLARATIVES.   -> nothing\n        any other                           -> a unit\n        Each CALL of the sentence is recorded in cobol_text.call_list and each ENTRY in\n        cobol_text.entry_list; ENTRY is written as CALL in the unit.\n        \"\"\"\n        if \"DECLARATIVES\" in (_word(statement_token_list, 0), _word(statement_token_list, 1)):\n            return\n\n        unit_token_list = list(statement_token_list)\n        for index, token in enumerate(statement_token_list):\n            word = _word(statement_token_list, index)\n            name_token = _call_name_token(statement_token_list, index)\n            if name_token is None:\n                continue\n            if word == \"CALL\":\n                self.cobol_text.call_list.append(\n                    (literal_value(name_token.text), name_token.kind == \"literal\", token.line)\n                )\n            elif word == \"ENTRY\":\n                self.cobol_text.entry_list.append((literal_value(name_token.text), token.line))\n                unit_token_list[index] = _Token(\n                    \"word\", \"CALL\", token.line, token.column, token.has_gap,\n                    position=token.position,\n                )\n        self.unit_token_list.append((PROCEDURE_UNIT, unit_token_list))\n\n    def _read_exec(self, index: int, end: int, statement_token_list: list[_Token]) -> int:\n        \"\"\"Read an EXEC ... END-EXEC block and return the index after it.\n\n        EXEC SQL INCLUDE name         -> recorded in cobol_text.copy_list\n        EXEC CICS ... PROGRAM(name)   -> recorded in cobol_text.call_list\n        The words of the block are recorded in cobol_text.word_list, a word with \":\"\n        as the words between them; a host variable written :STRUCT.NAME is qualified by\n        STRUCT. Of an EXEC SQL block only the host variables (the words after a \":\")\n        are recorded. In a procedure division CONTINUE is added to the statement in\n        place of the block.\n\n        Args:\n            index: Index of the word EXEC.\n            end: Index of the END-EXEC of the block.\n            statement_token_list: The tokens of the statement the block is in.\n        \"\"\"\n        token_list = self.token_list\n        block_token_list = token_list[index + 2:end]\n        line = token_list[index].line\n        kind = _word(token_list, index + 1)\n        for position, token in enumerate(block_token_list):\n            if token.kind != \"word\":\n                continue\n            structure_name = _host_structure_name(block_token_list, position)\n            qualifier = (structure_name,) if structure_name else ()\n            word_list = token.text.split(\":\")\n            is_after_colon = position > 0 and block_token_list[position - 1].text == \":\"\n            if kind == \"SQL\" and not (is_after_colon or structure_name):\n                # Only the part of the word written after a \":\" is a host variable\n                word_list = word_list[1:]\n            self.cobol_text.word_list.extend(\n                (word, token.line, qualifier) for word in word_list if word\n            )\n\n        if kind == \"SQL\" and _word(block_token_list, 0) == \"INCLUDE\" and len(block_token_list) > 1:\n            name_token = block_token_list[1]\n            if name_token.kind in (\"word\", \"literal\"):\n                self.cobol_text.copy_list.append(CobolCopy(\n                    literal_value(name_token.text), line, token_list[end].line,\n                    token_list[index].position,\n                ))\n        elif kind == \"CICS\":\n            for position in range(len(block_token_list) - 2):\n                name_token = block_token_list[position + 2]\n                if (\n                    _word(block_token_list, position) == \"PROGRAM\"\n                    and block_token_list[position + 1].text == \"(\"\n                    and name_token.kind in (\"word\", \"literal\")\n                ):\n                    self.cobol_text.call_list.append(\n                        (literal_value(name_token.text), name_token.kind == \"literal\", line)\n                    )\n\n        if self.division == PROCEDURE_DIVISION:\n            statement_token_list.append(_Token(\n                \"word\", \"CONTINUE\", line, token_list[index].column,\n                position=token_list[index].position,\n            ))\n        return end + 1\n\n    def _read_copy(self, index: int) -> int:\n        \"\"\"Record a COPY statement in cobol_text.copy_list and return the index after it.\"\"\"\n        token_list = self.token_list\n        end = _statement_end(token_list, index)\n        operand_token_list = token_list[index + 1:end]\n        if not operand_token_list or operand_token_list[0].kind not in (\"word\", \"literal\"):\n            return index + 1\n\n        library = \"\"\n        phrase_start = len(operand_token_list)\n        for position in range(1, len(operand_token_list)):\n            word = _word(operand_token_list, position)\n            if word in (\"OF\", \"IN\") and position == 1 and len(operand_token_list) > 2:\n                library = literal_value(operand_token_list[2].text)\n            elif word in (\"REPLACING\", \"SUPPRESS\"):\n                phrase_start = position\n                break\n        self.cobol_text.copy_list.append(CobolCopy(\n            name=literal_value(operand_token_list[0].text),\n            line=token_list[index].line,\n            end_line=token_list[min(end, len(token_list) - 1)].line,\n            position=token_list[index].position,\n            library=library,\n            replacing_list=_replacing_list(operand_token_list[phrase_start:]),\n        ))\n        return min(end + 1, len(token_list))"
+    },
+    {
+      "name": "__init__",
+      "type": "function_definition",
+      "start_line": 1106,
+      "end_line": 1122,
+      "context": "    def __init__(self, token_list: list[_Token], cobol_text: CobolText) -> None:\n        \"\"\"\n        Args:\n            token_list: The tokens of the file in source order.\n            cobol_text: Record of what is read without the grammar.\n        \"\"\"\n        self.token_list = token_list\n        self.cobol_text = cobol_text\n        self.division = _start_division(token_list)\n        # Word before SECTION in the last section header of the data division\n        self.section = \"\"\n        # Line of the header of an identification division that has no PROGRAM-ID yet\n        self.program_start_line = 0\n        # Whether no identification division header and no PROGRAM-ID has been read\n        self.is_prologue = True\n        # (unit kind, tokens of the statement) of each unit\n        self.unit_token_list: list[tuple[str, list[_Token]]] = []"
+    },
+    {
+      "name": "run",
+      "type": "function_definition",
+      "start_line": 1124,
+      "end_line": 1136,
+      "context": "    def run(self) -> list[tuple[str, list[_Token]]]:\n        \"\"\"Read every statement and return the (unit kind, tokens) of each unit.\"\"\"\n        index = 0\n        while index < len(self.token_list):\n            statement_token_list, index = self._statement(index)\n            if any(token.kind != \"period\" for token in statement_token_list):\n                unit_count = len(self.unit_token_list)\n                index = self._read_statement(statement_token_list, index)\n                if len(self.unit_token_list) == unit_count:\n                    self.cobol_text.other_statement_position_list.append(\n                        statement_token_list[0].position\n                    )\n        return self.unit_token_list"
+    },
+    {
+      "name": "_record_word_list",
+      "type": "function_definition",
+      "start_line": 1138,
+      "end_line": 1145,
+      "context": "    def _record_word_list(self, token_list: list[_Token]) -> None:\n        \"\"\"Record the words of tokens that are in no unit, with the names that qualify them.\"\"\"\n        text_list = [token.text if token.kind == \"word\" else \"\" for token in token_list]\n        for index, token in enumerate(token_list):\n            if token.kind == \"word\":\n                self.cobol_text.word_list.append(\n                    (token.text, token.line, qualifier_tuple(text_list, index))\n                )"
+    },
+    {
+      "name": "_statement",
+      "type": "function_definition",
+      "start_line": 1147,
+      "end_line": 1186,
+      "context": "    def _statement(self, index: int) -> tuple[list[_Token], int]:\n        \"\"\"Collect the tokens of the statement that starts at an index.\n\n        The statement ends with its period, or before PROGRAM-ID, END PROGRAM or a\n        division header.\n        COPY statements and EXEC blocks inside it are read and left out, except in an\n        identification division; EJECT, SKIP1 to SKIP3 and TITLE at its start are left out.\n\n        Args:\n            index: Index of the first token of the statement.\n\n        Returns:\n            A (tokens of the statement, index after the statement) tuple.\n        \"\"\"\n        token_list = self.token_list\n        statement_token_list: list[_Token] = []\n        while index < len(token_list):\n            word, next_word = _word(token_list, index), _word(token_list, index + 1)\n            is_code = self.division != IDENTIFICATION_DIVISION or self.is_prologue\n            if statement_token_list and (\n                _is_division_header(token_list, index)\n                or word == \"PROGRAM-ID\"\n                or (word == \"END\" and next_word == \"PROGRAM\")\n            ):\n                break\n            exec_end = _exec_end(token_list, index) if word == \"EXEC\" and next_word else None\n            if word == \"COPY\" and is_code:\n                index = self._read_copy(index)\n            elif exec_end is not None and is_code:\n                index = self._read_exec(index, exec_end, statement_token_list)\n            elif not statement_token_list and word in _NO_CODE_WORD_SET:\n                index += 1\n            elif not statement_token_list and word == \"TITLE\" and is_code:\n                index += 2\n            else:\n                statement_token_list.append(token_list[index])\n                index += 1\n                if statement_token_list[-1].kind == \"period\":\n                    break\n        return statement_token_list, index"
+    },
+    {
+      "name": "_read_statement",
+      "type": "function_definition",
+      "start_line": 1188,
+      "end_line": 1228,
+      "context": "    def _read_statement(self, statement_token_list: list[_Token], index: int) -> int:\n        \"\"\"Read one statement into a unit or into cobol_text.\n\n        Args:\n            statement_token_list: The tokens of the statement.\n            index: Index of the token after the statement.\n\n        Returns:\n            Index of the next token to read.\n        \"\"\"\n        first_word = _word(statement_token_list, 0)\n        second_word = _word(statement_token_list, 1)\n        line = statement_token_list[0].line\n\n        if _is_division_header(statement_token_list, 0):\n            if first_word in _IDENTIFICATION_WORD_SET:\n                self.division = IDENTIFICATION_DIVISION\n                self.program_start_line = line\n                self.is_prologue = False\n            else:\n                self.division = first_word\n                self._record_word_list(statement_token_list[2:])\n            self.section = \"\"\n            return index\n        if first_word == \"PROGRAM-ID\":\n            return self._read_program(statement_token_list, index)\n        if first_word == \"END\" and second_word == \"PROGRAM\":\n            if len(statement_token_list) > 2:\n                name = literal_value(statement_token_list[2].text)\n                self.cobol_text.program_end_list.append((name, line))\n            return index\n        if first_word == \"REPLACE\":\n            return index\n\n        if self.division == ENVIRONMENT_DIVISION:\n            self._read_environment(statement_token_list)\n        elif self.division == DATA_DIVISION:\n            self._read_data(statement_token_list)\n        elif self.division == PROCEDURE_DIVISION:\n            self._read_procedure(statement_token_list)\n        return index"
+    },
+    {
+      "name": "_read_program",
+      "type": "function_definition",
+      "start_line": 1230,
+      "end_line": 1246,
+      "context": "    def _read_program(self, statement_token_list: list[_Token], index: int) -> int:\n        \"\"\"Record the program a PROGRAM-ID paragraph names and return the index after it.\"\"\"\n        line = statement_token_list[0].line\n        name_token_list = statement_token_list[1:]\n        if all(token.kind == \"period\" for token in name_token_list):\n            name_token_list, index = self._statement(index)\n        name_token = next(\n            (token for token in name_token_list if token.kind in (\"word\", \"literal\")), None,\n        )\n        if name_token is not None:\n            self.cobol_text.program_list.append(\n                (literal_value(name_token.text), self.program_start_line or line, name_token.line)\n            )\n        self.program_start_line = 0\n        self.is_prologue = False\n        self.division = IDENTIFICATION_DIVISION\n        return index"
+    },
+    {
+      "name": "_read_environment",
+      "type": "function_definition",
+      "start_line": 1248,
+      "end_line": 1253,
+      "context": "    def _read_environment(self, statement_token_list: list[_Token]) -> None:\n        \"\"\"Read a statement of the environment division: a SELECT entry is a unit.\"\"\"\n        if _word(statement_token_list, 0) == \"SELECT\":\n            self.unit_token_list.append((SELECT_UNIT, statement_token_list))\n        else:\n            self._record_word_list(statement_token_list)"
+    },
+    {
+      "name": "_read_data",
+      "type": "function_definition",
+      "start_line": 1255,
+      "end_line": 1271,
+      "context": "    def _read_data(self, statement_token_list: list[_Token]) -> None:\n        \"\"\"Read a statement of the data division.\n\n        A data item and the description of a file are units. The statements of the\n        SCREEN and REPORT sections are in no unit.\n        \"\"\"\n        first_word = _word(statement_token_list, 0)\n        if first_word in _DATA_SECTION_WORD_SET and _word(statement_token_list, 1) == \"SECTION\":\n            self.section = first_word\n        elif self.section in _NO_UNIT_SECTION_WORD_SET:\n            self._record_word_list(statement_token_list)\n        elif _is_level_number(first_word):\n            self.unit_token_list.append((ITEM_UNIT, statement_token_list))\n        elif first_word in _FILE_ENTRY_WORD_SET:\n            self.unit_token_list.append((FILE_UNIT, statement_token_list))\n        else:\n            self._record_word_list(statement_token_list)"
+    },
+    {
+      "name": "_read_procedure",
+      "type": "function_definition",
+      "start_line": 1273,
+      "end_line": 1300,
+      "context": "    def _read_procedure(self, statement_token_list: list[_Token]) -> None:\n        \"\"\"Read a sentence of the procedure division.\n\n        DECLARATIVES. / END DECLARATIVES.   -> nothing\n        any other                           -> a unit\n        Each CALL of the sentence is recorded in cobol_text.call_list and each ENTRY in\n        cobol_text.entry_list; ENTRY is written as CALL in the unit.\n        \"\"\"\n        if \"DECLARATIVES\" in (_word(statement_token_list, 0), _word(statement_token_list, 1)):\n            return\n\n        unit_token_list = list(statement_token_list)\n        for index, token in enumerate(statement_token_list):\n            word = _word(statement_token_list, index)\n            name_token = _call_name_token(statement_token_list, index)\n            if name_token is None:\n                continue\n            if word == \"CALL\":\n                self.cobol_text.call_list.append(\n                    (literal_value(name_token.text), name_token.kind == \"literal\", token.line)\n                )\n            elif word == \"ENTRY\":\n                self.cobol_text.entry_list.append((literal_value(name_token.text), token.line))\n                unit_token_list[index] = _Token(\n                    \"word\", \"CALL\", token.line, token.column, token.has_gap,\n                    position=token.position,\n                )\n        self.unit_token_list.append((PROCEDURE_UNIT, unit_token_list))"
+    },
+    {
+      "name": "_read_exec",
+      "type": "function_definition",
+      "start_line": 1302,
+      "end_line": 1360,
+      "context": "    def _read_exec(self, index: int, end: int, statement_token_list: list[_Token]) -> int:\n        \"\"\"Read an EXEC ... END-EXEC block and return the index after it.\n\n        EXEC SQL INCLUDE name         -> recorded in cobol_text.copy_list\n        EXEC CICS ... PROGRAM(name)   -> recorded in cobol_text.call_list\n        The words of the block are recorded in cobol_text.word_list, a word with \":\"\n        as the words between them; a host variable written :STRUCT.NAME is qualified by\n        STRUCT. Of an EXEC SQL block only the host variables (the words after a \":\")\n        are recorded. In a procedure division CONTINUE is added to the statement in\n        place of the block.\n\n        Args:\n            index: Index of the word EXEC.\n            end: Index of the END-EXEC of the block.\n            statement_token_list: The tokens of the statement the block is in.\n        \"\"\"\n        token_list = self.token_list\n        block_token_list = token_list[index + 2:end]\n        line = token_list[index].line\n        kind = _word(token_list, index + 1)\n        for position, token in enumerate(block_token_list):\n            if token.kind != \"word\":\n                continue\n            structure_name = _host_structure_name(block_token_list, position)\n            qualifier = (structure_name,) if structure_name else ()\n            word_list = token.text.split(\":\")\n            is_after_colon = position > 0 and block_token_list[position - 1].text == \":\"\n            if kind == \"SQL\" and not (is_after_colon or structure_name):\n                # Only the part of the word written after a \":\" is a host variable\n                word_list = word_list[1:]\n            self.cobol_text.word_list.extend(\n                (word, token.line, qualifier) for word in word_list if word\n            )\n\n        if kind == \"SQL\" and _word(block_token_list, 0) == \"INCLUDE\" and len(block_token_list) > 1:\n            name_token = block_token_list[1]\n            if name_token.kind in (\"word\", \"literal\"):\n                self.cobol_text.copy_list.append(CobolCopy(\n                    literal_value(name_token.text), line, token_list[end].line,\n                    token_list[index].position,\n                ))\n        elif kind == \"CICS\":\n            for position in range(len(block_token_list) - 2):\n                name_token = block_token_list[position + 2]\n                if (\n                    _word(block_token_list, position) == \"PROGRAM\"\n                    and block_token_list[position + 1].text == \"(\"\n                    and name_token.kind in (\"word\", \"literal\")\n                ):\n                    self.cobol_text.call_list.append(\n                        (literal_value(name_token.text), name_token.kind == \"literal\", line)\n                    )\n\n        if self.division == PROCEDURE_DIVISION:\n            statement_token_list.append(_Token(\n                \"word\", \"CONTINUE\", line, token_list[index].column,\n                position=token_list[index].position,\n            ))\n        return end + 1"
+    },
+    {
+      "name": "_read_copy",
+      "type": "function_definition",
+      "start_line": 1362,
+      "end_line": 1387,
+      "context": "    def _read_copy(self, index: int) -> int:\n        \"\"\"Record a COPY statement in cobol_text.copy_list and return the index after it.\"\"\"\n        token_list = self.token_list\n        end = _statement_end(token_list, index)\n        operand_token_list = token_list[index + 1:end]\n        if not operand_token_list or operand_token_list[0].kind not in (\"word\", \"literal\"):\n            return index + 1\n\n        library = \"\"\n        phrase_start = len(operand_token_list)\n        for position in range(1, len(operand_token_list)):\n            word = _word(operand_token_list, position)\n            if word in (\"OF\", \"IN\") and position == 1 and len(operand_token_list) > 2:\n                library = literal_value(operand_token_list[2].text)\n            elif word in (\"REPLACING\", \"SUPPRESS\"):\n                phrase_start = position\n                break\n        self.cobol_text.copy_list.append(CobolCopy(\n            name=literal_value(operand_token_list[0].text),\n            line=token_list[index].line,\n            end_line=token_list[min(end, len(token_list) - 1)].line,\n            position=token_list[index].position,\n            library=library,\n            replacing_list=_replacing_list(operand_token_list[phrase_start:]),\n        ))\n        return min(end + 1, len(token_list))"
+    },
+    {
+      "name": "_put_stand_in_name",
+      "type": "function_definition",
+      "start_line": 1390,
+      "end_line": 1419,
+      "context": "def _put_stand_in_name(\n    token_list: list[_Token], unit_token_list: list[tuple[str, list[_Token]]], cobol_text: CobolText,\n) -> None:\n    \"\"\"Write a stand-in name in place of each word of the units the grammar does not read as a name.\n\n    A word with a character outside ASCII letters, digits and \"-\" gets a stand-in name;\n    the same word (upper and lower case alike) gets the same one. The stand-in names\n    are recorded in cobol_text.name_dict.\n\n    Args:\n        token_list: Every token of the file.\n        unit_token_list: (unit kind, tokens) of each unit; the text of the words is\n            replaced in place.\n        cobol_text: Record of the stand-in names.\n    \"\"\"\n    prefix = _STAND_IN_PREFIX\n    word_set = {token.text.upper() for token in token_list if token.kind == \"word\"}\n    while any(word.startswith(prefix) for word in word_set):\n        prefix += _STAND_IN_PREFIX_CHAR\n\n    stand_in_dict: dict[str, str] = {}\n    for _, statement_token_list in unit_token_list:\n        for token in statement_token_list:\n            if token.kind != \"word\" or GRAMMAR_NAME_RE.fullmatch(token.text):\n                continue\n            key = token.text.upper()\n            if key not in stand_in_dict:\n                stand_in_dict[key] = f\"{prefix}{len(stand_in_dict) + 1}\"\n                cobol_text.name_dict[stand_in_dict[key]] = token.text\n            token.text = stand_in_dict[key]"
+    },
+    {
+      "name": "_short_literal",
+      "type": "function_definition",
+      "start_line": 1422,
+      "end_line": 1441,
+      "context": "def _short_literal(text: str, width: int) -> str:\n    \"\"\"Return a literal cut to a width, with its quotes kept.\n\n    Examples:\n        (\"'ABCDEFGH'\", 6) -> \"'ABCD'\"\n\n    Args:\n        text: A literal with its opening and closing quote.\n        width: Number of characters the literal may take.\n\n    Returns:\n        The literal with its content cut at the end.\n    \"\"\"\n    quote = text[-1]\n    start = text.index(quote) + 1\n    content = text[start:-1][:max(0, width - start - 1)]\n    # A quote written twice is not cut in half\n    if (len(content) - len(content.rstrip(quote))) % 2:\n        content = content[:-1]\n    return text[:start] + content + quote"
+    },
+    {
+      "name": "_token_gap",
+      "type": "function_definition",
+      "start_line": 1444,
+      "end_line": 1452,
+      "context": "def _token_gap(last_token: _Token, token: _Token) -> str:\n    \"\"\"Return the text written between two tokens of one line (\" \" or \"\").\"\"\"\n    if token.has_gap:\n        return \" \"\n    if token.kind == \"word\" and last_token.text[-1] in _OPERATOR_CHAR_SET:\n        return \" \"\n    if last_token.kind == \"word\" and token.text[0] in _OPERATOR_CHAR_SET:\n        return \" \"\n    return \"\""
+    },
+    {
+      "name": "_code_line_text_list",
+      "type": "function_definition",
+      "start_line": 1455,
+      "end_line": 1495,
+      "context": "def _code_line_text_list(token_list: list[_Token]) -> list[str]:\n    \"\"\"Write the tokens of one source line as the code of one or more fixed-format lines.\n\n    The tokens keep the indent of the first one when the line fits the code area.\n    A line that does not fit is written without indent, then with each literal cut,\n    then on several lines.\n\n    Args:\n        token_list: The tokens of one source line, in order.\n\n    Returns:\n        The code of each line to write, each no longer than the code area.\n    \"\"\"\n    part_list = [token_list[0].text]\n    for last_token, token in zip(token_list, token_list[1:]):\n        part_list.append(_token_gap(last_token, token) + token.text)\n\n    indent = \" \" * token_list[0].column\n    if len(indent) + sum(len(part) for part in part_list) <= _CODE_WIDTH:\n        return [indent + \"\".join(part_list)]\n\n    # Cut the literals, the longest first, until the line fits\n    literal_index_list = sorted(\n        (index for index, token in enumerate(token_list) if token.kind == \"literal\"),\n        key=lambda index: -len(part_list[index]),\n    )\n    for index in literal_index_list:\n        extra_width = sum(len(part) for part in part_list) - _CODE_WIDTH\n        if extra_width <= 0:\n            break\n        gap = part_list[index][:len(part_list[index]) - len(token_list[index].text)]\n        width = max(len(token_list[index].text) - extra_width, 0)\n        part_list[index] = gap + _short_literal(token_list[index].text, width)\n\n    # Move the tokens that still do not fit to the next line\n    line_text_list = [\"\"]\n    for part in part_list:\n        if line_text_list[-1] and len(line_text_list[-1]) + len(part) > _CODE_WIDTH:\n            line_text_list.append(\"\")\n        line_text_list[-1] += part if line_text_list[-1] else part.lstrip()\n    return [_short_text(line_text) for line_text in line_text_list]"
+    },
+    {
+      "name": "_short_text",
+      "type": "function_definition",
+      "start_line": 1498,
+      "end_line": 1504,
+      "context": "def _short_text(line_text: str) -> str:\n    \"\"\"Return the code of one line cut to the width of the code area.\"\"\"\n    if len(line_text) <= _CODE_WIDTH:\n        return line_text\n    if line_text[-1] in \"\\\"'\":\n        return _short_literal(line_text, _CODE_WIDTH)\n    return line_text[:_CODE_WIDTH]"
+    },
+    {
+      "name": "_is_name_only",
+      "type": "function_definition",
+      "start_line": 1507,
+      "end_line": 1520,
+      "context": "def _is_name_only(token_list: list[_Token]) -> bool:\n    \"\"\"Return whether a sentence is one name, or one name and the word SECTION.\n\n    Examples:\n        MAIN-PARA.           -> True\n        CALC SECTION.        -> True\n        CALC SECTION 10.     -> True\n        MOVE A TO B.         -> False\n    \"\"\"\n    if token_list[0].kind != \"word\":\n        return False\n    if len(token_list) == 2:\n        return token_list[1].kind == \"period\"\n    return _word(token_list, 1) == \"SECTION\" and len(token_list) <= 4"
+    },
+    {
+      "name": "_has_name_suffix",
+      "type": "function_definition",
+      "start_line": 1523,
+      "end_line": 1544,
+      "context": "def _has_name_suffix(token_list: list[_Token]) -> bool:\n    \"\"\"Return whether a token is written right after the first word after the first token.\n\n    A period or a separator after the word does not count.\n\n    Examples:\n        05 CUST-ID PIC X.         -> False\n        05 CUST-ID.               -> False\n        05 ==PFX==CUST-ID PIC X.  -> False\n        05 (PFX)-ID PIC X.        -> True\n        05 CUST-(SFX) PIC X.      -> True\n    \"\"\"\n    index = next(\n        (index for index in range(1, len(token_list)) if token_list[index].kind == \"word\"),\n        len(token_list),\n    )\n    if index + 1 >= len(token_list):\n        return False\n    next_token = token_list[index + 1]\n    return not (\n        next_token.has_gap or next_token.kind == \"period\" or next_token.text in _SEPARATOR_TEXT_SET\n    )"
+    },
+    {
+      "name": "_unit",
+      "type": "function_definition",
+      "start_line": 1547,
+      "end_line": 1585,
+      "context": "def _unit(kind: str, token_list: list[_Token], word_list: list[tuple[str, int]]) -> CobolUnit:\n    \"\"\"Write one statement as the text of a unit.\n\n    The header lines of a program come first, then each source line of the statement\n    as one line; a source line that does not fit the code area is written as several\n    lines. A data item is written after the description of a file, and CONTINUE after\n    a sentence that is one name.\n\n    Args:\n        kind: The unit kind.\n        token_list: The tokens of the statement, with the stand-in names.\n        word_list: (word as written in the source, source line) of the words of the statement.\n\n    Returns:\n        The CobolUnit.\n    \"\"\"\n    by_line_dict: dict[int, list[_Token]] = {}\n    for token in token_list:\n        by_line_dict.setdefault(token.line, []).append(token)\n\n    text_line_list = list(_START_LINE_DICT[kind])\n    origin_line_list = [0] * len(text_line_list)\n    for line in sorted(by_line_dict):\n        for line_text in _code_line_text_list(by_line_dict[line]):\n            text_line_list.append(line_text)\n            origin_line_list.append(line)\n\n    if kind == FILE_UNIT:\n        text_line_list.append(_FILLER_ITEM_LINE)\n        origin_line_list.append(0)\n    elif kind == PROCEDURE_UNIT and _is_name_only(token_list):\n        text_line_list.append(_CONTINUE_LINE)\n        origin_line_list.append(0)\n\n    text = \"\".join(f\"{_LEFT_MARGIN}{line_text}\\n\" for line_text in text_line_list)\n    return CobolUnit(\n        kind, text, origin_line_list, word_list, token_list[0].position, token_list[-1].position,\n        _has_name_suffix(token_list),\n    )"
+    },
+    {
+      "name": "item_unit",
+      "type": "function_definition",
+      "start_line": 1588,
+      "end_line": 1603,
+      "context": "def item_unit(name: str) -> CobolUnit:\n    \"\"\"Return the unit of a data item of one character with the given name.\n\n    Args:\n        name: A word of ASCII letters, digits and \"-\".\n\n    Returns:\n        The unit of the statement \"01 name PIC X.\" on line 1.\n    \"\"\"\n    token_list = [\n        _Token(kind, text, 1, has_gap=kind != \"period\")\n        for kind, text in (\n            (\"word\", \"01\"), (\"word\", name), (\"word\", \"PIC\"), (\"picture\", \"X\"), (\"period\", \".\"),\n        )\n    ]\n    return _unit(ITEM_UNIT, token_list, [(\"01\", 1), (name, 1)])"
+    },
+    {
+      "name": "split_cobol_source",
+      "type": "function_definition",
+      "start_line": 1606,
+      "end_line": 1647,
+      "context": "def split_cobol_source(source: str) -> CobolText:\n    \"\"\"Split the text of a COBOL source file into the units the grammar reads.\n\n    Processing flow:\n    1. Split the code into tokens. Fixed-format and free-format lines are read by their\n       own columns, comments are dropped, a literal or word continued on the next\n       line becomes one token\n    2. Split the tokens into statements. Data items, descriptions of files, SELECT\n       entries and sentences of the procedure division become units; programs, COPY\n       statements, CALL statements, EXEC blocks and ENTRY statements are recorded\n    3. Write a stand-in name for each name with a character outside ASCII letters,\n       digits and \"-\"\n    4. Write each unit as fixed-format text\n\n    Args:\n        source: The text of the file.\n\n    Returns:\n        A CobolText. Names and line numbers in it are those of the source, except in\n        the text of the units.\n    \"\"\"\n    line_list = [line.expandtabs(_TAB_SIZE) for line in line_list_of(source)]\n    cobol_text = CobolText()\n\n    # == Step 1: Tokens =======================================================\n    token_list = _source_token_list(line_list)\n    cobol_text.code_line_list = sorted({token.line for token in token_list})\n\n    # == Step 2: Statements ===================================================\n    unit_token_list = _Split(token_list, cobol_text).run()\n    unit_word_list = [\n        [(token.text, token.line) for token in statement_token_list if token.kind == \"word\"]\n        for _, statement_token_list in unit_token_list\n    ]\n\n    # == Step 3: Stand-in names ===============================================\n    _put_stand_in_name(token_list, unit_token_list, cobol_text)\n\n    # == Step 4: Text of the units ============================================\n    for (kind, statement_token_list), word_list in zip(unit_token_list, unit_word_list):\n        cobol_text.unit_list.append(_unit(kind, statement_token_list, word_list))\n    return cobol_text"
+    }
+  ],
+  "callee_usages": [
+    {
+      "lines": [
+        1627
+      ],
+      "name": "line_list_of",
+      "from": "codetwine/codetwine/utils/file_utils_py/file_utils.py",
+      "target_context": "def line_list_of(text: str) -> list[str]:\n    \"\"\"Split a text into its lines at \"\\\\n\", \"\\\\r\\\\n\" and a lone \"\\\\r\" alone.\n\n    Every line number of the analysis counts lines this way. A form feed, a vertical tab,\n    U+0085, U+2028 and the other characters str.splitlines() also breaks at stay inside\n    their line.\n\n    Examples:\n        \"a\\\\r\\\\nb\\\\rc\\\\n\" -> [\"a\", \"b\", \"c\"]\n        \"a\\\\n\\\\f\\\\nb\"      -> [\"a\", \"\\\\f\", \"b\"]\n        \"\"              -> []\n\n    Args:\n        text: The text to split.\n\n    Returns:\n        The lines without their line breaks. A text that ends in a line break has no\n        empty line after it.\n    \"\"\"\n    line_list = lone_cr_to_lf(text).replace(\"\\r\\n\", \"\\n\").split(\"\\n\")\n    if line_list[-1] == \"\":\n        line_list.pop()\n    return line_list",
+      "target_name": "line_list_of",
+      "target_start_line": 168
+    }
+  ],
+  "same_file_usages": [
+    {
+      "lines": [
+        33,
+        35,
+        309,
+        350,
+        380,
+        523,
+        636,
+        637
+      ],
+      "name": "_CODE_START_COLUMN",
+      "target_name": "_CODE_START_COLUMN",
+      "target_start_line": 10
+    },
+    {
+      "lines": [
+        35,
+        521,
+        523,
+        525,
+        634
+      ],
+      "name": "_CODE_END_COLUMN",
+      "target_name": "_CODE_END_COLUMN",
+      "target_start_line": 12
+    },
+    {
+      "lines": [
+        69,
+        70
+      ],
+      "name": "_NAME_TAG_PATTERN",
+      "target_name": "_NAME_TAG_PATTERN",
+      "target_start_line": 67
+    },
+    {
+      "lines": [
+        102,
+        1066,
+        1226,
+        1355
+      ],
+      "name": "PROCEDURE_DIVISION",
+      "target_name": "PROCEDURE_DIVISION",
+      "target_start_line": 101
+    },
+    {
+      "lines": [
+        102,
+        1061,
+        1063,
+        1224
+      ],
+      "name": "DATA_DIVISION",
+      "target_name": "DATA_DIVISION",
+      "target_start_line": 100
+    },
+    {
+      "lines": [
+        102,
+        1065,
+        1222
+      ],
+      "name": "ENVIRONMENT_DIVISION",
+      "target_name": "ENVIRONMENT_DIVISION",
+      "target_start_line": 99
+    },
+    {
+      "lines": [
+        135,
+        136,
+        138,
+        140
+      ],
+      "name": "_IDENTIFICATION_LINE",
+      "target_name": "_IDENTIFICATION_LINE",
+      "target_start_line": 133
+    },
+    {
+      "lines": [
+        135,
+        1267,
+        1603
+      ],
+      "name": "ITEM_UNIT",
+      "target_name": "ITEM_UNIT",
+      "target_start_line": 124
+    },
+    {
+      "lines": [
+        136,
+        1269,
+        1574
+      ],
+      "name": "FILE_UNIT",
+      "target_name": "FILE_UNIT",
+      "target_start_line": 126
+    },
+    {
+      "lines": [
+        137,
+        1251
+      ],
+      "name": "SELECT_UNIT",
+      "target_name": "SELECT_UNIT",
+      "target_start_line": 128
+    },
+    {
+      "lines": [
+        140,
+        1300,
+        1577
+      ],
+      "name": "PROCEDURE_UNIT",
+      "target_name": "PROCEDURE_UNIT",
+      "target_start_line": 130
+    },
+    {
+      "lines": [
+        213,
+        1547,
+        1582,
+        1588
+      ],
+      "name": "CobolUnit",
+      "target_name": "CobolUnit",
+      "target_start_line": 172
+    },
+    {
+      "lines": [
+        223,
+        1339,
+        1379
+      ],
+      "name": "CobolCopy",
+      "target_name": "CobolCopy",
+      "target_start_line": 193
+    },
+    {
+      "lines": [
+        239,
+        261
+      ],
+      "name": "_WIDE_CLASS_SET",
+      "target_name": "_WIDE_CLASS_SET",
+      "target_start_line": 19
+    },
+    {
+      "lines": [
+        261,
+        265
+      ],
+      "name": "_AMBIGUOUS_CLASS",
+      "target_name": "_AMBIGUOUS_CLASS",
+      "target_start_line": 21
+    },
+    {
+      "lines": [
+        265
+      ],
+      "name": "_WIDE_STAND_IN",
+      "target_name": "_WIDE_STAND_IN",
+      "target_start_line": 23
+    },
+    {
+      "lines": [
+        276,
+        303
+      ],
+      "name": "_char_width",
+      "target_name": "_char_width",
+      "target_start_line": 237
+    },
+    {
+      "lines": [
+        309,
+        331,
+        350,
+        380,
+        402,
+        523,
+        525,
+        636,
+        637
+      ],
+      "name": "_column_slice",
+      "target_name": "_column_slice",
+      "target_start_line": 279
+    },
+    {
+      "lines": [
+        309,
+        331,
+        362,
+        402
+      ],
+      "name": "_INDICATOR_COLUMN",
+      "target_name": "_INDICATOR_COLUMN",
+      "target_start_line": 8
+    },
+    {
+      "lines": [
+        330,
+        349,
+        625
+      ],
+      "name": "_DIRECTIVE_START_RE.match",
+      "target_name": "_DIRECTIVE_START_RE",
+      "target_start_line": 38
+    },
+    {
+      "lines": [
+        349,
+        366,
+        378,
+        404,
+        430,
+        559,
+        564,
+        632
+      ],
+      "name": "_indicator",
+      "target_name": "_indicator",
+      "target_start_line": 307
+    },
+    {
+      "lines": [
+        351
+      ],
+      "name": "_FORMAT_DIRECTIVE_RE.match",
+      "target_name": "_FORMAT_DIRECTIVE_RE",
+      "target_start_line": 58
+    },
+    {
+      "lines": [
+        362,
+        520
+      ],
+      "name": "_line_width",
+      "target_name": "_line_width",
+      "target_start_line": 272
+    },
+    {
+      "lines": [
+        364,
+        376,
+        400,
+        561,
+        630
+      ],
+      "name": "_is_directive_line",
+      "target_name": "_is_directive_line",
+      "target_start_line": 312
+    },
+    {
+      "lines": [
+        364,
+        376,
+        400,
+        561,
+        629,
+        641
+      ],
+      "name": "_OPTION_LINE_RE.match",
+      "target_name": "_OPTION_LINE_RE",
+      "target_start_line": 56
+    },
+    {
+      "lines": [
+        366
+      ],
+      "name": "_INDICATOR_CHAR_SET",
+      "target_name": "_INDICATOR_CHAR_SET",
+      "target_start_line": 26
+    },
+    {
+      "lines": [
+        378,
+        559,
+        633
+      ],
+      "name": "_NO_CODE_INDICATOR_CHAR_SET",
+      "target_name": "_NO_CODE_INDICATOR_CHAR_SET",
+      "target_start_line": 30
+    },
+    {
+      "lines": [
+        403
+      ],
+      "name": "_WORD_SEQUENCE_AREA_RE.match",
+      "target_name": "_WORD_SEQUENCE_AREA_RE",
+      "target_start_line": 49
+    },
+    {
+      "lines": [
+        404
+      ],
+      "name": "_COMMENT_INDICATOR_CHAR_SET",
+      "target_name": "_COMMENT_INDICATOR_CHAR_SET",
+      "target_start_line": 28
+    },
+    {
+      "lines": [
+        405
+      ],
+      "name": "_LEVEL_SEQUENCE_AREA_RE.fullmatch",
+      "target_name": "_LEVEL_SEQUENCE_AREA_RE",
+      "target_start_line": 47
+    },
+    {
+      "lines": [
+        406,
+        429
+      ],
+      "name": "_fixed_code_text",
+      "target_name": "_fixed_code_text",
+      "target_start_line": 369
+    },
+    {
+      "lines": [
+        409
+      ],
+      "name": "_OTHER_LEVEL_SET",
+      "target_name": "_OTHER_LEVEL_SET",
+      "target_start_line": 53
+    },
+    {
+      "lines": [
+        409
+      ],
+      "name": "_RECORD_LEVEL_RANGE",
+      "target_name": "_RECORD_LEVEL_RANGE",
+      "target_start_line": 51
+    },
+    {
+      "lines": [
+        425,
+        453
+      ],
+      "name": "_format_directive",
+      "target_name": "_format_directive",
+      "target_start_line": 335
+    },
+    {
+      "lines": [
+        427
+      ],
+      "name": "_has_code_in_sequence_area",
+      "target_name": "_has_code_in_sequence_area",
+      "target_start_line": 383
+    },
+    {
+      "lines": [
+        427
+      ],
+      "name": "_is_fixed_line",
+      "target_name": "_is_fixed_line",
+      "target_start_line": 355
+    },
+    {
+      "lines": [
+        449
+      ],
+      "name": "_is_free_start",
+      "target_name": "_is_free_start",
+      "target_start_line": 412
+    },
+    {
+      "lines": [
+        457,
+        628
+      ],
+      "name": "_DIRECTIVE_MODE",
+      "target_name": "_DIRECTIVE_MODE",
+      "target_start_line": 106
+    },
+    {
+      "lines": [
+        459,
+        619
+      ],
+      "name": "_FREE_MODE",
+      "target_name": "_FREE_MODE",
+      "target_start_line": 108
+    },
+    {
+      "lines": [
+        461,
+        611,
+        634
+      ],
+      "name": "_FIXED_MODE",
+      "target_name": "_FIXED_MODE",
+      "target_start_line": 110
+    },
+    {
+      "lines": [
+        461
+      ],
+      "name": "_VARIABLE_MODE",
+      "target_name": "_VARIABLE_MODE",
+      "target_start_line": 112
+    },
+    {
+      "lines": [
+        522,
+        527,
+        535
+      ],
+      "name": "_NO_TEXT_BEYOND",
+      "target_name": "_NO_TEXT_BEYOND",
+      "target_start_line": 116
+    },
+    {
+      "lines": [
+        524,
+        532
+      ],
+      "name": "_code_area_end_state",
+      "target_name": "_code_area_end_state",
+      "target_start_line": 465
+    },
+    {
+      "lines": [
+        531,
+        538
+      ],
+      "name": "_LINE_END_COLUMN",
+      "target_name": "_LINE_END_COLUMN",
+      "target_start_line": 14
+    },
+    {
+      "lines": [
+        541,
+        566
+      ],
+      "name": "_CODE_BEYOND",
+      "target_name": "_CODE_BEYOND",
+      "target_start_line": 120
+    },
+    {
+      "lines": [
+        541,
+        565
+      ],
+      "name": "_TAG_BEYOND",
+      "target_name": "_TAG_BEYOND",
+      "target_start_line": 118
+    },
+    {
+      "lines": [
+        564
+      ],
+      "name": "_beyond_code_area",
+      "target_name": "_beyond_code_area",
+      "target_start_line": 497
+    },
+    {
+      "lines": [
+        582,
+        584
+      ],
+      "name": "_INLINE_COMMENT_START",
+      "target_name": "_INLINE_COMMENT_START",
+      "target_start_line": 42
+    },
+    {
+      "lines": [
+        582,
+        622
+      ],
+      "name": "_COMMENT_START",
+      "target_name": "_COMMENT_START",
+      "target_start_line": 40
+    },
+    {
+      "lines": [
+        585
+      ],
+      "name": "_OPERAND_END_CHAR_SET",
+      "target_name": "_OPERAND_END_CHAR_SET",
+      "target_start_line": 44
+    },
+    {
+      "lines": [
+        608
+      ],
+      "name": "_column_line_list",
+      "target_name": "_column_line_list",
+      "target_start_line": 242
+    },
+    {
+      "lines": [
+        609
+      ],
+      "name": "_line_mode_list",
+      "target_name": "_line_mode_list",
+      "target_start_line": 436
+    },
+    {
+      "lines": [
+        610
+      ],
+      "name": "_has_right_margin",
+      "target_name": "_has_right_margin",
+      "target_start_line": 544
+    },
+    {
+      "lines": [
+        623
+      ],
+      "name": "_is_free_comment_line",
+      "target_name": "_is_free_comment_line",
+      "target_start_line": 570
+    },
+    {
+      "lines": [
+        668,
+        852
+      ],
+      "name": "_code_text_list",
+      "target_name": "_code_text_list",
+      "target_start_line": 588
+    },
+    {
+      "lines": [
+        668,
+        1627
+      ],
+      "name": "_TAB_SIZE",
+      "target_name": "_TAB_SIZE",
+      "target_start_line": 16
+    },
+    {
+      "lines": [
+        695,
+        709,
+        728,
+        732,
+        733,
+        734,
+        748,
+        789,
+        790,
+        816,
+        817,
+        819,
+        822,
+        826,
+        830,
+        835,
+        838,
+        850,
+        851,
+        870,
+        877,
+        885,
+        898,
+        913,
+        972,
+        1003,
+        1011,
+        1035,
+        1069,
+        1106,
+        1122,
+        1124,
+        1138,
+        1147,
+        1162,
+        1188,
+        1230,
+        1248,
+        1255,
+        1273,
+        1296,
+        1302,
+        1356,
+        1391,
+        1444,
+        1455,
+        1507,
+        1523,
+        1547,
+        1563,
+        1598
+      ],
+      "name": "_Token",
+      "target_name": "_Token",
+      "target_start_line": 153
+    },
+    {
+      "lines": [
+        700,
+        705
+      ],
+      "name": "_PICTURE_WORD_SET",
+      "target_name": "_PICTURE_WORD_SET",
+      "target_start_line": 77
+    },
+    {
+      "lines": [
+        723
+      ],
+      "name": "_PICTURE_RE.match",
+      "target_name": "_PICTURE_RE",
+      "target_start_line": 72
+    },
+    {
+      "lines": [
+        758,
+        813
+      ],
+      "name": "_literal_end",
+      "target_name": "_literal_end",
+      "target_start_line": 671
+    },
+    {
+      "lines": [
+        768
+      ],
+      "name": "_SPACE_RE.match",
+      "target_name": "_SPACE_RE",
+      "target_start_line": 64
+    },
+    {
+      "lines": [
+        776
+      ],
+      "name": "_next_token",
+      "target_name": "_next_token",
+      "target_start_line": 788
+    },
+    {
+      "lines": [
+        805
+      ],
+      "name": "_is_picture_position",
+      "target_name": "_is_picture_position",
+      "target_start_line": 695
+    },
+    {
+      "lines": [
+        806
+      ],
+      "name": "_picture_token",
+      "target_name": "_picture_token",
+      "target_start_line": 709
+    },
+    {
+      "lines": [
+        809
+      ],
+      "name": "_LITERAL_START_RE.match",
+      "target_name": "_LITERAL_START_RE",
+      "target_start_line": 65
+    },
+    {
+      "lines": [
+        824
+      ],
+      "name": "_PSEUDO_TEXT_RE.match",
+      "target_name": "_PSEUDO_TEXT_RE",
+      "target_start_line": 66
+    },
+    {
+      "lines": [
+        828
+      ],
+      "name": "_WORD_RE.match",
+      "target_name": "_WORD_RE",
+      "target_start_line": 68
+    },
+    {
+      "lines": [
+        857
+      ],
+      "name": "_line_token_list",
+      "target_name": "_line_token_list",
+      "target_start_line": 731
+    },
+    {
+      "lines": [
+        893,
+        919,
+        921,
+        1005,
+        1007,
+        1022,
+        1057,
+        1087,
+        1164,
+        1198,
+        1199,
+        1250,
+        1261,
+        1262,
+        1281,
+        1286,
+        1321,
+        1336,
+        1347,
+        1373,
+        1520
+      ],
+      "name": "_word",
+      "target_name": "_word",
+      "target_start_line": 870
+    },
+    {
+      "lines": [
+        915,
+        1448,
+        1450
+      ],
+      "name": "_Token.text",
+      "target_name": "text",
+      "target_start_line": 159
+    },
+    {
+      "lines": [
+        915,
+        1448,
+        1450
+      ],
+      "name": "_Token.kind",
+      "target_name": "kind",
+      "target_start_line": 158
+    },
+    {
+      "lines": [
+        926
+      ],
+      "name": "_SPACE_RE.search",
+      "target_name": "_SPACE_RE",
+      "target_start_line": 64
+    },
+    {
+      "lines": [
+        964
+      ],
+      "name": "_QUALIFIER_WORD_SET",
+      "target_name": "_QUALIFIER_WORD_SET",
+      "target_start_line": 81
+    },
+    {
+      "lines": [
+        1008
+      ],
+      "name": "_DIVISION_WORD_SET",
+      "target_name": "_DIVISION_WORD_SET",
+      "target_start_line": 102
+    },
+    {
+      "lines": [
+        1008,
+        1203
+      ],
+      "name": "_IDENTIFICATION_WORD_SET",
+      "target_name": "_IDENTIFICATION_WORD_SET",
+      "target_start_line": 83
+    },
+    {
+      "lines": [
+        1023,
+        1172
+      ],
+      "name": "_exec_end",
+      "target_name": "_exec_end",
+      "target_start_line": 885
+    },
+    {
+      "lines": [
+        1025,
+        1365
+      ],
+      "name": "_statement_end",
+      "target_name": "_statement_end",
+      "target_start_line": 877
+    },
+    {
+      "lines": [
+        1056
+      ],
+      "name": "_first_statement_start",
+      "target_name": "_first_statement_start",
+      "target_start_line": 1011
+    },
+    {
+      "lines": [
+        1058,
+        1167,
+        1202
+      ],
+      "name": "_is_division_header",
+      "target_name": "_is_division_header",
+      "target_start_line": 1003
+    },
+    {
+      "lines": [
+        1059,
+        1165,
+        1204,
+        1245
+      ],
+      "name": "IDENTIFICATION_DIVISION",
+      "target_name": "IDENTIFICATION_DIVISION",
+      "target_start_line": 98
+    },
+    {
+      "lines": [
+        1060,
+        1268
+      ],
+      "name": "_FILE_ENTRY_WORD_SET",
+      "target_name": "_FILE_ENTRY_WORD_SET",
+      "target_start_line": 91
+    },
+    {
+      "lines": [
+        1060,
+        1266
+      ],
+      "name": "_is_level_number",
+      "target_name": "_is_level_number",
+      "target_start_line": 998
+    },
+    {
+      "lines": [
+        1062,
+        1262
+      ],
+      "name": "_DATA_SECTION_WORD_SET",
+      "target_name": "_DATA_SECTION_WORD_SET",
+      "target_start_line": 85
+    },
+    {
+      "lines": [
+        1106,
+        1113,
+        1391,
+        1606,
+        1628,
+        1635,
+        1642,
+        1647
+      ],
+      "name": "CobolText",
+      "target_name": "CobolText",
+      "target_start_line": 207
+    },
+    {
+      "lines": [
+        1114
+      ],
+      "name": "_start_division",
+      "target_name": "_start_division",
+      "target_start_line": 1035
+    },
+    {
+      "lines": [
+        1128,
+        1235
+      ],
+      "name": "_statement",
+      "target_name": "_statement",
+      "target_start_line": 1147
+    },
+    {
+      "lines": [
+        1131
+      ],
+      "name": "_read_statement",
+      "target_name": "_read_statement",
+      "target_start_line": 1188
+    },
+    {
+      "lines": [
+        1144
+      ],
+      "name": "qualifier_tuple",
+      "target_name": "qualifier_tuple",
+      "target_start_line": 944
+    },
+    {
+      "lines": [
+        1174
+      ],
+      "name": "_read_copy",
+      "target_name": "_read_copy",
+      "target_start_line": 1362
+    },
+    {
+      "lines": [
+        1176
+      ],
+      "name": "_read_exec",
+      "target_name": "_read_exec",
+      "target_start_line": 1302
+    },
+    {
+      "lines": [
+        1177
+      ],
+      "name": "_NO_CODE_WORD_SET",
+      "target_name": "_NO_CODE_WORD_SET",
+      "target_start_line": 79
+    },
+    {
+      "lines": [
+        1209,
+        1253,
+        1265,
+        1271
+      ],
+      "name": "_record_word_list",
+      "target_name": "_record_word_list",
+      "target_start_line": 1138
+    },
+    {
+      "lines": [
+        1213
+      ],
+      "name": "_read_program",
+      "target_name": "_read_program",
+      "target_start_line": 1230
+    },
+    {
+      "lines": [
+        1216,
+        1241,
+        1292,
+        1295,
+        1340,
+        1352,
+        1375,
+        1380
+      ],
+      "name": "literal_value",
+      "target_name": "literal_value",
+      "target_start_line": 931
+    },
+    {
+      "lines": [
+        1223
+      ],
+      "name": "_read_environment",
+      "target_name": "_read_environment",
+      "target_start_line": 1248
+    },
+    {
+      "lines": [
+        1225
+      ],
+      "name": "_read_data",
+      "target_name": "_read_data",
+      "target_start_line": 1255
+    },
+    {
+      "lines": [
+        1227
+      ],
+      "name": "_read_procedure",
+      "target_name": "_read_procedure",
+      "target_start_line": 1273
+    },
+    {
+      "lines": [
+        1264
+      ],
+      "name": "_NO_UNIT_SECTION_WORD_SET",
+      "target_name": "_NO_UNIT_SECTION_WORD_SET",
+      "target_start_line": 89
+    },
+    {
+      "lines": [
+        1287
+      ],
+      "name": "_call_name_token",
+      "target_name": "_call_name_token",
+      "target_start_line": 1069
+    },
+    {
+      "lines": [
+        1325
+      ],
+      "name": "_host_structure_name",
+      "target_name": "_host_structure_name",
+      "target_start_line": 972
+    },
+    {
+      "lines": [
+        1385
+      ],
+      "name": "_replacing_list",
+      "target_name": "_replacing_list",
+      "target_start_line": 898
+    },
+    {
+      "lines": [
+        1405
+      ],
+      "name": "_STAND_IN_PREFIX",
+      "target_name": "_STAND_IN_PREFIX",
+      "target_start_line": 148
+    },
+    {
+      "lines": [
+        1408
+      ],
+      "name": "_STAND_IN_PREFIX_CHAR",
+      "target_name": "_STAND_IN_PREFIX_CHAR",
+      "target_start_line": 150
+    },
+    {
+      "lines": [
+        1413
+      ],
+      "name": "GRAMMAR_NAME_RE.fullmatch",
+      "target_name": "GRAMMAR_NAME_RE",
+      "target_start_line": 74
+    },
+    {
+      "lines": [
+        1418
+      ],
+      "name": "CobolText.name_dict",
+      "target_name": "name_dict",
+      "target_start_line": 215
+    },
+    {
+      "lines": [
+        1446
+      ],
+      "name": "_Token.has_gap",
+      "target_name": "has_gap",
+      "target_start_line": 165
+    },
+    {
+      "lines": [
+        1448,
+        1450
+      ],
+      "name": "_OPERATOR_CHAR_SET",
+      "target_name": "_OPERATOR_CHAR_SET",
+      "target_start_line": 93
+    },
+    {
+      "lines": [
+        1470
+      ],
+      "name": "_token_gap",
+      "target_name": "_token_gap",
+      "target_start_line": 1444
+    },
+    {
+      "lines": [
+        1473,
+        1482,
+        1492,
+        1500,
+        1503,
+        1504
+      ],
+      "name": "_CODE_WIDTH",
+      "target_name": "_CODE_WIDTH",
+      "target_start_line": 35
+    },
+    {
+      "lines": [
+        1487,
+        1503
+      ],
+      "name": "_short_literal",
+      "target_name": "_short_literal",
+      "target_start_line": 1422
+    },
+    {
+      "lines": [
+        1495
+      ],
+      "name": "_short_text",
+      "target_name": "_short_text",
+      "target_start_line": 1498
+    },
+    {
+      "lines": [
+        1543
+      ],
+      "name": "_SEPARATOR_TEXT_SET",
+      "target_name": "_SEPARATOR_TEXT_SET",
+      "target_start_line": 95
+    },
+    {
+      "lines": [
+        1567
+      ],
+      "name": "_START_LINE_DICT",
+      "target_name": "_START_LINE_DICT",
+      "target_start_line": 134
+    },
+    {
+      "lines": [
+        1570
+      ],
+      "name": "_code_line_text_list",
+      "target_name": "_code_line_text_list",
+      "target_start_line": 1455
+    },
+    {
+      "lines": [
+        1575
+      ],
+      "name": "_FILLER_ITEM_LINE",
+      "target_name": "_FILLER_ITEM_LINE",
+      "target_start_line": 143
+    },
+    {
+      "lines": [
+        1577
+      ],
+      "name": "_is_name_only",
+      "target_name": "_is_name_only",
+      "target_start_line": 1507
+    },
+    {
+      "lines": [
+        1578
+      ],
+      "name": "_CONTINUE_LINE",
+      "target_name": "_CONTINUE_LINE",
+      "target_start_line": 145
+    },
+    {
+      "lines": [
+        1581
+      ],
+      "name": "_LEFT_MARGIN",
+      "target_name": "_LEFT_MARGIN",
+      "target_start_line": 33
+    },
+    {
+      "lines": [
+        1584
+      ],
+      "name": "_has_name_suffix",
+      "target_name": "_has_name_suffix",
+      "target_start_line": 1523
+    },
+    {
+      "lines": [
+        1603,
+        1646
+      ],
+      "name": "_unit",
+      "target_name": "_unit",
+      "target_start_line": 1547
+    },
+    {
+      "lines": [
+        1631
+      ],
+      "name": "_source_token_list",
+      "target_name": "_source_token_list",
+      "target_start_line": 838
+    },
+    {
+      "lines": [
+        1632
+      ],
+      "name": "CobolText.code_line_list",
+      "target_name": "code_line_list",
+      "target_start_line": 231
+    },
+    {
+      "lines": [
+        1635
+      ],
+      "name": "_Split",
+      "target_name": "_Split",
+      "target_start_line": 1099
+    },
+    {
+      "lines": [
+        1642
+      ],
+      "name": "_put_stand_in_name",
+      "target_name": "_put_stand_in_name",
+      "target_start_line": 1390
+    },
+    {
+      "lines": [
+        1646
+      ],
+      "name": "CobolText.unit_list.append",
+      "target_name": "unit_list",
+      "target_start_line": 213
+    }
+  ],
+  "caller_usages": [
+    {
+      "lines": [
+        349
+      ],
+      "name": "split_cobol_source",
+      "file": "codetwine/codetwine/cobol_file_index_py/cobol_file_index.py",
+      "usage_context": "    \"\"\"\n    try:\n        text = read_source(os.path.join(project_dir, file_rel))[0]\n        unit_list = split_cobol_source(text).unit_list\n    except Exception as e:\n        logger.warning(f\"{file_rel} is not read as COBOL: {type(e).__name__}: {e}\")\n        return False"
+    },
+    {
+      "lines": [
+        353
+      ],
+      "name": "FILE_UNIT",
+      "file": "codetwine/codetwine/cobol_file_index_py/cobol_file_index.py",
+      "usage_context": "    except Exception as e:\n        logger.warning(f\"{file_rel} is not read as COBOL: {type(e).__name__}: {e}\")\n        return False\n    if any(unit.kind in (ITEM_UNIT, FILE_UNIT) for unit in unit_list):\n        return True\n    language = EXT_TO_LANGUAGE_DICT[_COPYBOOK_EXT]\n    return any("
+    },
+    {
+      "lines": [
+        353
+      ],
+      "name": "ITEM_UNIT",
+      "file": "codetwine/codetwine/cobol_file_index_py/cobol_file_index.py",
+      "usage_context": "    except Exception as e:\n        logger.warning(f\"{file_rel} is not read as COBOL: {type(e).__name__}: {e}\")\n        return False\n    if any(unit.kind in (ITEM_UNIT, FILE_UNIT) for unit in unit_list):\n        return True\n    language = EXT_TO_LANGUAGE_DICT[_COPYBOOK_EXT]\n    return any("
+    },
+    {
+      "lines": [
+        357
+      ],
+      "name": "PROCEDURE_UNIT",
+      "file": "codetwine/codetwine/cobol_file_index_py/cobol_file_index.py",
+      "usage_context": "        return True\n    language = EXT_TO_LANGUAGE_DICT[_COPYBOOK_EXT]\n    return any(\n        unit.kind == PROCEDURE_UNIT and has_statement(unit, language) for unit in unit_list\n    )\n\n"
+    },
+    {
+      "lines": [
+        93,
+        384
+      ],
+      "name": "qualifier_tuple",
+      "file": "codetwine/codetwine/extractors/cobol_source_py/cobol_source.py",
+      "usage_context": "    name: str    # Upper-case name\n    line: int    # Line of the reference (1-based)\n    # Upper-case names that qualify it (X OF Y IN Z -> (\"Y\", \"Z\")), innermost first\n    qualifier_tuple: tuple[str, ...] = ()\n    # Whether it is the program name a CALL statement names\n    is_call: bool = False\n\n...\n            if is_define_due and word.upper() == define_name.upper():\n                is_define_due = False\n                continue\n            qualifier_list = qualifier_tuple(text_list, index)\n            self.source.reference_list.append(CobolReference(\n                word.upper(), line, tuple(qualifier.upper() for qualifier in qualifier_list),\n            ))"
+    },
+    {
+      "lines": [
+        234,
+        241
+      ],
+      "name": "CobolText",
+      "file": "codetwine/codetwine/extractors/cobol_source_py/cobol_source.py",
+      "usage_context": "class _UnitReader:\n    \"\"\"Reads the units of one COBOL file into a CobolSource.\"\"\"\n\n    def __init__(self, cobol_text: CobolText, line_list: list[str], language: Language) -> None:\n        \"\"\"\n        Args:\n            cobol_text: The units of the file and what is read without the grammar.\n...\n            line_list: Lines of the source text.\n            language: The tree-sitter Language of the COBOL grammar.\n        \"\"\"\n        self.cobol_text = cobol_text\n        self.parser = Parser(language)\n        self.source = CobolSource(line_list=line_list)\n        # (name, type, line) of each header of the procedure division"
+    },
+    {
+      "lines": [
+        266
+      ],
+      "name": "literal_value",
+      "file": "codetwine/codetwine/extractors/cobol_source_py/cobol_source.py",
+      "usage_context": "    def node_name(self, node: Node) -> str:\n        \"\"\"Return the name or the literal content a node holds.\"\"\"\n        text = node.text.decode(\"utf-8\")\n        value = literal_value(text)\n        return value if value != text else self.name(text)\n\n    def read(self) -> CobolSource:"
+    },
+    {
+      "lines": [
+        307,
+        326,
+        329,
+        331,
+        334,
+        349,
+        361,
+        363,
+        369,
+        373,
+        389,
+        433,
+        463,
+        491,
+        502,
+        783
+      ],
+      "name": "CobolUnit",
+      "file": "codetwine/codetwine/extractors/cobol_source_py/cobol_source.py",
+      "usage_context": "        self._add_import()\n        return self.source\n\n    def _read_unit(self, unit: CobolUnit) -> None:\n        \"\"\"Parse one unit and record what it defines and refers to.\n\n        The name a unit defines is read from the tree. References are the WORD nodes\n...\n        ]\n\n        define_name = self._read_definition(\n            unit, node_list, source_line_list[0], source_line_list[-1],\n        )\n        if root_node.has_error:\n            self._add_word_reference(unit, define_name)"
+    },
+    {
+      "lines": [
+        314,
+        794
+      ],
+      "name": "CobolUnit.text.encode",
+      "file": "codetwine/codetwine/extractors/cobol_source_py/cobol_source.py",
+      "usage_context": "        of the tree; for a unit the grammar does not read without error they are\n        every word of the statement except the name it defines.\n        \"\"\"\n        root_node = self.parser.parse(unit.text.encode(\"utf-8\")).root_node\n        source_line_list = [line for line in unit.origin_line_list if line]\n        self.unit_index += 1\n        if not source_line_list:\n...\n        True when the tree of the unit has no error and holds a statement node that\n        starts on a source line.\n    \"\"\"\n    root_node = Parser(language).parse(unit.text.encode(\"utf-8\")).root_node\n    if root_node.has_error:\n        return False\n    return any("
+    },
+    {
+      "lines": [
+        315,
+        321,
+        322,
+        396,
+        454,
+        477,
+        499,
+        799,
+        800
+      ],
+      "name": "CobolUnit.origin_line_list",
+      "file": "codetwine/codetwine/extractors/cobol_source_py/cobol_source.py",
+      "usage_context": "        every word of the statement except the name it defines.\n        \"\"\"\n        root_node = self.parser.parse(unit.text.encode(\"utf-8\")).root_node\n        source_line_list = [line for line in unit.origin_line_list if line]\n        self.unit_index += 1\n        if not source_line_list:\n            return\n...\n            return\n        node_list = [\n            node for node in _node_list(root_node)\n            if node.start_point[0] < len(unit.origin_line_list)\n            and unit.origin_line_list[node.start_point[0]]\n        ]\n"
+    },
+    {
+      "lines": [
+        348
+      ],
+      "name": "ITEM_UNIT",
+      "file": "codetwine/codetwine/extractors/cobol_source_py/cobol_source.py",
+      "usage_context": "            The name the unit defines. None when it defines none.\n        \"\"\"\n        define_name = None\n        if unit.kind == ITEM_UNIT:\n            define_name, name_line = self._item_name(unit, node_list)\n            self.item_list.append(_Item(\n                name=define_name,"
+    },
+    {
+      "lines": [
+        348,
+        362,
+        368
+      ],
+      "name": "CobolUnit.kind",
+      "file": "codetwine/codetwine/extractors/cobol_source_py/cobol_source.py",
+      "usage_context": "            The name the unit defines. None when it defines none.\n        \"\"\"\n        define_name = None\n        if unit.kind == ITEM_UNIT:\n            define_name, name_line = self._item_name(unit, node_list)\n            self.item_list.append(_Item(\n                name=define_name,\n...\n            if define_name is not None:\n                self._read_value(node_list, define_name)\n            self._read_index(unit, node_list, start_line, end_line)\n        elif unit.kind == FILE_UNIT:\n            define_name, name_line = self._file_name(unit, node_list)\n            if define_name is not None:\n                self.file_list.append("
+    },
+    {
+      "lines": [
+        352,
+        357,
+        378,
+        380,
+        456,
+        457,
+        511,
+        513
+      ],
+      "name": "CobolUnit.word_list",
+      "file": "codetwine/codetwine/extractors/cobol_source_py/cobol_source.py",
+      "usage_context": "            define_name, name_line = self._item_name(unit, node_list)\n            self.item_list.append(_Item(\n                name=define_name,\n                level=int(unit.word_list[0][0]),\n                start_line=start_line,\n                end_line=end_line,\n                name_line=name_line or start_line,\n...\n                end_line=end_line,\n                name_line=name_line or start_line,\n                unit_index=self.unit_index,\n                is_elementary=_is_elementary_word_list(unit.word_list),\n            ))\n            if define_name is not None:\n                self._read_value(node_list, define_name)"
+    },
+    {
+      "lines": [
+        362
+      ],
+      "name": "FILE_UNIT",
+      "file": "codetwine/codetwine/extractors/cobol_source_py/cobol_source.py",
+      "usage_context": "            if define_name is not None:\n                self._read_value(node_list, define_name)\n            self._read_index(unit, node_list, start_line, end_line)\n        elif unit.kind == FILE_UNIT:\n            define_name, name_line = self._file_name(unit, node_list)\n            if define_name is not None:\n                self.file_list.append("
+    },
+    {
+      "lines": [
+        368
+      ],
+      "name": "PROCEDURE_UNIT",
+      "file": "codetwine/codetwine/extractors/cobol_source_py/cobol_source.py",
+      "usage_context": "                self.file_list.append(\n                    _File(define_name, start_line, end_line, name_line, self.unit_index)\n                )\n        elif unit.kind == PROCEDURE_UNIT:\n            define_name = self._header_name(unit, node_list, start_line)\n            self._read_move(node_list)\n        return define_name"
+    },
+    {
+      "lines": [
+        444
+      ],
+      "name": "CobolUnit.has_name_suffix",
+      "file": "codetwine/codetwine/extractors/cobol_source_py/cobol_source.py",
+      "usage_context": "        Returns:\n            A (name, source line) tuple. (None, 0) for an item without a name or FILLER.\n        \"\"\"\n        if unit.has_name_suffix:\n            return None, 0\n        for node in node_list:\n            if node.type == \"entry_name\" or ("
+    },
+    {
+      "lines": [
+        458
+      ],
+      "name": "GRAMMAR_NAME_RE.fullmatch",
+      "file": "codetwine/codetwine/extractors/cobol_source_py/cobol_source.py",
+      "usage_context": "\n        if len(unit.word_list) > 1 and unit.word_list[1][1] == unit.word_list[0][1]:\n            word, line = unit.word_list[1]\n            if not GRAMMAR_NAME_RE.fullmatch(word) or self._is_item_name(word):\n                return word, line\n        return None, 0\n"
+    },
+    {
+      "lines": [
+        483
+      ],
+      "name": "item_unit",
+      "file": "codetwine/codetwine/extractors/cobol_source_py/cobol_source.py",
+      "usage_context": "    def _is_item_name(self, word: str) -> bool:\n        \"\"\"Return whether the grammar reads a word as the name of a data item.\"\"\"\n        if word.upper() not in self.is_item_name_dict:\n            unit = item_unit(word)\n            root_node = self.parser.parse(unit.text.encode(\"utf-8\")).root_node\n            self.is_item_name_dict[word.upper()] = not root_node.has_error and any(\n                node.type == \"entry_name\" and node.text.decode(\"utf-8\") == word"
+    },
+    {
+      "lines": [
+        818
+      ],
+      "name": "split_cobol_source",
+      "file": "codetwine/codetwine/extractors/cobol_source_py/cobol_source.py",
+      "usage_context": "    Returns:\n        A CobolSource.\n    \"\"\"\n    cobol_text = split_cobol_source(source)\n    return _UnitReader(cobol_text, line_list_of(source), language).read()"
+    }
+  ]
+}

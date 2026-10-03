@@ -1,5 +1,7 @@
 {
   "file": "codetwine/codetwine/config/logger_py/logger.py",
+  "language": "py",
+  "detected_encoding": null,
   "definitions": [
     {
       "name": "_LOG_DIR",
@@ -16,11 +18,11 @@
       "context": "_LOG_FORMAT = \"%(asctime)s [%(levelname)s] %(name)s: %(message)s\""
     },
     {
-      "name": "_MAX_BYTES",
+      "name": "_MAX_BYTE",
       "type": "expression_statement",
       "start_line": 16,
       "end_line": 16,
-      "context": "_MAX_BYTES = 1_048_576"
+      "context": "_MAX_BYTE = 1_048_576"
     },
     {
       "name": "_BACKUP_COUNT",
@@ -47,12 +49,94 @@
       "name": "setup_logging",
       "type": "function_definition",
       "start_line": 38,
-      "end_line": 75,
-      "context": "def setup_logging(level: int = logging.INFO) -> None:\n    \"\"\"Configure both console output and log file output.\n\n    Call this function once at the beginning of main() in entry points\n    (main.py, rlm_qa_agent.py).\n\n    Args:\n        level: Log level. Defaults to logging.INFO.\n    \"\"\"\n    # Get the root logger and set the log level\n    root_logger = logging.getLogger()\n    root_logger.setLevel(level)\n\n    # Create a formatter used by both console and file handlers\n    formatter = _SkipBlankFormatter(_LOG_FORMAT)\n\n    # ===== Console handler =====\n    # Only WARNING and above are output to the console; details are recorded in the log file.\n    console_handler = logging.StreamHandler()\n    console_handler.setLevel(logging.WARNING)\n    console_handler.setFormatter(formatter)\n    root_logger.addHandler(console_handler)\n\n    # ===== File handler =====\n    os.makedirs(_LOG_DIR, exist_ok=True)\n    file_handler = RotatingFileHandler(\n        os.path.join(_LOG_DIR, \"codetwine.log\"),\n        maxBytes=_MAX_BYTES,\n        backupCount=_BACKUP_COUNT,\n        encoding=\"utf-8\",\n    )\n    file_handler.setFormatter(formatter)\n    root_logger.addHandler(file_handler)\n\n    # ===== Restrict external library log levels to WARNING =====\n    logging.getLogger(\"httpx\").setLevel(logging.WARNING)\n    logging.getLogger(\"httpcore\").setLevel(logging.WARNING)\n    logging.getLogger(\"LiteLLM\").setLevel(logging.WARNING)"
+      "end_line": 74,
+      "context": "def setup_logging(level: int = logging.INFO) -> None:\n    \"\"\"Configure both console output and log file output.\n\n    Call this function once at the beginning of main() in the entry point (main.py).\n\n    Args:\n        level: Log level. Defaults to logging.INFO.\n    \"\"\"\n    # Get the root logger and set the log level\n    root_logger = logging.getLogger()\n    root_logger.setLevel(level)\n\n    # Create a formatter used by both console and file handlers\n    formatter = _SkipBlankFormatter(_LOG_FORMAT)\n\n    # ===== Console handler =====\n    # Only WARNING and above are output to the console; details are recorded in the log file.\n    console_handler = logging.StreamHandler()\n    console_handler.setLevel(logging.WARNING)\n    console_handler.setFormatter(formatter)\n    root_logger.addHandler(console_handler)\n\n    # ===== File handler =====\n    os.makedirs(_LOG_DIR, exist_ok=True)\n    file_handler = RotatingFileHandler(\n        os.path.join(_LOG_DIR, \"codetwine.log\"),\n        maxBytes=_MAX_BYTE,\n        backupCount=_BACKUP_COUNT,\n        encoding=\"utf-8\",\n    )\n    file_handler.setFormatter(formatter)\n    root_logger.addHandler(file_handler)\n\n    # ===== Restrict external library log levels to WARNING =====\n    logging.getLogger(\"httpx\").setLevel(logging.WARNING)\n    logging.getLogger(\"httpcore\").setLevel(logging.WARNING)\n    logging.getLogger(\"LiteLLM\").setLevel(logging.WARNING)"
+    },
+    {
+      "name": "log_progress",
+      "type": "function_definition",
+      "start_line": 77,
+      "end_line": 85,
+      "context": "def log_progress(logger: logging.Logger, message: str) -> None:\n    \"\"\"Print a progress message to the console and record it in the log file at INFO level.\n\n    Args:\n        logger: The calling module's logger.\n        message: The progress message.\n    \"\"\"\n    print(message)\n    logger.info(message)"
     }
   ],
   "callee_usages": [],
+  "same_file_usages": [
+    {
+      "lines": [
+        51,
+        57,
+        68
+      ],
+      "name": "_SkipBlankFormatter",
+      "target_name": "_SkipBlankFormatter",
+      "target_start_line": 20
+    },
+    {
+      "lines": [
+        51
+      ],
+      "name": "_LOG_FORMAT",
+      "target_name": "_LOG_FORMAT",
+      "target_start_line": 13
+    },
+    {
+      "lines": [
+        61,
+        63
+      ],
+      "name": "_LOG_DIR",
+      "target_name": "_LOG_DIR",
+      "target_start_line": 7
+    },
+    {
+      "lines": [
+        64
+      ],
+      "name": "_MAX_BYTE",
+      "target_name": "_MAX_BYTE",
+      "target_start_line": 16
+    },
+    {
+      "lines": [
+        65
+      ],
+      "name": "_BACKUP_COUNT",
+      "target_name": "_BACKUP_COUNT",
+      "target_start_line": 17
+    }
+  ],
   "caller_usages": [
+    {
+      "lines": [
+        1092,
+        1143,
+        1145,
+        1153,
+        1161,
+        1185
+      ],
+      "name": "log_progress",
+      "file": "codetwine/codetwine/doc_creator_py/doc_creator.py",
+      "usage_context": "    level_count = len(level_list)\n    total_file_count = sum(len(level) for level in level_list)\n\n    log_progress(\n        logger,\n        f\"Starting design document generation. \"\n        f\"Dependency depth levels: {level_count}, \"\n...\n            # Regenerate when doc.json is missing or unreadable\n            if existing_doc is not None:\n                if _is_doc_complete(existing_doc, template):\n                    log_progress(logger, f\"  REUSE: {file_rel}\")\n                    return file_rel, existing_doc\n                log_progress(logger, f\"  INCOMPLETE: {file_rel}\")\n"
+    },
+    {
+      "lines": [
+        159,
+        268,
+        282,
+        294,
+        296,
+        302,
+        305,
+        321,
+        328,
+        346
+      ],
+      "name": "log_progress",
+      "file": "codetwine/codetwine/pipeline_py/pipeline.py",
+      "usage_context": "        whose analysis failed, and {relative path: detected_encoding} of the files whose\n        encoding read_source() had to detect.\n    \"\"\"\n    log_progress(logger, f\"Extracting dependencies for {len(file_rel_list)} files...\")\n\n    # Lookups that are the same for every file, built once and passed to each call\n    project_file_set = {info[\"file\"] for info in language_dep_list}\n...\n    os.makedirs(base_output_dir, exist_ok=True)\n\n    # == Step 1: Build the project-wide dependency graph ====================\n    log_progress(logger, \"Analyzing project dependencies...\")\n    project_dep_list_raw = build_project_dependencies(project_dir, file_list)\n    project_dep_list = _to_internal_dep_list(project_dep_list_raw)\n"
+    },
     {
       "lines": [
         72

@@ -4,46 +4,165 @@
 
 **Overview**
 
-Traverses a tree-sitter AST to extract usage locations and typed-alias mappings of previously imported symbol names.
+Extract usage locations of imported names from source code ASTs by detecting function calls, attribute access chains, qualified identifiers, and type references, accounting for local variable scoping and alias tracking.
 
-- Call `extract_usages` when you need every location (function calls, attribute accesses, identifiers, type/namespace references) in a file where a set of imported names is referenced, and you want a deduplicated `UsageInfo` list sorted by line.
-- Call `extract_typed_aliases` when a language declares local variables/parameters with an imported type name (Java, Kotlin, C/C++ style declarations) and you need a variable-name → type-name mapping so those variable names can also be tracked as usages of the imported type.
-- Use the `UsageInfo` dataclass as the common return unit whenever you need a symbol name paired with its 1-based source line.
-- Use the private helpers (`_parse_call_node`, `_parse_attribute_node`, `_parse_identifier_node`, `_is_function_part_of_call`, `_extract_type_and_var`, `_deduplicate`) only if extending the traversal logic itself; external callers should not need them directly.
+- Call `extract_usages()` to traverse an AST or COBOL source and return a list of `UsageInfo` objects identifying where imported names are referenced, with line numbers and the full qualified names used.
+- Call `symbol_part_list()` to split a dotted or scope-resolution-qualified name into its constituent parts for hierarchical lookups.
+- Call `usage_root_name()` to identify the longest leading part of a usage name that is tracked, used by downstream files to resolve which imported name a usage references.
+- Call `deduplicate_usage_list()` to remove redundant entries (shorter names when longer qualified names exist on the same line) and eliminate exact duplicates from a usage list.
+- Call `extract_typed_aliases()` or `extract_value_aliases()` to find variables declared with or assigned tracked types, then use `typed_alias_type()` to determine what type a variable stands for at a specific line, enabling type-based usage filtering.
 
-This file relies only on `tree_sitter.Node` for AST traversal; it has no internal project dependencies. It is used by `codetwine/extractors/usage_analysis.py`, which calls `extract_typed_aliases` to build a variable→type map from a root AST node against a set of tracked names, then merges those variable names into the tracked-name set before calling `extract_usages` to obtain the final usage list for a file (both for the file itself and for caller-side analysis using `caller_root`).
+The file depends on `definitions.py` for `pattern_name_list()` to extract bound names from destructuring patterns, on `rust_path.py` for `path_segment_list()` and `macro_path_list()` to parse Rust paths, and on `cobol_source.py` to handle COBOL file references. It is used by `import_reference.py` to detect usages after imports are resolved, by `usage_analysis.py` to analyze reference targets, by `definition_source.py` to locate call origins, and by `import_binding.py` to resolve member definitions, all of which rely on accurate usage extraction and name part splitting.
 
-Design decisions: traversal is iterative (stack-based DFS) rather than recursive to avoid recursion-depth issues on large ASTs; language-specific behavior is entirely externalized into the `usage_node_types` / `typed_alias_parent_types` config dictionaries rather than hardcoded per-language branches, so adding a new language requires only new config entries, not new traversal code; deduplication favors the most specific dotted name (e.g. `module.attr` over `module`) per line rather than keeping both.
+Scoping is handled via depth-first AST traversal with a `_UsageSetting` object that caches local names per scope node to avoid recomputation; import statements and local variable bindings are tracked by line to distinguish usage from declaration; type aliases are stored with their scope boundaries so names on specific lines can be checked against their tracked types.
 
 **Definitions**
 
 ## `UsageInfo`
-A dataclass holding a single usage record: the symbol `name` and the 1-based `line` where it appears. It is the uniform return element produced by `extract_usages` and consumed by callers in `usage_analysis.py` to report where imported/tracked symbols are used.
 
-## `extract_usages`
-Performs an iterative DFS over the AST rooted at `root_node`, detecting usages of names in `imported_names` by matching node types configured in `usage_node_types` (`call_types`, `attribute_types`, `skip_parent_types`, and optional `skip_parent_types_for_type_ref` / `skip_name_field_types`), plus hardcoded handling for `identifier`, `type_identifier`/`namespace_identifier`, and C++ `qualified_identifier` nodes. It returns an empty list immediately when `usage_node_types` is falsy, which is how languages without usage-tracking configuration are handled; otherwise it delegates node-specific parsing to `_parse_call_node`, `_parse_attribute_node`, `_parse_identifier_node`, and inline scope-resolution logic, then deduplicates results via `_deduplicate` before returning. Callers use it to get the final, per-file or per-caller list of `UsageInfo` for a given set of tracked names.
+Data class holding a single symbol usage location with the qualified name being used and its line number (1-based).
 
-## `_deduplicate`
-Groups collected `UsageInfo` entries by line number and removes a shorter name when a more detailed dotted name (e.g. keeps `module.attr`, drops `module`) exists on the same line, then removes exact `(name, line)` duplicates. It exists to prevent redundant reporting when both a call/attribute node and its constituent identifier nodes independently register a usage on the same line. Returns results sorted ascending by line.
+## `symbol_part_list()`
 
-## `_is_function_part_of_call`
-Checks whether an attribute node is actually the callee expression of a parent call node (e.g. the `module.func` part of `module.func()`), based on `call_types` and whether the node is the parent's first identifier/attribute child. It exists so that `extract_usages` does not double-count an attribute access that is already handled by the enclosing call node's `_parse_call_node`.
+Split a usage name on dots and scope-resolution operators (`::`) into its constituent parts, used by callers to match individual segments against imported names or to reconstruct longer paths.
 
-## `_parse_call_node`
-Extracts a `UsageInfo` from a call node by inspecting only its first child: a simple `identifier` (e.g. `func()`), an attribute node from `attribute_types` (e.g. `module.func()`, checked via the leading segment before the first dot), or a `qualified_identifier` (C++ `geometry::doSomething()`), matching the resolved name against `imported_names`. Returns `None` when the leading name/segment is not tracked; used exclusively by `extract_usages` for nodes in `call_types`.
+## `_track_root()`
 
-## `_parse_attribute_node`
-Extracts a `UsageInfo` from a standalone attribute-access node (`module.attr`) by checking whether the leading segment before the first dot is in `imported_names`, recording the full dotted text as the usage name. Used by `extract_usages` only for attribute nodes not already classified as the function part of a call via `_is_function_part_of_call`.
+Find the longest leading part of a name (cut at separators) that is in a tracked name set, returning that prefix or None, used internally to determine whether a usage chain starts from a tracked name.
 
-## `_parse_identifier_node`
-Extracts a `UsageInfo` from a plain identifier node while filtering out identifiers that are structurally part of declarations/imports rather than genuine usages, using `skip_parent_types` to skip entirely and `skip_name_field_types` to skip only when the identifier is the parent's "name"-field child (allowing the "value" side, e.g. a default-parameter's assigned expression, to still be detected). It is the fallback usage detector for generic `identifier` nodes not covered by call/attribute/type-reference handling.
+## `usage_root_name()`
 
-## `extract_typed_aliases`
-Performs an iterative DFS over `root_node` to find variable/parameter declarations whose node type is in `typed_alias_parent_types` (e.g. Java `field_declaration`/`local_variable_declaration`/`formal_parameter`, Kotlin `property_declaration`/`parameter`, C/C++ `declaration`/`parameter_declaration`), delegating name/type extraction to `_extract_type_and_var`, and returns a `{variable_name: type_name}` dict limited to declarations whose type is in `imported_names`. Returns an empty dict immediately if `typed_alias_parent_types` is empty; `usage_analysis.py` uses this to discover locally-declared variable names (e.g. `genre` typed as imported `Genre`) so those variable names can be added to the tracked-name set before calling `extract_usages`.
+Return the longest leading part of a usage name found in a tracked set, or the first part if none match, used by downstream analysis to determine which imported name a usage refers to.
 
-## `_extract_type_and_var`
-Inspects the direct children of a typed-declaration node to pull out the declared type name and one or more variable names, handling per-language AST shape differences: direct `type_identifier`, Kotlin's `user_type` wrapping a nested `type_identifier`, direct `identifier`/`simple_identifier` children, and Java/C++ `variable_declarator`/`init_declarator` wrapping a nested `identifier`. Returns `(None, [])` when no recognizable type/variable pattern is found, signaling to `extract_typed_aliases` that the node should be skipped.
+## `_UsageSetting`
+
+Data class storing per-file usage extraction configuration: names and member names to track, type alias information, language-specific node type dictionaries, import line locations, cached local name sets per scope, and an optional callback to identify pattern names that bind rather than reference.
+
+## `_UsageSetting.type_set()`
+
+Return a set of node types from the language settings for a given key, or an empty set if absent, used to retrieve language-specific lists of syntax node types.
+
+## `_pattern_name_list()`
+
+Extract names from a binding pattern using the language-specific pattern type settings, wrapping `pattern_name_list()` from definitions.py with the current file's configuration.
+
+## `_binding_name_list()`
+
+Return local names bound by a binding node (parameters, variables, destructured names) excluding names from import statements on those lines and names that refer to definitions rather than bind, used to populate local scope tracking.
+
+## `_local_name_set()`
+
+Compute and cache the set of names bound in a scope (parameters, local variables, inner functions), walking the scope's children while skipping nested scopes and opaque bodies, and removing names declared global/nonlocal, used to check whether identifiers are local.
+
+## `_is_local_name()`
+
+Return whether a name at a node is bound by a scope ancestor, checking alias boundaries and scope body field restrictions, used to exclude local variable references from usage lists.
+
+## `_chain_part()`
+
+Split an attribute access (or chained member/pointer access) into the base node and the list of member names written after it, used to extract usage information from chains like `helper.process.run` or `self.x.go`.
+
+## `_chain_usage()`
+
+Return usage information for a name chain starting from a base node and optional member names, checking whether it starts from a tracked name or from self/this with a tracked member, used to create UsageInfo from attribute chains.
+
+## `_qualified_segment_list()`
+
+Split a qualified identifier (C++ or Kotlin) into its component segments, dropping template arguments, used to extract parts from scope-resolution-qualified names.
+
+## `_template_name()`
+
+Extract the name from a template node by removing generic type arguments (e.g., `Box<int>` becomes `Box`), used to normalize template syntax when building qualified names.
+
+## `_qualified_usage()`
+
+Return usage information from a qualified identifier by finding the first tracked segment and using all segments from that point onward as the usage name, used to handle C++ scope-resolution calls and namespace-qualified references.
+
+## `extract_usages()`
+
+Traverse an AST (or CobolSource) via depth-first search and collect all usage locations of imported names, detecting function calls, attribute access, identifiers, type/namespace references, and Rust paths while filtering out local variable bindings and skipping syntax-related occurrences, returning a deduplicated list; for COBOL sources, case-insensitive matching is used instead of AST parsing.
+
+## `_leading_part_set()`
+
+Extract every leading prefix of dotted/scope-qualified names up to each separator (e.g., `a.b.c` yields `a` and `a.b`), used to identify shorter names that are subsumed by longer qualified names on the same line.
+
+## `deduplicate_usage_list()`
+
+Remove redundant entries within each line (keeping the longer name when both `module` and `module.attr` exist) and eliminate duplicate (name, line) pairs, returning a list sorted by line number.
+
+## `_is_function_part_of_call()`
+
+Determine whether an attribute node is the first child of a call node, used to avoid processing the same function reference twice (once via the call node and once via the attribute node).
+
+## `_parse_call_node()`
+
+Extract usage information from a function call node by reading its function name part (simple identifier, attribute chain, or qualified identifier) or its object and name fields, used to detect method calls and function invocations.
+
+## `_parse_attribute_node()`
+
+Extract usage information from a standalone attribute access node by splitting it into base and member chain, used to detect member access outside of calls.
+
+## `_parse_path_node()`
+
+Extract usage information from a Rust path by checking whether the full path or its first segment is imported, used to detect Rust module paths and scoped-identifier usages.
+
+## `_parse_identifier_node()`
+
+Extract usage information from a simple identifier or identifier-like node by checking it against import names, skip rules, and local scope, filtering out syntax-related occurrences (in imports, definitions, patterns), used to detect simple variable references.
+
+## `TypedAlias`
+
+Data class representing a variable that stands for an object of a tracked type, with its name, type name (or None for non-tracked values), and the line range it applies to, used to track type-based scoping of variable usages.
+
+## `_scope_node()`
+
+Return the innermost scope node (function, block) around a given node, or the root if none exists, returning None if an opaque type (class body) blocks the path, used to determine the scope lifetime for alias tracking.
+
+## `extract_typed_aliases()`
+
+Traverse an AST to find variables declared with a tracked type, returning one `TypedAlias` per variable whose declared type matches an imported name, scoped to the innermost function or the whole file, used to suppress usages of those variable names on lines they are declared.
+
+## `_new_type_name()`
+
+Return the name of a type created by a constructor or new expression (e.g., `Engine()` yields `Engine`, `new Engine()` yields `Engine`), used to determine what type a value assignment creates.
+
+## `extract_value_aliases()`
+
+Traverse an AST to find variables assigned objects of tracked types (e.g., `e = Engine()`), returning one `TypedAlias` per variable and assignment, with type names only when assigned tracked types and None for non-tracked assignments, used to suppress usages of those variable names when they hold non-tracked values.
+
+## `typed_alias()`
+
+Find the most specific `TypedAlias` for a variable name on a given line (the one with the fewest lines if multiple match), used to determine what type a variable stands for at a specific location.
+
+## `typed_alias_type()`
+
+Return the type name a variable stands for at a specific line by finding its alias, used to replace variable usages with their type names for better dependency tracking.
+
+## `_type_name()`
+
+Extract the name of a type from a type node, handling identifiers, qualified types, template syntax, and module-qualified types like `core.Engine`, used to identify the type name in variable declarations.
+
+## `_field_type_and_var()`
+
+Extract type name and variable name from a declaration that stores both in named fields, used to handle declaration formats like Java or Kotlin parameter lists.
+
+## `_extract_type_and_var()`
+
+Extract type name and variable names from a typed variable declaration node, absorbing AST differences across Java, Kotlin, C/C++, and other languages by walking children for type nodes, identifiers, and declarators, used to handle diverse declaration syntaxes.
 
 # Summary
 
-Extracts imported-symbol usage locations and typed-alias variable-to-type mappings from a tree-sitter AST via iterative stack-based DFS, using language-agnostic config dictionaries. Public: UsageInfo dataclass, extract_usages, extract_typed_aliases. Handles calls, attributes, identifiers, type/namespace references, deduplication favoring specific dotted names, and typed variable/parameter declarations across Java/Kotlin/C/C++. Depends only on tree_sitter.Node; consumed by usage_analysis.py to build tracked-name sets and report per-file/caller symbol usage locations.
+# Summary: codetwine/extractors/usages.py
+
+**Single Responsibility:** Extract references to imported names from source code by analyzing ASTs and COBOL files, tracking where names are used across function calls, attribute access, qualified identifiers, and type references while accounting for local variable scoping and aliases.
+
+**Main Public Definitions:**
+- `UsageInfo`: Data class for a single usage location
+- `extract_usages()`: Traverse AST to collect all imported name references
+- `symbol_part_list()`: Split dotted/scope-qualified names into parts
+- `usage_root_name()`: Find longest tracked leading part of a usage name
+- `deduplicate_usage_list()`: Remove redundant entries from usage lists
+- `extract_typed_aliases()` / `extract_value_aliases()`: Find variables holding tracked types
+- `typed_alias_type()`: Determine what type a variable represents at a line
+
+**Key Concepts:** Usage detection, name part splitting, local scope filtering, type-based alias tracking, call/attribute/identifier parsing, language-specific AST differences, COBOL case-insensitive matching, deduplication by line and name subsumption.

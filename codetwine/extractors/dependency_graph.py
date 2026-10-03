@@ -15,6 +15,8 @@ from codetwine.import_reference import clear_import_reference_cache
 from codetwine.rust_module_tree import module_tree_cache
 from codetwine.parsers.r_markdown import has_r_chunk
 from codetwine.path_config import path_config_cache
+from codetwine.package_path import clear_package_path_cache
+from codetwine.alias_path import clear_alias_path_cache
 from codetwine.r_name_index import r_import_file_list, r_name_index_cache, r_target_cache
 from codetwine.reference_target import reference_kind, reference_target_list
 from codetwine.import_to_path import (
@@ -189,39 +191,6 @@ def _import_callee_rel_set(
     return callee_rel_set
 
 
-def _collect_import_callee_dict(
-    language_file_list: list[str],
-    project_dir: str,
-    project_file_set: set[str],
-) -> dict[str, set[str]]:
-    """Map each file to the project files its import statements resolve to.
-
-    Args:
-        language_file_list: Absolute paths of the files that have a language.
-        project_dir: Root directory of the project to analyze.
-        project_file_set: Relative paths of the files that have a language.
-
-    Returns:
-        A {file absolute path: set of callee absolute paths} dict, one entry per file.
-        A file whose analysis raises an exception has no callees; the exception is logged.
-    """
-    file_callee_dict: dict[str, set[str]] = {}
-    for file_path in language_file_list:
-        file_rel = _to_rel(file_path, project_dir)
-        try:
-            callee_rel_set = _import_callee_rel_set(
-                file_path, file_rel, project_file_set, project_dir,
-            )
-        except Exception as e:
-            _log_graph_failure(file_rel, e)
-            callee_rel_set = set()
-        file_callee_dict[os.path.abspath(file_path)] = {
-            os.path.abspath(os.path.join(project_dir, callee_rel))
-            for callee_rel in callee_rel_set if callee_rel != file_rel
-        }
-    return file_callee_dict
-
-
 def _log_graph_failure(file_rel: str, error: Exception) -> None:
     """Log that a file is analyzed without its dependencies in the dependency graph."""
     logger.warning(
@@ -257,39 +226,50 @@ def _reference_callee_rel_list(
     return callee_rel_list
 
 
-def _add_reference_callee(
-    file_callee_dict: dict[str, set[str]],
+def _collect_callee_dict(
     language_file_list: list[str],
     project_dir: str,
     project_file_set: set[str],
-) -> None:
-    """Add the files the references of a file resolve to as its callees.
+) -> dict[str, set[str]]:
+    """Map each file to the project files it depends on.
 
-    These are the files whose definitions the file uses: through an import statement,
-    without one (Java / Kotlin: same package, SQL: whole project), by name (C#, R), or
-    through a copybook that includes the file (COBOL).
-    A file whose analysis raises an exception adds no edges; the exception is logged.
+    These are the files its import statements resolve to, and the files whose
+    definitions it uses: through an import statement, without one (Java / Kotlin: same
+    package, SQL: whole project), by name (C#, R), or through a copybook that includes
+    the file (COBOL). Both are read for one file before the next file is read, so the
+    syntax tree of the file is read while it is in parse_cache.
 
     Args:
-        file_callee_dict: Return value of _collect_import_callee_dict; modified in place.
         language_file_list: Absolute paths of the files that have a language.
         project_dir: Root directory of the project to analyze.
         project_file_set: Relative paths of the files that have a language.
+
+    Returns:
+        A {file absolute path: set of callee absolute paths} dict, one entry per file.
+        A file whose import statements raise an exception has no callees of them, and
+        one whose references raise an exception none of those; the exception is logged.
     """
+    file_callee_dict: dict[str, set[str]] = {}
     for file_path in language_file_list:
         file_rel = _to_rel(file_path, project_dir)
+        callee_rel_set: set[str] = set()
         try:
-            callee_rel_list = _reference_callee_rel_list(
+            callee_rel_set.update(_import_callee_rel_set(
                 file_path, file_rel, project_file_set, project_dir,
-            )
+            ))
         except Exception as e:
             _log_graph_failure(file_rel, e)
-            continue
-        for callee_rel in callee_rel_list:
-            if callee_rel != file_rel:
-                file_callee_dict[os.path.abspath(file_path)].add(
-                    os.path.abspath(os.path.join(project_dir, callee_rel))
-                )
+        try:
+            callee_rel_set.update(_reference_callee_rel_list(
+                file_path, file_rel, project_file_set, project_dir,
+            ))
+        except Exception as e:
+            _log_graph_failure(file_rel, e)
+        file_callee_dict[os.path.abspath(file_path)] = {
+            os.path.abspath(os.path.join(project_dir, callee_rel))
+            for callee_rel in callee_rel_set if callee_rel != file_rel
+        }
+    return file_callee_dict
 
 
 def _to_output_entry_list(
@@ -361,7 +341,7 @@ def build_project_dependencies(
     statements (clear_import_reference_cache, clear_import_binder_cache,
     clear_import_path_cache), the definitions read for a definition's source
     (clear_definition_source_cache) and the path settings of the JS/TS config files
-    (path_config_cache). The parse results (parse_cache) are kept.
+    (path_config_cache, the package and alias caches). The parse results (parse_cache) are kept.
 
     Args:
         project_dir: Root directory of the project to analyze.
@@ -390,6 +370,8 @@ def build_project_dependencies(
     clear_import_path_cache()
     clear_definition_source_cache()
     path_config_cache.clear()
+    clear_package_path_cache()
+    clear_alias_path_cache()
 
     # R Markdown and Quarto files without an R code chunk are analyzed without a language,
     # and files without a language that COBOL COPY statements name are analyzed as COBOL
@@ -403,13 +385,8 @@ def build_project_dependencies(
     # A lookup set used to determine whether a module is within the project during import resolution
     project_file_set = {_to_rel(file_path, project_dir) for file_path in language_file_list}
 
-    # == Step 3: Collect files imported by each file (callees) ======
-    file_callee_dict = _collect_import_callee_dict(
-        language_file_list, project_dir, project_file_set,
-    )
-
-    # == Step 3.5: Add the files the references of each file resolve to ========
-    _add_reference_callee(file_callee_dict, language_file_list, project_dir, project_file_set)
+    # == Step 3: Collect the files each file imports and refers to (callees) ==
+    file_callee_dict = _collect_callee_dict(language_file_list, project_dir, project_file_set)
 
     # == Step 4: Build the callers (reverse lookup) index ==================
     file_caller_dict: dict[str, list[str]] = {os.path.abspath(f): [] for f in language_file_list}
