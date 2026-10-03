@@ -481,13 +481,17 @@ Per-file definition and dependency information.
     {
       "name": "string",
       "from": "string",
-      "target_context": "string",
+      "target_context": "string|null",
+      "target_name": "string|null",
+      "target_start_line": 0,
       "lines": [0]
     }
   ],
   "same_file_usages": [
     {
       "name": "string",
+      "target_name": "string|null",
+      "target_start_line": 0,
       "lines": [0]
     }
   ],
@@ -517,9 +521,13 @@ Per-file definition and dependency information.
 | `definitions[].context` | string | Full source code of the definition |
 | `callee_usages[].name` | string | Name of the used symbol as the file writes it (`helper.process`, `Settings::new`). A member used on a variable declared with a type of the project is named after the type (`User.getName`, `node_t.value`) |
 | `callee_usages[].from` | string | Path of the dependency file copied to the output directory |
-| `callee_usages[].target_context` | string | Full source code of the dependency symbol |
+| `callee_usages[].target_context` | string\|null | Full source code of the definition the name leads to. `null` when it leads to no definition of that file (a module used as a value) |
+| `callee_usages[].target_name` | string\|null | `definitions[].name` of that definition in the dependency file (`helper` for a usage written `hp` after `const { helper: hp } = require(...)`). `null` with `target_context` |
+| `callee_usages[].target_start_line` | int\|null | `definitions[].start_line` of that definition. `null` with `target_context` |
 | `callee_usages[].lines` | int[] | Line numbers of usage within this file |
 | `same_file_usages[].name` | string | Name of a symbol defined in this file and used in it |
+| `same_file_usages[].target_name` | string\|null | `definitions[].name` of the definition the name leads to (`new` for `Point::new`). `null` when it leads to no definition |
+| `same_file_usages[].target_start_line` | int\|null | `definitions[].start_line` of that definition |
 | `same_file_usages[].lines` | int[] | Line numbers of usage within this file, outside the definition the name refers to |
 | `caller_usages[].name` | string | Name of the symbol being used |
 | `caller_usages[].file` | string | Path of the dependent file copied to the output directory |

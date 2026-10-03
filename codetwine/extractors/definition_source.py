@@ -155,6 +155,36 @@ def file_definition(
         file whose definitions are not read by extract_definitions() from a syntax
         tree (COBOL, BMS, R, a file without a language).
     """
+    definition_tuple = source_definition(file_rel, name, project_dir)
+    return definition_tuple[0] if definition_tuple is not None else None
+
+
+def source_definition(
+    file_rel: str, name: str, project_dir: str, start_line: int | None = None,
+) -> tuple[DefinitionInfo, str] | None:
+    """Return the definition of a file a name names, with its source text.
+
+    With start_line, the parts of the name are tried from the last one and the first
+    definition named like the part whose first line is start_line is taken; when
+    there is none, and without start_line, the name is looked up by find_definition().
+
+    Examples (class Gen<T> on line 7 and class Gen on line 11, each with Size):
+        "Gen.Size", 13   -> Size inside class Gen
+        "Gen", 11        -> class Gen
+        "Gen.Count", 11  -> class Gen (Count is no definition)
+
+    Args:
+        file_rel: Path of the file relative to the project root.
+        name: Name of the definition, its parts joined with "." or "::".
+        project_dir: Absolute path to the project root.
+        start_line: First line of the definition (1-based), None when it is not known.
+
+    Returns:
+        (definition, source text of the definition). None when the name names no
+        definition of the file, and for a file whose definitions are not read by
+        extract_definitions() from a syntax tree (COBOL, BMS, R, a file without a
+        language).
+    """
     absolute_path = os.path.join(project_dir, file_rel)
     file_ext = language_ext(absolute_path)
     definition_dict = EXT_TO_DEFINITION_DICT.get(file_ext)
@@ -165,7 +195,24 @@ def file_definition(
         or file_ext in R_EXT_SET
     ):
         return None
-    return find_definition(_file_definition(absolute_path, definition_dict)[0], name)
+    definition_list, content = _file_definition(absolute_path, definition_dict)
+    definition: DefinitionInfo | None = None
+    if start_line is not None:
+        for part in reversed(symbol_part_list(name)):
+            definition = next(
+                (
+                    candidate for candidate in definition_list
+                    if candidate.name == part and candidate.start_line == start_line
+                ),
+                None,
+            )
+            if definition is not None:
+                break
+    if definition is None:
+        definition = find_definition(definition_list, name)
+    if definition is None:
+        return None
+    return definition, content[definition.start_byte:definition.end_byte].decode("utf-8")
 
 
 def extract_callee_source(
@@ -208,25 +255,14 @@ def extract_callee_source(
         callee_root, callee_content = parse_file(absolute_path)
         return r_definition_text(callee_root, callee_content, callee_name)
 
-    definition_list, content = _file_definition(absolute_path, definition_dict)
-    definition = find_definition(definition_list, callee_name)
-    if definition is None:
-        return None
-    return content[definition.start_byte:definition.end_byte].decode("utf-8")
+    definition_tuple = source_definition(callee_file_path, callee_name, project_dir)
+    return definition_tuple[1] if definition_tuple is not None else None
 
 
 def extract_definition_source(
     file_rel: str, name: str, start_line: int, project_dir: str,
 ) -> str | None:
     """Return the source text of the definition of a name that starts on a line.
-
-    The parts of the name are tried from the last one; the first definition of the
-    file named like the part whose first line is start_line is taken.
-
-    Examples (class Gen<T> on line 7 and class Gen on line 11, each with Size):
-        "Gen.Size", 13   -> Size inside class Gen
-        "Gen", 11        -> class Gen
-        "Gen.Count", 11  -> class Gen (Count is no definition)
 
     Args:
         file_rel: Path, relative to the project root, of a file whose definitions
@@ -236,15 +272,10 @@ def extract_definition_source(
         project_dir: Absolute path to the project root.
 
     Returns:
-        The source code string. The return value of extract_callee_source() when no
-        part of the name is a definition that starts on the line.
+        The source text of the definition source_definition() gives for the name and
+        the line. The return value of extract_callee_source() when it gives none.
     """
-    absolute_path = os.path.join(project_dir, file_rel)
-    definition_dict = EXT_TO_DEFINITION_DICT.get(language_ext(absolute_path))
-    if definition_dict:
-        definition_list, content = _file_definition(absolute_path, definition_dict)
-        for part in reversed(symbol_part_list(name)):
-            for definition in definition_list:
-                if definition.name == part and definition.start_line == start_line:
-                    return content[definition.start_byte:definition.end_byte].decode("utf-8")
+    definition_tuple = source_definition(file_rel, name, project_dir, start_line)
+    if definition_tuple is not None:
+        return definition_tuple[1]
     return extract_callee_source(file_rel, name, project_dir)

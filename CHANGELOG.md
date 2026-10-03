@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Added
+- `file_dependencies.json`: `callee_usages[]` and `same_file_usages[]` carry `target_name` and `target_start_line`, the `definitions[].name` and `definitions[].start_line` of the definition the usage leads to (`null` when it leads to none) (`definition_source.source_definition()`)
 - Rust: a `use` declaration inside a block or an inline module is bound for the lines of that block or module only, and a path starting with a name it binds is resolved through it (`ImportInfo.scope_line_tuple`, `ImportBinder.scope_binding_list()`)
 - Rust: paths and `use` names that lead to a definition of the file itself (`self::`, `crate::`, `super::`) are listed in `same_file_usages`; `Self::member` inside an `impl` block is read as `Type::member`
 - Rust: `Type::member` is also linked to every other file whose `impl` block of the type defines the member
