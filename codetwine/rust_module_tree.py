@@ -2,6 +2,7 @@ import os
 import logging
 import tomllib
 from dataclasses import dataclass, field
+from tree_sitter import Node
 from codetwine.parsers.ts_parser import parse_file
 from codetwine.extractors.definitions import (
     ATTACHED_DEFINITION_TYPE_SET,
@@ -9,6 +10,7 @@ from codetwine.extractors.definitions import (
     select_top_level_definitions,
 )
 from codetwine.extractors.rust_path import mod_declaration, rust_import_list
+from codetwine.utils.project_cache import project_cache_value
 from codetwine.config.settings import EXT_TO_DEFINITION_DICT
 
 logger = logging.getLogger(__name__)
@@ -46,10 +48,35 @@ class _ModuleFile:
     glob_list: list[list[str]] = field(default_factory=list)
     # (module name, #[path] value) of each mod declaration without a body
     mod_list: list[tuple[str, str | None]] = field(default_factory=list)
+    # Name of a top-level enum -> names of its variants
+    variant_dict: dict[str, list[str]] = field(default_factory=dict)
+
+
+def _enum_variant(node: Node) -> tuple[str, list[str]] | None:
+    """Read the name of an enum and the names of its variants.
+
+    Args:
+        node: An enum_item node.
+
+    Returns:
+        (enum name, variant names in the order written), None when the enum has no
+        name or no body.
+    """
+    name_node = node.child_by_field_name("name")
+    body_node = node.child_by_field_name("body")
+    if name_node is None or body_node is None:
+        return None
+    variant_name_list: list[str] = []
+    for child in body_node.named_children:
+        variant_name_node = child.child_by_field_name("name") if child.type == "enum_variant" else None
+        if variant_name_node is not None:
+            variant_name_list.append(variant_name_node.text.decode("utf-8"))
+    return name_node.text.decode("utf-8"), variant_name_list
 
 
 def _read_module_file(file_abs: str) -> _ModuleFile:
-    """Parse a .rs file and collect its top-level definitions, use declarations and mod declarations.
+    """Parse a .rs file and collect its top-level definitions, use declarations, mod
+    declarations and enum variants.
 
     Args:
         file_abs: Absolute path of the .rs file.
@@ -71,8 +98,12 @@ def _read_module_file(file_abs: str) -> _ModuleFile:
             declaration = mod_declaration(child)
             if declaration is not None:
                 module_file.mod_list.append(declaration)
+        elif child.type == "enum_item":
+            enum_variant = _enum_variant(child)
+            if enum_variant is not None:
+                module_file.variant_dict[enum_variant[0]] = enum_variant[1]
         elif child.type in ("use_declaration", "extern_crate_declaration"):
-            for module, name, _ in rust_import_list(child):
+            for module, name, _, _ in rust_import_list(child):
                 if name == "*":
                     module_file.glob_list.append(module.split("::"))
                 elif name:
@@ -300,6 +331,8 @@ class RustModuleTree:
         """Resolve a path written in a file to the file that defines what it names.
 
         The first segment is looked up in this order:
+            "" (a leading "::")     -> the library root of the crate the next segment
+                                       names, else the crate root in an edition 2015 package
             crate / self / super    -> the crate root / this module / the parent module
             a child module          -> that module's file
             a name bound by use     -> the path of that use declaration
@@ -345,6 +378,14 @@ class RustModuleTree:
         """Look up the first segment of a path in the order described in resolve."""
         head = segment_list[0]
         module_file = self.module_file_dict[file_rel]
+        if head == "":
+            if len(segment_list) > 1 and segment_list[1] in self.crate_lib_dict:
+                return self._walk(
+                    self.crate_lib_dict[segment_list[1]], segment_list[2:], hop, visit_set,
+                )
+            if self._is_edition_2015(file_rel):
+                return self._walk(self.crate_root(file_rel), segment_list[1:], hop, visit_set)
+            return None, segment_list
         if head == "crate":
             return self._walk(self.crate_root(file_rel), segment_list[1:], hop, visit_set)
         if head in ("self", "super") or head in self.child_dict[file_rel]:
@@ -442,14 +483,9 @@ def _get_module_tree(project_dir: str, project_file_set: set[str]) -> RustModule
     Returns:
         The RustModuleTree of the .rs files in project_file_set.
     """
-    cache_entry = module_tree_cache.get(project_dir)
-    if cache_entry is not None:
-        cache_file_set, module_tree = cache_entry
-        if cache_file_set is project_file_set:
-            return module_tree
-        if cache_file_set == project_file_set:
-            module_tree_cache[project_dir] = (project_file_set, module_tree)
-            return module_tree
+    module_tree = project_cache_value(module_tree_cache, project_dir, project_file_set)
+    if module_tree is not None:
+        return module_tree
 
     module_tree = RustModuleTree(project_dir, {f for f in project_file_set if f.endswith(".rs")})
     module_tree_cache[project_dir] = (project_file_set, module_tree)
@@ -527,8 +563,12 @@ def rust_import_name_dict(
     """Return the names a Rust import binds that refer to a definition, with the path the
     definition has in the resolved file.
 
-    A name that refers to a module is left out. "*" is kept only when the path is a
-    module (use a::*), not an item (use a::Enum::*).
+    A name that refers to a module is left out. "*" is kept when the path is a module
+    of another file (use a::*); when the path is a top-level enum (use a::Enum::*),
+    the names of its variants are returned in its place. An import that leads to the
+    current file gives its names when the first segment left over is a top-level
+    definition of the file. An import whose first segment left over is a name a use
+    declaration of the resolved file binds (pub use std::fmt::Write) gives no names.
 
     Examples (module, name_list -> result):
         "crate::config::Settings", ["Settings"]          -> {"Settings": "Settings"}
@@ -538,7 +578,10 @@ def rust_import_name_dict(
         "Settings::new", ["Settings::new"]                -> {"Settings::new": "Settings::new"}
         "self::config", ["config"]                        -> {}
         "crate::util", ["*"]                              -> {"*": None}
-        "crate::shape::Kind", ["*"]                       -> {}
+        "crate::shape::Kind", ["*"]    -> {"Round": "Kind::Round", "Square": "Kind::Square"}
+        "self::parse", ["self::parse"] (the current file defines parse)
+                                                          -> {"self::parse": "parse"}
+        "crate::prelude::Write", ["Write"] (prelude has pub use std::fmt::Write)  -> {}
 
     Args:
         module: A module string of an ImportInfo.
@@ -553,8 +596,15 @@ def rust_import_name_dict(
     """
     if _is_path_attribute(module):
         return {}
-    target_rel, rest_list = _resolve_import(module, current_file_rel, project_file_set, project_dir)
+    module_tree = _get_module_tree(project_dir, project_file_set)
+    target_rel, rest_list = module_tree.resolve(current_file_rel, module.split("::"))
     if target_rel is None:
+        return {}
+    module_file = module_tree.module_file_dict[target_rel]
+    is_definition = bool(rest_list) and rest_list[0] in module_file.definition_name_set
+    if not is_definition and (
+        target_rel == current_file_rel or (rest_list and rest_list[0] in module_file.use_dict)
+    ):
         return {}
 
     name_dict: dict[str, str | None] = {}
@@ -562,6 +612,9 @@ def rust_import_name_dict(
         if name == "*":
             if not rest_list:
                 name_dict[name] = None
+            elif len(rest_list) == 1:
+                for variant_name in module_file.variant_dict.get(rest_list[0], []):
+                    name_dict.setdefault(variant_name, f"{rest_list[0]}::{variant_name}")
         elif rest_list:
             name_dict[name] = "::".join(rest_list)
     return name_dict

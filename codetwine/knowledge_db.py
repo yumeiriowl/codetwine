@@ -1,14 +1,12 @@
 """SQLite form of the whole-project analysis result.
 
 The database is built from the per-file JSON files in the output directory, one file at
-a time, so the consolidated result is never held in memory as a whole. It carries the
-same content as project_knowledge.json:
+a time. It carries the same content as project_knowledge.json:
 
     project_knowledge.json "files"[]                -> files table (one row per file)
     project_knowledge.json "project_dependencies"[] -> files.summary + file_edges
 
-callers and callees come from two separate analyses and do not always mirror each other.
-file_edges holds each direction as it was analyzed; neither is derived from the other.
+file_edges holds the callers and the callees of each file, one row per direction.
 """
 
 import json
@@ -89,11 +87,11 @@ def save_consolidated_sqlite(
 
     The database is written to output_path + ".tmp" and moved to output_path once it is
     complete, replacing any existing database there. When writing fails, the existing
-    database is left as it was. The per-file JSON files are the source of truth and the
-    database is rebuilt from them on every run.
+    database is left as it was. The database is built from the per-file JSON files on
+    every run.
 
     Each file's analysis results are read, inserted and released before the next file is
-    read, so only one file is held in memory at a time.
+    read.
 
     Args:
         base_output_dir: Base output directory for file_dependencies.
@@ -321,7 +319,7 @@ def callers_of(connection: sqlite3.Connection, file: str) -> list[str]:
 
 def find_definitions(connection: sqlite3.Connection, name: str,
                      partial: bool = False) -> list[dict]:
-    """Return every definition with a given name, without reading any file body.
+    """Return every definition with a given name, read from the definitions table.
 
     Args:
         connection: An open knowledge database connection.

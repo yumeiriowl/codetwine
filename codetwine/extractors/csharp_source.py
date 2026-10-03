@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from tree_sitter import Node
-from codetwine.extractors.definitions import definition_name
+from codetwine.extractors.definitions import definition_name_list
 from codetwine.config.settings import CSHARP_DEFINITION_DICT
 
 # Kinds of a using directive
@@ -59,8 +59,8 @@ _MEMBER_NAME_TOKEN_DICT = {
     "subpattern": ":",
 }
 
-# AST node types of a declaration of fields
-_FIELD_DECLARATION_TYPE_SET = {"field_declaration", "event_field_declaration"}
+# Modifiers of a member that is named through its type
+_STATIC_MODIFIER_TUPLE = ("static", "const")
 
 # Prefix of the AST node types of preprocessor directives
 _PREPROC_PREFIX = "preproc_"
@@ -77,6 +77,7 @@ class CsharpUsing:
     part_tuple: tuple[str, ...]   # Parts of the namespace or type name (A.B.Type -> A, B, Type)
     alias: str = ""               # Name of an ALIAS_USING; "" for the other kinds
     is_global: bool = False       # Whether the directive is written with "global"
+    arity: int = 0                # Number of type arguments of the last part (A.Result<int> -> 1)
 
 
 @dataclass
@@ -91,6 +92,19 @@ class CsharpScope:
 
 
 @dataclass
+class CsharpMember:
+    """One declaration of a member of a type."""
+
+    start_line: int     # First line (1-based)
+    # Whether the member is named through the type: a static or const member, an enum member
+    is_static: bool = False
+    # (least, most) number of arguments a call of a method takes; most is None for a
+    # declaration with "params"; None for a member that is not a method
+    argument_range: tuple[int, int | None] | None = None
+    is_extension: bool = False  # Whether the first parameter is written with "this"
+
+
+@dataclass
 class CsharpType:
     """One type declaration."""
 
@@ -101,6 +115,8 @@ class CsharpType:
     end_line: int       # Last line
     # Names of the definitions written in the body, types included
     member_name_set: set[str] = field(default_factory=set)
+    # Name of a member that is not a type -> its declarations in line order
+    member_list_dict: dict[str, list[CsharpMember]] = field(default_factory=dict)
     # Name of a method whose first parameter is written with "this" -> (least, most)
     # number of arguments a call of each declaration of it takes, without the one
     # "this" stands for; most is None for a declaration with "params"
@@ -115,6 +131,22 @@ class CsharpDeclaration:
     scope_list: list[CsharpScope] = field(default_factory=list)
     # Type declarations in line order
     type_list: list[CsharpType] = field(default_factory=list)
+
+
+# Node types whose parameters and local variables are names of their own
+_LOCAL_SCOPE_TYPE_SET = {
+    "method_declaration", "constructor_declaration", "destructor_declaration",
+    "operator_declaration", "conversion_operator_declaration", "indexer_declaration",
+    "accessor_declaration", "local_function_statement", "lambda_expression",
+    "anonymous_method_expression",
+}
+
+# Node types that declare a local name in their field "name"
+_LOCAL_DECLARE_TYPE_SET = {
+    "parameter", "variable_declarator", "catch_declaration", "declaration_pattern",
+    "declaration_expression", "local_function_statement", "from_clause", "join_clause",
+    "tuple_pattern",
+}
 
 
 @dataclass(frozen=True)
@@ -177,6 +209,44 @@ def _type_parameter_name_list(node: Node) -> list[str]:
             name_node = child.child_by_field_name("name")
             if name_node is not None:
                 name_list.append(_node_text(name_node))
+    return name_list
+
+
+def _local_name_list(node: Node) -> list[str]:
+    """Return the names declared inside a method, accessor, local function or lambda.
+
+    These are its parameters, local variables, loop and catch variables, pattern and
+    out variables, local functions, and the range variables of a query.
+
+    Args:
+        node: A node whose type is in _LOCAL_SCOPE_TYPE_SET.
+
+    Returns:
+        The names, those of the lambdas and local functions inside it included.
+    """
+    name_list: list[str] = []
+    node_stack = [node]
+    while node_stack:
+        current = node_stack.pop()
+        if current.type in _LOCAL_DECLARE_TYPE_SET and current is not node:
+            name_list.extend(
+                _node_text(name_node)
+                for name_node in current.children_by_field_name("name")
+                if name_node.type == "identifier"
+            )
+        elif current.type == "implicit_parameter":
+            name_list.append(_node_text(current))
+        elif current.type == "foreach_statement":
+            left_node = current.child_by_field_name("left")
+            if left_node is not None and left_node.type == "identifier":
+                name_list.append(_node_text(left_node))
+        elif current.type == "let_clause":
+            name_node = next(
+                (child for child in current.children if child.type == "identifier"), None,
+            )
+            if name_node is not None:
+                name_list.append(_node_text(name_node))
+        node_stack.extend(current.children)
     return name_list
 
 
@@ -270,6 +340,7 @@ def _using_directive(node: Node) -> CsharpUsing | None:
         using System.Text;                  -> NAMESPACE_USING, (System, Text)
         global using static App.MathEx;     -> STATIC_USING, (App, MathEx), is_global
         using Json = App.Text.Serializer;   -> ALIAS_USING, (App, Text, Serializer), alias Json
+        using Ints = App.Result<int>;       -> ALIAS_USING, (App, Result), alias Ints, arity 1
 
     Args:
         node: A using_directive node.
@@ -305,6 +376,7 @@ def _using_directive(node: Node) -> CsharpUsing | None:
         part_tuple=tuple(chain.part_list),
         alias=_node_text(alias_node) if alias_node is not None else "",
         is_global="global" in child_type_set,
+        arity=chain.arity_list[-1],
     )
 
 
@@ -316,6 +388,47 @@ def join_name(*part_tuple: str) -> str:
         ("", "Customer")            -> "Customer"
     """
     return ".".join(part for part in part_tuple if part)
+
+
+def _parameter_node_list(node: Node) -> list[Node]:
+    """Return the parameter nodes of a method_declaration node, without a "params" one."""
+    parameter_list = node.child_by_field_name("parameters")
+    if parameter_list is None:
+        return []
+    return [child for child in parameter_list.children if child.type == "parameter"]
+
+
+def _argument_range(node: Node) -> tuple[int, int | None] | None:
+    """Return the number of arguments a call of a method takes.
+
+    Examples:
+        Twice(int v)                              -> (1, 1)
+        Pad(string s, int width, char fill = ' ') -> (2, 3)
+        Join(string s, params object[] rest)      -> (1, None)
+
+    Args:
+        node: A method_declaration node.
+
+    Returns:
+        (least, most) number of arguments; most is None for a declaration with
+        "params". None when the declaration has no parameter list.
+    """
+    parameter_list = node.child_by_field_name("parameters")
+    if parameter_list is None:
+        return None
+    parameter_node_list = _parameter_node_list(node)
+    least = sum(
+        1 for parameter in parameter_node_list
+        if not any(child.type == "=" for child in parameter.children)
+    )
+    has_params = any(child.type == "params" for child in parameter_list.children)
+    return least, None if has_params else len(parameter_node_list)
+
+
+def _is_extension(node: Node) -> bool:
+    """Return whether the first parameter of a method_declaration node is written with "this"."""
+    parameter_node_list = _parameter_node_list(node)
+    return bool(parameter_node_list) and _has_modifier(parameter_node_list[0], "this")
 
 
 def _extension_argument_range(node: Node) -> tuple[int, int | None] | None:
@@ -335,21 +448,10 @@ def _extension_argument_range(node: Node) -> tuple[int, int | None] | None:
         for; most is None for a declaration with "params". None when the first
         parameter is not written with "this".
     """
-    parameter_list = node.child_by_field_name("parameters")
-    if parameter_list is None:
+    if not _is_extension(node):
         return None
-    parameter_node_list = [
-        child for child in parameter_list.children if child.type == "parameter"
-    ]
-    if not parameter_node_list or not _has_modifier(parameter_node_list[0], "this"):
-        return None
-    rest_list = parameter_node_list[1:]
-    least = sum(
-        1 for parameter in rest_list
-        if not any(child.type == "=" for child in parameter.children)
-    )
-    has_params = any(child.type == "params" for child in parameter_list.children)
-    return least, None if has_params else len(rest_list)
+    least, most = _argument_range(node)
+    return least - 1, None if most is None else most - 1
 
 
 def _read_type(
@@ -446,31 +548,31 @@ def _member_name_list(node: Node) -> list[str]:
         Every variable of a declaration of fields; the name of any other declaration.
         Empty when the declaration has no name.
     """
-    if node.type in _FIELD_DECLARATION_TYPE_SET:
-        return [
-            _node_text(name_node)
-            for variable_declaration in node.children
-            if variable_declaration.type == "variable_declaration"
-            for declarator in variable_declaration.children
-            if declarator.type == "variable_declarator"
-            and (name_node := declarator.child_by_field_name("name")) is not None
-        ]
-    name = definition_name(node, CSHARP_DEFINITION_DICT)
-    return [name.removeprefix("@")] if name else []
+    return definition_name_list(node, CSHARP_DEFINITION_DICT)
 
 
 def _add_member(owner: CsharpType, node: Node) -> None:
-    """Add the names a member declaration gives to its type, and its extension method.
+    """Add the names a member declaration gives to its type, with the declaration, and
+    its extension method.
 
     Args:
         owner: The type whose body the declaration is written in; modified in place.
         node: A node whose type is in CSHARP_DEFINITION_DICT.
     """
+    member = CsharpMember(
+        start_line=node.start_point[0] + 1,
+        is_static=node.type == "enum_member_declaration" or any(
+            _has_modifier(node, modifier) for modifier in _STATIC_MODIFIER_TUPLE
+        ),
+    )
     argument_range = None
     if node.type == "method_declaration":
+        member.argument_range = _argument_range(node)
+        member.is_extension = _is_extension(node)
         argument_range = _extension_argument_range(node)
     for name in _member_name_list(node):
         owner.member_name_set.add(name)
+        owner.member_list_dict.setdefault(name, []).append(member)
         if argument_range is not None:
             owner.extension_dict.setdefault(name, []).append(argument_range)
 
@@ -562,6 +664,29 @@ def _chain_reference(
     )
 
 
+def _local_value_reference(reference: CsharpReference) -> CsharpReference | None:
+    """Turn a chain that starts with a local name into the member it calls on that value.
+
+    Examples (items is a local variable):
+        items.Where(x => ...)   -> MEMBER_REFERENCE Where
+        items.Count             -> None
+        items                   -> None
+
+    Args:
+        reference: A reference whose first name is a local name.
+
+    Returns:
+        A MEMBER_REFERENCE of the last name when the chain is a call with two or more
+        names, else None.
+    """
+    if not reference.is_call or len(reference.part_tuple) < 2:
+        return None
+    return CsharpReference(
+        MEMBER_REFERENCE, (reference.part_tuple[-1],), (reference.arity_tuple[-1],),
+        reference.line, True, argument_count=reference.argument_count,
+    )
+
+
 def _declare_name_id(node: Node) -> int | None:
     """Return the id of the child of a node that is a name the node declares or sets.
 
@@ -640,7 +765,7 @@ class _ReferenceWalker:
         """Start with no references and an empty stack."""
         self.reference_dict: dict[CsharpReference, None] = {}
         # (node, name of the field the node is in its parent, names of the type
-        # parameters of the declarations around the node)
+        # parameters and local names of the declarations around the node)
         self.node_stack: list[tuple[Node, str | None, frozenset[str]]] = []
 
     def walk(self, root_node: Node) -> list[CsharpReference]:
@@ -654,65 +779,84 @@ class _ReferenceWalker:
         """
         self.node_stack.append((root_node, None, frozenset()))
         while self.node_stack:
-            node, field_name, type_parameter_set = self.node_stack.pop()
+            node, field_name, local_name_set = self.node_stack.pop()
             if node.type == "using_directive":
-                continue
-            if node.type in _CHAIN_NODE_TYPE_SET:
+                self._visit_using(node, local_name_set)
+            elif node.type in _CHAIN_NODE_TYPE_SET:
                 kind = TYPE_REFERENCE if _is_type_position(node, field_name) else NAME_REFERENCE
-                self._add_chain(_read_chain(node), kind, node, type_parameter_set)
+                self._add_chain(_read_chain(node), kind, node, local_name_set)
             elif node.type == "attribute":
-                self._visit_attribute(node, type_parameter_set)
+                self._visit_attribute(node, local_name_set)
             elif node.type == "invocation_expression":
-                self._visit_invocation(node, type_parameter_set)
+                self._visit_invocation(node, local_name_set)
             elif node.type.startswith(_PREPROC_PREFIX):
-                self._visit_preproc(node, type_parameter_set)
+                self._visit_preproc(node, local_name_set)
             else:
-                self._visit_other(node, type_parameter_set)
+                self._visit_other(node, local_name_set)
         return list(self.reference_dict)
 
-    def _push(self, node_list: list[Node], type_parameter_set: frozenset[str]) -> None:
+    def _push(self, node_list: list[Node], local_name_set: frozenset[str]) -> None:
         """Put nodes on the stack without the name of their field."""
-        self.node_stack.extend((node, None, type_parameter_set) for node in node_list)
+        self.node_stack.extend((node, None, local_name_set) for node in node_list)
 
     def _add_chain(
         self,
         chain: _Chain,
         kind: str,
         node: Node,
-        type_parameter_set: frozenset[str],
+        local_name_set: frozenset[str],
         call_node: Node | None = None,
     ) -> None:
         """Keep the reference of a chain and put the nodes inside the chain on the stack.
 
-        A reference whose first name is a type parameter of a declaration around it is
-        not kept.
+        A chain whose first name is a type parameter or a local name of a declaration
+        around it is not a name of a type or member: only the member it calls is kept
+        (_local_value_reference).
 
         Args:
             chain: The chain.
             kind: Kind of the reference (_chain_reference).
             node: The node the chain starts at.
-            type_parameter_set: Names of the type parameters around the node.
+            local_name_set: Names of the type parameters and local names around the node.
             call_node: The invocation_expression node that calls the chain; None when
                 the chain is not called.
         """
         reference = _chain_reference(chain, kind, node.start_point[0] + 1, call_node)
-        if reference is not None and (
-            reference.kind == MEMBER_REFERENCE or reference.part_tuple[0] not in type_parameter_set
+        if (
+            reference is not None
+            and reference.kind not in (MEMBER_REFERENCE, THIS_REFERENCE)
+            and not reference.is_absolute
+            and reference.part_tuple[0] in local_name_set
         ):
+            reference = _local_value_reference(reference)
+        if reference is not None:
             self.reference_dict.setdefault(reference)
-        self._push(chain.inner_node_list, type_parameter_set)
+        self._push(chain.inner_node_list, local_name_set)
 
-    def _visit_attribute(self, node: Node, type_parameter_set: frozenset[str]) -> None:
+    def _visit_using(self, node: Node, local_name_set: frozenset[str]) -> None:
+        """Walk the types written inside the name a using directive gives.
+
+        The type arguments of a name chain (using L = List<Order>;) and a type that is
+        not a name chain (using P = (Order, int);) are walked; the name chain itself
+        and the alias are not kept.
+        """
+        for child in node.children:
+            if child.type in _CHAIN_NODE_TYPE_SET:
+                self._push(_read_chain(child).inner_node_list, local_name_set)
+            elif child.is_named:
+                self._push([child], local_name_set)
+
+    def _visit_attribute(self, node: Node, local_name_set: frozenset[str]) -> None:
         """Keep the name of an attribute and walk its arguments."""
         name_node = node.child_by_field_name("name")
         if name_node is not None and name_node.type in _CHAIN_NODE_TYPE_SET:
-            self._add_chain(_read_chain(name_node), ATTRIBUTE_REFERENCE, node, type_parameter_set)
+            self._add_chain(_read_chain(name_node), ATTRIBUTE_REFERENCE, node, local_name_set)
         self._push(
             [child for child in node.children if name_node is None or child.id != name_node.id],
-            type_parameter_set,
+            local_name_set,
         )
 
-    def _visit_invocation(self, node: Node, type_parameter_set: frozenset[str]) -> None:
+    def _visit_invocation(self, node: Node, local_name_set: frozenset[str]) -> None:
         """Keep what an invocation calls and walk the rest of it.
 
         A name chain that is called is kept with its number of arguments; a member
@@ -722,16 +866,16 @@ class _ReferenceWalker:
         skip_id = None
         if function_node is not None and function_node.type in _CHAIN_NODE_TYPE_SET:
             self._add_chain(
-                _read_chain(function_node), NAME_REFERENCE, node, type_parameter_set, node,
+                _read_chain(function_node), NAME_REFERENCE, node, local_name_set, node,
             )
             skip_id = function_node.id
         elif function_node is not None:
             chain = _call_member_chain(function_node)
             if chain is not None:
-                self._add_chain(chain, NAME_REFERENCE, node, type_parameter_set, node)
-        self._push([child for child in node.children if child.id != skip_id], type_parameter_set)
+                self._add_chain(chain, NAME_REFERENCE, node, local_name_set, node)
+        self._push([child for child in node.children if child.id != skip_id], local_name_set)
 
-    def _visit_preproc(self, node: Node, type_parameter_set: frozenset[str]) -> None:
+    def _visit_preproc(self, node: Node, local_name_set: frozenset[str]) -> None:
         """Walk the code of #if / #elif / #else; the other directives are not read."""
         if node.type not in _PREPROC_CODE_TYPE_SET:
             return
@@ -741,21 +885,24 @@ class _ReferenceWalker:
                 child for child in node.children
                 if condition_node is None or child.id != condition_node.id
             ],
-            type_parameter_set,
+            local_name_set,
         )
 
-    def _visit_other(self, node: Node, type_parameter_set: frozenset[str]) -> None:
+    def _visit_other(self, node: Node, local_name_set: frozenset[str]) -> None:
         """Walk the children of a node, leaving out the names it declares.
 
         Left out: every child in the field "name" (the names a declaration gives, the
         names of named arguments, the member of a conditional access), the child
         _declare_name_id gives, labels, and the names of members the node sets or
-        matches (_is_member_name). The type parameters the node declares are added to
-        the ones around its children.
+        matches (_is_member_name). The type parameters the node declares, and the
+        local names declared inside a node in _LOCAL_SCOPE_TYPE_SET, are added to the
+        ones around its children.
         """
-        type_parameter_name_list = _type_parameter_name_list(node)
-        if type_parameter_name_list:
-            type_parameter_set = type_parameter_set | frozenset(type_parameter_name_list)
+        declare_name_list = _type_parameter_name_list(node)
+        if node.type in _LOCAL_SCOPE_TYPE_SET:
+            declare_name_list += _local_name_list(node)
+        if declare_name_list:
+            local_name_set = local_name_set | frozenset(declare_name_list)
 
         skip_id = _declare_name_id(node)
         for child_index, child in enumerate(node.children):
@@ -766,17 +913,18 @@ class _ReferenceWalker:
                 continue
             if _is_member_name(node, child_index):
                 continue
-            self.node_stack.append((child, field_name, type_parameter_set))
+            self.node_stack.append((child, field_name, local_name_set))
 
 
 def csharp_reference_list(root_node: Node) -> list[CsharpReference]:
     """Read the name chains of a C# file that are not names of declarations.
 
     Left out: the names declarations give (types, members, parameters, variables,
-    labels), the names of using directives and namespace declarations, the names of
-    named arguments and of members set in an initializer, a chain that starts with a
-    type parameter of a declaration around it, and the name of a member of a value
-    that is not called. The conditions of #if / #elif and the other preprocessor
+    labels), the names of namespace declarations, the names of using directives
+    (the types written inside them are read: using L = List<Order>; -> Order), the
+    names of named arguments and of members set in an initializer, a chain that starts
+    with a type parameter of a declaration around it, and the name of a member of a
+    value that is not called. The conditions of #if / #elif and the other preprocessor
     directives are not read.
 
     Args:

@@ -4,34 +4,44 @@ from tree_sitter import Language
 from codetwine.parsers.ts_parser import parse_file
 from codetwine.extractors.definitions import (
     ATTACHED_DEFINITION_TYPE_SET,
+    TRANSPARENT_DEFINITION_TYPE_SET,
     extract_definitions,
     select_top_level_definitions,
 )
-from codetwine.extractors.imports import ImportInfo
-from codetwine.cobol_file_index import cobol_import_name_dict, resolve_cobol_module_path
-from codetwine.rust_module_tree import resolve_rust_module_path, rust_import_name_dict
+from codetwine.cobol_file_index import resolve_cobol_module_path
+from codetwine.path_config import path_config
+from codetwine.rust_module_tree import resolve_rust_module_path
 from codetwine.config.settings import (
     EXT_TO_DEFINITION_DICT,
     EXT_TO_IMPORT_RESOLVE_DICT,
     EXT_TO_IMPORT_QUERY_DICT,
     SOURCE_ROOT_PATTERN_LIST,
     EXT_TO_LANGUAGE_DICT,
-    implicit_scope_key,
     language_ext,
 )
 
 logger = logging.getLogger(__name__)
 
-# Extensions of the languages whose package root (com, org, ...) is not registered as a symbol
-_NO_PACKAGE_ROOT_EXT_TUPLE = ("java", "kt")
+# Cache of file name indexes: project file set (by identity) -> {file name: paths with that name}
+_file_name_index_cache: dict[int, tuple[set[str], dict[str, list[str]]]] = {}
+
+
+def clear_import_path_cache() -> None:
+    """Forget the file name indexes of every project."""
+    _file_name_index_cache.clear()
 
 
 def detect_source_roots(project_file_set: set[str]) -> set[str]:
     """Detect source root prefixes that actually exist in the project file set.
 
-    Checks each known source root pattern (e.g. "src/main/java/") against
-    the project file paths to find which prefixes are actually in use.
-    Only patterns that appear as a prefix of at least one file are returned.
+    Looks for each known source root pattern (e.g. "src/main/java/") at the start of a
+    file path and after any directory of it, so the roots of the modules of a
+    multi-module project are found as well.
+
+    Examples:
+        {"src/main/java/com/a/B.java"}        -> {"src/main/java/", "src/"}
+        {"core/src/main/java/com/a/B.java"}   -> {"core/src/main/java/", "core/src/"}
+        {"app/models.py"}                     -> set()
 
     Args:
         project_file_set: Set of relative file paths within the project.
@@ -41,12 +51,83 @@ def detect_source_roots(project_file_set: set[str]) -> set[str]:
         Empty set if no known source root patterns are found.
     """
     source_root_set: set[str] = set()
-    for pattern in SOURCE_ROOT_PATTERN_LIST:
-        for file_path in project_file_set:
+    for file_path in project_file_set:
+        for pattern in SOURCE_ROOT_PATTERN_LIST:
             if file_path.startswith(pattern):
                 source_root_set.add(pattern)
-                break
+            pattern_start = file_path.find("/" + pattern)
+            while pattern_start != -1:
+                source_root_set.add(file_path[:pattern_start + 1] + pattern)
+                pattern_start = file_path.find("/" + pattern, pattern_start + 1)
     return source_root_set
+
+
+def _common_dir_count(file_rel: str, other_rel: str) -> int:
+    """Return how many leading directories two relative paths share."""
+    count = 0
+    for part, other_part in zip(file_rel.split("/")[:-1], other_rel.split("/")[:-1]):
+        if part != other_part:
+            break
+        count += 1
+    return count
+
+
+def nearest_first(path_list: list[str], current_file_rel: str) -> list[str]:
+    """Sort paths so that the ones sharing the most leading directories with a file come first.
+
+    Args:
+        path_list: Relative paths (files, or directory prefixes ending with "/").
+        current_file_rel: Relative path of the file the paths are looked up for.
+
+    Returns:
+        The paths ordered by shared leading directories (most first), then by length,
+        then by name.
+    """
+    return sorted(
+        path_list,
+        key=lambda path: (-_common_dir_count(current_file_rel, path), len(path), path),
+    )
+
+
+def _file_name_index(project_file_set: set[str]) -> dict[str, list[str]]:
+    """Return {file name: paths of the project files with that name}, built once per file set."""
+    cache_entry = _file_name_index_cache.get(id(project_file_set))
+    if cache_entry is not None and cache_entry[0] is project_file_set:
+        return cache_entry[1]
+    name_index: dict[str, list[str]] = {}
+    for file_rel in project_file_set:
+        name_index.setdefault(file_rel.rsplit("/", 1)[-1], []).append(file_rel)
+    _file_name_index_cache[id(project_file_set)] = (project_file_set, name_index)
+    return name_index
+
+
+def _find_by_path_end(
+    candidate_path: str, current_file_rel: str, project_file_set: set[str],
+) -> str | None:
+    """Return the project file whose path ends with a candidate path.
+
+    Examples (candidate -> file):
+        "geo/shape.hpp" -> "include/geo/shape.hpp"
+        "app/models.py" -> "backend/app/models.py"
+
+    Args:
+        candidate_path: A relative path ("dir/name.ext").
+        current_file_rel: Relative path of the file the import is written in.
+        project_file_set: Set of file paths within the project.
+
+    Returns:
+        The file under some directory of the project whose path ends with
+        "/" + candidate_path; of several, the one nearest_first() puts first. None when
+        there is none.
+    """
+    file_name = candidate_path.rsplit("/", 1)[-1]
+    match_list = [
+        file_rel for file_rel in _file_name_index(project_file_set).get(file_name, [])
+        if file_rel.endswith("/" + candidate_path)
+    ]
+    if not match_list:
+        return None
+    return nearest_first(match_list, current_file_rel)[0]
 
 
 def resolve_relative_import(
@@ -67,7 +148,8 @@ def resolve_relative_import(
                                (e.g. ["src", "app"]).
 
     Returns:
-        A list of path components (e.g. ["src", "utils"]).
+        A list of path components (e.g. ["src", "utils"]); empty for a relative path
+        that leads to the project root ("../.." from "a/b/c.js").
         Joining this return value with "/".join() produces the base_path.
     """
     if separator == "." and module.startswith("."):
@@ -102,7 +184,7 @@ def resolve_relative_import(
         else:
             joined_path = module
         clean_path = os.path.normpath(joined_path).replace("\\", "/")
-        return clean_path.split("/")
+        return [] if clean_path == "." else clean_path.split("/")
 
     # Absolute import: split by separator to convert to path
     return module.split(separator)
@@ -122,7 +204,9 @@ def generate_candidate_path_list(
 
     When base_path already has one of the extensions in alt_ext_list (e.g. C/C++
     #include "stdio.h", JS/TS import "./helpers.js"), base_path is used as the candidate
-    itself and no extension is appended, so no "stdio.h.h" candidate is produced.
+    itself and no extension is appended, so no "stdio.h.h" candidate is produced. The
+    same path with each extension source_ext_dict gives for its extension follows it
+    (JS/TS: "./helpers.ts" and "./helpers.tsx" for "./helpers.js").
 
     Args:
         base_path: The base path converted from the module name (e.g. "src/utils", "stdio.h").
@@ -138,18 +222,22 @@ def generate_candidate_path_list(
     alt_ext_list = resolve_config.get("alt_ext_list", [])
     try_bare_path = resolve_config.get("try_bare_path", False)
     try_current_dir = resolve_config.get("try_current_dir", False)
+    source_ext_dict = resolve_config.get("source_ext_dict", {})
 
     # Check whether base_path already has one of the extensions in alt_ext_list
-    base_ext = os.path.splitext(base_path)[1]
+    base_stem, base_ext = os.path.splitext(base_path)
     has_known_ext = base_ext in alt_ext_list
 
     # Generate candidates from the project root
     root_candidate_list: list[str] = []
 
-    # base_path already carries a known extension: it is the file path itself.
+    # base_path already carries a known extension: it is the file path itself, then the
+    # source files that extension is written for (JS/TS: "./a.js" for a.ts).
     # Otherwise try a file with the same extension as the current file
     if has_known_ext:
         root_candidate_list.append(base_path)
+        for source_ext in source_ext_dict.get(base_ext, []):
+            root_candidate_list.append(base_stem + source_ext)
     else:
         root_candidate_list.append(base_path + src_ext_with_dot)
 
@@ -158,8 +246,9 @@ def generate_candidate_path_list(
         root_candidate_list.append(base_path + "/__init__.py")
 
     # Try directory index files (for JS/TS: import './components' -> './components/index.ts')
+    index_prefix = base_path + "/" if base_path else ""
     for idx_ext in index_ext_list:
-        root_candidate_list.append(base_path + "/index" + idx_ext)
+        root_candidate_list.append(index_prefix + "index" + idx_ext)
 
     # Try alternative extensions (skip if base_path already has an extension)
     if not has_known_ext:
@@ -205,6 +294,18 @@ def resolve_module_to_project_path(
        If no exact match is found and source_root_set is provided, retry with
        each source root prefix prepended to the candidate path.
        (e.g. "com/example/Foo.java" -> "src/main/java/com/example/Foo.java")
+    4. If still unmatched and the resolve config has min_path_end_part, a module that
+       is not relative and has at least that many parts is matched against the end of
+       the project file paths (_find_by_path_end).
+       (e.g. #include "geo/shape.hpp" -> "include/geo/shape.hpp")
+
+    A language whose resolve config has path_config_name_list (JS/TS) resolves a module
+    that is not relative through the config file that counts for the current file
+    (path_config): the paths its "paths" and "baseUrl" give are matched against
+    project_file_set, and nothing else is tried. Without such a config file the steps
+    above apply.
+
+    The current file itself is never returned.
 
     A language whose resolve config has module_tree (Rust) is resolved by
     resolve_rust_module_path instead, which reads the project files under project_dir.
@@ -256,247 +357,60 @@ def resolve_module_to_project_path(
         module, separator, current_dir_part_list
     )
     base_path = "/".join(path_part_list)
+    is_relative = module.startswith(".")
 
-    # Step 2: Generate file candidates
+    # A module that is not relative is looked up through the path settings of the
+    # config file that counts for the current file, when there is one
+    config_name_list = resolve_config.get("path_config_name_list")
+    if config_name_list and project_dir and not is_relative:
+        config = path_config(current_file_rel, project_dir, config_name_list)
+        if config is not None:
+            for module_path in config.module_path_list(module):
+                for candidate_path in generate_candidate_path_list(
+                    module_path, src_ext_with_dot, resolve_config, [],
+                ):
+                    if candidate_path in project_file_set and candidate_path != current_file_rel:
+                        return candidate_path
+            return None
+
+    # Step 2: Generate file candidates. An import that is not relative is not looked up
+    # from the current directory when that directory is a package
+    package_file = resolve_config.get("package_file")
+    is_in_package = bool(
+        package_file and project_dir and not is_relative
+        and os.path.isfile(os.path.join(project_dir, *current_dir_part_list, package_file))
+    )
     candidate_path_list = generate_candidate_path_list(
-        base_path, src_ext_with_dot, resolve_config, current_dir_part_list
+        base_path, src_ext_with_dot, resolve_config,
+        [] if is_in_package else current_dir_part_list,
     )
 
     # Step 3: Match against project_file_set and return the first matching candidate
     for candidate_path in candidate_path_list:
-        if candidate_path in project_file_set:
+        if candidate_path in project_file_set and candidate_path != current_file_rel:
             return candidate_path
 
-    # Step 3 fallback: Prepend source root prefixes and retry.
+    # Step 3 fallback: Prepend source root prefixes and retry, the roots nearest to the
+    # current file first.
     # Java import "com.example.Foo" generates candidate "com/example/Foo.java",
     # but the actual file may be at "src/main/java/com/example/Foo.java".
     if source_root_set:
+        source_root_list = nearest_first(list(source_root_set), current_file_rel)
         for candidate_path in candidate_path_list:
-            for source_root in source_root_set:
+            for source_root in source_root_list:
                 path_with_root = source_root + candidate_path
-                if path_with_root in project_file_set:
+                if path_with_root in project_file_set and path_with_root != current_file_rel:
                     return path_with_root
 
+    # Step 4: A module written with enough parts is looked up by the end of the path
+    min_path_end_part = resolve_config.get("min_path_end_part")
+    if min_path_end_part and not is_relative and len(path_part_list) >= min_path_end_part:
+        for candidate_path in candidate_path_list:
+            path_match = _find_by_path_end(candidate_path, current_file_rel, project_file_set)
+            if path_match is not None and path_match != current_file_rel:
+                return path_match
+
     return None
-
-
-def import_name_list(
-    import_info: ImportInfo,
-    current_file_rel: str,
-    project_file_set: set[str],
-    project_dir: str,
-) -> tuple[list[str], dict[str, str]]:
-    """Return the names an import binds in the file and the original names of the renamed ones.
-
-    For a language whose resolve config has module_tree (Rust), the names are decided from
-    the resolved path (rust_import_name_dict): a name that refers to a module is left out,
-    and a name that differs from the definition's name in the resolved file is renamed.
-    For a language whose resolve config has name_index (COBOL), the names of a COPY
-    statement with REPLACING are the names of the copybook as the statement writes them
-    (cobol_import_name_dict).
-    For every other language, ImportInfo.names and ImportInfo.alias_map are returned.
-
-    Args:
-        import_info: An ImportInfo whose module resolves to a project file.
-        current_file_rel: Relative path of the file the import is written in.
-        project_file_set: Set of file paths within the project.
-        project_dir: Absolute path to the project root.
-
-    Returns:
-        A (bound names, {alias name: original name}) tuple.
-    """
-    ext = language_ext(os.path.join(project_dir, current_file_rel))
-    resolve_config = EXT_TO_IMPORT_RESOLVE_DICT.get(ext, {})
-    if resolve_config.get("name_index"):
-        name_dict = cobol_import_name_dict(
-            import_info, current_file_rel, project_file_set, project_dir,
-        )
-    elif resolve_config.get("module_tree"):
-        name_dict = rust_import_name_dict(
-            import_info.module, import_info.names, current_file_rel, project_file_set,
-            project_dir,
-        )
-    else:
-        return list(import_info.names), dict(import_info.alias_map or {})
-
-    alias_dict = {
-        name: original for name, original in name_dict.items()
-        if original is not None and original != name
-    }
-    return list(name_dict), alias_dict
-
-
-def _put_symbol(
-    symbol_map: dict[str, str], name: str, path: str,
-) -> None:
-    """Register a symbol name into the map and warn if overwriting to a different file.
-
-    Args:
-        symbol_map: A symbol-name -> file-path dict. Modified directly by this function.
-        name: The symbol name to register.
-        path: The file path where the symbol is defined.
-    """
-    current_path = symbol_map.get(name)
-    if current_path and current_path != path:
-        logger.warning(
-            "Symbol '%s' definition source is being overwritten: '%s' -> '%s'",
-            name, current_path, path,
-        )
-    symbol_map[name] = path
-
-
-def _register_module_symbol(
-    import_info: ImportInfo,
-    resolved_path: str,
-    separator: str,
-    file_ext: str,
-    project_dir: str,
-    symbol_to_file_map: dict[str, str],
-) -> None:
-    """Register the symbols of an import that names no individual names.
-
-    separator ".":
-        import X as Y       -> "Y"
-        import X.Y.Z        -> "X" (not for Java / Kotlin) and "Z"
-    separator "/":
-        #include "header.h" -> every top-level definition of the included file
-
-    Args:
-        import_info: An ImportInfo with an empty names list.
-        resolved_path: The project file the import resolves to.
-        separator: Module name delimiter of the language.
-        file_ext: Extension of the current file (without ".").
-        project_dir: Absolute path to the project root.
-        symbol_to_file_map: The target dict (name -> file path). Modified directly by this function.
-    """
-    if separator == ".":
-        if import_info.module_alias:
-            _put_symbol(symbol_to_file_map, import_info.module_alias, resolved_path)
-            return
-        module_part_list = import_info.module.split(".")
-        # The root part: Python package access (X.Y.func())
-        if file_ext not in _NO_PACKAGE_ROOT_EXT_TUPLE:
-            module_root = module_part_list[0].lstrip(".")
-            if module_root:
-                _put_symbol(symbol_to_file_map, module_root, resolved_path)
-        # The trailing part: a Java class referenced by name (User user = new User())
-        module_leaf = module_part_list[-1]
-        if module_leaf and module_leaf != module_part_list[0]:
-            _put_symbol(symbol_to_file_map, module_leaf, resolved_path)
-    elif separator == "/":
-        _register_definitions_from_file(resolved_path, project_dir, symbol_to_file_map)
-
-
-def build_symbol_to_file_map(
-    import_info_list: list[ImportInfo],
-    current_file_rel: str,
-    project_file_set: set[str],
-    file_ext: str,
-    project_dir: str,
-    source_root_set: set[str] | None = None,
-) -> tuple[dict[str, str], dict[str, str]]:
-    """Build a dict mapping imported names to their definition file paths, used to
-    identify "which file does this name come from" during usage tracking.
-
-    Calls resolve_module_to_project_path for all module names in import_info_list
-    and registers only those resolvable to project-internal files.
-    Standard library and external packages are automatically excluded as they cannot be resolved.
-
-    Language-specific handling:
-        Python:  "import X.Y.Z" -> Register the module root "X" (for X.Y.Z.func() access)
-                 "from X import a, b" -> Register "a", "b" individually
-        Java:    "import com.foo.Bar" -> Register the trailing "Bar" (Java references by class name)
-        C/C++:   "#include <header.h>" -> Register all definition names from the header file
-                 (#include names no individual names)
-
-    Args:
-        import_info_list: List of ImportInfo returned by extract_imports.
-        current_file_rel: Relative path of the current file from the project root.
-        project_file_set: Set of file paths within the project.
-        file_ext: Extension of the current file (without ".", e.g. "py", "java", "c", "cpp").
-        project_dir: Absolute path to the project root.
-        source_root_set: Set of source root prefixes (e.g. {"src/main/java/"}).
-
-    Returns:
-        A (symbol_to_file_map, alias_to_original) tuple.
-        symbol_to_file_map: { imported name: definition file path }
-        alias_to_original: { alias name: original name } (from X import a as b -> {"b": "a"})
-    """
-    symbol_to_file_map: dict[str, str] = {}
-    alias_to_original: dict[str, str] = {}
-
-    # Get the resolve config for the current file's extension
-    resolve_config = EXT_TO_IMPORT_RESOLVE_DICT.get(file_ext, {})
-    separator = resolve_config.get("separator", ".")
-
-    # Names the current file defines; a wildcard import does not register them
-    own_name_set = set(top_level_definition_names(current_file_rel, project_dir))
-
-    for import_info in import_info_list:
-        # Resolve the module name to a file path (returns None for non-project modules)
-        resolved_path = resolve_module_to_project_path(
-            import_info.module, current_file_rel, project_file_set,
-            source_root_set, project_dir,
-        )
-
-        # Java/Kotlin wildcard import: if not resolvable to a single file,
-        # treat the module name as a package directory and register definitions from all files in the directory
-        if not resolved_path and "*" in import_info.names and separator == ".":
-            package_dir = import_info.module.replace(".", "/")
-            _register_definitions_from_package(
-                package_dir, file_ext, project_dir,
-                project_file_set, symbol_to_file_map,
-                source_root_set, own_name_set,
-            )
-            continue
-
-        if not resolved_path:
-            continue
-
-        name_list, alias_dict = import_name_list(
-            import_info, current_file_rel, project_file_set, project_dir,
-        )
-
-        # "from X import a, b" form: register individual names in the dict
-        for name in name_list:
-            if name == "*":
-                # from X import * -> register all definitions from the file,
-                # except the names the current file defines itself
-                _register_definitions_from_file(
-                    resolved_path, project_dir, symbol_to_file_map, own_name_set,
-                )
-            else:
-                _put_symbol(symbol_to_file_map, name, resolved_path)
-
-        # Transfer alias mappings to alias_to_original
-        alias_to_original.update(alias_dict)
-
-        if not import_info.names:
-            # No individual names: derive the symbols from the module itself
-            _register_module_symbol(
-                import_info, resolved_path, separator, file_ext, project_dir, symbol_to_file_map,
-            )
-        elif separator == "." and file_ext not in _NO_PACKAGE_ROOT_EXT_TUPLE:
-            # Also register the module root for attribute access, unless a direct import
-            # (import mylib) already registered it
-            module_root = import_info.module.split(".")[0].lstrip(".")
-            if module_root:
-                symbol_to_file_map.setdefault(module_root, resolved_path)
-
-    # Register definition names from the files visible without an import statement
-    # (Java/Kotlin: same package, SQL: whole project)
-    scope_key = implicit_scope_key(current_file_rel)
-    if scope_key is not None:
-        for project_file in project_file_set:
-            if project_file == current_file_rel:
-                continue
-            if implicit_scope_key(project_file) != scope_key:
-                continue
-            _register_definitions_from_file(
-                project_file, project_dir, symbol_to_file_map,
-            )
-
-    return symbol_to_file_map, alias_to_original
 
 
 def top_level_definition_names(file_rel: str, project_dir: str) -> list[str]:
@@ -507,9 +421,11 @@ def top_level_definition_names(file_rel: str, project_dir: str) -> list[str]:
         project_dir: Absolute path to the project root.
 
     Returns:
-        The outermost definition names in line order, without the ones in
-        ATTACHED_DEFINITION_TYPE_SET (Rust impl blocks). Empty when the file does not
-        exist or its extension has no definition settings.
+        The outermost definition names in line order, without duplicates, without the
+        ones in ATTACHED_DEFINITION_TYPE_SET (Rust impl blocks) and without the names
+        of the definitions in TRANSPARENT_DEFINITION_TYPE_SET (C++ namespaces), whose
+        members are returned in their place. Empty when the file does not exist or its
+        extension has no definition settings.
     """
     abs_path = os.path.join(project_dir, file_rel)
     if not os.path.isfile(abs_path):
@@ -521,77 +437,12 @@ def top_level_definition_names(file_rel: str, project_dir: str) -> list[str]:
 
     root_node = parse_file(abs_path)[0]
     definition_list = extract_definitions(root_node, definition_dict)
-    return [
+    return list(dict.fromkeys(
         d.name for d in select_top_level_definitions(definition_list)
-        if d.name and d.type not in ATTACHED_DEFINITION_TYPE_SET
-    ]
-
-
-def _register_definitions_from_file(
-    file_rel: str,
-    project_dir: str,
-    symbol_to_file_map: dict[str, str],
-    skip_name_set: set[str] | None = None,
-) -> None:
-    """Register all top-level definition names from the specified file into symbol_to_file_map.
-
-    Used for an import that brings in a whole file: C/C++ #include, Python
-    from X import *, Rust use X::*, and files visible without an import statement.
-
-    Args:
-        file_rel: Relative path from the project root (e.g. "c_app/utils.h").
-        project_dir: Absolute path to the project root.
-        symbol_to_file_map: The target dict (name -> file path). Modified directly by this function.
-        skip_name_set: Names not registered (the importing file's own definitions for a
-                       wildcard import). None registers every name.
-    """
-    for name in top_level_definition_names(file_rel, project_dir):
-        if skip_name_set is None or name not in skip_name_set:
-            _put_symbol(symbol_to_file_map, name, file_rel)
-
-
-def _register_definitions_from_package(
-    package_dir: str,
-    file_ext: str,
-    project_dir: str,
-    project_file_set: set[str],
-    symbol_to_file_map: dict[str, str],
-    source_root_set: set[str] | None = None,
-    skip_name_set: set[str] | None = None,
-) -> None:
-    """For Java/Kotlin wildcard imports: register definition names from all files
-    within the package directory into symbol_to_file_map.
-
-    Handles syntax like import com.example.model.* that imports all classes from a package.
-    Extracts definitions from files of the same extension directly under package_dir.
-
-    Args:
-        package_dir: Directory path of the package (e.g. "com/example/model").
-        file_ext: Extension of the current file (without ".", e.g. "java", "kt").
-        project_dir: Absolute path to the project root.
-        project_file_set: Set of file paths within the project.
-        symbol_to_file_map: The target dict (name -> file path). Modified directly by this function.
-        source_root_set: Set of source root prefixes (e.g. {"src/main/java/"}).
-        skip_name_set: Names not registered (the importing file's own definitions).
-    """
-    # Build the list of prefixes to try: bare prefix + source-root-prefixed variants
-    prefix_list = [package_dir + "/"]
-    if source_root_set:
-        for source_root in source_root_set:
-            prefix_list.append(source_root + package_dir + "/")
-
-    for prefix in prefix_list:
-        for project_file in project_file_set:
-            if not project_file.startswith(prefix):
-                continue
-            # Do not include files from sub-packages (only files directly under the directory)
-            remainder = project_file[len(prefix):]
-            if "/" in remainder:
-                continue
-            if os.path.splitext(project_file)[1].lstrip(".") == file_ext:
-                _register_definitions_from_file(
-                    project_file, project_dir, symbol_to_file_map, skip_name_set,
-                )
+        if d.name
+        and d.type not in ATTACHED_DEFINITION_TYPE_SET
+        and d.type not in TRANSPARENT_DEFINITION_TYPE_SET
+    ))
 
 
 def get_import_params(file_ext: str) -> tuple[Language, str | None] | tuple[None, None]:

@@ -1,6 +1,6 @@
 import logging
 from collections import OrderedDict
-from tree_sitter import Node, Parser
+from tree_sitter import Language, Node, Parser
 from codetwine.config.settings import (
     BMS_EXT_SET,
     COBOL_EXT_SET,
@@ -15,6 +15,9 @@ from codetwine.parsers.r_markdown import r_chunk_code
 from codetwine.utils.file_utils import lone_cr_to_lf, read_source
 
 logger = logging.getLogger(__name__)
+
+# Name written after a piece of code to see whether the code ends where it stops (_is_whole_code)
+_END_NAME = b"codetwine_end_of_code"
 
 
 # Module-level cache for parse results, ordered from least to most recently used.
@@ -50,6 +53,25 @@ def _read_utf8_content(file_path: str) -> bytes:
     return lone_cr_to_lf(text).encode("utf-8")
 
 
+def _is_whole_code(code: bytes, language: Language) -> bool:
+    """Return whether a piece of code ends where it stops: code written after it starts a new statement.
+
+    A name is added on a line after the code; the code is whole when the parser reads
+    that name as a statement of its own (not after an open "{", an open string or an
+    operator at the end of the code).
+
+    Args:
+        code: The code of one R chunk.
+        language: The tree-sitter Language of the code.
+
+    Returns:
+        True when the added name is the last top-level statement of the parse.
+    """
+    root_node = Parser(language).parse(code + b"\n" + _END_NAME + b"\n").root_node
+    child_list = root_node.named_children
+    return bool(child_list) and child_list[-1].type == "identifier" and child_list[-1].text == _END_NAME
+
+
 def parse_file(file_path: str) -> tuple[Node | CobolSource, bytes]:
     """Read a file, parse it with tree-sitter, and return (AST root node, byte content).
 
@@ -64,7 +86,8 @@ def parse_file(file_path: str) -> tuple[Node | CobolSource, bytes]:
 
     For an R Markdown or Quarto file the root node is the tree of its R code chunks
     (r_chunk_code), each node at the position its code has in the file; the byte content
-    is the whole file.
+    is the whole file. A chunk whose code does not end inside the chunk (an open "{", an
+    operator at its end) is left out of the tree.
 
     Parse results are cached at module level; a file found in the cache is not parsed again.
     The cache holds at most PARSE_CACHE_MAX_FILES entries; when it is full, the least
@@ -97,8 +120,11 @@ def parse_file(file_path: str) -> tuple[Node | CobolSource, bytes]:
         # Read the maps of the BMS macros
         parse_result = (read_bms_source(content.decode("utf-8")), content)
     elif ext in R_MARKDOWN_EXT_SET:
-        # Parse the R code chunks of the document, everything else blanked
-        tree = Parser(EXT_TO_LANGUAGE_DICT[ext]).parse(r_chunk_code(content))
+        # Parse the R code chunks of the document, everything else blanked; a chunk
+        # whose code runs on past its end is blanked as well
+        language = EXT_TO_LANGUAGE_DICT[ext]
+        chunk_code = r_chunk_code(content, lambda code: _is_whole_code(code, language))
+        tree = Parser(language).parse(chunk_code)
         parse_result = (tree.root_node, content)
     else:
         # Parse with tree-sitter to generate the AST

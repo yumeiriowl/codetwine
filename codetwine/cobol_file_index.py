@@ -9,13 +9,21 @@ from codetwine.extractors.cobol_source import (
     CobolDefinition,
     CobolReference,
     CobolSource,
+    has_statement,
 )
-from codetwine.extractors.imports import ImportInfo, cobol_module, cobol_module_part
-from codetwine.parsers.cobol_format import FILE_UNIT, ITEM_UNIT, split_cobol_source
+from codetwine.extractors.imports import cobol_module, cobol_module_part
+from codetwine.parsers.cobol_format import (
+    FILE_UNIT,
+    ITEM_UNIT,
+    PROCEDURE_UNIT,
+    split_cobol_source,
+)
 from codetwine.utils.file_utils import read_source
+from codetwine.utils.project_cache import project_cache_value
 from codetwine.config.settings import (
     BMS_EXT_SET,
     COBOL_EXT_SET,
+    EXT_TO_LANGUAGE_DICT,
     has_language,
     language_ext,
     set_copy_target_ext,
@@ -133,14 +141,9 @@ def _get_file_index(project_dir: str, project_file_set: set[str]) -> CobolFileIn
     Returns:
         The CobolFileIndex of the COBOL files in project_file_set.
     """
-    cache_entry = file_index_cache.get(project_dir)
-    if cache_entry is not None:
-        cache_file_set, file_index = cache_entry
-        if cache_file_set is project_file_set:
-            return file_index
-        if cache_file_set == project_file_set:
-            file_index_cache[project_dir] = (project_file_set, file_index)
-            return file_index
+    file_index = project_cache_value(file_index_cache, project_dir, project_file_set)
+    if file_index is not None:
+        return file_index
 
     file_index = _build_file_index(project_dir, project_file_set)
     file_index_cache[project_dir] = (project_file_set, file_index)
@@ -159,10 +162,10 @@ def _copybook_path(
     The files whose name, with or without its extension, is the file name of the
     copybook name are the candidates, and a BMS source whose mapset has the name; upper
     and lower case are not told apart. Among several the first of this order is taken: a
-    file whose path ends with the copybook name, a file in a directory named like the
-    library, a file with a COBOL extension, a BMS source, a file in the directory of the
-    current file, a file with the copybook extension, a file that defines no program,
-    the first in path order.
+    file whose path, with or without its extension, ends with the copybook name, a file
+    in a directory named like the library, a file with a COBOL extension, a BMS source,
+    a file in the directory of the current file, a file with the copybook extension, a
+    file that defines no program, the first in path order.
 
     Args:
         name: Name of the copybook (e.g. "CUSTREC", "ERRCODES.cpy", "copy/ERRCODES.cpy").
@@ -193,8 +196,12 @@ def _copybook_path(
         """Return the sort key of a candidate: the first in this order is taken."""
         directory = os.path.dirname(file_rel)
         ext = os.path.splitext(file_rel)[1].lstrip(".").lower()
+        upper_path = "/" + file_rel.upper()
+        is_named_path = any(
+            path.endswith(name_path) for path in (upper_path, os.path.splitext(upper_path)[0])
+        )
         return (
-            not ("/" + file_rel.upper()).endswith(name_path),
+            not is_named_path,
             not library or os.path.basename(directory).upper() != library.upper(),
             ext not in COBOL_EXT_SET,
             ext not in BMS_EXT_SET,
@@ -311,46 +318,6 @@ def replace_name(name: str, replacing_list: list[tuple[str, str, str]]) -> str:
     return name
 
 
-def cobol_import_name_dict(
-    import_info: ImportInfo,
-    current_file_rel: str,
-    project_file_set: set[str],
-    project_dir: str,
-) -> dict[str, str | None]:
-    """Return the names a COBOL import binds in the file.
-
-    CALL name                  -> {name: None}
-    COPY name                  -> {"*": None}
-    COPY name REPLACING ...    -> every definition name of the copybook as the
-                                  statement writes it, with the name in the copybook
-                                  for the ones the statement changes
-
-    Args:
-        import_info: An ImportInfo of a COBOL file.
-        current_file_rel: Relative path of the file the import is written in.
-        project_file_set: Set of file paths within the project.
-        project_dir: Absolute path to the project root.
-
-    Returns:
-        A {bound name: name in the copybook, or None when it is the same} dict.
-    """
-    if not import_info.replacing_list:
-        return {name: None for name in import_info.names}
-
-    resolved = resolve_cobol_module_path(
-        import_info.module, current_file_rel, project_file_set, project_dir,
-    )
-    cobol_source = _cobol_source(resolved, project_dir) if resolved else None
-    if cobol_source is None:
-        return {name: None for name in import_info.names}
-
-    name_dict: dict[str, str | None] = {}
-    for definition in cobol_source.definition_list:
-        new_name = replace_name(definition.name, import_info.replacing_list)
-        name_dict[new_name] = definition.name if new_name != definition.name else None
-    return name_dict
-
-
 def _copy_name_list(cobol_source: CobolSource) -> list[tuple[str, str]]:
     """Return (copybook name, library name) of each COPY statement and EXEC SQL INCLUDE."""
     return [
@@ -370,15 +337,25 @@ def _is_named_whole(name: str, file_rel: str) -> bool:
     return name.replace("\\", "/").split("/")[-1].upper() == os.path.basename(file_rel).upper()
 
 
-def _has_data_description(file_rel: str, project_dir: str) -> bool:
-    """Return whether the text of a file read as COBOL holds a data item or a file description."""
+def _is_cobol_text(file_rel: str, project_dir: str) -> bool:
+    """Return whether the text of a file read as COBOL holds a data description or a statement.
+
+    Returns:
+        True when the text holds a data item, the description of a file, or a sentence
+        of the procedure division the grammar reads a statement in (has_statement).
+    """
     try:
         text = read_source(os.path.join(project_dir, file_rel))[0]
         unit_list = split_cobol_source(text).unit_list
     except Exception as e:
         logger.warning(f"{file_rel} is not read as COBOL: {type(e).__name__}: {e}")
         return False
-    return any(unit.kind in (ITEM_UNIT, FILE_UNIT) for unit in unit_list)
+    if any(unit.kind in (ITEM_UNIT, FILE_UNIT) for unit in unit_list):
+        return True
+    language = EXT_TO_LANGUAGE_DICT[_COPYBOOK_EXT]
+    return any(
+        unit.kind == PROCEDURE_UNIT and has_statement(unit, language) for unit in unit_list
+    )
 
 
 def register_copy_target(project_dir: str, file_rel_list: list[str]) -> dict[str, str]:
@@ -387,10 +364,11 @@ def register_copy_target(project_dir: str, file_rel_list: list[str]) -> dict[str
     A COPY statement or EXEC SQL INCLUDE of a COBOL file that resolves to a file without
     a language (_copybook_path, with those files as candidates too) makes that file a
     COBOL copybook, whatever its extension, when the statement names it with its whole
-    file name, or when its text read as COBOL holds a data item or the description of a
-    file; otherwise the statement is resolved again without that file. The COPY
-    statements of such a file are followed as well. The files are recorded
-    with set_copy_target_ext(), replacing the ones recorded before for the project.
+    file name, or when its text read as COBOL holds a data item, the description of a
+    file or a statement of the procedure division (_is_cobol_text); otherwise the
+    statement is resolved again without that file. The COPY statements of such a file
+    are followed as well. The files are recorded with set_copy_target_ext(), replacing
+    the ones recorded before for the project.
 
     Processing flow:
     1. Parse the COBOL files and BMS sources once: index them and keep the COPY
@@ -442,14 +420,14 @@ def register_copy_target(project_dir: str, file_rel_list: list[str]) -> dict[str
 
     # == Step 3: COPY statements ==============================================
     copy_target_ext_dict: dict[str, str] = {}
-    # Relative path of a file without a language -> whether it holds a data description
-    data_description_dict: dict[str, bool] = {}
+    # Relative path of a file without a language -> whether its text is read as COBOL
+    is_cobol_text_dict: dict[str, bool] = {}
 
     def is_copy_target(name: str, file_rel: str) -> bool:
         """Return whether a file without a language is the copybook a COPY statement names."""
-        if file_rel not in data_description_dict:
-            data_description_dict[file_rel] = _has_data_description(file_rel, project_dir)
-        return _is_named_whole(name, file_rel) or data_description_dict[file_rel]
+        if file_rel not in is_cobol_text_dict:
+            is_cobol_text_dict[file_rel] = _is_cobol_text(file_rel, project_dir)
+        return _is_named_whole(name, file_rel) or is_cobol_text_dict[file_rel]
 
     queue = sorted(copy_name_dict)
     while queue:
@@ -484,11 +462,12 @@ def register_copy_target(project_dir: str, file_rel_list: list[str]) -> dict[str
 class CobolReferenceTarget:
     """The definition one reference of a COBOL file resolves to."""
 
-    name: str        # Name of the definition as the referring file writes it (after REPLACING)
+    # Name of the definition: a data name or procedure name as the referring file writes
+    # it (after REPLACING), a program or ENTRY name as its definition writes it
+    name: str
     line: int        # Line of the reference (1-based)
     file_rel: str    # Relative path of the file with the definition
-    # The definition; None when the file has no definition of that name (a CALL of a
-    # program file by its file name)
+    # The definition; None when the program file of a CALL is not read
     definition: CobolDefinition | None
 
 
@@ -502,7 +481,8 @@ class _Candidate:
     copy_line: int = 0
     # REPLACING operands of the COPY statement
     replacing_list: list[tuple[str, str, str]] = field(default_factory=list)
-    # Upper-case local name -> definitions with it, built on first use
+    # Upper-case local name -> definitions with it other than programs and ENTRY
+    # names, built on first use
     definition_dict: dict[str, list[CobolDefinition]] | None = None
 
     def local_name(self, definition: CobolDefinition) -> str:
@@ -510,30 +490,79 @@ class _Candidate:
         return replace_name(definition.name, self.replacing_list)
 
     def find_definition_list(self, name: str) -> list[CobolDefinition]:
-        """Return the definitions whose local name is an upper-case name, in line order."""
+        """Return the definitions a data name or procedure name can refer to.
+
+        Args:
+            name: Upper-case name.
+
+        Returns:
+            The definitions whose local name is the name, in line order; a program or
+            an ENTRY name is not among them.
+        """
         if self.definition_dict is None:
             self.definition_dict = {}
             for definition in self.cobol_source.definition_list:
+                if definition.type in CALL_TARGET_TYPE_TUPLE:
+                    continue
                 local_name = self.local_name(definition).upper()
                 self.definition_dict.setdefault(local_name, []).append(definition)
         return self.definition_dict.get(name, [])
 
 
-def _candidate_list(
-    cobol_source: CobolSource, file_rel: str, project_file_set: set[str], project_dir: str,
-) -> list[_Candidate]:
-    """Return the file itself, then each copybook its COPY statements bring in, in line order."""
-    candidate_list = [_Candidate(file_rel, cobol_source)]
-    for cobol_import in cobol_source.import_list:
+def _add_copybook_candidate(
+    candidate_list: list[_Candidate],
+    holder: _Candidate,
+    open_file_set: set[str],
+    project_file_set: set[str],
+    project_dir: str,
+) -> None:
+    """Add the copybooks the COPY statements of a file bring in, in line order.
+
+    Each copybook is followed by the copybooks its own COPY statements bring in. A
+    copybook of a copybook has the line of the COPY statement of the referring file,
+    and the REPLACING operands of its own COPY statement before those of the
+    statements that lead to it.
+
+    Args:
+        candidate_list: The candidates of the referring file; the copybooks are appended.
+        holder: The file whose COPY statements are read: the referring file or a copybook.
+        open_file_set: Relative paths of the holder and of the files that lead to it.
+        project_file_set: Relative paths of the project files that have a language.
+        project_dir: Absolute path to the project root.
+    """
+    for cobol_import in holder.cobol_source.import_list:
         if cobol_import.kind != COPY_KIND:
             continue
         module = cobol_module(COPY_KIND, cobol_import.name, cobol_import.library)
-        resolved = resolve_cobol_module_path(module, file_rel, project_file_set, project_dir)
-        copy_source = _cobol_source(resolved, project_dir) if resolved else None
-        if copy_source is not None:
-            candidate_list.append(_Candidate(
-                resolved, copy_source, cobol_import.line, cobol_import.replacing_list,
-            ))
+        resolved = resolve_cobol_module_path(
+            module, holder.file_rel, project_file_set, project_dir,
+        )
+        if not resolved or resolved in open_file_set:
+            continue
+        copy_source = _cobol_source(resolved, project_dir)
+        if copy_source is None:
+            continue
+        candidate = _Candidate(
+            resolved, copy_source, holder.copy_line or cobol_import.line,
+            [*cobol_import.replacing_list, *holder.replacing_list],
+        )
+        candidate_list.append(candidate)
+        _add_copybook_candidate(
+            candidate_list, candidate, open_file_set | {resolved}, project_file_set, project_dir,
+        )
+
+
+def _candidate_list(
+    cobol_source: CobolSource, file_rel: str, project_file_set: set[str], project_dir: str,
+) -> list[_Candidate]:
+    """Return the file itself, then each copybook its COPY statements bring in, in line order.
+
+    The copybooks a copybook brings in come right after it (_add_copybook_candidate).
+    """
+    candidate_list = [_Candidate(file_rel, cobol_source)]
+    _add_copybook_candidate(
+        candidate_list, candidate_list[0], {file_rel}, project_file_set, project_dir,
+    )
     return candidate_list
 
 
@@ -626,6 +655,19 @@ def _program_definition(cobol_source: CobolSource | None, name: str) -> CobolDef
     )
 
 
+def _first_program_definition(cobol_source: CobolSource | None) -> CobolDefinition | None:
+    """Return the first program or ENTRY of a file, or None."""
+    if cobol_source is None:
+        return None
+    return next(
+        (
+            definition for definition in cobol_source.definition_list
+            if definition.type in CALL_TARGET_TYPE_TUPLE
+        ),
+        None,
+    )
+
+
 def _call_target(
     reference: CobolReference,
     file_rel: str,
@@ -641,17 +683,24 @@ def _call_target(
         project_dir: Absolute path to the project root.
 
     Returns:
-        The target in the program file the CALL leads to; without one, the program or
-        ENTRY of that name in the referring file. None when neither exists.
+        The target in the program file the CALL leads to: the program or ENTRY of that
+        name, else the first program or ENTRY of the file. Without such a file, the
+        program or ENTRY of that name in the referring file. None when neither exists.
+        The target has the name of its definition, and the program name as written
+        when the program file has no definition.
     """
     program_name, program_file_rel = program_target_dict.get(
         (reference.name, reference.line), ("", file_rel),
     )
-    definition = _program_definition(_cobol_source(program_file_rel, project_dir), reference.name)
+    program_source = _cobol_source(program_file_rel, project_dir)
+    definition = _program_definition(program_source, reference.name)
     if program_file_rel == file_rel and definition is None:
         return None
+    if definition is None:
+        definition = _first_program_definition(program_source)
     return CobolReferenceTarget(
-        program_name or definition.name, reference.line, program_file_rel, definition,
+        definition.name if definition is not None else program_name,
+        reference.line, program_file_rel, definition,
     )
 
 
@@ -690,21 +739,21 @@ def _name_target(
 
 
 def cobol_reference_target_list(
-    cobol_source: CobolSource,
     file_rel: str,
     project_file_set: set[str],
     project_dir: str,
 ) -> list[CobolReferenceTarget]:
     """Resolve each reference of a COBOL file to the definition it refers to.
 
-    The program name of a CALL statement goes to the program file the statement leads
-    to, or to the program or ENTRY of that name in the file itself (_call_target). A
+    The program name of a CALL statement goes to the program or ENTRY of the program
+    file the statement leads to, or to the one of that name in the file itself
+    (_call_target). A
     data name or procedure name qualified with OF / IN goes to the definition under the
     named groups in the file itself or in a copybook it includes; any other name, and a
     qualified one no definition matches, goes to the first definition of that name in
-    the file itself, else in the copybooks in the order of the COPY statements
-    (_name_target). The names of a copybook are those a COPY ... REPLACING statement
-    writes. Names are compared without regard to upper and lower case.
+    the file itself, else in the copybooks in the order of the COPY statements, each
+    followed by the copybooks it includes (_name_target). The names of a copybook are
+    those a COPY ... REPLACING statement writes. Names are compared without regard to upper and lower case.
 
     Processing flow:
     1. Return the targets of reference_target_cache when they were resolved with the
@@ -713,7 +762,6 @@ def cobol_reference_target_list(
     3. Resolve each reference
 
     Args:
-        cobol_source: The CobolSource of the file.
         file_rel: Relative path of the file.
         project_file_set: Relative paths of the project files that have a language.
         project_dir: Absolute path to the project root.
@@ -725,13 +773,12 @@ def cobol_reference_target_list(
     """
     # == Step 1: Cache ========================================================
     cache_key = os.path.abspath(os.path.join(project_dir, file_rel))
-    cache_entry = reference_target_cache.get(cache_key)
-    if cache_entry is not None and (
-        cache_entry[0] is project_file_set or cache_entry[0] == project_file_set
-    ):
-        return cache_entry[1]
+    target_list = project_cache_value(reference_target_cache, cache_key, project_file_set)
+    if target_list is not None:
+        return target_list
 
     # == Step 2: Copybooks and CALL statements ================================
+    cobol_source = parse_file(os.path.join(project_dir, file_rel))[0]
     candidate_list = _candidate_list(cobol_source, file_rel, project_file_set, project_dir)
     program_target_dict = _program_target_dict(
         cobol_source, file_rel, project_file_set, project_dir,

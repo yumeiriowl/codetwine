@@ -23,6 +23,7 @@ SECTION_TYPE = "section_header"
 PARAGRAPH_TYPE = "paragraph_header"
 DATA_ITEM_TYPE = "data_description"
 FILE_TYPE = "file_description_entry"
+INDEX_TYPE = "occurs_indexed"
 
 # Definition types of the names a CALL statement can name
 CALL_TARGET_TYPE_TUPLE = (PROGRAM_TYPE, ENTRY_TYPE)
@@ -33,6 +34,8 @@ CALL_KIND = "CALL"
 
 # Node types of the headers of the procedure division
 _HEADER_NODE_TYPE_SET = {SECTION_TYPE, PARAGRAPH_TYPE}
+# End of the node type of each statement of the procedure division
+_STATEMENT_NODE_SUFFIX = "_statement"
 
 # Level numbers of the data items that belong to no group
 _NO_GROUP_LEVEL_SET = {1, 77, 78}
@@ -46,6 +49,8 @@ _TOP_RANK = 1
 # (it belongs to the item before it)
 _RENAME_RANK = _TOP_RANK + 1
 _CONDITION_RANK = 100
+# Rank of the description of a file: every data item after it belongs to it
+_FILE_RANK = 0
 # A position after every token of a file
 _NO_POSITION = sys.maxsize
 # Level numbers of the items that can be a group item
@@ -189,6 +194,17 @@ class _Item:
     is_elementary: bool
 
 
+@dataclass
+class _File:
+    """One description of a file (FD / SD) of a COBOL file, as the units are read."""
+
+    name: str          # Name as written in the source
+    start_line: int    # First line of its statement
+    end_line: int      # Last line of its statement
+    name_line: int     # Line of its name
+    unit_index: int    # Index of its unit in CobolText.unit_list
+
+
 def _is_elementary_word_list(word_list: list[tuple[str, int]]) -> bool:
     """Return whether the words of a data item's statement make it an elementary item.
 
@@ -229,6 +245,10 @@ class _UnitReader:
         self.header_list: list[tuple[str, str, int]] = []
         # Each data item
         self.item_list: list[_Item] = []
+        # Each description of a file with a name
+        self.file_list: list[_File] = []
+        # The definition of each index name (INDEXED BY)
+        self.index_definition_list: list[CobolDefinition] = []
         # Index in CobolText.unit_list of the unit being read
         self.unit_index = -1
         # Upper-case data item name -> literals the item is given (VALUE clause, MOVE)
@@ -271,7 +291,8 @@ class _UnitReader:
             *self._program_definition_list(),
             *self._header_definition_list(),
             *self._item_definition_list(),
-            *self.source.definition_list,
+            *self.index_definition_list,
+            *self._file_definition_list(),
         ]
         for name, line in self.cobol_text.entry_list:
             definition_list.append(CobolDefinition(name, ENTRY_TYPE, line, line, line))
@@ -337,11 +358,12 @@ class _UnitReader:
             ))
             if define_name is not None:
                 self._read_value(node_list, define_name)
+            self._read_index(unit, node_list, start_line, end_line)
         elif unit.kind == FILE_UNIT:
             define_name, name_line = self._file_name(unit, node_list)
             if define_name is not None:
-                self.source.definition_list.append(
-                    CobolDefinition(define_name, FILE_TYPE, start_line, end_line, name_line)
+                self.file_list.append(
+                    _File(define_name, start_line, end_line, name_line, self.unit_index)
                 )
         elif unit.kind == PROCEDURE_UNIT:
             define_name = self._header_name(unit, node_list, start_line)
@@ -395,8 +417,14 @@ class _UnitReader:
 
     @staticmethod
     def _is_definition_name(node: Node) -> bool:
-        """Return whether a WORD node is the name of a constant or of the description of a file."""
+        """Return whether a WORD node is a name its statement defines.
+
+        The names are that of a constant, that of the description of a file and the
+        index names of a data item.
+        """
         parent = node.parent
+        if parent is not None and parent.type == INDEX_TYPE:
+            return True
         if parent is None or parent.type not in ("constant_entry", FILE_TYPE):
             return False
         first_word = next(child for child in parent.children if child.type == "WORD")
@@ -407,14 +435,18 @@ class _UnitReader:
 
         The name is the entry name of the tree. When the tree holds none, it is the
         word after the level number, provided the grammar reads that word as the name
-        of a data item.
+        of a data item. An item has no name when a token is written right after the
+        first word after the level number ("(PFX)-ID", "WS-(SFX)").
 
         Returns:
             A (name, source line) tuple. (None, 0) for an item without a name or FILLER.
         """
+        if unit.has_name_suffix:
+            return None, 0
         for node in node_list:
             if node.type == "entry_name" or (
                 node.type == "WORD" and self._is_definition_name(node)
+                and node.parent.type == "constant_entry"
             ):
                 text = node.text.decode("utf-8")
                 if text.upper() == "FILLER":
@@ -426,6 +458,24 @@ class _UnitReader:
             if not GRAMMAR_NAME_RE.fullmatch(word) or self._is_item_name(word):
                 return word, line
         return None, 0
+
+    def _read_index(
+        self, unit: CobolUnit, node_list: list[Node], start_line: int, end_line: int,
+    ) -> None:
+        """Record the definition of each index name of a data item (INDEXED BY).
+
+        Args:
+            unit: The unit of the data item.
+            node_list: The nodes of the tree of the unit that start on a source line.
+            start_line: First source line of the unit.
+            end_line: Last source line of the unit.
+        """
+        for node in node_list:
+            if node.type == "WORD" and node.parent is not None and node.parent.type == INDEX_TYPE:
+                self.index_definition_list.append(CobolDefinition(
+                    self.node_name(node), INDEX_TYPE, start_line, end_line,
+                    unit.origin_line_list[node.start_point[0]],
+                ))
 
     def _is_item_name(self, word: str) -> bool:
         """Return whether the grammar reads a word as the name of a data item."""
@@ -657,7 +707,9 @@ class _UnitReader:
             the next statement that does not belong to it (_extent_end_position).
         """
         start_position = self.cobol_text.unit_list[item.unit_index].end_position
-        end_position = self._extent_end_position(item, item_by_unit_dict)
+        end_position = self._extent_end_position(
+            item.unit_index, _item_rank(item.level), item_by_unit_dict,
+        )
         return next(
             (
                 cobol_copy.end_line for cobol_copy in self.cobol_text.copy_list
@@ -666,15 +718,20 @@ class _UnitReader:
             None,
         )
 
-    def _extent_end_position(self, item: _Item, item_by_unit_dict: dict[int, _Item]) -> int:
-        """Return the position of the next statement that does not belong to a data item.
+    def _extent_end_position(
+        self, unit_index: int, rank: int, item_by_unit_dict: dict[int, _Item],
+    ) -> int:
+        """Return the position of the next statement that does not belong to a unit.
 
         The statement is the next one in no unit (a section header, ...), the next unit
         that is not a data item, or the next data item whose rank is not higher than
-        that of the item.
+        the rank given.
 
         Args:
-            item: The data item.
+            unit_index: Index in CobolText.unit_list of the unit of a data item or of
+                the description of a file.
+            rank: Rank of the data item (_item_rank), _FILE_RANK for the description of
+                a file.
             item_by_unit_dict: {unit index: data item of that unit} of every data item.
 
         Returns:
@@ -682,19 +739,67 @@ class _UnitReader:
             more than the last index of any token when no such statement follows.
         """
         unit_list = self.cobol_text.unit_list
-        start_position = unit_list[item.unit_index].end_position
+        start_position = unit_list[unit_index].end_position
         other_position_list = self.cobol_text.other_statement_position_list
         other_index = bisect_right(other_position_list, start_position)
         end_position = (
             other_position_list[other_index] if other_index < len(other_position_list)
             else _NO_POSITION
         )
-        rank = _item_rank(item.level)
-        for unit_index in range(item.unit_index + 1, len(unit_list)):
-            other = item_by_unit_dict.get(unit_index)
+        for next_index in range(unit_index + 1, len(unit_list)):
+            other = item_by_unit_dict.get(next_index)
             if other is None or _item_rank(other.level) <= rank:
-                return min(end_position, unit_list[unit_index].start_position)
+                return min(end_position, unit_list[next_index].start_position)
         return end_position
+
+    def _file_definition_list(self) -> list[CobolDefinition]:
+        """Build the definition of each description of a file.
+
+        A description ends on the last line of the data items and COPY statements
+        after it, up to the next statement that is not a data item (_extent_end_position).
+        """
+        unit_list = self.cobol_text.unit_list
+        item_by_unit_dict = {item.unit_index: item for item in self.item_list}
+        definition_list: list[CobolDefinition] = []
+        for cobol_file in self.file_list:
+            start_position = unit_list[cobol_file.unit_index].end_position
+            end_position = self._extent_end_position(
+                cobol_file.unit_index, _FILE_RANK, item_by_unit_dict,
+            )
+            end_line_list = [
+                item.end_line for item in self.item_list
+                if start_position < unit_list[item.unit_index].start_position < end_position
+            ] + [
+                cobol_copy.end_line for cobol_copy in self.cobol_text.copy_list
+                if start_position < cobol_copy.position < end_position
+            ]
+            definition_list.append(CobolDefinition(
+                cobol_file.name, FILE_TYPE, cobol_file.start_line,
+                max([cobol_file.end_line, *end_line_list]), cobol_file.name_line,
+            ))
+        return definition_list
+
+
+def has_statement(unit: CobolUnit, language: Language) -> bool:
+    """Return whether the grammar reads a statement in a sentence of the procedure division.
+
+    Args:
+        unit: A unit of a sentence of the procedure division.
+        language: The tree-sitter Language of the COBOL grammar.
+
+    Returns:
+        True when the tree of the unit has no error and holds a statement node that
+        starts on a source line.
+    """
+    root_node = Parser(language).parse(unit.text.encode("utf-8")).root_node
+    if root_node.has_error:
+        return False
+    return any(
+        node.type.endswith(_STATEMENT_NODE_SUFFIX)
+        and node.start_point[0] < len(unit.origin_line_list)
+        and unit.origin_line_list[node.start_point[0]]
+        for node in _node_list(root_node)
+    )
 
 
 def read_cobol_source(source: str, language: Language) -> CobolSource:

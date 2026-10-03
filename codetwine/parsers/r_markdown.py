@@ -1,4 +1,5 @@
 import re
+from collections.abc import Callable
 
 # First line of an R code chunk: ```{r}, ```{r name, fig.cap="a {b}"}, ~~~{r}, > ```{r}
 _CHUNK_START_RE = re.compile(
@@ -24,7 +25,7 @@ def has_r_chunk(content: bytes) -> bool:
     return any(_CHUNK_START_RE.match(line) for line in content.split(b"\n"))
 
 
-def r_chunk_code(content: bytes) -> bytes:
+def r_chunk_code(content: bytes, is_chunk_kept: Callable[[bytes], bool] | None = None) -> bytes:
     """Return the text of an R Markdown or Quarto file with only its R code chunks kept.
 
     A chunk starts at a fence line of three or more backticks or tildes followed by
@@ -41,6 +42,8 @@ def r_chunk_code(content: bytes) -> bytes:
 
     Args:
         content: The file's text as UTF-8 bytes.
+        is_chunk_kept: Called with the code of each chunk; a chunk it returns False for
+            is blanked like the text outside the chunks. None keeps every chunk.
 
     Returns:
         The bytes with everything but the code of the R chunks blanked. A chunk without
@@ -48,20 +51,30 @@ def r_chunk_code(content: bytes) -> bytes:
         are blanked.
     """
     code_line_list: list[bytes] = []
+    chunk_start: int | None = None
     fence: bytes | None = None
     is_quote = False
+
+    def close_chunk() -> None:
+        """Blank the lines of the chunk that ends here when is_chunk_kept rejects its code."""
+        chunk_line_list = code_line_list[chunk_start:]
+        if is_chunk_kept is not None and not is_chunk_kept(b"\n".join(chunk_line_list)):
+            code_line_list[chunk_start:] = [b" " * len(line) for line in chunk_line_list]
+
     for line in content.split(b"\n"):
         if fence is None:
             start_match = _CHUNK_START_RE.match(line)
             if start_match:
                 fence = start_match.group("fence")
                 is_quote = b">" in start_match.group("prefix")
+                chunk_start = len(code_line_list) + 1
             code_line_list.append(b" " * len(line))
             continue
 
         end_match = _CHUNK_END_RE.match(line)
         end_fence = end_match.group("fence") if end_match else b""
         if end_fence[:1] == fence[:1] and len(end_fence) >= len(fence):
+            close_chunk()
             fence = None
             code_line_list.append(b" " * len(line))
             continue
@@ -69,4 +82,6 @@ def r_chunk_code(content: bytes) -> bytes:
             prefix_length = _QUOTE_PREFIX_RE.match(line).end()
             line = b" " * prefix_length + line[prefix_length:]
         code_line_list.append(line)
+    if fence is not None:
+        close_chunk()
     return b"\n".join(code_line_list)

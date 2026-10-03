@@ -3,10 +3,32 @@
 ## Unreleased
 
 ### Added
+- Rust: a `use` declaration inside a block or an inline module is bound for the lines of that block or module only, and a path starting with a name it binds is resolved through it (`ImportInfo.scope_line_tuple`, `ImportBinder.scope_binding_list()`)
+- Rust: paths and `use` names that lead to a definition of the file itself (`self::`, `crate::`, `super::`) are listed in `same_file_usages`; `Self::member` inside an `impl` block is read as `Type::member`
+- Rust: `Type::member` is also linked to every other file whose `impl` block of the type defines the member
+- Rust: a path with a leading `::` is resolved from the crate it names (from the crate root in an edition 2015 package)
+- Rust: enum variants written by their bare name after `use a::Enum::*;` are linked to the enum
+- C/C++: a function a header only declares is linked as well to each file that includes the header and defines it (`ImportBinder.implement_file_list()`); the usage, the `caller_usages` of that file and the dependency edge are added
+- JS/TS definitions: a function assigned to a member at the top level of a file (`app.init = function () {}`), the function entries of an exported object (`module.exports = { run() {} }`, `export default { run: () => 1 }`), and the members of a TypeScript enum; an entry written `key: name` in `module.exports = { ... }` leads to `name`
+- `definition_source.file_definition()` and `definition_source.find_definition()`: the definition of a file a name names
+- Python, JS/TS: an import statement or `require()` written inside a function binds its names for the lines of that function, and such a name is no local variable of the function (`extract_imports()`: `scope_types` argument; `extract_usages()`: `import_line_dict` argument)
+- JS/TS: a name an export statement only passes on (`export { a } from "./m"`, `export { p as q }`) is a name for the files that import the file and no name of the file itself; in the file only the export statement is a usage of the name it passes on. A name passed on with a source comes before a definition of that name in the file (`ImportInfo.is_export`)
+- Python: a default value, an annotation and the return type of a function are read outside the function, where a parameter of the same name does not hide an imported or module-level name (`scope_body_dict` of the usage settings)
+- JS/TS: a module that is not relative is resolved through `paths` and `baseUrl` of the `tsconfig.json` / `jsconfig.json` that counts for the file (the nearest one from its directory up; `extends` is followed inside the project). With such a config file a module it does not map is no longer looked up from the project root or a source root (`path_config.path_config()`, `path_config_name_list` of the resolve settings)
+- JS/TS imports: `const x = require("./m").y`, `const m = await import("./m")` and `const { a, b: c } = await import("./m")` bind their names
+- `utils.project_cache.project_cache_value()`: the value a cache keeps for a project file set
+- Names bound by import statements are followed to the file that defines them (`import_binding.ImportBinder`). Python: names an `__init__.py` imports, `from m import *`, a module of a package (`from pkg import module`), `import a.b` beside `import a.c`. JS/TS: default and namespace imports, `export ... from`, `export *`, `require()` bound to a name or destructured with a rename, `import()` of a string, `module.exports = name` and `module.exports = require(...)`. Java / Kotlin: nested class imports, static imports, wildcard imports, imports under another name, and top-level functions, properties and type aliases of a package. C/C++: the headers an included header includes
+- `reference_target.reference_target_list()`: the definition each reference of a file resolves to, for every language; `import_reference.import_reference_target_list()` resolves the references of the languages with import statements
+- A name bound inside a function (parameter, local variable, loop variable, inner function) is not a usage of an imported or file-level name of that name (Python, JS/TS, Java, Kotlin, C/C++, Rust; `scope_types`, `local_binding_dict` and the related keys of the usage settings)
+- A member written after `self` / `cls` / `this` is a usage of the definition of that name in the file (`self_names` / `self_types` of the usage settings)
+- Definitions. Python: every target of a chained or destructuring assignment, `type` aliases, the members of a decorated class. Java: records, annotation types and their elements, enum constants, compact constructors, every variable of a field declaration. Kotlin: type aliases, enum entries, named companion objects, the variables of a destructuring declaration. JS/TS: generator functions, `exports.name = ...` / `module.exports.name = ...`, an unnamed default export (`default`), every variable of a declaration and of a destructuring pattern; TS abstract classes and their method signatures, function signatures, interface members, namespaces. C/C++: `typedef` names, unions, enumerators, function-like macros, variables declared without an initializer or as pointers or arrays, every variable of a declaration, operators and destructors, concepts. C#: indexers (`this[]`), operators (`operator +`), conversion operators (`operator int`), destructors (`~Name`), every variable of a field declaration
+- Module resolution: a module written with two or more parts (Python, C/C++ includes of any length) is matched against the end of the project file paths, the nearest file first (`min_path_end_part`); source roots (`src/main/java/` etc.) are detected under any directory; a JS/TS import written with `.js` / `.jsx` / `.mjs` / `.cjs` resolves to the TypeScript file of that name (`source_ext_dict`); a relative JS/TS path that leads to the project root resolves to its index file; the package of a Java / Kotlin file is read from its `package` statement
+- Rust: paths written in the arguments of a macro (`assert_eq!(crate::util::add(1, 2), 3)`) are resolved and are usages; a glob import brings in the names the module re-exports with `use`; the value of an enum variant (`A = BASE`) is a usage
+- `LangConfig.reference_kind` and `settings.EXT_TO_REFERENCE_KIND_DICT`: how the references of a file are resolved (`import` / `cobol` / `csharp` / `r`)
+- `extractors.definition_source`: `extract_callee_source()` (moved from `dependency_graph`) and `clear_definition_source_cache()`
 - R (`r`, `rmd`, `qmd`, in any case; grammar from `tree-sitter-language-pack`): top-level assignments, the names given to `setClass`, `setRefClass`, `setClassUnion`, `setGeneric`, `setMethod`, `setReplaceMethod` and `setValidity`, and the members of `R6Class` and `setRefClass` are extracted as definitions. A name no function around it binds is resolved to the file that defines it through the names `box::use` attaches, the scripts read with `source()` / `sys.source()` and the scripts that read the file, `global.R` and the `R/` directory of a Shiny app, the helper scripts of a `testthat` directory, the `R/` directory of the package the file is in (the nearest `DESCRIPTION` file with a `Package:` field) and the project packages attached with `library()` / `require()`; `pkg::name`, `mod$name` of a box module, the class and generic names given as strings to `new`, `setMethod`, `setValidity` and `contains`, `do.call("f")`, `match.fun("f")`, operators written between `%`, `f(x) <- value` (to `f<-`) and `name <<- value` inside a function are resolved as well, and an S3 method `generic.class` leads to its generic. A script read with `source()` or `box::use` is a dependency whether or not a name of it is used. Of an R Markdown or Quarto file the `{r}` code chunks are analyzed, and such a file without one is a file without a language (`codetwine/r_name_index.py`, `codetwine/extractors/r_source.py`, `codetwine/parsers/r_markdown.py`)
 - `r_name_index.r_reference_target_list()`: the definition each reference of an R file resolves to, and `r_name_index.r_import_file_list()`: the scripts an R file reads with `source()` and `box::use`
 - `settings.R_EXT_SET`: the extensions of the R files, and `settings.R_MARKDOWN_EXT_SET`: the ones whose code is in the R chunks of a document
-- `usage_analysis.build_r_usage_info_list()` / `usage_analysis.build_r_same_file_usages()`: `callee_usages` and `same_file_usages` of an R file from its resolved references
 - `parsers.r_markdown.r_chunk_code()`: the text of an R Markdown or Quarto file with everything but its R code chunks blanked, positions kept, and `parsers.r_markdown.has_r_chunk()`
 - `settings.set_no_language_file()`: the files of a project analyzed without a language whatever their extension
 - `parse_file()`: for an R Markdown or Quarto file the root node is the tree of its R code chunks, and the byte content the whole file
@@ -19,8 +41,7 @@
 - C# (`cs`, `tree-sitter-c-sharp`): classes, structs, interfaces, enums, records, delegates, methods, constructors, properties, events, fields and enum members are extracted as definitions. A name is resolved to the file of the type or member it names through the namespaces around it, the `using` directives (`using`, `using static`, alias, `global using` under the nearest `.csproj` directory), names written with their namespaces, the members of a `partial` type written in other files, extension methods by name and number of arguments, and attributes to their class, written with or without the suffix `Attribute`. A usage is named as written without its namespaces, except that an attribute written without the suffix is named with it (`[Audit]` is `AuditAttribute`) and a name written with an alias of a type is named with the type (`Fmt.Format` with `using Fmt = App.Text.Formatter;` is `Formatter.Format`) (`codetwine/csharp_namespace_index.py`, `codetwine/extractors/csharp_source.py`)
 - `csharp_namespace_index.csharp_reference_target_list()`: the definition each reference of a C# file resolves to
 - `settings.CSHARP_EXT_SET`: the extensions of the C# files
-- `usage_analysis.build_csharp_usage_info_list()` / `usage_analysis.build_csharp_same_file_usages()`: `callee_usages` and `same_file_usages` of a C# file from its resolved references
-- Definition name settings `__name_field__` (the `name` field of a declaration) and `__variable_declaration__` (the first variable of a field declaration)
+- Definition name settings `__name_field__` (the `name` field of a declaration) and `__variable_declaration__` (the variables of a field declaration)
 - `tree-sitter-c-sharp` dependency
 - `file_dependencies.json`: `language`, the extension whose language settings the file is analyzed with (`cpy` for a copybook of any extension that a `COPY` statement names, `""` for a file without a language)
 - `parsers.cobol_format.code_text_list()`: the code of each line of a COBOL source file, as the file is analyzed (columns 8 to 72 in fixed format, the whole line in free format, nothing for a comment or directive line)
@@ -33,16 +54,14 @@
 - COBOL (`cbl`, `cob`, `cpy`, in any case; grammar from `tree-sitter-language-pack`): programs, `ENTRY` names, sections, paragraphs, data items and file descriptions are extracted as definitions. `COPY` (with `OF` library and `REPLACING`), `EXEC SQL INCLUDE`, `CALL` of a literal or of a data item given a literal, and `EXEC CICS ... PROGRAM(...)` are resolved to files by file name and program name. Fixed-format and free-format source, names outside ASCII and names with `_` are read; each data item and each sentence is parsed by itself (`codetwine/parsers/cobol_format.py`, `codetwine/extractors/cobol_source.py`, `codetwine/cobol_file_index.py`)
 - `parse_file()`: returns a `CobolSource` in place of the root node for a COBOL file; `extract_definitions()`, `extract_imports()`, `extract_usages()` and `extract_callee_source()` take it
 - `settings.COBOL_EXT_SET`: the extensions of the COBOL files (lower case)
-- `ImportInfo.replacing_list`: the `REPLACING` operands of a COBOL `COPY` statement
 - `definitions.BARE_NAME_DEFINITION_TYPE_SET`: definition types `select_top_level_definitions()` keeps wherever they are nested
 - `tree-sitter-language-pack` dependency (0.13.0, the release with the grammars inside the wheel)
 - Rust (`rs`, `tree-sitter-rust`): functions, structs, enums, unions, traits, impl blocks (named after their type), type aliases, constants, statics, inline modules and `macro_rules!` are extracted as definitions. `use` declarations, `mod` declarations (including `#[path]`), `extern crate` and paths written without `use` are resolved to files through the tree of `mod` declarations, through re-exports, and through the crates whose `Cargo.toml` is in the project (`codetwine/rust_module_tree.py`, `codetwine/extractors/rust_path.py`)
 - `resolve_module_to_project_path()`: `project_dir` argument, required for a language whose resolve config has `module_tree` (Rust)
-- `import_to_path.import_name_list()`: the names an import binds and the original names of the renamed ones
-- `definitions.definition_name()` and `definitions.select_top_level_definitions()` (moved from `import_to_path._select_top_level_definitions()`)
+- `definitions.definition_name_list()` and `definitions.select_top_level_definitions()` (moved from `import_to_path._select_top_level_definitions()`)
 - `usages.symbol_part_list()` / `usages.usage_root_name()`: split a usage name at `.` and `::`
 - SQL (`sql`, `tree-sitter-sql`): tables, views, materialized views, functions, procedures, types, sequences, triggers, indexes and schemas are extracted as definitions, and a reference to an object created in another `.sql` file of the project is a dependency
-- `LangConfig.implicit_visibility` (`package` / `project`): the files whose definitions can be referenced without an import statement (Java / Kotlin: same directory, SQL: whole project), replacing `same_package_visible`
+- `LangConfig.implicit_visibility` (`package` / `project`): the files whose definitions can be referenced without an import statement (Java / Kotlin: same package, SQL: whole project), replacing `same_package_visible`
 - Every non-empty text file is analysed: a file whose extension has no tree-sitter language is listed with empty `definitions`, `callee_usages` and `caller_usages`, a `null` summary and no design document, and copied to the output directory (`settings.has_language()`, `file_utils.is_text_file()`)
 - `KNOWLEDGE_FORMAT` setting (`json` / `sqlite` / `both`) selecting the form of the whole-project result
 - `codetwine/knowledge_db.py`: SQLite output (`project_knowledge.sqlite`) built from the per-file JSON files, with a read API (`open_knowledge`, `iter_files`, `get_file`, `callers_of`, `callees_of`, `find_definitions`)
@@ -66,12 +85,49 @@
 - `charset-normalizer` dependency
 
 ### Changed
+- R: a script read with `source()` sees `global.R`, the `R/` directory and the testthat helper scripts of the files that read it, and the names of an R Markdown or Quarto document that reads it
+- R: every target of `a = b <- value` is a definition
+- R: a name assigned inside a top-level statement, outside the functions and `local()` calls written in it (`tryCatch({ cfg <- load() })`), is a definition when a later top-level statement refers to the name without assigning it itself
+- R: the names `box::use` attaches are read once per module when modules use one another in layers
+- COBOL: a data name or procedure name is not linked to the program or `ENTRY` of the same name
+- COBOL: a file named by a `COPY` statement without its extension is a copybook when it holds only statements of the procedure division
+- COBOL: a file description (`FD` / `SD`) spans its record descriptions and `COPY` statements (its `end_line` and source text), and `name OF file-name` is linked to the record of that file
+- COBOL: a `CALL` usage has the name of the program definition; a `CALL` of a program file by its file name is linked to its first program
+- COBOL: `COPY name` takes a file with the extension `cbl`, `cob` or `cpy` before a file without an extension
+- COBOL: index names (`INDEXED BY`) are definitions of type `occurs_indexed`; the names of a copybook included by a copybook are linked, with a dependency edge to it; an item named like `(PFX)-ID` is not a definition
+- COBOL: a file whose lines hold code in columns 1 to 6, or whose first line with code has `-` in column 7, is read as free format
+- COBOL: an ambiguous-width character counts as two columns in a file that holds a full-width character
+- COBOL: a line that starts with `@` or `$` is a directive line only when a word of letters follows
+- C#: a name that is both a member of the enclosing type and a type (`Status Status { get; set; }`, a constructor) is the type when a static member, a constant, an enum member or a nested type follows it (`Status.Closed`)
+- C#: a type is looked up with the number of type arguments it is written with (`Result<int>` is not `Result`); a type of another number is taken only when no step of the lookup finds one
+- C#: an alias or `using static` of a generic type keeps its number of type arguments; the types written inside a `using` alias are usages on the line of the directive
+- C#: `target_context` is the declaration the reference resolves to: the overload that takes the number of arguments of the call, the type with the number of type arguments written (`CsharpReferenceTarget.definition_line`, `definition_source.extract_definition_source()`)
+- `same_file_usages`: a reference is left out only inside the lines of the definition it names. `Type.Member` written inside `Type` is kept, and a COBOL reference is compared with the definition it resolved to instead of every definition of that name
+- A variable declared with a type of the project is named after the type inside the function it is declared in only (`extract_typed_aliases()` returns `TypedAlias` entries with the lines they count for); a field counts for the whole file
+- `extract_usages()`: `keep_local_names` is replaced by `alias_list`
+- `caller_usages` of a file are the `callee_usages` of the files that depend on it that lead to the file, for every language: the names, lines and files of the two lists match
+- `usage_analysis`: `build_callee_usages()`, `build_same_file_usages()` and `build_caller_usages()` take the resolved references of a file (`reference_target_list()`) for every language, replacing `build_usage_info_list()` and the `build_cobol_*` / `build_csharp_*` / `build_r_*` functions
+- `get_file_dependencies()` and `build_caller_usages()` no longer take `source_root_set`
+- `extract_callee_source()`: the name is looked up among the definitions of the file (`extract_definitions()`), each part of a name inside the definitions the part before it names (`Delete.Handler.Run`). A name that is no definition of the file gives `None` instead of a definition that mentions the name. The text of a C/C++ function prototype is its whole declaration
+- Usage names: an attribute access is named by the names it writes (`helper.process`; a chain after a call starts a new name), C/C++ `a->b` is `a.b`, a C++ name written with `::` is named from its first part that is a definition (`Shape::count`), and a Java method call is named with its method (`User.of`)
+- C++: the name of a namespace is not a name of the file (`geo::Circle` is `Circle`); the definitions inside a namespace and the enumerators of an enum count as top-level names; a member defined outside its class is named with its class (`Shape::count`)
+- C/C++: a struct, union, enum or class written without a body (`struct node *p`) is not a definition; a name a file defines itself is not linked to a header that declares it
+- Definition line ranges: a `#define` ends on its own line, a function returning a pointer is one definition over its body, and a function prototype covers its whole declaration
+- `build_project_dependencies()`: `callers` and `callees` are listed in path order; a file is never its own caller or callee; the files of a wildcard import are callees when one of their names is used
+- Python: an import that is not relative is not looked up among the files of the directory when that directory is a package (`from types import ...` in a package with `types.py`); `from x.y import a` no longer registers `x` as a name
+- JS/TS: an import that names no names (`import "./m"`), a default import and a namespace import no longer register every definition of the module as a name of the file; the import line itself is not a usage
+- Java / Kotlin: a name of the same package no longer replaces a name the file imports; a name another file of the package imports is not visible through a wildcard import
+- SQL and same-package names: of several files that define a name, the first in path order is linked
+- COBOL: of an `EXEC SQL` block only the host variables are read as names of the program
+- R Markdown / Quarto: a chunk whose code does not end inside the chunk (an open `{`, an operator at its end) is left out instead of taking the chunks after it into its statement (`r_chunk_code()`: `is_chunk_kept` argument)
+- R: of the project packages attached with `library()`, the one attached last is looked up first; `setRefClass(fields = c(...))` lists its members; a name is looked up once per file
+- C#: `[global::Namespace.Name]` is linked to `NameAttribute`; `Type.Member` gets the source of the member under the whole path written
+- C#: a parameter, local variable, lambda parameter, range variable or local function is not linked to a member or type of that name; a method called on such a value is matched against the extension methods only
 - `build_project_dependencies()`: a file whose analysis raises an exception is logged and left without dependencies in the graph instead of stopping the run; `process_all_files()` reports it in `dependency_fail_list`
 - `LangConfig` fields renamed after their type: `usage_node_types` -> `usage_node_type_dict`, `import_resolve` -> `import_resolve_dict`
 - `extract_callee_source()`: for a name with two or more parts, the last part is first looked up inside the container definitions named by the part before it (`Settings::new`, `Config.load`), and a definition whose own name matches is preferred over a definition that only contains the name
 - `same_file_usages`: a name bound by an import statement that the file defines only inside another definition (a method named like an imported module, e.g. Rust `use std::fmt;` and `fn fmt`) is not tracked, even when the import leads outside the project
 - Wildcard imports (`from X import *`, `import pkg.*`, Rust `use X::*`) no longer register the names the importing file defines itself
-- `build_symbol_to_file_map()`: the module root of an import with names (`from x.y import a`) is registered only for languages whose module separator is `.`. A JS/TS named import from a bare specifier that resolves to a project file (`import { foo } from "utils"`) no longer registers `utils`, so a local variable of that name is no longer taken for a usage of the file
 - Public settings renamed after their type: `TREE_SITTER_LANGUAGES` -> `EXT_TO_LANGUAGE_DICT`, `DEFINITION_DICTS` -> `EXT_TO_DEFINITION_DICT`, `IMPORT_QUERIES` -> `EXT_TO_IMPORT_QUERY_DICT`, `USAGE_NODE_TYPES` -> `EXT_TO_USAGE_NODE_TYPE_DICT`, `IMPORT_RESOLVE_CONFIG` -> `EXT_TO_IMPORT_RESOLVE_DICT`, `KNOWLEDGE_FORMATS` -> `KNOWLEDGE_FORMAT_TUPLE`, `SOURCE_ROOT_PATTERNS` -> `SOURCE_ROOT_PATTERN_LIST`
 - `build_project_dependencies()`: an implicit dependency (Java / Kotlin same package, SQL) is added when a top-level definition name of the other file is used in the syntax tree, instead of when the file name appears in the source text
 - `build_project_dependencies()`: collects every text file instead of only the supported extensions, and skips empty and binary files there; import resolution, dependency edges, change detection and design documents cover the files with a language only
@@ -79,7 +135,7 @@
 - `parse_file()`: the parse cache is now a bounded LRU, so the syntax trees of a whole project are no longer held at once
 - `save_consolidated_json()` / `save_dependency_summary()`: entries are written one at a time instead of being assembled in a list first
 - `generate_all_docs()`: only each design document's summary is carried forward between levels, not its full section text
-- `get_file_dependencies()`: takes the project file set, source roots and caller map from the caller instead of rebuilding them per file
+- `get_file_dependencies()`: takes the project file set and caller map from the caller instead of rebuilding them per file
 - `examples/doc_template_python.json`: the five sections are merged into one `design` section, so a design document takes one LLM call plus the summary
 - `process_all_files()`: change detection runs only when design documents are generated
 - `DOC_MAX_TOKENS` default raised from `8192` to `16384`
@@ -89,9 +145,19 @@
 - `is_text_file()`: a file that starts with a UTF-16 or UTF-32 BOM is text
 
 ### Removed
+- `import_to_path.build_symbol_to_file_map()`, `import_to_path.import_name_list()`, `settings.implicit_scope_key()`, `cobol_file_index.cobol_import_name_dict()`, `definitions.definition_name()` (see `definitions.definition_name_list()`)
 - `is_file_unchanged()`
 
 ### Fixed
+- Rust: a name a module only re-exports from outside the project (`pub use std::collections::HashMap;`) gives no usage
+- JS/TS, Kotlin, Rust: the declarations inside a callback, a class static block, a lambda, an `init` block or a closure were listed as definitions of the file. The ones inside a function called where it is written (`(function () { ... })()`) are still listed
+- C++ usage names no longer carry template arguments (`obj.get<int>` is `obj.get`)
+- Python: `from m import *` was not read as an import; the members of a decorated class were not listed
+- JS/TS: a destructuring declaration was listed as one definition named after the pattern (`{ a, b }`)
+- C: a header (`.h`) lost its `typedef` names; a function returning a pointer was listed by its declarator line only and its local variables were listed as definitions
+- Kotlin: an import under another name (`import a.b.C as D`) was not read; a variable declared with an imported type was not linked to the type
+- Usage names no longer carry call arguments or line breaks (`a.b(x).c`, a method chain over several lines)
+- Rust: an `impl` block for a type without a name (`impl dyn Trait`, `impl Trait for (u8, u8)`) is listed as a definition and keeps its members
 - `build_project_dependencies()`: a second call for a project in one process reads the project again. The Rust module tree, the C# namespace index and the COBOL file index of the first call were kept while the set of analyzed files stayed the same, so a `Cargo.toml` or `.csproj` file added, removed or changed in between did not count
 - A file analyzed without a language keeps no design document: the `doc.json` and `doc.md` a previous run wrote while the file had a language (a copybook no `COPY` statement names any more) are removed, and its summary is `null`
 - Line numbers count lines at `\n`, `\r\n` and a lone `\r` alone. A file whose lines end in a lone `\r` was read as one line by tree-sitter, so every definition started on line 1, and a form feed, U+2028 or another character `str.splitlines()` breaks at shifted the source text of the definitions after it (and the lines of a COBOL or BMS source) by a line

@@ -16,6 +16,9 @@ MEMBER_REFERENCE = "member"          # owner$name / owner@name
 _LEFT_ASSIGN_SET = {"<-", "=", "<<-"}
 _RIGHT_ASSIGN_SET = {"->", "->>"}
 
+# Name of the call that evaluates its argument in an environment of its own
+_LOCAL_CALL = "local"
+
 # Assignment operators that bind the name in the function they are written in
 _LOCAL_ASSIGN_SET = {"<-", "=", "->"}
 
@@ -249,6 +252,40 @@ def _assign_part(node: Node) -> tuple[Node | None, Node | None] | None:
     return None
 
 
+def _is_target_pair(node: Node | None) -> bool:
+    """Return whether a node is "a = b" written without parentheses."""
+    return node is not None and node.type == "binary_operator" and _operator(node) == "="
+
+
+def _target_part_list(target: Node | None) -> list[Node]:
+    """Return the targets the target side of an assignment holds.
+
+    a = b <- value is parsed as (a = b) <- value: the target side is the node "a = b",
+    and both of its sides are targets.
+
+    Examples:
+        a           -> [a]
+        a = b       -> [a, b]
+        a = b = c   -> [a, b, c]
+        x$y         -> [x$y]
+
+    Args:
+        target: The target node of an assignment (_assign_part), or None.
+
+    Returns:
+        The target nodes in source order: the target itself unless it is a "=" node.
+    """
+    part_list: list[Node] = []
+    while _is_target_pair(target):
+        lhs = target.child_by_field_name("lhs")
+        if lhs is not None:
+            part_list.append(lhs)
+        target = target.child_by_field_name("rhs")
+    if target is not None:
+        part_list.append(target)
+    return part_list
+
+
 def _call_name_part(node: Node) -> tuple[str, str] | None:
     """Return the package and the name of the function a call node calls.
 
@@ -363,6 +400,7 @@ def _assign_chain(node: Node) -> tuple[list[Node], Node | None]:
     Examples:
         a <- b <- 1     -> ([a, b], 1)
         1 -> a -> b     -> ([b, a], 1)
+        a = b <- 1      -> ([a, b], 1)
         f(x)            -> ([], f(x))
 
     Args:
@@ -378,8 +416,7 @@ def _assign_chain(node: Node) -> tuple[list[Node], Node | None]:
         assign_part = _assign_part(value)
         if assign_part is None:
             break
-        if assign_part[0] is not None:
-            target_list.append(assign_part[0])
+        target_list.extend(_target_part_list(assign_part[0]))
         value = assign_part[1]
     return target_list, value
 
@@ -452,13 +489,13 @@ def _member_definition_list(call_node: Node) -> list[RDefinition]:
         call_node: A call node.
 
     Returns:
-        One RDefinition of type "argument" per named argument of each list, with
-        is_member set. Empty when the call makes no class.
+        One RDefinition of type "argument" per named argument of each list() or c(),
+        with is_member set. Empty when the call makes no class.
     """
     member_list: list[RDefinition] = []
     for argument_name in _MEMBER_ARGUMENT_DICT.get(_call_name(call_node) or "", ()):
         list_node = _argument_value(call_node, argument_name)
-        if _call_name(list_node) != "list":
+        if _call_name(list_node) not in _STRING_HOLDER_CALL_SET:
             continue
         for member_name, value, argument_node in _argument_list(list_node):
             if member_name is None:
@@ -575,6 +612,9 @@ def r_definition_list(root_node: Node) -> list[RDefinition]:
     R6Class and of methods and fields of setRefClass are members (type "argument").
     The statements of a top-level if, "{ }", "( )", for, while and repeat are top-level
     statements (_read_top_level). An assignment inside a function is not a definition.
+    A name assigned inside a top-level statement, outside the functions written in it,
+    is a definition when a later top-level statement refers to it
+    (_inner_definition_list).
 
     Args:
         root_node: The AST root node of the file.
@@ -610,7 +650,70 @@ def r_definition_list(root_node: Node) -> list[RDefinition]:
             definition_list.extend(_call_definition_list(call_node, statement, set(name_list)))
             definition_list.extend(_member_definition_list(call_node))
 
+    definition_list.extend(_inner_definition_list(root_node))
     return sorted(definition_list, key=lambda definition: definition.start_line)
+
+
+def _is_inside_local_call(node: Node, statement: Node) -> bool:
+    """Return whether a node of a statement is written inside a call of local()."""
+    current = node.parent
+    while current is not None and current.id != statement.id:
+        if current.type == "call" and _call_name(current) == _LOCAL_CALL:
+            return True
+        current = current.parent
+    return statement.type == "call" and _call_name(statement) == _LOCAL_CALL
+
+
+def _inner_definition_list(root_node: Node) -> list[RDefinition]:
+    """Return the definitions written inside the top-level statements of an R file.
+
+    A name assigned inside a top-level statement, outside the functions and the
+    local() calls written in it (tryCatch({ cfg <- load() }), system.time(fit <- run())),
+    is a definition when a top-level statement after it refers to the name without
+    assigning it itself.
+
+    Args:
+        root_node: The AST root node of the file.
+
+    Returns:
+        One RDefinition per such name and statement, with the lines of the first
+        assignment of the name in the statement: of type "function_definition" when
+        the value is a function, else "binary_operator".
+    """
+    statement_list, loop_name_set = _read_top_level(root_node)
+    definition_list: list[RDefinition] = []
+    later_name_set: set[str] = set()
+    for statement in reversed(statement_list):
+        bind_list = _local_bind_list(statement, _chain_node_id_set(statement))
+        first_node_dict: dict[str, Node] = {}
+        for name, bind_node in sorted(bind_list, key=lambda bind: bind[1].start_byte):
+            if bind_node.type == "binary_operator" and not _is_inside_local_call(bind_node, statement):
+                first_node_dict.setdefault(name, bind_node)
+        for name, assign_node in first_node_dict.items():
+            if name not in later_name_set:
+                continue
+            assign_part = _assign_part(assign_node)
+            is_function = (
+                assign_part is not None and assign_part[1] is not None
+                and assign_part[1].type == "function_definition"
+            )
+            definition_list.append(RDefinition(
+                name=name,
+                type="function_definition" if is_function else "binary_operator",
+                start_line=_line(assign_node),
+                end_line=assign_node.end_point[0] + 1,
+                is_function=is_function,
+            ))
+
+        # The names the statement refers to without binding them itself; of owner$name
+        # the owner
+        walker = _ReferenceWalker()
+        walker.walk(statement, [{name for name, _ in bind_list} | loop_name_set])
+        later_name_set.update(
+            reference.owner if reference.kind == MEMBER_REFERENCE else reference.name
+            for reference in walker.reference_list
+        )
+    return definition_list
 
 
 def r_definition_text(root_node: Node, content: bytes, name: str) -> str | None:
@@ -790,6 +893,7 @@ def _chain_node_id_set(statement: Node) -> set[int]:
 
     Examples:
         a <- b <- f(x)   -> the ids of "a <- b <- f(x)" and "b <- f(x)"
+        a = b <- f(x)    -> the ids of "a = b <- f(x)" and "a = b"
         f(x)             -> empty
     """
     node_id_set: set[int] = set()
@@ -799,14 +903,21 @@ def _chain_node_id_set(statement: Node) -> set[int]:
         if assign_part is None:
             break
         node_id_set.add(current.id)
+        target = assign_part[0]
+        while _is_target_pair(target):
+            node_id_set.add(target.id)
+            target = target.child_by_field_name("rhs")
         current = assign_part[1]
     return node_id_set
 
 
-def _local_name_set(node: Node, skip_node_id_set: set[int] | None = None) -> set[str]:
-    """Return the names assigned inside a node, outside the functions written in it.
+def _local_bind_list(
+    node: Node, skip_node_id_set: set[int] | None = None,
+) -> list[tuple[str, Node]]:
+    """Return the names bound inside a node, outside the functions written in it, with the node that binds each.
 
-    The targets of "<-", "=" and "->" and the variables of for loops are returned.
+    The targets of "<-", "=" and "->" (with their assignment node) and the variables
+    of for loops (with the loop node) are returned.
 
     Args:
         node: The node to read: the body of a function, or a top-level statement.
@@ -814,9 +925,9 @@ def _local_name_set(node: Node, skip_node_id_set: set[int] | None = None) -> set
             assignments a top-level statement defines names with).
 
     Returns:
-        The set of names.
+        (name, assignment or for node) pairs.
     """
-    name_set: set[str] = set()
+    bind_list: list[tuple[str, Node]] = []
     node_stack = [node]
     while node_stack:
         current = node_stack.pop()
@@ -828,15 +939,33 @@ def _local_name_set(node: Node, skip_node_id_set: set[int] | None = None) -> set
             operator = _operator(current)
             if operator in _LOCAL_ASSIGN_SET:
                 target = current.child_by_field_name("rhs" if operator == "->" else "lhs")
-                name = _name_text(target)
-                if name:
-                    name_set.add(name)
+                bind_list.extend(
+                    (name, current)
+                    for name in map(_name_text, _target_part_list(target)) if name
+                )
         elif current.type == "for_statement":
             name = _name_text(current.child_by_field_name("variable"))
             if name:
-                name_set.add(name)
+                bind_list.append((name, current))
         node_stack.extend(current.children)
-    return name_set
+    return bind_list
+
+
+def _local_name_set(node: Node, skip_node_id_set: set[int] | None = None) -> set[str]:
+    """Return the names assigned inside a node, outside the functions written in it.
+
+    The targets of "<-", "=" and "->" and the variables of for loops are returned
+    (_local_bind_list).
+
+    Args:
+        node: The node to read: the body of a function, or a top-level statement.
+        skip_node_id_set: Ids of the assignments whose own target is not returned (the
+            assignments a top-level statement defines names with).
+
+    Returns:
+        The set of names.
+    """
+    return {name for name, _ in _local_bind_list(node, skip_node_id_set)}
 
 
 def _function_local_name_set(function_node: Node) -> set[str]:
@@ -1074,16 +1203,19 @@ class _ReferenceWalker:
             name <<- v, v ->> name inside a function    a reference to the name, unless
                                                         a scope outside that function binds it
         any other target (names(x) <- v, x$y <- v): _read_replace_target
+        Each target of a = b <- v is read by itself (_target_part_list): the last one
+        with the operator of the assignment, the ones before it with "=".
         The value is read in every case.
         """
         child_list: list[_ScopeNode] = [(value, scope_list)] if value is not None else []
-        if target is None:
-            return child_list
-        name = _name_text(target)
-        if name is None:
-            return child_list + self._read_replace_target(target, scope_list)
-        if operator in _OUTER_ASSIGN_SET and len(scope_list) > 1:
-            self._add_name(name, _line(target), scope_list[:-1])
+        part_list = _target_part_list(target)
+        is_outer = operator in _OUTER_ASSIGN_SET and len(scope_list) > 1
+        for position, part in enumerate(part_list):
+            name = _name_text(part)
+            if name is None:
+                child_list.extend(self._read_replace_target(part, scope_list))
+            elif is_outer and position == len(part_list) - 1:
+                self._add_name(name, _line(part), scope_list[:-1])
         return child_list
 
     def _read_replace_target(self, target: Node, scope_list: list[set[str]]) -> list[_ScopeNode]:

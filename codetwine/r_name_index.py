@@ -16,6 +16,7 @@ from codetwine.extractors.r_source import (
     RSource,
     read_r_source,
 )
+from codetwine.utils.project_cache import project_cache_value
 from codetwine.config.settings import R_EXT_SET, R_MARKDOWN_EXT_SET, language_ext
 
 logger = logging.getLogger(__name__)
@@ -116,7 +117,7 @@ class RNameIndex:
     package_table_dict: dict[str, _NameTable] = field(default_factory=dict)
     # Directory of a package -> the scripts in its R directory
     package_file_dict: dict[str, set[str]] = field(default_factory=dict)
-    # Name -> the top-level definitions of that name in the R scripts, in path order
+    # Name -> the top-level definitions of that name in the R files, in path order
     entry_dict: _NameTable = field(default_factory=dict)
     # Relative path -> the scripts the file reads with source(), in line order
     source_file_dict: dict[str, list[str]] = field(default_factory=dict)
@@ -385,6 +386,7 @@ def _module_table(
     module: _BoxModule,
     file_rel: str,
     visit_set: frozenset[str] = frozenset(),
+    hit_set: set[str] | None = None,
 ) -> _NameTable:
     """Return the names a box module gives the file that binds it.
 
@@ -397,30 +399,39 @@ def _module_table(
         module: The module.
         file_rel: Relative path of the file that binds the module.
         visit_set: The files whose box::use calls are read at this moment.
+        hit_set: Given the modules of visit_set the read comes back to; modified in
+            place.
     """
     if module.file_rel is None:
         return _package_table(name_index, module.package_name, file_rel)
     own_table = name_index.table_dict[module.file_rel]
     if module.file_rel in visit_set:
+        if hit_set is not None:
+            hit_set.add(module.file_rel)
         return own_table
-    box_scope = _box_scope(name_index, module.file_rel, visit_set)
+    box_scope = _box_scope(name_index, module.file_rel, visit_set, hit_set)
     return _merge_table([own_table, box_scope.attach_table, box_scope.attach_all_table])
 
 
 def _box_scope(
-    name_index: RNameIndex, file_rel: str, visit_set: frozenset[str] = frozenset(),
+    name_index: RNameIndex,
+    file_rel: str,
+    visit_set: frozenset[str] = frozenset(),
+    hit_set: set[str] | None = None,
 ) -> _BoxScope:
     """Return what the box::use calls of a file bind.
 
-    The scope of a file read for itself (empty visit_set) is kept in
-    name_index.box_scope_dict. Modules that attach the names of one another in a circle
-    give each file the names of all of them.
+    The scope is kept in name_index.box_scope_dict when the read of it came back to no
+    file of visit_set. Modules that attach the names of one another in a circle give
+    each file the names of all of them.
 
     Args:
         name_index: The name index of the project.
         file_rel: Relative path of the file.
         visit_set: The files whose box::use calls are read at this moment, when the
             file is read as a module of one of them.
+        hit_set: Given the modules the read of the file comes back to; modified in
+            place.
 
     Returns:
         The _BoxScope of the file.
@@ -430,6 +441,7 @@ def _box_scope(
         return box_scope
     box_scope = _BoxScope()
     module_visit_set = visit_set | {file_rel}
+    module_hit_set: set[str] = set()
 
     attach_all_table_list: list[_NameTable] = []
     for r_import in name_index.source_dict[file_rel].import_list:
@@ -442,15 +454,19 @@ def _box_scope(
             box_scope.module_dict[r_import.alias] = module
         if not r_import.name_dict and not r_import.is_attach_all:
             continue
-        module_table = _module_table(name_index, module, file_rel, module_visit_set)
+        module_table = _module_table(
+            name_index, module, file_rel, module_visit_set, module_hit_set,
+        )
         for name, original_name in r_import.name_dict.items():
             box_scope.attach_table.setdefault(name, []).extend(module_table.get(original_name, []))
         if r_import.is_attach_all:
             attach_all_table_list.append(module_table)
     box_scope.attach_all_table.update(_merge_table(attach_all_table_list))
 
-    if not visit_set:
+    if not module_hit_set & visit_set:
         name_index.box_scope_dict[file_rel] = box_scope
+    if hit_set is not None:
+        hit_set.update(module_hit_set)
     return box_scope
 
 
@@ -480,10 +496,10 @@ def _build_name_index(project_dir: str, project_file_set: set[str]) -> RNameInde
         file_rel_list.append(file_rel)
         name_index.source_dict[file_rel] = r_source
         name_index.table_dict[file_rel] = _file_table(file_rel, r_source)
+        for name, entry_list in name_index.table_dict[file_rel].items():
+            name_index.entry_dict.setdefault(name, []).extend(entry_list)
         if file_ext not in R_MARKDOWN_EXT_SET:
             name_index.script_file_set.add(file_rel)
-            for name, entry_list in name_index.table_dict[file_rel].items():
-                name_index.entry_dict.setdefault(name, []).extend(entry_list)
             name_index.lower_file_dict.setdefault(file_rel.lower(), []).append(file_rel)
             name_index.dir_file_dict.setdefault(posixpath.dirname(file_rel), []).append(file_rel)
 
@@ -505,14 +521,9 @@ def _get_name_index(project_dir: str, project_file_set: set[str]) -> RNameIndex:
     Returns:
         The RNameIndex of the R files in project_file_set.
     """
-    cache_entry = r_name_index_cache.get(project_dir)
-    if cache_entry is not None:
-        cache_file_set, name_index = cache_entry
-        if cache_file_set is project_file_set:
-            return name_index
-        if cache_file_set == project_file_set:
-            r_name_index_cache[project_dir] = (project_file_set, name_index)
-            return name_index
+    name_index = project_cache_value(r_name_index_cache, project_dir, project_file_set)
+    if name_index is not None:
+        return name_index
 
     name_index = _build_name_index(project_dir, project_file_set)
     r_name_index_cache[project_dir] = (project_file_set, name_index)
@@ -535,6 +546,8 @@ class _ReferenceResolver:
         self._box_scope = _box_scope(name_index, file_rel)
         # Package name -> the names of the packages the file names with it
         self._package_table_dict: dict[str, _NameTable] = {}
+        # Name -> definitions of it the file sees, kept once looked up
+        self._lookup_dict: dict[str, list[_Entry]] = {}
         self._file_set_list = self._lookup_file_set_list()
 
     def _with_source(self, file_rel_list: list[str], skip_set: set[str]) -> list[str]:
@@ -563,16 +576,16 @@ class _ReferenceResolver:
             for script_rel in self._name_index.dir_file_dict.get(directory, [])
         )
 
-    def _app_file_list(self) -> list[str]:
-        """Return the scripts of the Shiny app of the file whose names it sees.
+    def _app_file_list(self, file_rel: str) -> list[str]:
+        """Return the scripts of the Shiny app of a file whose names it sees.
 
         For app.R, ui.R, server.R and global.R of an app directory, and for the scripts
         of its R directory: global.R and the scripts of the R directory.
         """
-        if self._file_rel not in self._name_index.script_file_set:
+        if file_rel not in self._name_index.script_file_set:
             return []
-        directory = posixpath.dirname(self._file_rel)
-        if posixpath.basename(self._file_rel).lower() in _APP_SCRIPT_SET and self._is_app_dir(directory):
+        directory = posixpath.dirname(file_rel)
+        if posixpath.basename(file_rel).lower() in _APP_SCRIPT_SET and self._is_app_dir(directory):
             app_dir = directory
         elif posixpath.basename(directory) == _CODE_DIR and self._is_app_dir(posixpath.dirname(directory)):
             app_dir = posixpath.dirname(directory)
@@ -586,9 +599,9 @@ class _ReferenceResolver:
         file_list.extend(dir_file_dict.get(posixpath.join(app_dir, _CODE_DIR), []))
         return file_list
 
-    def _test_helper_file_list(self) -> list[str]:
-        """Return the helper and setup scripts of the testthat directory the file is in."""
-        directory = posixpath.dirname(self._file_rel)
+    def _test_helper_file_list(self, file_rel: str) -> list[str]:
+        """Return the helper and setup scripts of the testthat directory a file is in."""
+        directory = posixpath.dirname(file_rel)
         if posixpath.basename(directory) != _TEST_DIR:
             return []
         return [
@@ -598,8 +611,8 @@ class _ReferenceResolver:
 
     def _library_file_set_list(self, file_rel_list: list[str]) -> list[set[str]]:
         """Return the scripts of the project packages the given files attach with
-        library() / require(): one set for each package name, in the order the names
-        are first attached, without the package the file itself is in."""
+        library() / require(): one set for each package name, the package attached
+        last first, without the package the file itself is in."""
         name_index = self._name_index
         own_package_dir = name_index.package_dir_dict.get(self._file_rel)
         file_set_dict: dict[str, set[str]] = {}
@@ -612,7 +625,7 @@ class _ReferenceResolver:
                     for package_dir in _package_dir_list(name_index, r_import.path, self._file_rel)
                     if package_dir != own_package_dir
                 ))
-        return list(file_set_dict.values())
+        return list(file_set_dict.values())[::-1]
 
     def _lookup_file_set_list(self) -> list[set[str]]:
         """Return the sets of scripts a name of the file is looked up in, in order.
@@ -620,11 +633,12 @@ class _ReferenceResolver:
         After the file itself and the names box::use attaches (_lookup):
         1. The package the file is in, when the file is a script of its R directory
         2. The scripts the file reads with source(), followed through
-        3. The scripts that read the file with source(), followed up, and the scripts
+        3. The files that read the file with source(), followed up, and the scripts
            those read
-        4. global.R and the R directory of the Shiny app of the file, and the scripts
-           those read
-        5. The helper and setup scripts of the testthat directory of the file, and the
+        4. global.R and the R directory of the Shiny app of the file, and of the Shiny
+           app of each file that reads it (followed up), and the scripts those read
+        5. The helper and setup scripts of the testthat directory of the file, and of
+           the testthat directory of each file that reads it (followed up), and the
            scripts those read
         6. The package the file is in, when the file is not a script of its R directory
         7. The packages of the project that the file, or a script of 2 to 5, attaches
@@ -637,8 +651,18 @@ class _ReferenceResolver:
         skip_set = {self._file_rel}
         source_list = self._with_source([self._file_rel], skip_set)
         reader_list = self._reader_file_list(skip_set | set(source_list))
-        app_list = self._with_source(self._app_file_list(), skip_set)
-        helper_list = self._with_source(self._test_helper_file_list(), skip_set)
+        chain_list = _reach_list(name_index.reader_file_dict, [self._file_rel])
+        app_list = self._with_source(
+            [app_rel for chain_rel in chain_list for app_rel in self._app_file_list(chain_rel)],
+            skip_set,
+        )
+        helper_list = self._with_source(
+            [
+                helper_rel for chain_rel in chain_list
+                for helper_rel in self._test_helper_file_list(chain_rel)
+            ],
+            skip_set,
+        )
         package_dir = name_index.package_dir_dict.get(self._file_rel)
         package_file_set = (
             name_index.package_file_dict[package_dir] if package_dir is not None else set()
@@ -662,8 +686,17 @@ class _ReferenceResolver:
 
         The definitions of the file itself, else the ones box::use attaches under the
         name (one by one, then whole modules), else the ones in the first set of
-        _lookup_file_set_list with a script that defines the name.
+        _lookup_file_set_list with a script that defines the name. A name is looked up
+        once per file.
         """
+        entry_list = self._lookup_dict.get(name)
+        if entry_list is None:
+            entry_list = self._find_entry_list(name)
+            self._lookup_dict[name] = entry_list
+        return entry_list
+
+    def _find_entry_list(self, name: str) -> list[_Entry]:
+        """Look up the definitions of a name the file sees (see _lookup)."""
         own_table_list = [
             self._name_index.table_dict[self._file_rel],
             self._box_scope.attach_table,
@@ -821,14 +854,9 @@ def r_reference_target_list(
     """
     # == Step 1: Cache ========================================================
     cache_key = os.path.abspath(os.path.join(project_dir, file_rel))
-    cache_entry = r_target_cache.get(cache_key)
-    if cache_entry is not None:
-        cache_file_set, target_list = cache_entry
-        if cache_file_set is project_file_set:
-            return target_list
-        if cache_file_set == project_file_set:
-            r_target_cache[cache_key] = (project_file_set, target_list)
-            return target_list
+    target_list = project_cache_value(r_target_cache, cache_key, project_file_set)
+    if target_list is not None:
+        return target_list
 
     # == Step 2: Targets ======================================================
     name_index = _get_name_index(project_dir, project_file_set)

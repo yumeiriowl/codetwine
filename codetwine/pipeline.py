@@ -20,7 +20,6 @@ from codetwine.output import (
     build_summary_map,
 )
 from codetwine.doc_creator import generate_all_docs, load_doc
-from codetwine.import_to_path import detect_source_roots
 from codetwine.knowledge_db import save_consolidated_sqlite
 from codetwine.llm.client import LLMClient
 from codetwine.utils.file_utils import (
@@ -161,7 +160,6 @@ def _process_file_dependencies(
 
     # Lookups that are the same for every file, built once and passed to each call
     project_file_set = {info["file"] for info in language_dep_list}
-    source_root_set = detect_source_roots(project_file_set)
     caller_map = {info["file"]: info.get("callers", []) for info in language_dep_list}
 
     fail_file_list: list[str] = []
@@ -174,7 +172,7 @@ def _process_file_dependencies(
 
             dep_result = get_file_dependencies(
                 file_abs, project_dir,
-                project_file_set, source_root_set, caller_map,
+                project_file_set, caller_map,
             )
             if dep_result["detected_encoding"] is not None:
                 detected_encoding_dict[file_rel] = dep_result["detected_encoding"]
