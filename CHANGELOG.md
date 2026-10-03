@@ -3,6 +3,14 @@
 ## Unreleased
 
 ### Added
+- R (`r`, `rmd`, `qmd`, in any case; grammar from `tree-sitter-language-pack`): top-level assignments, the names given to `setClass`, `setRefClass`, `setClassUnion`, `setGeneric`, `setMethod`, `setReplaceMethod` and `setValidity`, and the members of `R6Class` and `setRefClass` are extracted as definitions. A name no function around it binds is resolved to the file that defines it through the names `box::use` attaches, the scripts read with `source()` / `sys.source()` and the scripts that read the file, `global.R` and the `R/` directory of a Shiny app, the helper scripts of a `testthat` directory, the `R/` directory of the package the file is in (the nearest `DESCRIPTION` file with a `Package:` field) and the project packages attached with `library()` / `require()`; `pkg::name`, `mod$name` of a box module, the class and generic names given as strings to `new`, `setMethod`, `setValidity` and `contains`, `do.call("f")`, `match.fun("f")`, operators written between `%`, `f(x) <- value` (to `f<-`) and `name <<- value` inside a function are resolved as well, and an S3 method `generic.class` leads to its generic. A script read with `source()` or `box::use` is a dependency whether or not a name of it is used. Of an R Markdown or Quarto file the `{r}` code chunks are analyzed, and such a file without one is a file without a language (`codetwine/r_name_index.py`, `codetwine/extractors/r_source.py`, `codetwine/parsers/r_markdown.py`)
+- `r_name_index.r_reference_target_list()`: the definition each reference of an R file resolves to, and `r_name_index.r_import_file_list()`: the scripts an R file reads with `source()` and `box::use`
+- `settings.R_EXT_SET`: the extensions of the R files, and `settings.R_MARKDOWN_EXT_SET`: the ones whose code is in the R chunks of a document
+- `usage_analysis.build_r_usage_info_list()` / `usage_analysis.build_r_same_file_usages()`: `callee_usages` and `same_file_usages` of an R file from its resolved references
+- `parsers.r_markdown.r_chunk_code()`: the text of an R Markdown or Quarto file with everything but its R code chunks blanked, positions kept, and `parsers.r_markdown.has_r_chunk()`
+- `settings.set_no_language_file()`: the files of a project analyzed without a language whatever their extension
+- `parse_file()`: for an R Markdown or Quarto file the root node is the tree of its R code chunks, and the byte content the whole file
+- `extract_callee_source()`: for an R file the definition named by the whole name is returned; a name with `.` is not split
 - Other extensions of supported languages: `cc`, `cxx`, `hpp`, `hh`, `hxx` (C++), `mjs`, `cjs` (JavaScript) and `mts`, `cts` (TypeScript); an include or import written with one of them resolves to the file
 - `file_dependencies.json`: `detected_encoding`, the encoding a file was decoded with when no BOM, UTF-8 or `SOURCE_ENCODING` decoded it (`""` when it was read as UTF-8 with invalid bytes replaced, `null` otherwise)
 - `process_all_files()`: `detected_encoding_dict`, the files whose encoding was detected, with that encoding
@@ -84,6 +92,8 @@
 - `is_file_unchanged()`
 
 ### Fixed
+- `build_project_dependencies()`: a second call for a project in one process reads the project again. The Rust module tree, the C# namespace index and the COBOL file index of the first call were kept while the set of analyzed files stayed the same, so a `Cargo.toml` or `.csproj` file added, removed or changed in between did not count
+- A file analyzed without a language keeps no design document: the `doc.json` and `doc.md` a previous run wrote while the file had a language (a copybook no `COPY` statement names any more) are removed, and its summary is `null`
 - Line numbers count lines at `\n`, `\r\n` and a lone `\r` alone. A file whose lines end in a lone `\r` was read as one line by tree-sitter, so every definition started on line 1, and a form feed, U+2028 or another character `str.splitlines()` breaks at shifted the source text of the definitions after it (and the lines of a COBOL or BMS source) by a line
 - File collection leaves out symbolic links and paths under a linked directory, whether the project is walked or `file_list` is given; a file outside the project is no longer analyzed through a link, and a file inside it is not listed twice
 - `extract_callee_source()`: returns the definition node the name belongs to instead of the parent of the name node. A C/C++ function definition now comes with its body, and a SQL object with its whole `CREATE` statement

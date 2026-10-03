@@ -8,9 +8,11 @@ from codetwine.extractors.imports import ImportInfo, extract_imports
 from codetwine.extractors.usages import UsageInfo, extract_usages, extract_typed_aliases, usage_root_name
 from codetwine.extractors.definitions import ATTACHED_DEFINITION_TYPE_SET, extract_definitions
 from codetwine.extractors.cobol_source import CobolSource
+from codetwine.extractors.r_source import r_definition_list
 from codetwine.extractors.dependency_graph import extract_callee_source
 from codetwine.cobol_file_index import CobolReferenceTarget, cobol_reference_target_list
 from codetwine.csharp_namespace_index import CsharpReferenceTarget, csharp_reference_target_list
+from codetwine.r_name_index import RReferenceTarget, r_reference_target_list
 from codetwine.import_to_path import (
     resolve_module_to_project_path,
     get_import_params,
@@ -22,14 +24,15 @@ from codetwine.config.settings import (
     EXT_TO_DEFINITION_DICT,
     EXT_TO_USAGE_NODE_TYPE_DICT,
     EXT_TO_IMPORT_RESOLVE_DICT,
+    R_EXT_SET,
     implicit_scope_key,
     language_ext,
 )
 
 logger = logging.getLogger(__name__)
 
-# A reference of a COBOL or C# file resolved to its definition
-_ReferenceTarget = CobolReferenceTarget | CsharpReferenceTarget
+# A reference of a COBOL, C# or R file resolved to its definition
+_ReferenceTarget = CobolReferenceTarget | CsharpReferenceTarget | RReferenceTarget
 
 # Maximum number of usage lines of one name whose surrounding code becomes usage_context
 _MAX_CONTEXT_LOCATION = 2
@@ -370,6 +373,61 @@ def build_csharp_same_file_usages(
     return _group_same_file_target_list(target_list, file_rel, definition_list)
 
 
+def build_r_usage_info_list(
+    target_list: list[RReferenceTarget], file_rel: str, project_dir: str,
+) -> list[dict]:
+    """Build the callee_usages of an R file from its resolved references.
+
+    The references that resolve to another file are grouped by (file, name); the
+    target_context of a group is the lines of the definition its first reference
+    resolves to (start_line to end_line of the target), read from the file.
+
+    Args:
+        target_list: Return value of r_reference_target_list.
+        file_rel: Relative path of the file.
+        project_dir: Absolute path to the project root.
+
+    Returns:
+        A list of {"lines", "name", "from", "target_context"} dicts.
+    """
+    line_list_dict: dict[str, list[str]] = {}
+
+    def definition_line_text(target: RReferenceTarget) -> str:
+        """Return the lines of the definition a reference resolves to."""
+        if target.file_rel not in line_list_dict:
+            target_text = read_source(os.path.join(project_dir, target.file_rel))[0]
+            line_list_dict[target.file_rel] = line_list_of(target_text)
+        return "\n".join(line_list_dict[target.file_rel][target.start_line - 1:target.end_line])
+
+    return _group_other_file_target_list(target_list, file_rel, definition_line_text)
+
+
+def build_r_same_file_usages(
+    target_list: list[RReferenceTarget], file_rel: str, root_node: Node,
+) -> list[dict]:
+    """Build the same_file_usages of an R file from its resolved references.
+
+    The references that resolve to the file itself are grouped by name. A reference
+    inside the line range of a top-level definition of the same name is left out, as in
+    build_same_file_usages; the members of a class and the calls written for a name
+    defined elsewhere (setMethod) are not such definitions.
+
+    Args:
+        target_list: Return value of r_reference_target_list.
+        file_rel: Relative path of the file.
+        root_node: The AST root node of the file.
+
+    Returns:
+        A list of {"lines", "name"} dicts.
+    """
+    definition_list = [
+        {"name": definition.name, "start_line": definition.start_line, "end_line": definition.end_line}
+        for definition in r_definition_list(root_node)
+        if not definition.is_member and not definition.is_attach
+    ]
+    return _group_same_file_target_list(target_list, file_rel, definition_list)
+
+
 def _caller_target_list(
     caller_root: Node | CobolSource,
     caller_ext: str,
@@ -381,7 +439,8 @@ def _caller_target_list(
 
     The references are resolved as get_file_dependencies resolves them for the caller
     itself: a COBOL file with OF / IN qualification (cobol_reference_target_list), a C#
-    file through its namespaces and using directives (csharp_reference_target_list).
+    file through its namespaces and using directives (csharp_reference_target_list), an
+    R file through the names it sees (r_reference_target_list).
 
     Returns:
         The resolved references. None for a caller of another language.
@@ -390,6 +449,8 @@ def _caller_target_list(
         return cobol_reference_target_list(caller_root, caller_rel, project_file_set, project_dir)
     if caller_ext in CSHARP_EXT_SET:
         return csharp_reference_target_list(caller_root, caller_rel, project_file_set, project_dir)
+    if caller_ext in R_EXT_SET:
+        return r_reference_target_list(caller_rel, project_file_set, project_dir)
     return None
 
 
@@ -621,7 +682,7 @@ def build_caller_usages(
         if not language:
             continue
 
-        # COBOL / C#: the caller's references that resolve to the target
+        # COBOL / C# / R: the caller's references that resolve to the target
         target_list = _caller_target_list(
             caller_root, caller_ext, caller_rel, project_file_set, project_dir,
         )

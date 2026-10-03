@@ -3,7 +3,8 @@ from collections import deque
 from dataclasses import dataclass
 from tree_sitter import Node
 from codetwine.extractors.cobol_source import CobolSource
-from codetwine.config.settings import COBOL_DEFINITION_DICT
+from codetwine.extractors.r_source import r_definition_list
+from codetwine.config.settings import COBOL_DEFINITION_DICT, R_DEFINITION_DICT
 
 # Regex pattern for filtering out #include guard #define directives
 _INCLUDE_GUARD_RE = re.compile(r"^_*[A-Z][A-Z0-9_]*_H(?:PP|XX)?_*(?:INCLUDED)?_*$")
@@ -60,6 +61,10 @@ def extract_definitions(
     paragraphs, data items and descriptions of files, with the line of the name, and the
     level number and whether it is a group item for a data item.
 
+    For an R file (definition_dict is R_DEFINITION_DICT) the definitions
+    r_definition_list() reads are returned: top-level assignments, the names setClass
+    and the like are given, and the members of R6Class and setRefClass.
+
     definition_dict structure:
         key = AST node type (e.g. "function_definition")
         value = one of the following:
@@ -87,6 +92,11 @@ def extract_definitions(
                 definition.name_line, definition.level, definition.is_group,
             )
             for definition in root_node.definition_list
+        ]
+    if definition_dict is R_DEFINITION_DICT:
+        return [
+            DefinitionInfo(definition.name, definition.type, definition.start_line, definition.end_line)
+            for definition in r_definition_list(root_node)
         ]
 
     definition_list: list[DefinitionInfo] = []

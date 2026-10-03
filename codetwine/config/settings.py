@@ -276,6 +276,15 @@ BMS_DEFINITION_DICT = {
     "data_description": "entry_name",
 }
 
+# Definition types of R -> the node that holds the name.
+# The definitions are read by r_source.r_definition_list(); the values are not read
+R_DEFINITION_DICT = {
+    "function_definition": "identifier",
+    "binary_operator": "identifier",
+    "call": "string",
+    "argument": "identifier",
+}
+
 SQL_DEFINITION_DICT = {
     "create_table": "__object_reference__",
     "create_view": "__object_reference__",
@@ -560,7 +569,7 @@ class LangConfig:
                         "project" - every file of the same extension (SQL)
                         None      - none
     ignore_ext_case:  Whether the extension is matched without regard to upper and lower
-                      case (COBOL, BMS)
+                      case (COBOL, BMS, R)
     """
     language: Language
     definition_dict: dict[str, str]
@@ -582,6 +591,13 @@ _COBOL_LANG_CONFIG = LangConfig(
 _BMS_LANG_CONFIG = LangConfig(
     language=tspack.get_language("cobol"),
     definition_dict=BMS_DEFINITION_DICT,
+    ignore_ext_case=True,
+)
+
+# R scripts, and R Markdown / Quarto files read through their R code chunks
+_R_LANG_CONFIG = LangConfig(
+    language=tspack.get_language("r"),
+    definition_dict=R_DEFINITION_DICT,
     ignore_ext_case=True,
 )
 
@@ -687,6 +703,9 @@ _LANG_REGISTRY: dict[str, LangConfig] = {
     "cob": _COBOL_LANG_CONFIG,
     "cpy": _COBOL_LANG_CONFIG,
     "bms": _BMS_LANG_CONFIG,
+    "r": _R_LANG_CONFIG,
+    "rmd": _R_LANG_CONFIG,
+    "qmd": _R_LANG_CONFIG,
 }
 
 
@@ -753,6 +772,15 @@ CSHARP_EXT_SET: set[str] = {
     if definition_dict is CSHARP_DEFINITION_DICT
 }
 
+# Extensions of the R files: scripts, R Markdown and Quarto (lower case)
+R_EXT_SET: set[str] = {
+    ext for ext, definition_dict in EXT_TO_DEFINITION_DICT.items()
+    if definition_dict is R_DEFINITION_DICT
+}
+
+# Extensions of the R files whose code is in the R chunks of a document (lower case)
+R_MARKDOWN_EXT_SET: set[str] = {"rmd", "qmd"}
+
 # Extensions of the BMS sources (lower case)
 BMS_EXT_SET: set[str] = {
     ext for ext, definition_dict in EXT_TO_DEFINITION_DICT.items()
@@ -787,18 +815,42 @@ def set_copy_target_ext(project_dir: str, file_ext_dict: dict[str, str]) -> None
         _copy_target_ext_dict[os.path.abspath(os.path.join(project_dir, file_rel))] = ext
 
 
+# Absolute path of a file whose extension has a language but which is analyzed without
+# one. Filled by set_no_language_file() (R Markdown / Quarto: a file without an R code chunk)
+_no_language_path_set: set[str] = set()
+
+
+def set_no_language_file(project_dir: str, file_rel_list: list[str]) -> None:
+    """Record the files of a project that are analyzed without a language whatever their extension.
+
+    The files recorded before for the same project are forgotten.
+
+    Args:
+        project_dir: Root directory of the project.
+        file_rel_list: Paths relative to project_dir.
+    """
+    project_prefix = os.path.join(os.path.abspath(project_dir), "")
+    for path in [path for path in _no_language_path_set if path.startswith(project_prefix)]:
+        _no_language_path_set.discard(path)
+    for file_rel in file_rel_list:
+        _no_language_path_set.add(os.path.abspath(os.path.join(project_dir, file_rel)))
+
+
 def language_ext(path: str) -> str:
     """Return the extension whose language settings a file is analyzed with.
 
-    A file recorded by set_copy_target_ext() gets the extension recorded for it. Every
-    other file gets its own extension when it is a key of EXT_TO_DEFINITION_DICT; the
-    extensions of the languages with ignore_ext_case are matched in any case.
+    A file recorded by set_copy_target_ext() gets the extension recorded for it, and a
+    file recorded by set_no_language_file() none. Every other file gets its own
+    extension when it is a key of EXT_TO_DEFINITION_DICT; the extensions of the
+    languages with ignore_ext_case are matched in any case.
 
     Examples:
         "src/app.py"          -> "py"
         "src/MAIN.Cbl"        -> "cbl"
+        "R/utils.R"           -> "r"
         "config.yaml"         -> ""
         "dcl/DCLCUST.dcl"     -> "cpy" (when a COPY statement names it)
+        "docs/notes.qmd"      -> "" (when it has no R code chunk)
 
     Args:
         path: A file path. A relative path is taken from the current directory when
@@ -808,9 +860,12 @@ def language_ext(path: str) -> str:
         The extension (without the dot, a key of EXT_TO_DEFINITION_DICT), or "" for a
         file without a language.
     """
-    copy_target_ext = _copy_target_ext_dict.get(os.path.abspath(path))
+    path_abs = os.path.abspath(path)
+    copy_target_ext = _copy_target_ext_dict.get(path_abs)
     if copy_target_ext:
         return copy_target_ext
+    if path_abs in _no_language_path_set:
+        return ""
     ext = os.path.splitext(path)[1].lstrip(".")
     if ext in EXT_TO_DEFINITION_DICT:
         return ext

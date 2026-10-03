@@ -6,10 +6,12 @@ from codetwine.config.settings import (
     COBOL_EXT_SET,
     EXT_TO_LANGUAGE_DICT,
     PARSE_CACHE_MAX_FILES,
+    R_MARKDOWN_EXT_SET,
     language_ext,
 )
 from codetwine.extractors.bms_source import read_bms_source
 from codetwine.extractors.cobol_source import CobolSource, read_cobol_source
+from codetwine.parsers.r_markdown import r_chunk_code
 from codetwine.utils.file_utils import lone_cr_to_lf, read_source
 
 logger = logging.getLogger(__name__)
@@ -60,6 +62,10 @@ def parse_file(file_path: str) -> tuple[Node | CobolSource, bytes]:
     (read_bms_source); extract_definitions(), extract_imports() and extract_usages()
     take it as they take a root node. The language is the one language_ext() gives.
 
+    For an R Markdown or Quarto file the root node is the tree of its R code chunks
+    (r_chunk_code), each node at the position its code has in the file; the byte content
+    is the whole file.
+
     Parse results are cached at module level; a file found in the cache is not parsed again.
     The cache holds at most PARSE_CACHE_MAX_FILES entries; when it is full, the least
     recently used entry is discarded and that file is parsed again the next time it is
@@ -90,6 +96,10 @@ def parse_file(file_path: str) -> tuple[Node | CobolSource, bytes]:
     elif ext in BMS_EXT_SET:
         # Read the maps of the BMS macros
         parse_result = (read_bms_source(content.decode("utf-8")), content)
+    elif ext in R_MARKDOWN_EXT_SET:
+        # Parse the R code chunks of the document, everything else blanked
+        tree = Parser(EXT_TO_LANGUAGE_DICT[ext]).parse(r_chunk_code(content))
+        parse_result = (tree.root_node, content)
     else:
         # Parse with tree-sitter to generate the AST
         tree = Parser(EXT_TO_LANGUAGE_DICT[ext]).parse(content)

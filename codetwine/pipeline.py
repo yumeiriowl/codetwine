@@ -7,6 +7,7 @@ from collections import Counter
 from codetwine.parsers.ts_parser import parse_cache
 from codetwine.cobol_file_index import file_index_cache, reference_target_cache
 from codetwine.csharp_namespace_index import csharp_target_cache, namespace_index_cache
+from codetwine.r_name_index import r_name_index_cache, r_target_cache
 from codetwine.rust_module_tree import module_tree_cache
 from codetwine.extractors.dependency_graph import build_project_dependencies
 from codetwine.file_analyzer import get_file_dependencies
@@ -38,6 +39,10 @@ from codetwine.config.settings import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+# File names of the design document in the output directory of a file
+_DOC_FILE_TUPLE = ("doc.json", "doc.md")
 
 
 def _to_internal_dep_list(
@@ -137,7 +142,8 @@ def _process_file_dependencies(
     and a copy of the original file to the output directory.
 
     When the analysis of a file fails, the file_dependencies.json and the copy that a
-    previous run left in its output directory are removed.
+    previous run left in its output directory are removed. For a file analyzed without
+    a language, the design document (doc.json, doc.md) a previous run left is removed.
 
     Args:
         file_rel_list: List of relative paths of files to process.
@@ -180,6 +186,12 @@ def _process_file_dependencies(
 
             # Copy the original file to the output directory
             shutil.copy2(file_abs, os.path.join(output_file_dir, os.path.basename(file_rel)))
+
+            # Remove the design document a previous run left for a file without a language
+            if dep_result["language"] == "":
+                for output_name in _DOC_FILE_TUPLE:
+                    with contextlib.suppress(OSError):
+                        os.remove(os.path.join(output_file_dir, output_name))
 
             logger.info(f"  OK: {file_rel}")
         except Exception as e:
@@ -322,13 +334,16 @@ async def process_all_files(
         )
 
     # Clear parse result cache, Rust module tree cache, COBOL file index and reference
-    # caches and C# namespace index and reference caches to free memory
+    # caches, C# namespace index and reference caches and R name index and reference
+    # caches to free memory
     parse_cache.clear()
     module_tree_cache.clear()
     file_index_cache.clear()
     reference_target_cache.clear()
     namespace_index_cache.clear()
     csharp_target_cache.clear()
+    r_name_index_cache.clear()
+    r_target_cache.clear()
 
     log_progress(logger, "Analysis complete.")
 

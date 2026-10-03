@@ -5,6 +5,7 @@ from collections import deque
 from tree_sitter import Node
 from codetwine.parsers.ts_parser import parse_file
 from codetwine.extractors.cobol_source import CobolSource
+from codetwine.extractors.r_source import r_definition_text
 from codetwine.extractors.definitions import (
     ATTACHED_DEFINITION_TYPE_SET,
     CONTAINER_DEFINITION_TYPE_SET,
@@ -12,23 +13,42 @@ from codetwine.extractors.definitions import (
 )
 from codetwine.extractors.imports import extract_imports
 from codetwine.extractors.usages import extract_usages, symbol_part_list
-from codetwine.cobol_file_index import reference_target_cache, register_copy_target
-from codetwine.csharp_namespace_index import csharp_reference_target_list, csharp_target_cache
+from codetwine.cobol_file_index import (
+    file_index_cache,
+    reference_target_cache,
+    register_copy_target,
+)
+from codetwine.csharp_namespace_index import (
+    csharp_reference_target_list,
+    csharp_target_cache,
+    namespace_index_cache,
+)
+from codetwine.rust_module_tree import module_tree_cache
+from codetwine.parsers.r_markdown import has_r_chunk
+from codetwine.r_name_index import (
+    r_import_file_list,
+    r_name_index_cache,
+    r_reference_target_list,
+    r_target_cache,
+)
 from codetwine.import_to_path import (
     detect_source_roots,
     resolve_module_to_project_path,
     get_import_params,
     top_level_definition_names,
 )
-from codetwine.utils.file_utils import is_text_file, rel_to_copy_path
+from codetwine.utils.file_utils import is_text_file, lone_cr_to_lf, read_source, rel_to_copy_path
 from codetwine.config.settings import (
     CSHARP_EXT_SET,
     EXT_TO_DEFINITION_DICT,
     EXCLUDE_PATTERNS,
     EXT_TO_USAGE_NODE_TYPE_DICT,
+    R_EXT_SET,
+    R_MARKDOWN_EXT_SET,
     has_language,
     implicit_scope_key,
     language_ext,
+    set_no_language_file,
 )
 
 logger = logging.getLogger(__name__)
@@ -158,6 +178,8 @@ def extract_callee_source(
 
     For a COBOL file the lines of the first definition with the name are returned;
     names are compared without regard to upper and lower case.
+    For an R file the lines of the definition named callee_name as a whole are returned
+    (r_source.r_definition_text); the name is not split into parts.
 
     Parse results are reused via the module-level cache in ts_parser.py.
 
@@ -175,9 +197,11 @@ def extract_callee_source(
     if not definition_dict:
         return None
 
-    callee_root = parse_file(absolute_path)[0]
+    callee_root, callee_content = parse_file(absolute_path)
     if isinstance(callee_root, CobolSource):
         return callee_root.definition_source(callee_name)
+    if language_ext(absolute_path) in R_EXT_SET:
+        return r_definition_text(callee_root, callee_content, callee_name)
 
     # For attribute access like "helper.process", the trailing "process" is the actual definition name.
     # For cases like "TEMPLATE.format" where the trailing part is a built-in method,
@@ -297,6 +321,29 @@ def _to_rel(path: str, project_dir: str) -> str:
     return os.path.relpath(path, project_dir).replace("\\", "/")
 
 
+def _no_chunk_document_list(project_dir: str, all_file_list: list[str]) -> list[str]:
+    """Return the R Markdown and Quarto files that have no R code chunk.
+
+    Args:
+        project_dir: Root directory of the project to analyze.
+        all_file_list: Absolute paths of the text files of the project.
+
+    Returns:
+        Paths relative to project_dir. A file that cannot be read is not returned.
+    """
+    document_list: list[str] = []
+    for file_path in all_file_list:
+        if os.path.splitext(file_path)[1].lstrip(".").lower() not in R_MARKDOWN_EXT_SET:
+            continue
+        try:
+            content = lone_cr_to_lf(read_source(file_path)[0]).encode("utf-8")
+        except OSError:
+            continue
+        if not has_r_chunk(content):
+            document_list.append(_to_rel(file_path, project_dir))
+    return document_list
+
+
 def _collect_import_callee_dict(
     language_file_list: list[str],
     project_dir: str,
@@ -403,13 +450,47 @@ def _add_implicit_callee(
                 file_callee_dict[abs_path].add(os.path.abspath(os.path.join(project_dir, other_rel)))
 
 
+def _reference_callee_rel_list(
+    file_path: str, file_rel: str, project_file_set: set[str], project_dir: str,
+) -> list[str]:
+    """Return the files the references of a C# or R file resolve to.
+
+    For an R file the scripts it reads with source() and box::use are returned as well,
+    whether or not it uses a name of them.
+
+    Args:
+        file_path: Absolute path of the file.
+        file_rel: Relative path of the file.
+        project_file_set: Relative paths of the files that have a language.
+        project_dir: Root directory of the project to analyze.
+
+    Returns:
+        Relative paths, the file itself among them when it refers to its own
+        definitions. Empty for a file of another language.
+    """
+    file_ext = language_ext(file_path)
+    if file_ext in CSHARP_EXT_SET:
+        root_node = parse_file(file_path)[0]
+        return [
+            target.file_rel for target in csharp_reference_target_list(
+                root_node, file_rel, project_file_set, project_dir,
+            )
+        ]
+    if file_ext in R_EXT_SET:
+        return [
+            target.file_rel
+            for target in r_reference_target_list(file_rel, project_file_set, project_dir)
+        ] + r_import_file_list(file_rel, project_file_set, project_dir)
+    return []
+
+
 def _add_reference_callee(
     file_callee_dict: dict[str, set[str]],
     language_file_list: list[str],
     project_dir: str,
     project_file_set: set[str],
 ) -> None:
-    """Add the files the references of a C# file resolve to as its callees.
+    """Add the files the references of a C# or R file resolve to as its callees.
 
     A file whose analysis raises an exception adds no edges; the exception is logged.
 
@@ -420,21 +501,18 @@ def _add_reference_callee(
         project_file_set: Relative paths of the files that have a language.
     """
     for file_path in language_file_list:
-        if language_ext(file_path) not in CSHARP_EXT_SET:
-            continue
         file_rel = _to_rel(file_path, project_dir)
         try:
-            root_node = parse_file(file_path)[0]
-            target_list = csharp_reference_target_list(
-                root_node, file_rel, project_file_set, project_dir,
+            callee_rel_list = _reference_callee_rel_list(
+                file_path, file_rel, project_file_set, project_dir,
             )
         except Exception as e:
             _log_graph_failure(file_rel, e)
             continue
-        for target in target_list:
-            if target.file_rel != file_rel:
+        for callee_rel in callee_rel_list:
+            if callee_rel != file_rel:
                 file_callee_dict[os.path.abspath(file_path)].add(
-                    os.path.abspath(os.path.join(project_dir, target.file_rel))
+                    os.path.abspath(os.path.join(project_dir, callee_rel))
                 )
 
 
@@ -496,8 +574,14 @@ def build_project_dependencies(
     runs on the files with a language (has_language); every other file is listed with
     empty callers and callees. A file without a language that a COBOL COPY statement
     names is analyzed as a COBOL copybook, and keeps that language until the next call
-    for the project (register_copy_target). The resolved references of COBOL files
-    (reference_target_cache) and of C# files (csharp_target_cache) are cleared.
+    for the project (register_copy_target). An R Markdown or Quarto file without an R
+    code chunk is analyzed without a language, until the next call for the project
+    (set_no_language_file).
+    The indexes built from the files of a project and the references resolved with
+    them are cleared: the Rust module trees (module_tree_cache), the C# namespace
+    indexes (namespace_index_cache, csharp_target_cache), the R name indexes
+    (r_name_index_cache, r_target_cache) and the COBOL file indexes (file_index_cache,
+    reference_target_cache). The parse results (parse_cache) are kept.
 
     Args:
         project_dir: Root directory of the project to analyze.
@@ -513,9 +597,18 @@ def build_project_dependencies(
     else:
         all_file_list = _filter_text_file_list(project_dir, file_list)
 
-    # Files without a language that COBOL COPY statements name are analyzed as COBOL
+    # Forget the indexes and the resolved references of an earlier analysis
+    module_tree_cache.clear()
+    file_index_cache.clear()
+    namespace_index_cache.clear()
+    r_name_index_cache.clear()
     reference_target_cache.clear()
     csharp_target_cache.clear()
+    r_target_cache.clear()
+
+    # R Markdown and Quarto files without an R code chunk are analyzed without a language,
+    # and files without a language that COBOL COPY statements name are analyzed as COBOL
+    set_no_language_file(project_dir, _no_chunk_document_list(project_dir, all_file_list))
     register_copy_target(project_dir, [_to_rel(f, project_dir) for f in all_file_list])
 
     # Only the files with a language take part in import resolution and dependency edges
@@ -536,7 +629,7 @@ def build_project_dependencies(
     # == Step 3.5: Add files visible without an import statement as implicit callees ==
     _add_implicit_callee(file_callee_dict, language_file_list, project_dir)
 
-    # == Step 3.6: Add the files the references of a C# file resolve to ========
+    # == Step 3.6: Add the files the references of a C# or R file resolve to ===
     _add_reference_callee(file_callee_dict, language_file_list, project_dir, project_file_set)
 
     # == Step 4: Build the callers (reverse lookup) index ==================

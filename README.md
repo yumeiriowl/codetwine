@@ -38,6 +38,7 @@ The knowledge file can be used as input material for LLM-powered code search and
     - [Rust](#rust)
     - [C#](#c)
     - [COBOL](#cobol)
+    - [R](#r)
   - [♻️ Incremental Processing](#️-incremental-processing)
   - [🗄️ SQLite Output](#️-sqlite-output)
   - [📋 Output JSON Schema](#-output-json-schema)
@@ -60,7 +61,7 @@ The knowledge file can be used as input material for LLM-powered code search and
 
 Definitions, dependencies and design documents are extracted for the following languages
 (extensions `py`, `java`, `kt`, `kts`, `js`, `jsx`, `mjs`, `cjs`, `ts`, `tsx`, `mts`, `cts`, `c`, `cpp`,
-`cc`, `cxx`, `h`, `hpp`, `hh`, `hxx`, `sql`, `rs`, `cs`, and `cbl`, `cob`, `cpy`, `bms` in any case):
+`cc`, `cxx`, `h`, `hpp`, `hh`, `hxx`, `sql`, `rs`, `cs`, and `cbl`, `cob`, `cpy`, `bms`, `r`, `rmd`, `qmd` in any case):
 
 - Python
 - Java
@@ -74,6 +75,7 @@ Definitions, dependencies and design documents are extracted for the following l
 - C#
 - COBOL (a file with another extension, or none, that a `COPY` statement names is read as a copybook)
 - BMS (CICS map definitions: the names of the symbolic map a COBOL program copies)
+- R (scripts, and the `{r}` code chunks of R Markdown and Quarto files; a `.Rmd` / `.qmd` file without such a chunk is a file without a language)
 
 Every other non-empty text file (`.md`, `.yaml`, `.toml`, `Makefile`, ...) is also listed in the
 outputs and copied to the output directory, with empty `definitions`, `callee_usages`,
@@ -261,7 +263,7 @@ Running the tool generates the following files in `<output directory>/<project n
 
 ## ⚠️ Dependency Analysis Limitations
 
-Dependency extraction is performed through static syntax analysis with tree-sitter, parsing import statements (including `#include`, Rust `use` / `mod`, C# `using` and COBOL `COPY` / `CALL`) in source code to identify inter-file dependencies. Dependencies may not be detected or may be incomplete in the following cases.
+Dependency extraction is performed through static syntax analysis with tree-sitter, parsing import statements (including `#include`, Rust `use` / `mod`, C# `using`, COBOL `COPY` / `CALL` and R `source()` / `box::use`) in source code to identify inter-file dependencies. Dependencies may not be detected or may be incomplete in the following cases.
 
 ### Common to All Languages
 
@@ -317,6 +319,19 @@ Dependency extraction is performed through static syntax analysis with tree-sitt
 - **Source format**: Fixed-format and free-format source are read. A file without a `>>SOURCE` / `$SET SOURCEFORMAT` directive is read as free format when one of its lines, other than a directive line, cannot be a fixed-format line. The code of a fixed-format line ends at column 72, unless more of the file's lines have code past column 72 than have an identification field there (text only in columns 73 to 80, after a blank column 72); such a file is read to the end of each line. A floating comment (`*>`) past column 72 and a literal the next line continues are not counted. A full-width character counts as two columns
 - **Statements the grammar does not read**: Each data item and each sentence of the procedure division is parsed by itself. In a statement the grammar does not read, every word that is a name of a definition counts as a usage, and a paragraph that starts in the middle of a sentence (no period before it) is not a definition
 - **Debug lines and compiler directives**: Lines with `D` in the indicator column, `>>` directives, `REPLACE` statements and conditional compilation are not evaluated
+
+### R
+
+- **Names**: R has no import statement. A name that no function around it binds is linked to the top-level definition of that name the file sees, looked up in this order: the file itself; the names `box::use` attaches; the scripts the file reads with `source()` / `sys.source()`, followed through; the scripts that read the file with `source()`, and the scripts those read; `global.R` and the `R/` directory of the Shiny app the file belongs to (a directory with `app.R` or `server.R`); the `helper*.R` / `setup*.R` scripts of the `testthat` directory the file is in; the scripts in `R/` of the package the file is in (the nearest directory above it whose `DESCRIPTION` file has a `Package:` field); the packages of the project that the file, or one of those scripts, attaches with `library()` / `require()`. The scripts that `global.R`, the `R/` directory of an app and the helper scripts read with `source()` count with them. For a script in the `R/` directory of a package, the package comes right after the names `box::use` attaches. `pkg::name` and `pkg:::name` are linked when `pkg` is a package of the project. A package name that several packages of the project have is linked to all of them, or to the package the file is in when it has that name. A name defined in several files of the place it is found in is linked to all of them. Scripts that share only a directory do not see each other. A usage is named after the definition (`pkg::f` and `mod$f` are `f`)
+- **Definitions**: A top-level assignment to a name (`<-`, `=`, `<<-`, `->`, `->>`), also inside a top-level `if`, `{ }`, `( )`, `for`, `while` or `repeat`, is a definition; every name of a chain (`a <- b <- value`) is one. `setClass`, `setRefClass`, `setClassUnion` and `setGeneric` define the name of their string; `setMethod`, `setReplaceMethod` (under `name<-`) and `setValidity` are listed under the name they are written for. These calls are read also as an argument of another top-level call (`invisible(setClass("A"))`). The named entries of `public`, `private` and `active` of `R6Class` and of `methods` and `fields` of `setRefClass` are listed as members. `assign("name", ...)`, a name assigned inside `local()` and S7 `method(generic, class) <- ...` are not definitions
+- **Local names**: A name is not linked where a parameter, an assignment or a `for` loop of a function around it binds it, or where it is assigned inside the top-level statement it is written in (`test_that("...", { x <- 1 })`). `name <<- value` inside a function is linked to `name`, and `f(x) <- value` to `f<-`. A column written as a bare name (`count(df, n)`, `DT[, sum(x), by = month]`) is linked when a definition of that name is in sight
+- **`source()`**: A path written as a string, or as `file.path()` / `here::here()` of strings, is tried from the directory of the file, then from each directory above it. When no script has the path as written, the one script whose path differs only in upper and lower case is taken. A path built at run time is not followed. `source()`, `library()` and `box::use` calls count for the whole file wherever they are written in it
+- **`box::use`**: `box::use(path/mod)`, `alias = path/mod`, `path/mod[a, b = c]` and `path/mod[...]` lead to `path/mod.R` or `path/mod/__init__.R`, from the directory of the file for `./` and `../`, else from the directory of the file and each directory above it. `mod$name` is linked to `name` of the module, and `mod$inner$name` through a module that `mod` itself binds with `box::use`. A module gives its top-level names and the names its own `box::use` calls attach; `#' @export` is not read. A name without `/` is a package
+- **S3**: A function named `generic.class` is linked to the function `generic` it sees that calls `UseMethod()`. A call of the generic (`print(x)`) is not linked to its methods
+- **S4, R6 and Reference Classes**: `new("A")`, `setMethod("g", "A")`, `signature("A", "B")`, `setValidity("A")`, `contains = "A"`, `setClassUnion(members = ...)` and the class of a slot or field (`representation(x = "A")`, `slots = c(x = "A")`, `fields = list(x = "A")`) are linked to the class or generic of that name, and `Class$new()` to `Class`. `object$method()` and `object@slot` are not linked to the class of `object`
+- **Names in strings**: `do.call("f", ...)` and `match.fun("f")` are linked. `get("x")`, `exists("x")` and names built at run time are not
+- **R Markdown and Quarto**: Of a `.Rmd` / `.qmd` file the `{r}` code chunks are analyzed, at their lines in the file, also inside a blockquote. A file without such a chunk is a file without a language. Chunks of other languages, inline code (`` `r x` ``), chunks read with `knitr::read_chunk()` and `child` documents are not
+- **Not analyzed**: `import::from()`, `NAMESPACE` files, and the link between `.Call()` / Rcpp and C or C++ code
 
 ## ♻️ Incremental Processing
 
@@ -478,10 +493,10 @@ Per-file definition and dependency information.
 | Field | Type | Description |
 |-----------|-----|------|
 | `file` | string | Path of the source file copied to the output directory |
-| `language` | string | Extension whose language settings the file is analyzed with, in lower case (`py`, `cbl`, ...; `cpy` for a copybook of another extension or without one that a `COPY` statement names). `""` for a file without a language |
+| `language` | string | Extension whose language settings the file is analyzed with, in lower case (`py`, `cbl`, ...; `cpy` for a copybook of another extension or without one that a `COPY` statement names). `""` for a file without a language, and for a `.Rmd` / `.qmd` file without an R code chunk |
 | `detected_encoding` | string\|null | Encoding the file was decoded with when it had no BOM, was not valid UTF-8 and was not decoded by `SOURCE_ENCODING` (the encoding charset-normalizer detects; `""` when it was read as UTF-8 with invalid bytes replaced). `null` otherwise, and for a file without a language |
 | `definitions[].name` | string | Function/class name |
-| `definitions[].type` | string | Definition type (tree-sitter node type, varies by language. Python: `function_definition`, `class_definition` / Java: `class_declaration`, `method_declaration` / JS/TS: `function_declaration`, `class_declaration` / SQL: `create_table`, `create_view` / Rust: `function_item`, `struct_item`, `impl_item` / C#: `class_declaration`, `method_declaration`, `property_declaration`, etc.) |
+| `definitions[].type` | string | Definition type (tree-sitter node type, varies by language. Python: `function_definition`, `class_definition` / Java: `class_declaration`, `method_declaration` / JS/TS: `function_declaration`, `class_declaration` / SQL: `create_table`, `create_view` / Rust: `function_item`, `struct_item`, `impl_item` / C#: `class_declaration`, `method_declaration`, `property_declaration` / R: `function_definition`, `binary_operator`, `call`, `argument`, etc.) |
 | `definitions[].start_line` | int | Start line number. Every line number counts from 1, and a line ends at `\n`, `\r\n` or a lone `\r` (a form feed or U+2028 stays inside its line) |
 | `definitions[].end_line` | int | End line number |
 | `definitions[].name_line` | int | Line the name is written on (COBOL and BMS only) |
@@ -626,6 +641,7 @@ codetwine/
 │   ├── rust_module_tree.py     # Rust path to file resolution through mod declarations
 │   ├── cobol_file_index.py     # COBOL COPY / CALL name to file resolution and reference resolution
 │   ├── csharp_namespace_index.py # C# name to file resolution through namespaces and using directives
+│   ├── r_name_index.py         # R name to file resolution through packages, source(), box::use and Shiny apps
 │   ├── output.py               # JSON and Mermaid output processing
 │   ├── knowledge_db.py         # SQLite output and read API
 │   ├── config/
@@ -638,12 +654,14 @@ codetwine/
 │   │   ├── cobol_source.py     # COBOL definitions, COPY / CALL statements and references
 │   │   ├── csharp_source.py    # C# namespaces, using directives, types and references
 │   │   ├── bms_source.py       # Symbolic map names of a BMS source
+│   │   ├── r_source.py         # R definitions, source() / box::use / library() calls and references
 │   │   ├── usages.py           # Symbol usage location extraction
 │   │   ├── usage_analysis.py   # Usage location analysis
 │   │   └── dependency_graph.py # Project-wide dependency graph construction
 │   ├── parsers/
 │   │   ├── ts_parser.py        # Source code parser using tree-sitter
-│   │   └── cobol_format.py     # COBOL source split into statements in fixed format
+│   │   ├── cobol_format.py     # COBOL source split into statements in fixed format
+│   │   └── r_markdown.py       # R code chunks of an R Markdown or Quarto file
 │   ├── llm/
 │   │   └── client.py           # LLM API client via litellm
 │   └── utils/
@@ -663,7 +681,7 @@ codetwine/
 This project uses the following libraries:
 
 - [tree-sitter](https://tree-sitter.github.io/tree-sitter/) - Source code syntax analysis
-- [tree-sitter-language-pack](https://github.com/xberg-io/tree-sitter-language-pack) - COBOL grammar ([tree-sitter-cobol](https://github.com/yutaro-sakamoto/tree-sitter-cobol))
+- [tree-sitter-language-pack](https://github.com/xberg-io/tree-sitter-language-pack) - COBOL grammar ([tree-sitter-cobol](https://github.com/yutaro-sakamoto/tree-sitter-cobol)) and R grammar ([tree-sitter-r](https://github.com/r-lib/tree-sitter-r))
 - [litellm](https://github.com/BerriAI/litellm) - Unified interface for multiple LLM providers
 
 ## 📄 License

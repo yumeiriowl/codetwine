@@ -15,15 +15,23 @@ from codetwine.extractors.usage_analysis import (
     build_cobol_same_file_usages,
     build_csharp_usage_info_list,
     build_csharp_same_file_usages,
+    build_r_usage_info_list,
+    build_r_same_file_usages,
 )
 from codetwine.cobol_file_index import cobol_reference_target_list
 from codetwine.csharp_namespace_index import csharp_reference_target_list
+from codetwine.r_name_index import r_reference_target_list
 from codetwine.import_to_path import (
     build_symbol_to_file_map,
     get_import_params,
 )
 from codetwine.extractors.imports import extract_imports
-from codetwine.config.settings import CSHARP_EXT_SET, EXT_TO_DEFINITION_DICT, language_ext
+from codetwine.config.settings import (
+    CSHARP_EXT_SET,
+    EXT_TO_DEFINITION_DICT,
+    R_EXT_SET,
+    language_ext,
+)
 from codetwine.utils.file_utils import detected_encoding, line_list_of
 
 logger = logging.getLogger(__name__)
@@ -76,8 +84,9 @@ def get_file_dependencies(
     when a BOM, UTF-8 or SOURCE_ENCODING decodes it or the file has no language.
     A definition of a COBOL file or a BMS source also has "name_line", and a data item
     "level" and "is_group". The references of a COBOL file are resolved with OF / IN
-    qualification (cobol_reference_target_list), and the references of a C# file
-    through its namespaces and using directives (csharp_reference_target_list).
+    qualification (cobol_reference_target_list), the references of a C# file through
+    its namespaces and using directives (csharp_reference_target_list), and the
+    references of an R file through the names it sees (r_reference_target_list).
 
     Args:
         target_file: Absolute path of the target file to analyze.
@@ -139,6 +148,11 @@ def get_file_dependencies(
         same_file_usages = build_csharp_same_file_usages(
             target_list, target_file_rel, definition_list,
         )
+    elif file_ext in R_EXT_SET:
+        # Resolve each reference, through the names the file sees, to this file or another
+        target_list = r_reference_target_list(target_file_rel, project_file_set, project_dir)
+        usage_list = build_r_usage_info_list(target_list, target_file_rel, project_dir)
+        same_file_usages = build_r_same_file_usages(target_list, target_file_rel, root_node)
     elif language:
         # Parse import statements and create an "imported name -> dependency file" dict
         import_info_list = extract_imports(root_node, language, import_query_str)
