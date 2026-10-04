@@ -268,90 +268,84 @@ Dependencies are extracted by static analysis of the source text. They may be mi
   - JavaScript/TypeScript: `import(variable)`
   - Java: `Class.forName("com.example.Foo")`
 - **Detected encodings**: A file that has no BOM, is not valid UTF-8 and is not decoded by `SOURCE_ENCODING` is decoded with a detected encoding, which can be wrong: comments and strings may be garbled and definitions may be lost. Such files are listed in `detected_encoding_dict` and carry `detected_encoding` in their `file_dependencies.json`. Set `SOURCE_ENCODING` for them
-- **Local names**: A name bound inside a function (a parameter, a local variable, an inner function) is not linked to an imported or file-level name of that name
 - **`self` / `this`**: `self.name`, `cls.name` and `this.name` are linked to the definition `name` of the same file, whatever class it is written in (Python, JavaScript/TypeScript, Java, Kotlin, C++, Rust)
 
 ### Python
 
 - **Import roots**: A module is looked up from the project root, the directory of the file and a `src/` directory; a module written with two or more parts is also matched against the end of the project file paths (`from app.models import User` leads to `backend/app/models.py`). Roots added through `PYTHONPATH` or `sys.path` are not read
 - **Modules of the same name**: A module that both a project file and an installed package provide (`import utils` with `utils.py` in the project) is linked to the project file
-- **`__all__`**: `from m import *` brings in the names the `__all__` of `m` lists when it is written with string constants (`__all__ = [...]`, `+=`, `.extend([...])`, `.append("...")`), else every name of `m` that does not start with `_`. An `__all__` built at run time is not read
-- **Method calls on values**: A method called on a variable is linked to the class the variable is given an object of inside the same function (`e = Engine(); e.run()` is listed as `Engine.run`), or is annotated with (`e: Engine`, a parameter `e: Engine`). The class counts from the line of the assignment until the variable is given anything else, whichever branch the lines are in (after `if flag: e = Other()`, `e.run()` is `Other.run`); a variable annotated with a class keeps it. A variable given the result of a function, an attribute (`self.engine.run()`) and a variable assigned at the top level of the file are not followed
+- **`__all__`**: An `__all__` built at run time is not read; `from m import *` then brings in every name of `m` that does not start with `_`
+- **Method calls on values**: A method called on a variable is listed under a class (`e = Engine(); e.run()` is `Engine.run`) only when the variable is given an object of the class inside the same function or is annotated with it. The class is the one of the nearest assignment above the line, whichever branch it is in (after `if flag: e = Other()`, `e.run()` is `Other.run`). A variable given the result of a function, an attribute (`self.engine.run()`) and a variable assigned at the top level of the file are not followed
 
 ### JavaScript / TypeScript
 
-- **Path aliases**: A module that is not relative (`import { x } from "app/store"`) is resolved through `paths` and `baseUrl` of the `tsconfig.json` or `jsconfig.json` in the directory of the file or the nearest one above it; `extends` is followed when it is a relative path. Of the config files, the one that covers the file (`files`, `include`, `exclude`) is taken, also when it is one the nearest config file names in `references`. A module such a config file does not map is not linked. Without a config file the module is looked up from the project root and a `src/` directory
-- **Package files**: A module that starts with `#` is resolved through `imports` of the nearest `package.json`. A module that names a package of the project (the `name` of any `package.json` in it) is resolved through `exports`, `types`, `module` and `main` of that package; a path that names a build output (`dist/index.js`) is looked up under `src/` as well. `workspaces` and `pnpm-workspace.yaml` are not read: a `package.json` anywhere in the project with the `name` of the module is taken, also one of a test fixture named like an installed package
-- **Bundler aliases**: `resolve.alias` of the nearest `vite.config.*` or `webpack.config.*` is read when an alias is written as a string, `path.resolve(__dirname, ...)`, `path.join(__dirname, ...)` or `fileURLToPath(new URL("...", import.meta.url))`. An alias written any other way, or with a regular expression, is not read
-- **Imports not bound to a name**: `require("./m").run()` is linked to `run` of the file, and the first parameter of the callback of `import("./m").then((m) => ...)` stands for the file. Any other `require()` or `import()` whose result the statement does not bind to a name adds the dependency on the file only
-- **Method calls on values**: A method called on a variable is linked to the class the variable is given with `new` inside the same function (`const s = new Store(); s.get()` is listed as `Store.get`), or is annotated with in TypeScript (`s: Store`). The class counts from the line of the `new` until the variable is given anything else, whichever branch the lines are in; a variable annotated with a class keeps it. A variable given any other value is not followed
-- **Definitions**: The declarations inside a callback (`describe("...", function () { ... })`) are not listed as definitions; the ones inside a function called where it is written (`(function () { ... })()`) are. An unnamed default export (`export default { ... }`) is listed as the definition `default`
+- **Path aliases**: A module that is not relative is resolved through `paths` and `baseUrl` of the `tsconfig.json` / `jsconfig.json` that covers the file, or from the project root and a `src/` directory without one. `extends` that names a package is not followed, and a module the config file does not map is not linked
+- **Workspace packages**: `workspaces` and `pnpm-workspace.yaml` are not read. A module is linked to the `package.json` of the project that has its `name`, wherever it is (also a test fixture named like an installed package)
+- **Bundler aliases**: `resolve.alias` of `vite.config.*` / `webpack.config.*` is read only when an alias is written as a string, `path.resolve(__dirname, ...)`, `path.join(__dirname, ...)` or `fileURLToPath(new URL("...", import.meta.url))`
+- **Imports not bound to a name**: A `require()` or `import()` whose result the statement does not bind to a name adds the dependency on the file only, except `require("./m").run()` and the callback of `import("./m").then((m) => ...)`
+- **Method calls on values**: A method called on a variable is listed under a class (`const s = new Store(); s.get()` is `Store.get`) only when the variable is given the object with `new` inside the same function or is annotated with the class in TypeScript. The class is the one of the nearest assignment above the line, whichever branch it is in. A variable given any other value is not followed
+- **Definitions**: The declarations inside a callback (`describe("...", function () { ... })`) are not listed as definitions. An unnamed default export (`export default { ... }`) is listed as the definition `default`
 
 ### Java / Kotlin
 
-- **Packages**: A dependency on a file of a wildcard import or of the same package is added when one of its names is used. A file without a `package` statement sees only the files of its directory that have none either
-- **Method calls**: A method called on a variable is linked to the type the variable is declared with (`User u; u.getName()` is listed as `User.getName`). A variable whose type is not written (`var`, `val u = ...`) and a chain of calls are not followed. A local variable or parameter hides a field of the same name
+- **Packages**: A file of a wildcard import or of the same package is a dependency only when one of its names is used. A file without a `package` statement sees only the files of its directory that have none either
+- **Method calls**: A method called on a variable is listed under the type the variable is declared with (`User u; u.getName()` is `User.getName`). A variable whose type is not written (`var`, `val u = ...`) and a chain of calls are not followed
 - **Kotlin class bodies on one line**: A class, object or interface whose body with members is written on one line (`class A { fun f() {} }`) is not parsed by the grammar. Surrounding code is still analyzed
 
 ### C / C++
 
-- **Include paths**: `#include` is looked up from the project root and the directory of the file, then as the nearest project file whose path ends with the included path (`#include "list.h"` leads to `include/list.h`). Include paths added via CMake or Makefile `-I` options are not read
-- **Declarations and definitions**: A function a header declares is linked to the header and to each file that includes the header and defines it; when several files define it (per-platform sources), all of them are linked. A variable declared `extern` is linked to the header only
+- **Include paths**: `#include` is looked up from the project root and the directory of the file, then as the nearest project file whose path ends with the included path. Include paths added via CMake or Makefile `-I` options are not read
+- **Functions of the same name**: A function a header declares is linked to every file that includes the header and defines it (per-platform sources, a test that defines it again). A variable declared `extern` is linked to the header only
 - **Namespaces**: `using namespace` is not evaluated, and a name is linked without its namespaces (`geo::Shape::count()` is listed as `Shape::count`), so equal names of different namespaces are not told apart
-- **Members**: Inside a member function defined outside its class (`int Shape::count() { ... }`) and inside a class, a member of the class or of a base class written by its name alone is linked to that member, and `value.member()` on a variable declared with a class is linked to the base class that declares the member. A base class written through a `typedef` or a template parameter is not followed
-- **Functions of the same name**: A function declared in a header and defined in several files that include it (per-platform sources, a test that defines it again) is linked to all of them; which one is built is not read from the build files
-- **Preprocessor**: `#if` / `#ifdef` are not evaluated; every branch is analyzed. Definitions produced by macro expansion are not analyzed. A macro written between `class` / `struct` / `union` and the name of the type (`class EXPORT Shape { ... }`) is read; a declaration written with any other macro the grammar does not read (`EXPORT int f(void);`, `void f() NOEXCEPT_MACRO { ... }`) may be listed without its type or under the name of the macro
+- **Members**: A member of a base class written through a `typedef` or a template parameter is not linked
+- **Preprocessor**: `#if` / `#ifdef` are not evaluated; every branch is analyzed. Definitions produced by macro expansion are not analyzed. A declaration written with a macro the grammar does not read (`EXPORT int f(void);`, `void f() NOEXCEPT_MACRO { ... }`) may be listed without its type or under the name of the macro. A `/* */` comment inside a `#define` of several lines ends the macro for the grammar, and the lines after it are read as code of the file
 
 ### SQL
 
-- **Object references**: A dependency is added when a table, view, function, type or sequence created in another `.sql` file of the project is referenced. Names are compared as written, so a reference that differs in case or quoting from the `CREATE` statement is not detected
+- **Object references**: Names are compared as written: a reference that differs in case or quoting from the `CREATE` statement is not detected
 - **Unsupported syntax**: PostgreSQL-style `CREATE PROCEDURE`, `CALL`, `GRANT` and psql `\i` are not parsed by the grammar. Surrounding statements are still analyzed
 
 ### Rust
 
-- **Module paths**: A path starting with a crate name is resolved when that crate's `Cargo.toml` is in the project. A `mod` declaration inside an inline module (`mod a { mod b; }`) and `#[cfg_attr(..., path = "...")]` are not resolved. A name a module only re-exports from outside the project (`pub use std::collections::HashMap;`) is not linked
-- **Inline modules**: Inside an inline module without `use super::*`, a top-level name of the file and a name a `use` declaration of the file binds are not linked; a name the module defines or brings in itself, a `macro_rules!` macro of the file, and a path (`super::name`, `crate::...`), are
-- **Impl blocks in other files**: `Type::member` is linked to the file that defines the type and to every other file whose `impl` block of the type defines the member
-- **`Self`**: `Self::new()` inside an `impl` block is listed as `Type::new`, and `Self::NAME` inside a `trait` as `Trait::NAME`
+- **Module paths**: A path starting with a crate name is resolved only when that crate's `Cargo.toml` is in the project. A `mod` declaration inside an inline module (`mod a { mod b; }`) and `#[cfg_attr(..., path = "...")]` are not resolved. A name a module only re-exports from outside the project (`pub use std::collections::HashMap;`) is not linked
+- **Usage names**: `Self::new()` inside an `impl` block is listed as `Type::new`, and `Self::NAME` inside a `trait` as `Trait::NAME`
 - **Macros**: Code generated by macros (`macro_rules!`, procedural macros, `include!`) is not analyzed. In the arguments of a macro call only the paths written with `::` and the plain names are linked. A macro exported with `#[macro_export]` is not linked to the file that defines it
 - **Method calls on values**: `value.method()` is not linked to the type of `value`. A call written with the type (`Type::method()`) is
-- **Patterns**: A name a pattern of `match` / `if let` / `while let` / `let` binds is not linked to a name of the file; a name written in a pattern that is a constant, a static, a struct or an enum variant the file can write is. A name bound by `if let` / `while let` counts for the whole `if` / `while` expression
+- **Patterns**: A name bound by `if let` / `while let` counts as bound in the whole `if` / `while` expression, its `else` branch included
 - **Conditional compilation**: `#[cfg(...)]` is not evaluated. Every alternative module is a dependency
 
 ### C#
 
 - **Usage names**: A usage is listed as the file writes it, without its namespaces (`App.Models.Customer.Parse()` is `Customer.Parse`); an attribute is listed with its class (`AuditAttribute`) and a name written with an alias of a type with that type
-- **Overloads**: A called method is linked by its name and its number of arguments; among several declarations that take that number, the one whose parameter types fit the arguments is taken when the file tells their types (a literal, `new T()`, a cast, a parameter, a local variable, a field or a property declared with a type), a parameter of exactly the type of its argument before a wider one (`Show(int)` before `Show(double)` for `Show(1)`). When no single declaration fits, `target_context` is the first declaration
+- **Overloads**: A called method is linked by its name, its number of arguments and, where the file tells them, the types of the arguments. When no single declaration fits, `target_context` is the first declaration
 - **Extension methods**: `value.Method()` is linked to every extension method of that name and number of arguments the line sees, whatever the type of `value` is
 - **Method calls on values**: Other than extension methods, `value.Method()` is not linked to the type of `value`. A call written with the type (`Type.Method()`) is. A member inherited from a base type is not linked by its name alone
-- **Types in several files**: A `partial` type is linked to every file that declares it, or to the files that define the member when one is named. A type of the same name and namespace declared under several `.csproj` directories is linked to the one under the `.csproj` directory of the referring file, when there is one
-- **Project files**: `global using` directives count for the files under the nearest `.csproj` directory above the file they are written in. `ProjectReference`, `<Using Include="..." />` and `ImplicitUsings` of a `.csproj` file are not read
+- **Project files**: `ProjectReference`, `<Using Include="..." />` and `ImplicitUsings` of a `.csproj` file are not read
 - **Conditional compilation**: `#if` is not evaluated; the code of every branch is analyzed. A directive that splits a declaration or statement is not parsed by the grammar; the code around it is still analyzed
 - **Unsupported syntax**: `extension` blocks, `allows ref struct` and null-conditional assignment (`a?.b = c`) are not parsed by the grammar. Surrounding code is still analyzed
 - **Generated code**: Code produced by source generators, and `.razor` / `.cshtml` files, are not analyzed
 
 ### COBOL
 
-- **Definitions**: Programs (`PROGRAM-ID`), `ENTRY` names, sections, paragraphs, data items, index names (`INDEXED BY`) and file descriptions (`FD` / `SD`) are definitions. The items of the `SCREEN` and `REPORT` sections, `FUNCTION-ID`, `CLASS-ID` and `METHOD-ID` are not, and neither is a data item whose name has other text joined to it (`(PFX)-ID`). A group item whose items come from a `COPY` statement after items of its own is not told apart from a `COPY` of other records
-- **Names**: Names are compared without regard to upper and lower case. A name is linked to its definition in the file itself, else to the first copybook, in the order of the `COPY` statements, that defines it. A name qualified with `OF` / `IN` that matches no definition is linked as an unqualified one. Of an `EXEC SQL` block only the host variables are read; of any other `EXEC` block every word is read as a name
-- **COPY**: `COPY name` and `EXEC SQL INCLUDE name` lead to the project file named `name`, with or without its extension; a name with a directory part is looked up by its file name. The text of a copybook is not expanded into the file that includes it: a copybook is analyzed as a file of its own. With `REPLACING`, only an operand whose texts are one word each (`==:TAG:== BY ==WS==`, `OLD-NAME BY NEW-NAME`, `LEADING` / `TRAILING`) is applied to the names
-- **BMS**: `COPY name` leads to the `.bms` file of that name or of that mapset name, unless a COBOL file of that name (a generated symbolic map) is in the project
-- **CALL**: `CALL "name"` and `EXEC CICS ... PROGRAM("name")` lead to the file that defines a program or an `ENTRY` of that name, or to the program file named `name`. A `CALL` of a data item leads to the programs named by the literals the item is given in the same file (`VALUE` clause, `MOVE "name" TO item`); a name built at run time is not resolved
-- **Source format**: Fixed-format and free-format source are read. Without a `>>SOURCE` / `$SET SOURCEFORMAT` directive, the format of a file and whether its code runs past column 72 are judged from its lines. In free format, a line that starts with `*` in column 1 or with `*>` is a comment; an indented `*` is read as code when the line before it ends with an operand (`COMPUTE X = A` / `* B`), and as a comment otherwise
+- **Definitions**: The items of the `SCREEN` and `REPORT` sections, `FUNCTION-ID`, `CLASS-ID` and `METHOD-ID` are not definitions, and neither is a data item whose name has other text joined to it (`(PFX)-ID`). A group item whose items come from a `COPY` statement after items of its own is not told apart from a `COPY` of other records
+- **Names**: A name several copybooks define is linked to the first of them in the order of the `COPY` statements. A name qualified with `OF` / `IN` that matches no definition is linked as an unqualified one. Of an `EXEC` block other than `EXEC SQL`, every word is read as a name
+- **COPY**: The text of a copybook is not expanded into the file that includes it: a copybook is analyzed as a file of its own. A name with a directory part is looked up by its file name. With `REPLACING`, only an operand whose texts are one word each (`==:TAG:== BY ==WS==`, `OLD-NAME BY NEW-NAME`, `LEADING` / `TRAILING`) is applied to the names
+- **CALL**: A `CALL` of a data item leads only to the programs named by the literals the item is given in the same file (`VALUE` clause, `MOVE "name" TO item`); a name built at run time is not resolved
+- **Source format**: Without a `>>SOURCE` / `$SET SOURCEFORMAT` directive, the format of a file and whether its code runs past column 72 are judged from its lines. In free format, an indented line that starts with `*` is read as code only when the line before it ends with an operand
 - **Statements the grammar does not read**: In a statement the grammar does not read, every word that is a name of a definition counts as a usage, and a paragraph that starts in the middle of a sentence (no period before it) is not a definition
 - **Debug lines and compiler directives**: Lines with `D` in the indicator column, `>>` directives, `REPLACE` statements and conditional compilation are not evaluated
 
 ### R
 
-- **Names**: A name is linked to a top-level definition of the file itself, of the scripts it reads with `source()` or `box::use`, of the files that read it, of its Shiny app (`global.R`, `R/`), of the `testthat` helper scripts, of its package (`R/` beside a `DESCRIPTION` file) and of the project packages it attaches with `library()`. Scripts that share only a directory do not see each other. A name defined in several of those files is linked to all of them. A usage is listed under the name of the definition (`pkg::f` and `mod$f` are `f`)
+- **Names**: Scripts that only share a directory, with no `source()`, `box::use`, package (`DESCRIPTION`), Shiny app or `testthat` helper tying them, do not see each other. A name defined in several files in sight is linked to all of them. A usage is listed under the name of the definition (`pkg::f` and `mod$f` are `f`)
 - **Definitions**: `assign("name", ...)`, a name assigned inside `local()` and S7 `method(generic, class) <- ...` are not definitions
 - **`source()`**: A path built at run time is not followed
 - **`box::use`**: `#' @export` is not read: a module gives every top-level name
 - **Bare column names**: A column written as a bare name (`count(df, n)`, `DT[, sum(x), by = month]`) is linked when a definition of that name is in sight
 - **S3**: A call of a generic (`print(x)`) is not linked to its methods
 - **S4, R6 and Reference Classes**: `object$method()` and `object@slot` are not linked to the class of `object`
-- **Names in strings**: `do.call("f", ...)` and `match.fun("f")` are linked. `get("x")`, `exists("x")` and names built at run time are not
-- **R Markdown and Quarto**: Only the `{r}` code chunks are analyzed, also the ones written inside a longer fence (` ```` ` or `~~~~`) or indented, which knitr runs as well. A chunk whose code does not end inside the chunk (an open `{`, an operator at its end) is not analyzed, and neither are chunks of other languages, inline code (`` `r x` ``), chunks read with `knitr::read_chunk()` and `child` documents
+- **Names in strings**: `get("x")`, `exists("x")` and names built at run time are not linked
+- **R Markdown and Quarto**: Only the `{r}` code chunks are analyzed. A chunk whose code does not end inside the chunk (an open `{`, an operator at its end), chunks of other languages, inline code (`` `r x` ``), chunks read with `knitr::read_chunk()` and `child` documents are not
 - **Not analyzed**: `import::from()`, `NAMESPACE` files, and the link between `.Call()` / Rcpp and C or C++ code
 
 ## ♻️ Incremental Processing
@@ -619,7 +613,7 @@ To output only dependency information without generating LLM design documents, s
 ENABLE_LLM_DOC=False
 ```
 
-Dependency information (`file_dependencies.json` and file copies) is still generated for each file, along with `project_knowledge.json`, `project_dependency_summary.json`, and `dependency_graph.md`. No API key or model configuration is needed. The next run with `ENABLE_LLM_DOC=True` regenerates the design documents of every file changed since they were generated.
+Dependency information (`file_dependencies.json` and file copies) is still generated for each file, along with `project_knowledge.json`, `project_dependency_summary.json`, and `dependency_graph.md`. No API key or model configuration is needed.
 
 ## 💡 Usage Example: RLM QA Agent
 
