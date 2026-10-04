@@ -4,125 +4,133 @@
 
 **Overview**
 
-Build and query the module hierarchy of Rust projects by parsing mod declarations, use statements, and Cargo.toml package metadata to resolve import paths to files and extract definition bindings.
+Build and query the module tree of a Rust project by parsing mod declarations, use statements, and Cargo.toml files to resolve import paths to their defining files.
 
-When another file needs to resolve a Rust import path to its source file within a project, it calls `resolve_rust_module_path()` or `rust_import_name_dict()` to map module strings like "crate::config::Settings" to a file path and extract the names that import binds. The module tree is constructed once per project from all .rs files and cached until the project file set changes. Internal resolution follows Rust's scoping rules: absolute paths (leading "::"), keywords (crate, self, super), child modules declared via mod statements, use-statement bindings, glob imports, and fallback to crate root children in edition 2015 packages.
+The file is used to resolve Rust import module paths to project-internal files:
+- Call `resolve_rust_module_path()` to map an import's module string to the .rs file that defines what it names, or None if the import targets an external crate or the current file.
+- Call `rust_import_name_dict()` to determine which names an import binds and their paths within the resolved file, handling re-exports, glob imports, and enum variants.
+- Call `_get_module_tree()` internally to obtain a cached RustModuleTree for a project's .rs files.
 
-This file depends on `parse_file()` from codetwine/parsers/ts_parser.py to parse each .rs file into an AST, on `extract_definitions()` and `select_top_level_definitions()` from codetwine/extractors/definitions.py to find top-level definitions in each file, on `mod_declaration()` and `rust_import_list()` from codetwine/extractors/rust_path.py to extract module declarations and use statements, on `EXT_TO_DEFINITION_DICT` from codetwine/config/settings.py for language-specific definition extraction rules, and on `project_cache_value()` from codetwine/utils/project_cache.py to validate cached module trees. The file is used by codetwine/import_binding.py to populate import bindings and by codetwine/import_to_path.py to resolve module references during import analysis.
+The module builds on `parse_file()` and `extract_definitions()` to read .rs files and identify top-level definitions, uses `mod_declaration()` and `rust_import_list()` to extract module and import metadata from syntax trees, and consults `EXT_TO_DEFINITION_DICT` for language configuration. It is consumed by `import_binding.py` and `import_to_path.py` to bind imports to their targets, and by `dependency_graph.py` and `pipeline.py` which clear its `module_tree_cache` to free memory between analyses.
 
-The module tree construction parses every .rs file once and caches the result in `module_tree_cache` keyed by project directory with validation by project file set; clearing the cache is the responsibility of callers like codetwine/pipeline.py and codetwine/extractors/dependency_graph.py. Resolution implements a hop counter (_MAX_USE_HOP = 8) to prevent infinite loops when following use declarations and glob imports, and detects cycles in parent-module traversal via a visit set.
+The module caches RustModuleTree objects per project directory, invalidating the cache when the project file set changes. It resolves paths through use declarations with a maximum hop limit (`_MAX_USE_HOP`) to prevent infinite loops, and distinguishes between edition 2015 and later Rust editions to handle implicit crate-root module visibility differently.
 
 **Definitions**
 
-## `_join_path`
-
-Join relative path segments with "/" and normalize "." and ".." path components; used internally to construct candidate file paths from directory, module name, and path attribute values, ensuring cross-platform path consistency by replacing backslashes.
-
-## `_ModuleFile`
-
-Data class holding the parsed content of one .rs file: the set of top-level definition names, a mapping of names bound by use declarations to their module paths, glob import paths (use a::*), module declarations without bodies (mod name;), and a mapping of enum names to their variant names; populated by `_read_module_file()` and used by resolution logic to determine what names are defined or re-exported.
-
-## `_enum_variant`
-
-Extract the name of an enum and the names of its variants from an enum_item AST node; returns None if the enum has no name or body, used to populate the variant_dict of a _ModuleFile so that use enm::Enum::* imports can expand to variant names.
-
-## `_read_module_file`
-
-Parse a .rs file and collect its top-level definitions (excluding impl items), mod declarations, enum variants, and use/extern_crate declarations; constructs a _ModuleFile by calling extract_definitions() on the parsed AST and walking the syntax tree for mod_item, enum_item, use_declaration, and extern_crate_declaration nodes.
-
-## `_ancestor_dir_set`
-
-Return all directories that contain .rs files and their parent directories, including the project root (""); used internally to locate Cargo.toml files at each level in the directory hierarchy.
-
-## `_read_cargo_package_dict`
-
-Parse Cargo.toml files found in directories containing .rs files and their parents, collecting those with a [package] table; returns a mapping of directory paths to parsed TOML dicts, used to determine crate names and library root files for path resolution.
-
-## `_crate_lib_dict`
-
-Map each crate name to its library root file by reading [lib] name (or [package] name with "-" replaced by "_") and lib path (defaulting to "src/lib.rs") from Cargo.toml files; returns a dict used by resolution to handle paths like "::crate_name::module::item".
-
-## `RustModuleTree`
-
-Class encapsulating the module hierarchy of a project: stores the parsed content of each .rs file in module_file_dict, links parent and child modules via child_dict and parent_dict, identifies crate roots, and implements path resolution following Rust scoping rules. Caches resolution results per (file, segment_list) pair to avoid recomputing paths.
-
-## `RustModuleTree.__init__`
-
-Parse every .rs file in the project, read Cargo.toml files to determine crate names and library roots, and call _link_modules() to connect parent and child modules based on mod declarations; initializes _resolve_cache for memoizing resolution results and _edition_2015_dict to track edition per directory.
-
-## `RustModuleTree._link_modules`
-
-Connect parent and child modules by matching mod declarations to .rs files: for each mod name, candidates are looked up as <dir>/name.rs and <dir>/name/mod.rs (where <dir> depends on the parent file type), or via #[path] attribute relative to the parent's directory, and fallback rules apply when a declaration matches no file but the parent has no parent module yet; when multiple declarations share a name (cfg alternatives), the first matched file becomes the child.
-
-## `RustModuleTree._link`
-
-Register a module as a child of its parent file by adding it to child_dict with the module name as key and updating parent_dict; ensures each file has at most one parent and prevents re-linking if already registered.
-
-## `RustModuleTree.crate_root`
-
-Return the crate root file (the file with no parent module) by following parent_dict up the hierarchy, detecting cycles via a visit set to prevent infinite loops.
-
-## `RustModuleTree._is_edition_2015`
-
-Return True if the nearest Cargo.toml package above a file specifies edition 2015 (or no edition, the default); used to enable fallback resolution rules that only apply to edition 2015 packages.
-
-## `RustModuleTree._is_found`
-
-Check whether resolving through a glob import (use a::*) successfully consumed the glob path and then either consumed the first segment as a module, or found the first remaining segment as a top-level definition of the target file; used to validate whether a glob import matches the segments being resolved.
-
-## `RustModuleTree.resolve`
-
-Resolve a path written in a file (segments joined from "crate::config::Settings") to the file that defines what it names and the segments not consumed by modules; implements caching per (file, segment_list) pair when visit_set is None, and delegates to _resolve_head() to handle the first segment and then _walk() to follow child/parent modules and apply use/glob imports; returns (file relative path, remaining segments).
-
-## `RustModuleTree._resolve_head`
-
-Look up the first segment of a path in order: empty string (leading ::) to access crate or crate name, "crate" to the crate root, "self"/"super" or child module to follow, a use-declared binding or definition of the current file, a crate name from Cargo.toml, glob imports, and finally (for edition 2015) child modules of the crate root; enforces _MAX_USE_HOP to prevent infinite loops through use chains.
-
-## `RustModuleTree._walk`
-
-Follow segments through child modules (mod name), parent modules (super), and the current module (self) in sequence; when a segment does not match a child or parent, apply use-declaration re-exports and glob imports to find the segment as a definition of the module, with hop counting to prevent infinite loops; returns (file, remaining segments).
-
-## `_get_module_tree`
-
-Retrieve or construct the RustModuleTree for a project, caching it by project directory with validation that the project file set has not changed; returns the cached tree if valid, otherwise constructs a new tree from .rs files and stores it in module_tree_cache.
-
-## `_is_path_attribute`
-
-Return True if a module string contains "." or "/" (indicating it is a file path like "unix.rs" from a #[path] attribute) rather than a :: -delimited module path; used to route path resolution through different logic.
-
-## `_resolve_import`
-
-Resolve a module path (segments joined with "::") written in a file to its file within the project by calling resolve() on the module tree; filters out resolutions that lead to the current file itself and returns (file relative path, remaining segments).
-
-## `resolve_rust_module_path`
-
-Resolve a Rust import module string to a project-internal file, handling both :: -delimited paths like "crate::config::Settings" and #[path] file paths like "unix.rs"; returns the file path if it resolves within the project and is not the current file, otherwise None. This is the primary entry point for external callers.
-
-## `rust_import_name_dict`
-
-Return a mapping of names an import binds to their paths within the resolved file, expanding glob imports (use a::*) to enum variant names when they target an enum; applies rules to filter out module references, re-exports from other files, and imports that resolve to the current file; returns an empty dict when the import does not resolve or when it leads outside the project.
-
-## `module_tree_cache`
-
-Module-level cache storing RustModuleTree instances by project directory, with each entry holding both the project file set it was built from and the tree itself; cached trees remain valid only if the project file set has not changed.
-
 ## `_OWN_DIR_FILE_NAME_TUPLE`
 
-Constant tuple containing file names (mod.rs, lib.rs, main.rs) whose child modules live in the file's own directory rather than a subdirectory named after the file; used to determine the candidate directory when looking up mod declarations.
+Marks file names whose child modules live in the file's own directory rather than a subdirectory named after the file; used during `_link_modules()` to compute the search directory for mod declarations.
 
 ## `_MAX_USE_HOP`
 
-Constant maximum number of use declarations followed when resolving a single path (set to 8); enforced via hop counter to prevent infinite loops when following chains of use bindings and glob imports.
+Limits the number of use declarations followed when resolving a single path to prevent infinite loops in cyclic re-export chains; enforced in `resolve()` and `_walk()` during path traversal.
+
+## `module_tree_cache`
+
+Module-level dictionary caching RustModuleTree objects by project directory; each entry stores the project file set the tree was built from so `_get_module_tree()` can invalidate stale caches when files change.
+
+## `_join_path`
+
+Join relative path parts with "/" and normalize "." and ".." segments; used throughout the module to compute file paths from directory and module name components, handling cross-platform path separators.
+
+## `_ModuleFile`
+
+Dataclass holding the parsed top-level contents of one .rs file: definition names, use declarations (bound name to path segments), glob imports, mod declarations (with optional #[path] values), and enum variant names; constructed by `_read_module_file()` and queried during path resolution.
+
+## `_enum_variant`
+
+Extract the name and variant names from an enum_item AST node; returns None if the enum lacks a name or body, otherwise a tuple of enum name and ordered variant names used by `_read_module_file()`.
+
+## `_read_module_file`
+
+Parse a .rs file and collect its top-level definitions, use declarations, mod declarations, and enum variants into a _ModuleFile; called once per file when constructing a RustModuleTree to support later path resolution.
+
+## `_ancestor_dir_set`
+
+Return all ancestor directories of the given relative file paths, including the project root (""); used by `_read_cargo_package_dict()` to locate Cargo.toml files that may define crate metadata.
+
+## `_read_cargo_package_dict`
+
+Read Cargo.toml files in and above directories holding .rs files, extracting those with a [package] table; used to identify crates and their library root files for resolving absolute crate names in imports.
+
+## `_crate_lib_dict`
+
+Map each crate name to its library root file path by reading [lib] and [package] tables from Cargo.toml files; crate names use the [lib] name or [package] name with "-" replaced by "_", enabling resolution of imports like `use external_crate::item`.
+
+## `RustModuleTree`
+
+Class that models the module tree of a Rust project: parses all .rs files, links each mod declaration to its target file, and resolves import paths to the files and definitions they name; constructed once per project and cached.
+
+## `RustModuleTree.__init__`
+
+Initialize the tree by parsing every .rs file, reading Cargo.toml for crate metadata and edition information, and linking mod declarations to their target files via `_link_modules()`; sets up caches for resolved paths.
+
+## `RustModuleTree._link_modules`
+
+Populate child_dict and parent_dict by matching mod declarations to .rs files, following #[path] attributes and searching standard module locations; handles fallback lookup in the file's own directory and prioritizes earlier declarations when multiple candidates exist (#[cfg] alternatives).
+
+## `RustModuleTree._link`
+
+Register a parent-child relationship between two modules in child_dict and parent_dict, using setdefault to preserve the first declaration when multiple mod declarations share a name.
+
+## `RustModuleTree.crate_root`
+
+Follow parent_dict upward to find the module with no parent, which is the crate root (.rs file with no parent module); detects and breaks cycles to avoid infinite loops.
+
+## `RustModuleTree._is_edition_2015`
+
+Determine whether the nearest package above a file is Rust edition 2015 by consulting _edition_2015_dict; used to apply edition 2015's implicit root module visibility when resolving paths.
+
+## `RustModuleTree._is_found`
+
+Test whether resolving through a glob import (use a::*) reached the target path by comparing the remaining segments; returns True if the glob path was consumed and the first remaining segment either was consumed as a module or is a definition in the reached file.
+
+## `RustModuleTree.resolve`
+
+Resolve a path written in a file to the file defining what it names, handling module hierarchy (child, parent, crate root), use bindings, definitions, external crates, glob imports, and edition 2015 rules; caches results per (file, segments) pair and detects cycles via visit_set.
+
+## `RustModuleTree._resolve_head`
+
+Look up the first segment of a path in resolution order: leading "::" (crate or external crate), crate / self / super keywords, child modules, use bindings, file definitions, project crates, glob imports, and edition 2015 root visibility; delegates to `_walk()` to follow remaining segments through module hierarchy.
+
+## `RustModuleTree._walk`
+
+Follow segments through child and parent modules, processing self / super / module names, and resolve remaining segments through use re-exports and glob imports when they are not modules; used by `_resolve_head()` to traverse the resolved module chain.
+
+## `_get_module_tree`
+
+Retrieve or construct the cached RustModuleTree for a project, validating that the tree was built for the current project file set and discarding it if the file set changed; used by public resolution functions to obtain the tree.
+
+## `_is_path_attribute`
+
+Determine whether a module string is the value of a #[path] attribute (contains "." or "/") rather than a "::" -joined path; used to route resolution through direct file lookup instead of module tree traversal.
+
+## `_resolve_import`
+
+Resolve a "::" -joined module path through the module tree, returning the file it names and any unconsumed segments; returns None if the path leads to an external crate or the current file itself.
+
+## `resolve_rust_module_path`
+
+Public entry point to resolve an import's module string (either "::" -joined path or #[path] attribute value) to a project-internal .rs file or None; used by `import_to_path.py` to map imports to their defining files.
+
+## `rust_import_name_dict`
+
+Public entry point to determine which names an import binds and their definition paths within the resolved file; handles re-exports, glob imports with enum variant expansion, and returns an empty dict if the import leads outside the project or to a use re-export of the resolved file.
 
 # Summary
 
 # Summary: codetwine/rust_module_tree.py
 
-**Responsibility:** Build and cache the module hierarchy of Rust projects by parsing .rs files, Cargo.toml metadata, and mod/use declarations; resolve import paths to source files and extract binding names following Rust scoping rules.
+**Single Responsibility**
 
-**Main Public Definitions:**
-- `resolve_rust_module_path()` — resolve import strings to project files
-- `rust_import_name_dict()` — map imported names to their paths
-- `RustModuleTree` — module hierarchy with path resolution
+Build and cache a Rust project's module tree by parsing .rs files and Cargo.toml metadata, then resolve import paths to their defining files and bound names.
 
-**Key Terms:** module tree caching, path resolution (absolute/relative, crate/super/self), use declarations, glob imports, mod declarations, enum variants, Cargo.toml crate names, edition 2015 fallback, hop counting for cycle prevention.
+**Main Public Definitions**
+
+- `resolve_rust_module_path()` — map import module strings to project-internal .rs files
+- `rust_import_name_dict()` — determine which names an import binds and their paths
+- `module_tree_cache` — module-level cache for RustModuleTree objects by project directory
+
+**Key Capabilities**
+
+Parses mod declarations, use statements, and Cargo.toml to build a module tree; resolves absolute and relative import paths through module hierarchies, use bindings, and glob imports; handles re-exports and enum variants; supports Rust editions 2015 and later; caches results per (file, path) pair; prevents infinite loops with hop limits and cycle detection; invalidates cache when project file sets change.

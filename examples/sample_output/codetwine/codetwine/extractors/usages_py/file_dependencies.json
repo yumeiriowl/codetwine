@@ -98,8 +98,8 @@
       "name": "_UsageSetting",
       "type": "class_definition",
       "start_line": 100,
-      "end_line": 118,
-      "context": "@dataclass\nclass _UsageSetting:\n    \"\"\"The node type settings of one language and the names tracked in one file.\"\"\"\n\n    name_set: set[str]                 # Names whose usages are tracked\n    member_name_set: set[str]          # Names tracked when written after self / this\n    alias_list: list[\"TypedAlias\"]     # Variables tracked on the lines they are declared for\n    usage_node_types: dict             # The EXT_TO_USAGE_NODE_TYPE_DICT entry of the language\n    # Name an import statement binds -> lines of those statements\n    import_line_dict: dict[str, set[int]] = field(default_factory=dict)\n    # Node id of a scope -> names bound inside it, filled on first use\n    local_name_dict: dict[int, set[str]] = field(default_factory=dict)\n    # Returns whether a name written in a pattern refers to a definition instead of\n    # binding the name (Rust: a constant, a variant); None when no name does\n    is_reference_name: Callable[[str], bool] | None = None\n\n    def type_set(self, key: str) -> set[str]:\n        \"\"\"Return a node type set of the settings, empty when the language has none.\"\"\"\n        return self.usage_node_types.get(key, _EMPTY_SET)"
+      "end_line": 119,
+      "context": "@dataclass\nclass _UsageSetting:\n    \"\"\"The node type settings of one language and the names tracked in one file.\"\"\"\n\n    name_set: set[str]                 # Names whose usages are tracked\n    member_name_set: set[str]          # Names tracked when written after self / this\n    # Variable name -> the lines it is tracked for (typed_alias_dict)\n    alias_dict: dict[str, list[\"TypedAlias\"]]\n    usage_node_types: dict             # The EXT_TO_USAGE_NODE_TYPE_DICT entry of the language\n    # Name an import statement binds -> lines of those statements\n    import_line_dict: dict[str, set[int]] = field(default_factory=dict)\n    # Node id of a scope -> names bound inside it, filled on first use\n    local_name_dict: dict[int, set[str]] = field(default_factory=dict)\n    # Returns whether a name written in a pattern refers to a definition instead of\n    # binding the name (Rust: a constant, a variant); None when no name does\n    is_reference_name: Callable[[str], bool] | None = None\n\n    def type_set(self, key: str) -> set[str]:\n        \"\"\"Return a node type set of the settings, empty when the language has none.\"\"\"\n        return self.usage_node_types.get(key, _EMPTY_SET)"
     },
     {
       "name": "name_set",
@@ -116,269 +116,277 @@
       "context": "    member_name_set: set[str]          # Names tracked when written after self / this"
     },
     {
-      "name": "alias_list",
+      "name": "alias_dict",
       "type": "expression_statement",
-      "start_line": 106,
-      "end_line": 106,
-      "context": "    alias_list: list[\"TypedAlias\"]     # Variables tracked on the lines they are declared for"
+      "start_line": 107,
+      "end_line": 107,
+      "context": "    alias_dict: dict[str, list[\"TypedAlias\"]]"
     },
     {
       "name": "usage_node_types",
       "type": "expression_statement",
-      "start_line": 107,
-      "end_line": 107,
+      "start_line": 108,
+      "end_line": 108,
       "context": "    usage_node_types: dict             # The EXT_TO_USAGE_NODE_TYPE_DICT entry of the language"
     },
     {
       "name": "import_line_dict",
       "type": "expression_statement",
-      "start_line": 109,
-      "end_line": 109,
+      "start_line": 110,
+      "end_line": 110,
       "context": "    import_line_dict: dict[str, set[int]] = field(default_factory=dict)"
     },
     {
       "name": "local_name_dict",
       "type": "expression_statement",
-      "start_line": 111,
-      "end_line": 111,
+      "start_line": 112,
+      "end_line": 112,
       "context": "    local_name_dict: dict[int, set[str]] = field(default_factory=dict)"
     },
     {
       "name": "is_reference_name",
       "type": "expression_statement",
-      "start_line": 114,
-      "end_line": 114,
+      "start_line": 115,
+      "end_line": 115,
       "context": "    is_reference_name: Callable[[str], bool] | None = None"
     },
     {
       "name": "type_set",
       "type": "function_definition",
-      "start_line": 116,
-      "end_line": 118,
+      "start_line": 117,
+      "end_line": 119,
       "context": "    def type_set(self, key: str) -> set[str]:\n        \"\"\"Return a node type set of the settings, empty when the language has none.\"\"\"\n        return self.usage_node_types.get(key, _EMPTY_SET)"
     },
     {
       "name": "_pattern_name_list",
       "type": "function_definition",
-      "start_line": 121,
-      "end_line": 126,
+      "start_line": 122,
+      "end_line": 127,
       "context": "def _pattern_name_list(node: Node, setting: _UsageSetting) -> list[str]:\n    \"\"\"Return the names a binding pattern binds (pattern_name_list with the settings of the file).\"\"\"\n    return pattern_name_list(\n        node, setting.type_set(\"pattern_types\"),\n        setting.usage_node_types.get(\"pattern_field_dict\", {}),\n    )"
     },
     {
       "name": "_binding_name_list",
       "type": "function_definition",
-      "start_line": 129,
-      "end_line": 157,
+      "start_line": 130,
+      "end_line": 158,
       "context": "def _binding_name_list(node: Node, field_name: str, setting: _UsageSetting) -> list[str]:\n    \"\"\"Return the names a binding node binds as local names.\n\n    Args:\n        node: A node whose type is a key of local_binding_dict or scope_binding_dict.\n        field_name: The field of the node that holds the pattern; \"\" when the named\n            children of the node are the patterns.\n        setting: The usage settings of the file.\n\n    Returns:\n        The bound names, without the names an import statement written on the lines\n        of their pattern binds (import_line_dict) and the names a pattern refers to\n        (is_reference_name).\n    \"\"\"\n    pattern_node_list = (\n        node.children_by_field_name(field_name) if field_name else node.named_children\n    )\n    name_list: list[str] = []\n    for pattern_node in pattern_node_list:\n        start_line, end_line = pattern_node.start_point[0] + 1, pattern_node.end_point[0] + 1\n        name_list.extend(\n            name for name in _pattern_name_list(pattern_node, setting)\n            if not any(\n                start_line <= line <= end_line\n                for line in setting.import_line_dict.get(name, ())\n            )\n            and not (setting.is_reference_name is not None and setting.is_reference_name(name))\n        )\n    return name_list"
     },
     {
       "name": "_local_name_set",
       "type": "function_definition",
-      "start_line": 160,
-      "end_line": 207,
+      "start_line": 161,
+      "end_line": 208,
       "context": "def _local_name_set(scope_node: Node, setting: _UsageSetting) -> set[str]:\n    \"\"\"Return the names bound inside a scope: parameters, local variables, inner functions.\n\n    The nodes of the scope are walked without entering the scopes and the opaque\n    nodes (class bodies) inside it; a node whose type is a key of local_binding_dict\n    binds the names of its pattern. The names of unbind_types nodes (Python global /\n    nonlocal) are taken out.\n\n    Args:\n        scope_node: A node whose type is in scope_types.\n        setting: The usage settings of the file.\n\n    Returns:\n        The bound names. Computed once per scope node.\n    \"\"\"\n    local_name_set = setting.local_name_dict.get(scope_node.id)\n    if local_name_set is not None:\n        return local_name_set\n\n    scope_type_set = setting.type_set(\"scope_types\")\n    opaque_type_set = setting.type_set(\"opaque_types\")\n    unbind_type_set = setting.type_set(\"unbind_types\")\n    local_binding_dict = setting.usage_node_types.get(\"local_binding_dict\", {})\n\n    local_name_set = set()\n    global_name_set: set[str] = set()\n    scope_field = setting.usage_node_types.get(\"scope_binding_dict\", {}).get(scope_node.type)\n    if scope_field is not None:\n        local_name_set.update(_binding_name_list(scope_node, scope_field, setting))\n\n    node_stack = list(scope_node.children)\n    while node_stack:\n        node = node_stack.pop()\n        if node.type in unbind_type_set:\n            global_name_set.update(\n                child.text.decode(\"utf-8\") for child in node.named_children\n            )\n            continue\n        field_name = local_binding_dict.get(node.type)\n        if field_name is not None:\n            local_name_set.update(_binding_name_list(node, field_name, setting))\n        if node.type in scope_type_set or node.type in opaque_type_set:\n            continue\n        node_stack.extend(node.children)\n\n    local_name_set -= global_name_set\n    setting.local_name_dict[scope_node.id] = local_name_set\n    return local_name_set"
     },
     {
       "name": "_is_local_name",
       "type": "function_definition",
-      "start_line": 210,
-      "end_line": 245,
-      "context": "def _is_local_name(node: Node, name: str, setting: _UsageSetting) -> bool:\n    \"\"\"Return whether a name written at a node is bound by a scope around the node.\n\n    Args:\n        node: The node the name is written at.\n        name: The name.\n        setting: The usage settings of the file.\n\n    Returns:\n        True when a scope_types node among the ancestors of node binds the name\n        (_local_name_set) and the name is no typed variable declared inside that scope\n        for the line of the node (alias_list). A scope whose type is a key of scope_body_dict binds\n        its names only for the nodes inside that field of it (Python: a default value\n        or an annotation of a function is read outside the function).\n    \"\"\"\n    scope_type_set = setting.type_set(\"scope_types\")\n    if not scope_type_set:\n        return False\n    alias = typed_alias(setting.alias_list, name, node.start_point[0] + 1)\n    scope_body_dict = setting.usage_node_types.get(\"scope_body_dict\", {})\n    child = node\n    current = node.parent\n    while current is not None:\n        if current.type in scope_type_set and name in _local_name_set(current, setting):\n            body_field = scope_body_dict.get(current.type)\n            if body_field is None or current.child_by_field_name(body_field) == child:\n                is_alias_inside = (\n                    alias is not None and alias.type_name is not None\n                    and current.start_point[0] + 1 <= alias.start_line\n                    and alias.end_line <= current.end_point[0] + 1\n                )\n                if not is_alias_inside:\n                    return True\n        child = current\n        current = current.parent\n    return False"
+      "start_line": 211,
+      "end_line": 246,
+      "context": "def _is_local_name(node: Node, name: str, setting: _UsageSetting) -> bool:\n    \"\"\"Return whether a name written at a node is bound by a scope around the node.\n\n    Args:\n        node: The node the name is written at.\n        name: The name.\n        setting: The usage settings of the file.\n\n    Returns:\n        True when a scope_types node among the ancestors of node binds the name\n        (_local_name_set) and the name is no typed variable declared inside that scope\n        for the line of the node (alias_dict). A scope whose type is a key of scope_body_dict binds\n        its names only for the nodes inside that field of it (Python: a default value\n        or an annotation of a function is read outside the function).\n    \"\"\"\n    scope_type_set = setting.type_set(\"scope_types\")\n    if not scope_type_set:\n        return False\n    alias = typed_alias(setting.alias_dict, name, node.start_point[0] + 1)\n    scope_body_dict = setting.usage_node_types.get(\"scope_body_dict\", {})\n    child = node\n    current = node.parent\n    while current is not None:\n        if current.type in scope_type_set and name in _local_name_set(current, setting):\n            body_field = scope_body_dict.get(current.type)\n            if body_field is None or current.child_by_field_name(body_field) == child:\n                is_alias_inside = (\n                    alias is not None and alias.type_name is not None\n                    and current.start_point[0] + 1 <= alias.start_line\n                    and alias.end_line <= current.end_point[0] + 1\n                )\n                if not is_alias_inside:\n                    return True\n        child = current\n        current = current.parent\n    return False"
     },
     {
       "name": "_chain_part",
       "type": "function_definition",
-      "start_line": 248,
-      "end_line": 274,
+      "start_line": 249,
+      "end_line": 275,
       "context": "def _chain_part(node: Node, attribute_types: set[str]) -> tuple[Node, list[str]] | None:\n    \"\"\"Split an attribute access into the node it starts from and the names after it.\n\n    Examples:\n        helper.process.run  -> (identifier helper, [\"process\", \"run\"])\n        self.x.go           -> (self, [\"x\", \"go\"])\n        head->value         -> (identifier head, [\"value\"])\n        make().value        -> (call make(), [\"value\"])\n\n    Args:\n        node: An attribute access node.\n        attribute_types: Node types of an attribute access.\n\n    Returns:\n        (first node that is no attribute access, names written after it), None when\n        an access has no name part.\n    \"\"\"\n    part_list: list[str] = []\n    current = node\n    while current.type in attribute_types:\n        child_list = current.named_children\n        if len(child_list) < 2:\n            return None\n        part_list.append(_template_name(child_list[-1]))\n        current = child_list[0]\n    part_list.reverse()\n    return current, part_list"
     },
     {
       "name": "_chain_usage",
       "type": "function_definition",
-      "start_line": 277,
-      "end_line": 315,
+      "start_line": 278,
+      "end_line": 316,
       "context": "def _chain_usage(\n    base_node: Node, part_list: list[str], line: int, setting: _UsageSetting,\n    is_call_name: bool = False,\n) -> UsageInfo | None:\n    \"\"\"Return the usage a chain of names gives.\n\n    A chain that starts from a name gives \"name.part...\" when it starts from a tracked\n    name no scope around it binds. A chain that starts from self / this (self_names,\n    self_types) gives \"part...\" when its first part is in member_name_set.\n\n    Args:\n        base_node: The node the chain starts from.\n        part_list: The names written after it (may be empty).\n        line: Line of the usage (1-based).\n        setting: The usage settings of the file.\n        is_call_name: True when base_node is the name of a called function; with\n            call_ignores_local such a name is a usage also where a scope binds it.\n\n    Returns:\n        UsageInfo, or None when the chain names nothing tracked.\n    \"\"\"\n    base_text = base_node.text.decode(\"utf-8\")\n    is_self = (\n        base_node.type in setting.type_set(\"self_types\")\n        or (base_node.type == \"identifier\" and base_text in setting.type_set(\"self_names\"))\n    )\n    if is_self:\n        if part_list and part_list[0] in setting.member_name_set:\n            return UsageInfo(name=\".\".join(part_list), line=line)\n        return None\n    if base_node.type != \"identifier\":\n        return None\n    name = \".\".join([base_text, *part_list])\n    if _track_root(name, setting.name_set) is None:\n        return None\n    is_local_check = not (is_call_name and setting.usage_node_types.get(\"call_ignores_local\"))\n    if is_local_check and _is_local_name(base_node, base_text, setting):\n        return None\n    return UsageInfo(name=name, line=line)"
     },
     {
       "name": "_qualified_segment_list",
       "type": "function_definition",
-      "start_line": 318,
-      "end_line": 343,
+      "start_line": 319,
+      "end_line": 344,
       "context": "def _qualified_segment_list(node: Node) -> list[str]:\n    \"\"\"Split a name written with \"::\" (C++) or \".\" (Kotlin) into its parts.\n\n    Template arguments are dropped: geo::Box<int>::get -> [\"geo\", \"Box\", \"get\"].\n\n    Args:\n        node: A qualified_identifier node.\n\n    Returns:\n        The parts in the order they are written.\n    \"\"\"\n    segment_list: list[str] = []\n    current: Node | None = node\n    while current is not None and current.type == \"qualified_identifier\":\n        scope_node = current.child_by_field_name(\"scope\")\n        name_node = current.child_by_field_name(\"name\")\n        if name_node is None:\n            # Kotlin: the parts are plain children\n            segment_list.extend(child.text.decode(\"utf-8\") for child in current.named_children)\n            return segment_list\n        if scope_node is not None:\n            segment_list.append(_template_name(scope_node))\n        current = name_node\n    if current is not None:\n        segment_list.append(_template_name(current))\n    return segment_list"
     },
     {
       "name": "_template_name",
       "type": "function_definition",
-      "start_line": 346,
-      "end_line": 349,
+      "start_line": 347,
+      "end_line": 350,
       "context": "def _template_name(node: Node) -> str:\n    \"\"\"Return the name of a node without its template arguments (Box<int> -> Box).\"\"\"\n    name_node = node.child_by_field_name(\"name\") if node.type in _TEMPLATE_NODE_TYPE_SET else None\n    return (name_node or node).text.decode(\"utf-8\")"
     },
     {
       "name": "_qualified_usage",
       "type": "function_definition",
-      "start_line": 352,
-      "end_line": 369,
+      "start_line": 353,
+      "end_line": 370,
       "context": "def _qualified_usage(node: Node, setting: _UsageSetting) -> UsageInfo | None:\n    \"\"\"Return the usage a qualified name gives.\n\n    The name from the first tracked part on is the usage, so the namespaces written in\n    front of it are dropped: geo::Shape::count with \"Shape\" tracked -> \"Shape::count\".\n\n    Args:\n        node: The outermost qualified_identifier node of the name.\n        setting: The usage settings of the file.\n\n    Returns:\n        UsageInfo, or None when no part is tracked.\n    \"\"\"\n    segment_list = _qualified_segment_list(node)\n    for index, segment in enumerate(segment_list):\n        if segment in setting.name_set:\n            return UsageInfo(name=\"::\".join(segment_list[index:]), line=node.start_point[0] + 1)\n    return None"
     },
     {
       "name": "extract_usages",
       "type": "function_definition",
-      "start_line": 372,
-      "end_line": 532,
-      "context": "def extract_usages(\n    root_node: Node | CobolSource,\n    imported_names: set[str],\n    usage_node_types: dict | None = None,\n    member_names: set[str] | None = None,\n    alias_list: list[\"TypedAlias\"] | None = None,\n    import_line_dict: dict[str, set[int]] | None = None,\n    is_reference_name: Callable[[str], bool] | None = None,\n) -> list[UsageInfo]:\n    \"\"\"Extract usage locations of imported names from the AST and return them.\n\n    Traverses the AST via depth-first search (DFS) and detects the following kinds:\n    - Nodes in call_types (function calls)\n    - Nodes in attribute_types (attribute access), named by the chain of names they\n      write (helper.process.run); a chain written after self / this is named without it\n    - identifier nodes (simple variable references), and nodes in identifier_types\n    - type_identifier / namespace_identifier nodes (type / namespace references)\n      Java: \"User\" in User user = new User() is a type_identifier\n      C/C++: \"Point\" in struct Point p is a type_identifier\n    - qualified_identifier nodes (C++: geo::Shape::count), named from their first\n      tracked part on\n    - Nodes in path_types (Rust paths such as config::Settings::new), recorded\n      with the whole path as the name; the paths in the arguments of a macro\n      (macro_argument_types) are read the same way\n\n    A name is not a usage where a scope around it (scope_types) binds it as a\n    parameter or a local variable. A name an import statement binds inside a scope\n    (import_line_dict) is no local variable of it.\n\n    Duplicate and redundant entries are removed at the end by deduplicate_usage_list.\n\n    For a CobolSource the places the file refers to the names are returned; names are\n    compared without regard to upper and lower case, and usage_node_types is not read.\n\n    Args:\n        root_node: The AST root node covering the entire file, or the CobolSource of a COBOL file.\n        imported_names: Set of names whose usage is to be tracked. A name may have several\n                        parts (\"pkg.core\"); a usage starts from the longest tracked name.\n        usage_node_types: Per-language node type settings dict, obtained from EXT_TO_USAGE_NODE_TYPE_DICT in config.py.\n                          Returns an empty list when None (for languages with no usage tracking defined).\n                          Required keys: \"call_types\", \"attribute_types\", \"skip_parent_types\"\n                          Optional key: \"skip_parent_types_for_type_ref\" (uses skip_parent_types if absent)\n                          Optional key: \"skip_name_field_types\" (when the parent is this type,\n                            only the name-field child is skipped; the value side is detected as a usage)\n                          Optional key: \"identifier_parent_types\" (when set, an identifier is a usage\n                            only when its parent is one of these types)\n                          Optional key: \"identifier_types\" (node types read like an identifier)\n                          Optional key: \"path_types\" (node types of a path written with \"::\")\n                          Optional key: \"macro_argument_types\" (node types of macro arguments,\n                            whose paths are read from loose tokens)\n                          Optional keys: \"self_names\" / \"self_types\" (identifier texts / node\n                            types that stand for the object a member is written on)\n                          Optional keys: \"scope_types\", \"scope_body_dict\", \"scope_binding_dict\",\n                            \"local_binding_dict\", \"pattern_types\", \"pattern_field_dict\",\n                            \"opaque_types\", \"unbind_types\"\n                            (how the names bound inside a function are found, see _local_name_set)\n        member_names: Names tracked when they are written after self / this. None for none.\n        alias_list: Variables declared with a tracked type (extract_typed_aliases); such a\n                    name stays a usage on the lines it is declared for, where a scope\n                    binds it. None for none.\n        import_line_dict: Name an import statement binds -> lines of those statements.\n                    None for none.\n        is_reference_name: Returns whether a name written in a pattern refers to a\n                    definition instead of binding the name. None when no name does.\n\n    Returns:\n        A list of UsageInfo (deduplicated).\n    \"\"\"\n    if isinstance(root_node, CobolSource):\n        return [\n            UsageInfo(name=name, line=line)\n            for name, line in root_node.usage_line_list(imported_names)\n        ]\n    if not usage_node_types:\n        return []\n\n    setting = _UsageSetting(\n        name_set=imported_names,\n        member_name_set=member_names or set(),\n        alias_list=alias_list or [],\n        usage_node_types=usage_node_types,\n        import_line_dict=import_line_dict or {},\n        is_reference_name=is_reference_name,\n    )\n\n    # Retrieve per-language node types from the settings\n    call_types: set[str] = usage_node_types[\"call_types\"]\n    attribute_types: set[str] = usage_node_types[\"attribute_types\"]\n    skip_parent_types: set[str] = usage_node_types[\"skip_parent_types\"]\n    skip_parent_types_for_type_ref: set[str] = usage_node_types.get(\n        \"skip_parent_types_for_type_ref\", skip_parent_types\n    )\n    identifier_types: set[str] = {\"identifier\"} | setting.type_set(\"identifier_types\")\n    path_types: set[str] = setting.type_set(\"path_types\")\n    macro_argument_types: set[str] = setting.type_set(\"macro_argument_types\")\n\n    usage_list: list[UsageInfo] = []\n    # DFS traversal of the AST using a stack\n    node_stack = [root_node]\n\n    while node_stack:\n        node = node_stack.pop()\n        usage: UsageInfo | None = None\n\n        # Process function call nodes\n        if node.type in call_types:\n            usage = _parse_call_node(node, setting)\n\n        elif node.type in attribute_types:\n            # Process only standalone attribute access (exclude function part of a call)\n            if not _is_function_part_of_call(node, call_types):\n                usage = _parse_attribute_node(node, setting)\n\n        elif node.type == \"qualified_identifier\":\n            # Process only the outermost qualified name outside import / package declarations\n            parent = node.parent\n            if not parent or (\n                parent.type != \"qualified_identifier\"\n                and parent.type not in skip_parent_types_for_type_ref\n                and parent.type not in call_types\n            ):\n                usage = _qualified_usage(node, setting)\n\n        elif node.type in path_types:\n            # Process only the outermost path outside import statements (Rust: a::b::c)\n            parent = node.parent\n            if not parent or (\n                parent.type not in path_types and parent.type not in skip_parent_types_for_type_ref\n            ):\n                usage = _parse_path_node(node, imported_names)\n\n        elif node.type in macro_argument_types:\n            # Process the paths written as loose tokens in the arguments of a macro\n            for first_node, segment_list in macro_path_list(node):\n                name = \"::\".join(segment_list)\n                if name in imported_names or segment_list[0] in imported_names:\n                    usage_list.append(UsageInfo(name=name, line=first_node.start_point[0] + 1))\n\n        elif node.type in _TYPE_REFERENCE_NODE_TYPE_SET:\n            # Process type reference nodes.\n            # Use the type-reference skip list for checking (only import statements and scope resolution are skipped).\n            # Unlike the identifier skip_parent_types, type references in parameters and method declarations\n            # are detected as dependencies.\n            parent = node.parent\n            if not parent or parent.type not in skip_parent_types_for_type_ref:\n                name = node.text.decode(\"utf-8\")\n                if name in imported_names:\n                    usage = UsageInfo(name=name, line=node.start_point[0] + 1)\n\n        elif node.type in identifier_types:\n            # Process simple identifier nodes\n            usage = _parse_identifier_node(node, setting)\n\n        if usage:\n            usage_list.append(usage)\n\n        # Add child nodes to the stack to continue traversal\n        node_stack.extend(node.children)\n\n    # Remove duplicate and redundant entries and return\n    return deduplicate_usage_list(usage_list)"
+      "start_line": 373,
+      "end_line": 533,
+      "context": "def extract_usages(\n    root_node: Node | CobolSource,\n    imported_names: set[str],\n    usage_node_types: dict | None = None,\n    member_names: set[str] | None = None,\n    alias_list: list[\"TypedAlias\"] | None = None,\n    import_line_dict: dict[str, set[int]] | None = None,\n    is_reference_name: Callable[[str], bool] | None = None,\n) -> list[UsageInfo]:\n    \"\"\"Extract usage locations of imported names from the AST and return them.\n\n    Traverses the AST via depth-first search (DFS) and detects the following kinds:\n    - Nodes in call_types (function calls)\n    - Nodes in attribute_types (attribute access), named by the chain of names they\n      write (helper.process.run); a chain written after self / this is named without it\n    - identifier nodes (simple variable references), and nodes in identifier_types\n    - type_identifier / namespace_identifier nodes (type / namespace references)\n      Java: \"User\" in User user = new User() is a type_identifier\n      C/C++: \"Point\" in struct Point p is a type_identifier\n    - qualified_identifier nodes (C++: geo::Shape::count), named from their first\n      tracked part on\n    - Nodes in path_types (Rust paths such as config::Settings::new), recorded\n      with the whole path as the name; the paths in the arguments of a macro\n      (macro_argument_types) are read the same way\n\n    A name is not a usage where a scope around it (scope_types) binds it as a\n    parameter or a local variable. A name an import statement binds inside a scope\n    (import_line_dict) is no local variable of it.\n\n    Duplicate and redundant entries are removed at the end by deduplicate_usage_list.\n\n    For a CobolSource the places the file refers to the names are returned; names are\n    compared without regard to upper and lower case, and usage_node_types is not read.\n\n    Args:\n        root_node: The AST root node covering the entire file, or the CobolSource of a COBOL file.\n        imported_names: Set of names whose usage is to be tracked. A name may have several\n                        parts (\"pkg.core\"); a usage starts from the longest tracked name.\n        usage_node_types: Per-language node type settings dict, obtained from EXT_TO_USAGE_NODE_TYPE_DICT in config.py.\n                          Returns an empty list when None (for languages with no usage tracking defined).\n                          Required keys: \"call_types\", \"attribute_types\", \"skip_parent_types\"\n                          Optional key: \"skip_parent_types_for_type_ref\" (uses skip_parent_types if absent)\n                          Optional key: \"skip_name_field_types\" (when the parent is this type,\n                            only the name-field child is skipped; the value side is detected as a usage)\n                          Optional key: \"identifier_parent_types\" (when set, an identifier is a usage\n                            only when its parent is one of these types)\n                          Optional key: \"identifier_types\" (node types read like an identifier)\n                          Optional key: \"path_types\" (node types of a path written with \"::\")\n                          Optional key: \"macro_argument_types\" (node types of macro arguments,\n                            whose paths are read from loose tokens)\n                          Optional keys: \"self_names\" / \"self_types\" (identifier texts / node\n                            types that stand for the object a member is written on)\n                          Optional keys: \"scope_types\", \"scope_body_dict\", \"scope_binding_dict\",\n                            \"local_binding_dict\", \"pattern_types\", \"pattern_field_dict\",\n                            \"opaque_types\", \"unbind_types\"\n                            (how the names bound inside a function are found, see _local_name_set)\n        member_names: Names tracked when they are written after self / this. None for none.\n        alias_list: Variables declared with a tracked type (extract_typed_aliases); such a\n                    name stays a usage on the lines it is declared for, where a scope\n                    binds it. None for none.\n        import_line_dict: Name an import statement binds -> lines of those statements.\n                    None for none.\n        is_reference_name: Returns whether a name written in a pattern refers to a\n                    definition instead of binding the name. None when no name does.\n\n    Returns:\n        A list of UsageInfo (deduplicated).\n    \"\"\"\n    if isinstance(root_node, CobolSource):\n        return [\n            UsageInfo(name=name, line=line)\n            for name, line in root_node.usage_line_list(imported_names)\n        ]\n    if not usage_node_types:\n        return []\n\n    setting = _UsageSetting(\n        name_set=imported_names,\n        member_name_set=member_names or set(),\n        alias_dict=typed_alias_dict(alias_list or []),\n        usage_node_types=usage_node_types,\n        import_line_dict=import_line_dict or {},\n        is_reference_name=is_reference_name,\n    )\n\n    # Retrieve per-language node types from the settings\n    call_types: set[str] = usage_node_types[\"call_types\"]\n    attribute_types: set[str] = usage_node_types[\"attribute_types\"]\n    skip_parent_types: set[str] = usage_node_types[\"skip_parent_types\"]\n    skip_parent_types_for_type_ref: set[str] = usage_node_types.get(\n        \"skip_parent_types_for_type_ref\", skip_parent_types\n    )\n    identifier_types: set[str] = {\"identifier\"} | setting.type_set(\"identifier_types\")\n    path_types: set[str] = setting.type_set(\"path_types\")\n    macro_argument_types: set[str] = setting.type_set(\"macro_argument_types\")\n\n    usage_list: list[UsageInfo] = []\n    # DFS traversal of the AST using a stack\n    node_stack = [root_node]\n\n    while node_stack:\n        node = node_stack.pop()\n        usage: UsageInfo | None = None\n\n        # Process function call nodes\n        if node.type in call_types:\n            usage = _parse_call_node(node, setting)\n\n        elif node.type in attribute_types:\n            # Process only standalone attribute access (exclude function part of a call)\n            if not _is_function_part_of_call(node, call_types):\n                usage = _parse_attribute_node(node, setting)\n\n        elif node.type == \"qualified_identifier\":\n            # Process only the outermost qualified name outside import / package declarations\n            parent = node.parent\n            if not parent or (\n                parent.type != \"qualified_identifier\"\n                and parent.type not in skip_parent_types_for_type_ref\n                and parent.type not in call_types\n            ):\n                usage = _qualified_usage(node, setting)\n\n        elif node.type in path_types:\n            # Process only the outermost path outside import statements (Rust: a::b::c)\n            parent = node.parent\n            if not parent or (\n                parent.type not in path_types and parent.type not in skip_parent_types_for_type_ref\n            ):\n                usage = _parse_path_node(node, imported_names)\n\n        elif node.type in macro_argument_types:\n            # Process the paths written as loose tokens in the arguments of a macro\n            for first_node, segment_list in macro_path_list(node):\n                name = \"::\".join(segment_list)\n                if name in imported_names or segment_list[0] in imported_names:\n                    usage_list.append(UsageInfo(name=name, line=first_node.start_point[0] + 1))\n\n        elif node.type in _TYPE_REFERENCE_NODE_TYPE_SET:\n            # Process type reference nodes.\n            # Use the type-reference skip list for checking (only import statements and scope resolution are skipped).\n            # Unlike the identifier skip_parent_types, type references in parameters and method declarations\n            # are detected as dependencies.\n            parent = node.parent\n            if not parent or parent.type not in skip_parent_types_for_type_ref:\n                name = node.text.decode(\"utf-8\")\n                if name in imported_names:\n                    usage = UsageInfo(name=name, line=node.start_point[0] + 1)\n\n        elif node.type in identifier_types:\n            # Process simple identifier nodes\n            usage = _parse_identifier_node(node, setting)\n\n        if usage:\n            usage_list.append(usage)\n\n        # Add child nodes to the stack to continue traversal\n        node_stack.extend(node.children)\n\n    # Remove duplicate and redundant entries and return\n    return deduplicate_usage_list(usage_list)"
     },
     {
       "name": "_leading_part_set",
       "type": "function_definition",
-      "start_line": 535,
-      "end_line": 552,
+      "start_line": 536,
+      "end_line": 553,
       "context": "def _leading_part_set(name_set: set[str]) -> set[str]:\n    \"\"\"Return every leading part of the names that ends right before a \".\" or \"::\".\n\n    Examples:\n        {\"a.b.c\", \"x::y\"} -> {\"a\", \"a.b\", \"x\"}\n\n    Args:\n        name_set: Usage names.\n\n    Returns:\n        The text of each name up to (not including) each separator in it.\n    \"\"\"\n    part_set: set[str] = set()\n    for name in name_set:\n        for index, char in enumerate(name):\n            if char == \".\" or name.startswith(\"::\", index):\n                part_set.add(name[:index])\n    return part_set"
     },
     {
       "name": "deduplicate_usage_list",
       "type": "function_definition",
-      "start_line": 555,
-      "end_line": 592,
+      "start_line": 556,
+      "end_line": 593,
       "context": "def deduplicate_usage_list(usage_list: list[UsageInfo]) -> list[UsageInfo]:\n    \"\"\"Remove redundant entries within the same line and eliminate duplicates.\n\n    When both \"module\" and \"module.attr\" (or \"module::item\") exist on the same line,\n    the more detailed name is kept and \"module\" is removed.\n    Entries with duplicate (name, line) pairs are also removed.\n\n    Args:\n        usage_list: A UsageInfo list that may contain duplicates.\n\n    Returns:\n        A deduplicated UsageInfo list (sorted by line number in ascending order).\n    \"\"\"\n    # Group by line number\n    by_line_dict: dict[int, list[UsageInfo]] = {}\n    for usage in usage_list:\n        by_line_dict.setdefault(usage.line, []).append(usage)\n\n    seen_key_set: set[tuple] = set()\n    unique_list: list[UsageInfo] = []\n\n    # Process each group in ascending line-number order\n    for line in sorted(by_line_dict):\n        line_usage_list = by_line_dict[line]\n        shorter_name_set = _leading_part_set({usage.name for usage in line_usage_list})\n\n        for usage in line_usage_list:\n            # Exclude the shorter name if a more detailed name (usage.name.xxx) exists on the same line\n            if usage.name in shorter_name_set:\n                continue\n\n            # Also remove entries with duplicate (name, line) pairs\n            entry_key = (usage.name, usage.line)\n            if entry_key not in seen_key_set:\n                seen_key_set.add(entry_key)\n                unique_list.append(usage)\n\n    return unique_list"
     },
     {
       "name": "_is_function_part_of_call",
       "type": "function_definition",
-      "start_line": 595,
-      "end_line": 615,
+      "start_line": 596,
+      "end_line": 616,
       "context": "def _is_function_part_of_call(node: Node, call_types: set[str]) -> bool:\n    \"\"\"Determine whether this attribute node is the function part of a call node.\n\n    In the AST for \"func()\", the first child of the call node is an identifier or attribute.\n    In that case, the call node handles the processing, so the attribute node alone is not processed.\n\n    Args:\n        node: The attribute node to check.\n        call_types: Set of node types representing function calls.\n\n    Returns:\n        True if it is the function part of a call, False if it is a standalone attribute access.\n    \"\"\"\n    # Check if the parent node is a call type\n    parent = node.parent\n    if parent and parent.type in call_types:\n        # Check if the first child of the call node is this node\n        for child in parent.children:\n            if child.type in (\"identifier\", node.type):\n                return child.id == node.id\n    return False"
     },
     {
       "name": "_parse_call_node",
       "type": "function_definition",
-      "start_line": 618,
-      "end_line": 664,
+      "start_line": 619,
+      "end_line": 665,
       "context": "def _parse_call_node(node: Node, setting: _UsageSetting) -> UsageInfo | None:\n    \"\"\"Extract symbol usage information from a function call node.\n\n    Only the function part of the call is read:\n        func()                    -> \"func\"\n        module.func()             -> \"module.func\"\n        self.method()             -> \"method\" (see _chain_usage)\n        geo::doSomething()        -> from the first tracked part on (C++)\n    A call that names its method in a name field after its object (Java:\n    User.of(), repo.items.all()) is read as object + \".\" + name.\n\n    Args:\n        node: A call node.\n        setting: The usage settings of the file.\n\n    Returns:\n        UsageInfo, or None if not applicable.\n    \"\"\"\n    line = node.start_point[0] + 1\n    attribute_types = setting.usage_node_types[\"attribute_types\"]\n\n    # A call with an object and a name field (Java method_invocation)\n    object_node = node.child_by_field_name(\"object\")\n    name_node = node.child_by_field_name(\"name\")\n    if object_node is not None and name_node is not None:\n        chain = _chain_part(object_node, attribute_types)\n        if chain is None:\n            return None\n        base_node, part_list = chain\n        return _chain_usage(base_node, [*part_list, name_node.text.decode(\"utf-8\")], line, setting)\n\n    # Check only the first child (function name part) of the call node\n    function_node = node.children[0] if node.children else None\n    if function_node is None:\n        return None\n    if function_node.type == \"identifier\":\n        # Simple function call: func()\n        return _chain_usage(function_node, [], line, setting, is_call_name=True)\n    if function_node.type in attribute_types:\n        # Call via attribute access: module.func()\n        chain = _chain_part(function_node, attribute_types)\n        return _chain_usage(*chain, line, setting) if chain else None\n    if function_node.type == \"qualified_identifier\":\n        # C++ scope resolution operator call: geo::doSomething()\n        usage = _qualified_usage(function_node, setting)\n        return UsageInfo(name=usage.name, line=line) if usage else None\n    return None"
     },
     {
       "name": "_parse_attribute_node",
       "type": "function_definition",
-      "start_line": 667,
-      "end_line": 683,
+      "start_line": 668,
+      "end_line": 684,
       "context": "def _parse_attribute_node(node: Node, setting: _UsageSetting) -> UsageInfo | None:\n    \"\"\"Extract symbol usage information from an attribute access node.\n\n    Returns a UsageInfo when the chain of names the access writes starts from a\n    tracked name (\"module.attr\"), or from self / this followed by a tracked member.\n\n    Args:\n        node: An attribute node.\n        setting: The usage settings of the file.\n\n    Returns:\n        UsageInfo, or None if not applicable.\n    \"\"\"\n    chain = _chain_part(node, setting.usage_node_types[\"attribute_types\"])\n    if chain is None:\n        return None\n    return _chain_usage(*chain, node.start_point[0] + 1, setting)"
     },
     {
       "name": "_parse_path_node",
       "type": "function_definition",
-      "start_line": 686,
-      "end_line": 710,
+      "start_line": 687,
+      "end_line": 711,
       "context": "def _parse_path_node(\n    node: Node,\n    imported_names: set[str],\n) -> UsageInfo | None:\n    \"\"\"Extract symbol usage information from a Rust path node.\n\n    Returns a UsageInfo named with the whole path when the whole path or its first\n    segment is an imported name.\n    e.g. Settings::new() with \"Settings\" imported -> \"Settings::new\"\n    e.g. crate::util::log() with \"crate::util::log\" imported -> \"crate::util::log\"\n\n    Args:\n        node: A path node (scoped_identifier / scoped_type_identifier).\n        imported_names: Set of names to track.\n\n    Returns:\n        UsageInfo, or None if not applicable.\n    \"\"\"\n    segment_list = path_segment_list(node)\n    if not segment_list:\n        return None\n    name = \"::\".join(segment_list)\n    if name in imported_names or segment_list[0] in imported_names:\n        return UsageInfo(name=name, line=node.start_point[0] + 1)\n    return None"
     },
     {
       "name": "_parse_identifier_node",
       "type": "function_definition",
-      "start_line": 713,
-      "end_line": 758,
+      "start_line": 714,
+      "end_line": 759,
       "context": "def _parse_identifier_node(node: Node, setting: _UsageSetting) -> UsageInfo | None:\n    \"\"\"Extract symbol usage information from a simple identifier node.\n\n    Ignored when the identifier is part of import statements, definitions,\n    or argument declarations (i.e., part of syntax), and where a scope around it\n    binds its name.\n    For node types in skip_name_field_types, only the \"name\"-field child is\n    skipped while the \"value\" side is detected as a usage. The child a pattern node\n    binds (pattern_field_dict) is skipped the same way.\n    When identifier_parent_types is not empty, only an identifier whose parent\n    is one of those types is detected (SQL: object_reference).\n\n    Example: in def func(x=some_var), for default_parameter:\n        identifier \"x\" (name field) -> skipped\n        identifier \"some_var\" (value field) -> detected as a usage\n\n    Args:\n        node: An identifier node, or a node whose type is in identifier_types.\n        setting: The usage settings of the file.\n\n    Returns:\n        UsageInfo, or None if not applicable.\n    \"\"\"\n    identifier_parent_types = setting.type_set(\"identifier_parent_types\")\n    parent = node.parent\n    if identifier_parent_types and (not parent or parent.type not in identifier_parent_types):\n        return None\n    if parent:\n        if parent.type in setting.type_set(\"skip_name_field_types\"):\n            # Skip only the \"name\" field child; treat the \"value\" side as a usage\n            name_child = parent.child_by_field_name(\"name\")\n            if name_child and name_child.id == node.id:\n                return None\n        elif parent.type in setting.usage_node_types[\"skip_parent_types\"]:\n            return None\n        # The name a pattern binds (inner in { hp: inner = hp }) is no usage of that name\n        pattern_field = setting.usage_node_types.get(\"pattern_field_dict\", {}).get(parent.type)\n        if pattern_field is not None and node in parent.children_by_field_name(pattern_field):\n            return None\n\n    # Check if the name matches an imported name\n    name = node.text.decode(\"utf-8\")\n    if name in setting.name_set and not _is_local_name(node, name, setting):\n        return UsageInfo(name=name, line=node.start_point[0] + 1)\n\n    return None"
     },
     {
       "name": "TypedAlias",
       "type": "class_definition",
-      "start_line": 761,
-      "end_line": 769,
+      "start_line": 762,
+      "end_line": 770,
       "context": "@dataclass\nclass TypedAlias:\n    \"\"\"A variable that stands for an object of a tracked type, and the lines it does so for.\"\"\"\n\n    name: str              # Name of the variable\n    # Name of the type; None for the lines the variable is given a value of no tracked type\n    type_name: str | None\n    start_line: int        # First line the variable counts for (1-based)\n    end_line: int          # Last line it counts for"
     },
     {
       "name": "name",
       "type": "expression_statement",
-      "start_line": 765,
-      "end_line": 765,
+      "start_line": 766,
+      "end_line": 766,
       "context": "    name: str              # Name of the variable"
     },
     {
       "name": "type_name",
       "type": "expression_statement",
-      "start_line": 767,
-      "end_line": 767,
+      "start_line": 768,
+      "end_line": 768,
       "context": "    type_name: str | None"
     },
     {
       "name": "start_line",
       "type": "expression_statement",
-      "start_line": 768,
-      "end_line": 768,
+      "start_line": 769,
+      "end_line": 769,
       "context": "    start_line: int        # First line the variable counts for (1-based)"
     },
     {
       "name": "end_line",
       "type": "expression_statement",
-      "start_line": 769,
-      "end_line": 769,
+      "start_line": 770,
+      "end_line": 770,
       "context": "    end_line: int          # Last line it counts for"
     },
     {
       "name": "_scope_node",
       "type": "function_definition",
-      "start_line": 772,
-      "end_line": 786,
+      "start_line": 773,
+      "end_line": 787,
       "context": "def _scope_node(\n    node: Node, scope_types: set[str], root_node: Node, opaque_types: set[str] = _EMPTY_SET,\n) -> Node | None:\n    \"\"\"Return the innermost scope_types node around a node, the root node when there is none.\n\n    Returns:\n        The node; None when an opaque_types node (Python: a class body) comes before\n        it, since a name written there is no variable of the scope.\n    \"\"\"\n    scope_node = node.parent\n    while scope_node is not None and scope_node.type not in scope_types:\n        if scope_node.type in opaque_types:\n            return None\n        scope_node = scope_node.parent\n    return scope_node or root_node"
     },
     {
       "name": "extract_typed_aliases",
       "type": "function_definition",
-      "start_line": 789,
-      "end_line": 851,
+      "start_line": 790,
+      "end_line": 852,
       "context": "def extract_typed_aliases(\n    root_node: Node,\n    imported_names: set[str],\n    usage_node_types: dict,\n) -> list[TypedAlias]:\n    \"\"\"Traverse the AST to find the variables declared with a tracked type.\n\n    Detects variables declared with an imported type (e.g. Genre) such as genre.\n    A variable counts for the lines of the innermost scope_types node around its\n    declaration (a function), or for the whole file when there is none (a field). A\n    declaration written in an opaque_types node (Python: a class body) is not read.\n\n    Supported AST patterns (typed_alias_parent_types):\n      Java:   field_declaration / local_variable_declaration / formal_parameter\n      Kotlin: property_declaration / parameter\n      C/C++:  declaration / parameter_declaration\n      Python: e: Engine = ... / a parameter e: Engine\n      TS:     const e: Engine = ... / a parameter e: Engine\n    A node type in typed_alias_name_field_dict names its variable in that field (\"\" for\n    its first named child) and its type in the field \"type\".\n\n    Args:\n        root_node: The AST root node covering the entire file.\n        imported_names: Set of type names to track.\n        usage_node_types: The EXT_TO_USAGE_NODE_TYPE_DICT entry of the language.\n\n    Returns:\n        One TypedAlias per variable whose type name is in imported_names, or starts\n        with a name of it (\"core.Engine\"), in no particular order.\n    \"\"\"\n    typed_alias_parent_types = usage_node_types.get(\"typed_alias_parent_types\", set())\n    if not typed_alias_parent_types:\n        return []\n    scope_types = usage_node_types.get(\"scope_types\", set())\n    opaque_types = usage_node_types.get(\"opaque_types\", set())\n    name_field_dict = usage_node_types.get(\"typed_alias_name_field_dict\", {})\n\n    alias_list: list[TypedAlias] = []\n    stack = [root_node]\n\n    while stack:\n        node = stack.pop()\n\n        if node.type in typed_alias_parent_types:\n            if node.type in name_field_dict:\n                type_name, var_names = _field_type_and_var(node, name_field_dict[node.type])\n            else:\n                type_name, var_names = _extract_type_and_var(node)\n            scope_node = (\n                _scope_node(node, scope_types, root_node, opaque_types)\n                if type_name and _track_root(type_name, imported_names) is not None else None\n            )\n            if scope_node is not None:\n                for var_name in var_names:\n                    if var_name != type_name:\n                        alias_list.append(TypedAlias(\n                            var_name, type_name,\n                            scope_node.start_point[0] + 1, scope_node.end_point[0] + 1,\n                        ))\n\n        stack.extend(node.children)\n\n    return alias_list"
     },
     {
       "name": "_new_type_name",
       "type": "function_definition",
-      "start_line": 854,
-      "end_line": 880,
+      "start_line": 855,
+      "end_line": 881,
       "context": "def _new_type_name(value_node: Node, usage_node_types: dict) -> str | None:\n    \"\"\"Return the name of the type a value makes an object of, None for any other value.\n\n    Examples (typed_alias_new_dict):\n        Engine(1)         -> \"Engine\"       (Python: call, function)\n        core.Engine()     -> \"core.Engine\"\n        new Engine(1)     -> \"Engine\"       (JS / TS: new_expression, constructor)\n\n    Args:\n        value_node: The value node.\n        usage_node_types: The EXT_TO_USAGE_NODE_TYPE_DICT entry of the language.\n\n    Returns:\n        The name written in the field typed_alias_new_dict gives for the node type,\n        when it is a name or an attribute access made of names only.\n    \"\"\"\n    name_field = usage_node_types.get(\"typed_alias_new_dict\", {}).get(value_node.type)\n    name_node = value_node.child_by_field_name(name_field) if name_field else None\n    if name_node is None:\n        return None\n    if name_node.type == \"identifier\":\n        return name_node.text.decode(\"utf-8\")\n    if name_node.type in usage_node_types[\"attribute_types\"]:\n        chain = _chain_part(name_node, usage_node_types[\"attribute_types\"])\n        if chain is not None and chain[0].type == \"identifier\":\n            return \".\".join([chain[0].text.decode(\"utf-8\"), *chain[1]])\n    return None"
     },
     {
       "name": "extract_value_aliases",
       "type": "function_definition",
-      "start_line": 883,
-      "end_line": 951,
-      "context": "def extract_value_aliases(\n    root_node: Node,\n    usage_node_types: dict,\n    is_type_name: Callable[[str], bool],\n) -> list[TypedAlias]:\n    \"\"\"Traverse the AST to find the variables given an object of a tracked type.\n\n    e = Engine() (Python) and const e = new Engine() (JS / TS) make e stand for Engine\n    from the line of the assignment to the end of the innermost scope_types node around\n    it (a function). A later assignment of any other value to the same variable ends\n    that: it gives a TypedAlias without a type for its own lines. An assignment outside\n    every scope_types node is not read.\n\n    Settings read:\n        typed_alias_value_dict: node type -> (field of the variable, field of the value;\n            \"\" for the first named child)\n        typed_alias_new_dict:   node type of a value that makes an object -> field\n            naming its type\n\n    Args:\n        root_node: The AST root node covering the entire file.\n        usage_node_types: The EXT_TO_USAGE_NODE_TYPE_DICT entry of the language.\n        is_type_name: Returns whether a name written as the type names a tracked type.\n\n    Returns:\n        The TypedAlias of every assignment to a variable that is given an object of a\n        tracked type somewhere in its scope, in no particular order.\n    \"\"\"\n    value_dict = usage_node_types.get(\"typed_alias_value_dict\", {})\n    if not value_dict or not usage_node_types.get(\"typed_alias_new_dict\"):\n        return []\n    scope_types = usage_node_types.get(\"scope_types\", set())\n\n    alias_list: list[TypedAlias] = []\n    stack = [root_node]\n    while stack:\n        node = stack.pop()\n        stack.extend(node.children)\n        field_tuple = value_dict.get(node.type)\n        if field_tuple is None:\n            continue\n        name_field, value_field = field_tuple\n        name_node = node.child_by_field_name(name_field)\n        value_node = (\n            node.child_by_field_name(value_field) if value_field\n            else next(iter(node.named_children), None)\n        )\n        # Python: with Engine() as e holds the name in an as_pattern_target\n        if name_node is not None and name_node.type != \"identifier\" and name_node.named_child_count == 1:\n            name_node = name_node.named_children[0]\n        if name_node is None or name_node.type != \"identifier\" or value_node is None:\n            continue\n        scope_node = _scope_node(\n            node, scope_types, root_node, usage_node_types.get(\"opaque_types\", set()),\n        )\n        if scope_node is None or scope_node is root_node:\n            continue\n        type_name = _new_type_name(value_node, usage_node_types)\n        if type_name is not None and not is_type_name(type_name):\n            type_name = None\n        alias_list.append(TypedAlias(\n            name_node.text.decode(\"utf-8\"), type_name,\n            node.start_point[0] + 1, scope_node.end_point[0] + 1,\n        ))\n\n    typed_key_set = {\n        (alias.name, alias.end_line) for alias in alias_list if alias.type_name is not None\n    }\n    return [alias for alias in alias_list if (alias.name, alias.end_line) in typed_key_set]"
+      "start_line": 884,
+      "end_line": 978,
+      "context": "def extract_value_aliases(\n    root_node: Node,\n    usage_node_types: dict,\n    is_type_name: Callable[[str], bool],\n    import_line_dict: dict[str, set[int]] | None = None,\n) -> list[TypedAlias]:\n    \"\"\"Traverse the AST to find the variables given an object of a tracked type.\n\n    e = Engine() (Python) and const e = new Engine() (JS / TS) make e stand for Engine\n    from the line of the assignment to the end of the innermost scope_types node around\n    it (a function). A later node that gives the same variable anything else (another\n    value, a destructuring, the variable of a loop) ends that: it gives a TypedAlias\n    without a type for its own lines. A type written with a name a scope around the\n    value binds (var Engine = pick(); const e = new Engine()) is no tracked type. An\n    assignment outside every scope_types node is not read.\n\n    Settings read:\n        typed_alias_value_dict: node type -> (field of the variable or of a pattern of\n            variables, field of the value; \"\" for the first named child, None for a\n            node whose value is not read)\n        typed_alias_new_dict:   node type of a value that makes an object -> field\n            naming its type\n\n    Args:\n        root_node: The AST root node covering the entire file.\n        usage_node_types: The EXT_TO_USAGE_NODE_TYPE_DICT entry of the language.\n        is_type_name: Returns whether a name written as the type names a tracked type.\n        import_line_dict: Name an import statement binds -> lines of those statements;\n            such a name is no name a scope binds.\n\n    Returns:\n        The TypedAlias of every node that gives a value to a variable that is given an\n        object of a tracked type somewhere in its scope, in no particular order.\n    \"\"\"\n    value_dict = usage_node_types.get(\"typed_alias_value_dict\", {})\n    if not value_dict or not usage_node_types.get(\"typed_alias_new_dict\"):\n        return []\n    scope_types = usage_node_types.get(\"scope_types\", set())\n    pattern_type_set = usage_node_types.get(\"pattern_types\", set())\n    pattern_field_dict = usage_node_types.get(\"pattern_field_dict\", {})\n    setting = _UsageSetting(\n        name_set=set(), member_name_set=set(), alias_dict={},\n        usage_node_types=usage_node_types, import_line_dict=import_line_dict or {},\n    )\n\n    alias_list: list[TypedAlias] = []\n    stack = [root_node]\n    while stack:\n        node = stack.pop()\n        stack.extend(node.children)\n        field_tuple = value_dict.get(node.type)\n        if field_tuple is None:\n            continue\n        name_field, value_field = field_tuple\n        target_node = node.child_by_field_name(name_field)\n        if target_node is None:\n            continue\n        if value_field is None:\n            value_node = None\n        elif value_field:\n            value_node = node.child_by_field_name(value_field)\n        else:\n            value_node = next(iter(node.named_children), None)\n        scope_node = _scope_node(\n            node, scope_types, root_node, usage_node_types.get(\"opaque_types\", set()),\n        )\n        if scope_node is None or scope_node is root_node:\n            continue\n        # Python: with Engine() as e holds the name in an as_pattern_target\n        name_node = target_node\n        if name_node.type != \"identifier\" and name_node.named_child_count == 1:\n            name_node = name_node.named_children[0]\n        if name_node.type == \"identifier\":\n            name_list = [name_node.text.decode(\"utf-8\")]\n            type_name = (\n                _new_type_name(value_node, usage_node_types) if value_node is not None else None\n            )\n            if type_name is not None and (\n                not is_type_name(type_name)\n                or _is_local_name(value_node, symbol_part_list(type_name)[0], setting)\n            ):\n                type_name = None\n        else:\n            # A pattern of several variables gives none of them an object of its own\n            name_list = pattern_name_list(target_node, pattern_type_set, pattern_field_dict)\n            type_name = None\n        alias_list.extend(\n            TypedAlias(name, type_name, node.start_point[0] + 1, scope_node.end_point[0] + 1)\n            for name in name_list\n        )\n\n    typed_key_set = {\n        (alias.name, alias.end_line) for alias in alias_list if alias.type_name is not None\n    }\n    return [alias for alias in alias_list if (alias.name, alias.end_line) in typed_key_set]"
+    },
+    {
+      "name": "typed_alias_dict",
+      "type": "function_definition",
+      "start_line": 981,
+      "end_line": 986,
+      "context": "def typed_alias_dict(alias_list: list[TypedAlias]) -> dict[str, list[TypedAlias]]:\n    \"\"\"Return the aliases of a file by their variable names, in the order of the list.\"\"\"\n    alias_dict: dict[str, list[TypedAlias]] = {}\n    for alias in alias_list:\n        alias_dict.setdefault(alias.name, []).append(alias)\n    return alias_dict"
     },
     {
       "name": "typed_alias",
       "type": "function_definition",
-      "start_line": 954,
-      "end_line": 972,
-      "context": "def typed_alias(alias_list: list[TypedAlias], name: str, line: int) -> TypedAlias | None:\n    \"\"\"Return the alias a variable name counts under on a line.\n\n    Args:\n        alias_list: The aliases of a file (extract_typed_aliases, extract_value_aliases).\n        name: A variable name.\n        line: Line the name is written on (1-based).\n\n    Returns:\n        The alias of that name whose lines hold the line; of several, the one with the\n        fewest lines. None when no alias of that name counts for the line.\n    \"\"\"\n    match_list = [\n        alias for alias in alias_list\n        if alias.name == name and alias.start_line <= line <= alias.end_line\n    ]\n    if not match_list:\n        return None\n    return min(match_list, key=lambda alias: alias.end_line - alias.start_line)"
+      "start_line": 989,
+      "end_line": 1009,
+      "context": "def typed_alias(\n    alias_dict: dict[str, list[TypedAlias]], name: str, line: int,\n) -> TypedAlias | None:\n    \"\"\"Return the alias a variable name counts under on a line.\n\n    Args:\n        alias_dict: The aliases of a file by their variable names (typed_alias_dict).\n        name: A variable name.\n        line: Line the name is written on (1-based).\n\n    Returns:\n        The alias of that name whose lines hold the line; of several, the one with the\n        fewest lines. None when no alias of that name counts for the line.\n    \"\"\"\n    match_list = [\n        alias for alias in alias_dict.get(name, ())\n        if alias.start_line <= line <= alias.end_line\n    ]\n    if not match_list:\n        return None\n    return min(match_list, key=lambda alias: alias.end_line - alias.start_line)"
     },
     {
       "name": "typed_alias_type",
       "type": "function_definition",
-      "start_line": 975,
-      "end_line": 987,
-      "context": "def typed_alias_type(alias_list: list[TypedAlias], name: str, line: int) -> str | None:\n    \"\"\"Return the type a variable name stands for on a line.\n\n    Args:\n        alias_list: The aliases of a file (extract_typed_aliases, extract_value_aliases).\n        name: A variable name.\n        line: Line the name is written on (1-based).\n\n    Returns:\n        The type of typed_alias(); None when there is no such alias or it has no type.\n    \"\"\"\n    alias = typed_alias(alias_list, name, line)\n    return alias.type_name if alias is not None else None"
+      "start_line": 1012,
+      "end_line": 1026,
+      "context": "def typed_alias_type(\n    alias_dict: dict[str, list[TypedAlias]], name: str, line: int,\n) -> str | None:\n    \"\"\"Return the type a variable name stands for on a line.\n\n    Args:\n        alias_dict: The aliases of a file by their variable names (typed_alias_dict).\n        name: A variable name.\n        line: Line the name is written on (1-based).\n\n    Returns:\n        The type of typed_alias(); None when there is no such alias or it has no type.\n    \"\"\"\n    alias = typed_alias(alias_dict, name, line)\n    return alias.type_name if alias is not None else None"
     },
     {
       "name": "_type_name",
       "type": "function_definition",
-      "start_line": 990,
-      "end_line": 1020,
+      "start_line": 1029,
+      "end_line": 1059,
       "context": "def _type_name(type_node: Node) -> str | None:\n    \"\"\"Return the name of the type a declaration is written with.\n\n    Examples:\n        User               -> \"User\"\n        struct node        -> \"node\"\n        geo::Shape         -> \"Shape\"\n        Box<int>           -> \"Box\"\n        core.Engine        -> \"core.Engine\" (Python)\n\n    Args:\n        type_node: The type node of a declaration.\n\n    Returns:\n        The type name, or None for a type without a name (a primitive type).\n    \"\"\"\n    current: Node | None = type_node\n    while current is not None:\n        if current.type in (\"type_identifier\", \"identifier\"):\n            return current.text.decode(\"utf-8\")\n        if current.type == \"attribute\":\n            # Python: a type written with its module (core.Engine)\n            text = current.text.decode(\"utf-8\")\n            return text if _DOTTED_NAME_RE.fullmatch(text) else None\n        name_node = current.child_by_field_name(\"name\")\n        if name_node is None and current.type in _TYPE_WRAP_NODE_TYPE_SET:\n            # Kotlin: user_type holds the type name as a plain child; Python and TS wrap\n            # an annotation in a node of its own\n            name_node = next(iter(current.named_children), None)\n        current = name_node\n    return None"
     },
     {
       "name": "_field_type_and_var",
       "type": "function_definition",
-      "start_line": 1023,
-      "end_line": 1041,
+      "start_line": 1062,
+      "end_line": 1080,
       "context": "def _field_type_and_var(node: Node, name_field: str) -> tuple[str | None, list[str]]:\n    \"\"\"Extract the type name and the variable name from a declaration that names both in fields.\n\n    Args:\n        node: A node whose type is a key of typed_alias_name_field_dict.\n        name_field: The field holding the variable; \"\" for the first named child.\n\n    Returns:\n        (type name of the field \"type\", [variable name]); (None, []) when the node has\n        no type or its variable is not a plain name.\n    \"\"\"\n    type_node = node.child_by_field_name(\"type\")\n    name_node = (\n        node.child_by_field_name(name_field) if name_field\n        else next(iter(node.named_children), None)\n    )\n    if type_node is None or name_node is None or name_node.type != \"identifier\":\n        return None, []\n    return _type_name(type_node), [name_node.text.decode(\"utf-8\")]"
     },
     {
       "name": "_extract_type_and_var",
       "type": "function_definition",
-      "start_line": 1044,
-      "end_line": 1080,
+      "start_line": 1083,
+      "end_line": 1119,
       "context": "def _extract_type_and_var(node: Node) -> tuple[str | None, list[str]]:\n    \"\"\"Extract the type name and variable names from a typed variable declaration node.\n\n    Absorbs AST structure differences across languages:\n      Java:   type: type_identifier + declarator: variable_declarator / name: identifier\n      Kotlin: variable_declaration (identifier + user_type) / identifier + user_type\n      C/C++:  type: type_identifier + declarator: (init / pointer / array) declarator\n\n    Args:\n        node: An AST node representing a typed variable declaration.\n\n    Returns:\n        A (type_name, [list of variable names]) tuple. Returns (None, []) if not found.\n    \"\"\"\n    # Kotlin: val name: Type holds its name and type in a variable_declaration\n    holder_node = node\n    for child in node.children:\n        if child.type == \"variable_declaration\":\n            holder_node = child\n            break\n\n    type_name: str | None = None\n    var_name_list: list[str] = []\n    type_node = holder_node.child_by_field_name(\"type\")\n    for child in holder_node.children:\n        if child == type_node or child.type in (\"type_identifier\", \"user_type\"):\n            type_name = _type_name(child) or type_name\n        elif child.type == \"identifier\":\n            var_name_list.append(child.text.decode(\"utf-8\"))\n        elif child.type in _DECLARATOR_TYPE_SET:\n            name_node = declarator_name_node(child)\n            if name_node is not None and name_node.type == \"variable_declarator\":\n                name_node = name_node.child_by_field_name(\"name\")\n            if name_node is not None and name_node.type == \"identifier\":\n                var_name_list.append(name_node.text.decode(\"utf-8\"))\n\n    return type_name, var_name_list"
     }
   ],
   "callee_usages": [
     {
       "lines": [
-        123
+        124,
+        968
       ],
       "name": "pattern_name_list",
       "from": "codetwine/codetwine/extractors/definitions_py/definitions.py",
@@ -388,8 +396,8 @@
     },
     {
       "lines": [
-        373,
-        440
+        374,
+        441
       ],
       "name": "CobolSource",
       "from": "codetwine/codetwine/extractors/cobol_source_py/cobol_source.py",
@@ -399,7 +407,7 @@
     },
     {
       "lines": [
-        505
+        506
       ],
       "name": "macro_path_list",
       "from": "codetwine/codetwine/extractors/rust_path_py/rust_path.py",
@@ -409,7 +417,7 @@
     },
     {
       "lines": [
-        704
+        705
       ],
       "name": "path_segment_list",
       "from": "codetwine/codetwine/extractors/rust_path_py/rust_path.py",
@@ -419,7 +427,7 @@
     },
     {
       "lines": [
-        1074
+        1113
       ],
       "name": "declarator_name_node",
       "from": "codetwine/codetwine/extractors/definitions_py/definitions.py",
@@ -447,7 +455,8 @@
     },
     {
       "lines": [
-        97
+        97,
+        963
       ],
       "name": "symbol_part_list",
       "target_name": "symbol_part_list",
@@ -456,8 +465,8 @@
     {
       "lines": [
         97,
-        310,
-        839
+        311,
+        840
       ],
       "name": "_track_root",
       "target_name": "_track_root",
@@ -465,16 +474,16 @@
     },
     {
       "lines": [
-        118
+        119
       ],
       "name": "usage_node_types.get",
       "target_name": "usage_node_types",
-      "target_start_line": 107
+      "target_start_line": 108
     },
     {
       "lines": [
-        118,
-        773
+        119,
+        774
       ],
       "name": "_EMPTY_SET",
       "target_name": "_EMPTY_SET",
@@ -482,30 +491,32 @@
     },
     {
       "lines": [
-        121,
-        129,
-        150,
-        160,
-        188,
-        200,
-        210,
-        233,
-        278,
-        313,
-        352,
-        448,
-        478,
-        483,
-        493,
-        523,
-        618,
-        647,
-        655,
-        659,
-        662,
-        667,
-        683,
-        713
+        122,
+        130,
+        151,
+        161,
+        189,
+        201,
+        211,
+        234,
+        279,
+        314,
+        353,
+        449,
+        479,
+        484,
+        494,
+        524,
+        619,
+        648,
+        656,
+        660,
+        663,
+        668,
+        684,
+        714,
+        924,
+        963
       ],
       "name": "_UsageSetting",
       "target_name": "_UsageSetting",
@@ -513,143 +524,143 @@
     },
     {
       "lines": [
-        124,
-        179,
+        125,
         180,
         181,
-        225,
-        300,
+        182,
+        226,
         301,
-        464,
+        302,
         465,
         466,
-        736,
-        741
+        467,
+        737,
+        742
       ],
       "name": "_UsageSetting.type_set",
       "target_name": "type_set",
-      "target_start_line": 116
+      "target_start_line": 117
     },
     {
       "lines": [
-        125,
-        182,
-        186,
-        229,
-        312,
-        749
+        126,
+        183,
+        187,
+        230,
+        313,
+        750
       ],
       "name": "_UsageSetting.usage_node_types.get",
       "target_name": "usage_node_types",
+      "target_start_line": 108
+    },
+    {
+      "lines": [
+        151
+      ],
+      "name": "_pattern_name_list",
+      "target_name": "_pattern_name_list",
+      "target_start_line": 122
+    },
+    {
+      "lines": [
+        154
+      ],
+      "name": "_UsageSetting.import_line_dict.get",
+      "target_name": "import_line_dict",
+      "target_start_line": 110
+    },
+    {
+      "lines": [
+        156
+      ],
+      "name": "_UsageSetting.is_reference_name",
+      "target_name": "is_reference_name",
+      "target_start_line": 115
+    },
+    {
+      "lines": [
+        176
+      ],
+      "name": "_UsageSetting.local_name_dict.get",
+      "target_name": "local_name_dict",
+      "target_start_line": 112
+    },
+    {
+      "lines": [
+        189,
+        201
+      ],
+      "name": "_binding_name_list",
+      "target_name": "_binding_name_list",
+      "target_start_line": 130
+    },
+    {
+      "lines": [
+        207
+      ],
+      "name": "_UsageSetting.local_name_dict",
+      "target_name": "local_name_dict",
+      "target_start_line": 112
+    },
+    {
+      "lines": [
+        229,
+        1025
+      ],
+      "name": "typed_alias",
+      "target_name": "typed_alias",
+      "target_start_line": 989
+    },
+    {
+      "lines": [
+        229
+      ],
+      "name": "_UsageSetting.alias_dict",
+      "target_name": "alias_dict",
       "target_start_line": 107
     },
     {
       "lines": [
-        150
-      ],
-      "name": "_pattern_name_list",
-      "target_name": "_pattern_name_list",
-      "target_start_line": 121
-    },
-    {
-      "lines": [
-        153
-      ],
-      "name": "_UsageSetting.import_line_dict.get",
-      "target_name": "import_line_dict",
-      "target_start_line": 109
-    },
-    {
-      "lines": [
-        155
-      ],
-      "name": "_UsageSetting.is_reference_name",
-      "target_name": "is_reference_name",
-      "target_start_line": 114
-    },
-    {
-      "lines": [
-        175
-      ],
-      "name": "_UsageSetting.local_name_dict.get",
-      "target_name": "local_name_dict",
-      "target_start_line": 111
-    },
-    {
-      "lines": [
-        188,
-        200
-      ],
-      "name": "_binding_name_list",
-      "target_name": "_binding_name_list",
-      "target_start_line": 129
-    },
-    {
-      "lines": [
-        206
-      ],
-      "name": "_UsageSetting.local_name_dict",
-      "target_name": "local_name_dict",
-      "target_start_line": 111
-    },
-    {
-      "lines": [
-        228,
-        986
-      ],
-      "name": "typed_alias",
-      "target_name": "typed_alias",
-      "target_start_line": 954
-    },
-    {
-      "lines": [
-        228
-      ],
-      "name": "_UsageSetting.alias_list",
-      "target_name": "alias_list",
-      "target_start_line": 106
-    },
-    {
-      "lines": [
-        233
+        234
       ],
       "name": "_local_name_set",
       "target_name": "_local_name_set",
-      "target_start_line": 160
+      "target_start_line": 161
     },
     {
       "lines": [
-        271,
-        339,
-        342
+        272,
+        340,
+        343
       ],
       "name": "_template_name",
       "target_name": "_template_name",
-      "target_start_line": 346
+      "target_start_line": 347
     },
     {
       "lines": [
-        280,
-        305,
-        315,
-        352,
-        368,
-        380,
-        442,
-        468,
-        474,
-        508,
-        519,
-        555,
-        569,
-        574,
-        618,
-        663,
-        667,
-        689,
-        709,
-        713,
-        756
+        281,
+        306,
+        316,
+        353,
+        369,
+        381,
+        443,
+        469,
+        475,
+        509,
+        520,
+        556,
+        570,
+        575,
+        619,
+        664,
+        668,
+        690,
+        710,
+        714,
+        757
       ],
       "name": "UsageInfo",
       "target_name": "UsageInfo",
@@ -657,7 +668,7 @@
     },
     {
       "lines": [
-        304
+        305
       ],
       "name": "_UsageSetting.member_name_set",
       "target_name": "member_name_set",
@@ -665,9 +676,9 @@
     },
     {
       "lines": [
-        310,
-        367,
-        755
+        311,
+        368,
+        756
       ],
       "name": "_UsageSetting.name_set",
       "target_name": "name_set",
@@ -675,16 +686,17 @@
     },
     {
       "lines": [
-        313,
-        755
+        314,
+        756,
+        963
       ],
       "name": "_is_local_name",
       "target_name": "_is_local_name",
-      "target_start_line": 210
+      "target_start_line": 211
     },
     {
       "lines": [
-        348
+        349
       ],
       "name": "_TEMPLATE_NODE_TYPE_SET",
       "target_name": "_TEMPLATE_NODE_TYPE_SET",
@@ -692,56 +704,64 @@
     },
     {
       "lines": [
-        365
+        366
       ],
       "name": "_qualified_segment_list",
       "target_name": "_qualified_segment_list",
-      "target_start_line": 318
+      "target_start_line": 319
     },
     {
       "lines": [
-        478
+        452
+      ],
+      "name": "typed_alias_dict",
+      "target_name": "typed_alias_dict",
+      "target_start_line": 981
+    },
+    {
+      "lines": [
+        479
       ],
       "name": "_parse_call_node",
       "target_name": "_parse_call_node",
-      "target_start_line": 618
-    },
-    {
-      "lines": [
-        482
-      ],
-      "name": "_is_function_part_of_call",
-      "target_name": "_is_function_part_of_call",
-      "target_start_line": 595
+      "target_start_line": 619
     },
     {
       "lines": [
         483
       ],
-      "name": "_parse_attribute_node",
-      "target_name": "_parse_attribute_node",
-      "target_start_line": 667
+      "name": "_is_function_part_of_call",
+      "target_name": "_is_function_part_of_call",
+      "target_start_line": 596
     },
     {
       "lines": [
-        493,
-        662
+        484
+      ],
+      "name": "_parse_attribute_node",
+      "target_name": "_parse_attribute_node",
+      "target_start_line": 668
+    },
+    {
+      "lines": [
+        494,
+        663
       ],
       "name": "_qualified_usage",
       "target_name": "_qualified_usage",
-      "target_start_line": 352
+      "target_start_line": 353
     },
     {
       "lines": [
-        501
+        502
       ],
       "name": "_parse_path_node",
       "target_name": "_parse_path_node",
-      "target_start_line": 686
+      "target_start_line": 687
     },
     {
       "lines": [
-        510
+        511
       ],
       "name": "_TYPE_REFERENCE_NODE_TYPE_SET",
       "target_name": "_TYPE_REFERENCE_NODE_TYPE_SET",
@@ -749,111 +769,114 @@
     },
     {
       "lines": [
-        523
+        524
       ],
       "name": "_parse_identifier_node",
       "target_name": "_parse_identifier_node",
-      "target_start_line": 713
+      "target_start_line": 714
     },
     {
       "lines": [
-        532
+        533
       ],
       "name": "deduplicate_usage_list",
       "target_name": "deduplicate_usage_list",
-      "target_start_line": 555
+      "target_start_line": 556
     },
     {
       "lines": [
-        579
+        580
       ],
       "name": "_leading_part_set",
       "target_name": "_leading_part_set",
-      "target_start_line": 535
+      "target_start_line": 536
     },
     {
       "lines": [
-        637,
-        680,
-        746
+        638,
+        681,
+        747
       ],
       "name": "_UsageSetting.usage_node_types",
       "target_name": "usage_node_types",
-      "target_start_line": 107
+      "target_start_line": 108
     },
     {
       "lines": [
-        643,
-        658,
-        680,
-        877
+        644,
+        659,
+        681,
+        878
       ],
       "name": "_chain_part",
       "target_name": "_chain_part",
-      "target_start_line": 248
+      "target_start_line": 249
     },
     {
       "lines": [
-        647,
-        655,
-        659,
-        683
+        648,
+        656,
+        660,
+        684
       ],
       "name": "_chain_usage",
       "target_name": "_chain_usage",
-      "target_start_line": 277
+      "target_start_line": 278
     },
     {
       "lines": [
-        793,
-        826,
-        844,
-        887,
-        916,
-        943,
-        954,
-        975
+        794,
+        827,
+        845,
+        889,
+        929,
+        971,
+        981,
+        983,
+        990,
+        991,
+        1013
       ],
       "name": "TypedAlias",
       "target_name": "TypedAlias",
-      "target_start_line": 761
+      "target_start_line": 762
     },
     {
       "lines": [
-        834
+        835
       ],
       "name": "_field_type_and_var",
       "target_name": "_field_type_and_var",
-      "target_start_line": 1023
+      "target_start_line": 1062
     },
     {
       "lines": [
-        836
+        837
       ],
       "name": "_extract_type_and_var",
       "target_name": "_extract_type_and_var",
-      "target_start_line": 1044
+      "target_start_line": 1083
     },
     {
       "lines": [
-        838,
-        935
+        839,
+        947
       ],
       "name": "_scope_node",
       "target_name": "_scope_node",
-      "target_start_line": 772
+      "target_start_line": 773
     },
     {
       "lines": [
-        940
+        959
       ],
       "name": "_new_type_name",
       "target_name": "_new_type_name",
-      "target_start_line": 854
+      "target_start_line": 855
     },
     {
       "lines": [
-        1013
+        1052
       ],
       "name": "_DOTTED_NAME_RE.fullmatch",
       "target_name": "_DOTTED_NAME_RE",
@@ -861,7 +884,7 @@
     },
     {
       "lines": [
-        1015
+        1054
       ],
       "name": "_TYPE_WRAP_NODE_TYPE_SET",
       "target_name": "_TYPE_WRAP_NODE_TYPE_SET",
@@ -869,16 +892,16 @@
     },
     {
       "lines": [
-        1041,
-        1070
+        1080,
+        1109
       ],
       "name": "_type_name",
       "target_name": "_type_name",
-      "target_start_line": 990
+      "target_start_line": 1029
     },
     {
       "lines": [
-        1073
+        1112
       ],
       "name": "_DECLARATOR_TYPE_SET",
       "target_name": "_DECLARATOR_TYPE_SET",
@@ -888,12 +911,12 @@
   "caller_usages": [
     {
       "lines": [
-        171,
-        241
+        202,
+        273
       ],
       "name": "symbol_part_list",
       "file": "codetwine/codetwine/extractors/definition_source_py/definition_source.py",
-      "usage_context": "    Returns:\n        The definition, or None when no part of the name is a definition of the file.\n    \"\"\"\n    part_list = symbol_part_list(callee_name)\n    if len(part_list) > 1:\n        for definition in definition_list:\n            if definition.name == callee_name:\n...\n    definition_list, content = _file_definition(absolute_path, definition_dict)\n    definition: DefinitionInfo | None = None\n    if start_line is not None:\n        for part in reversed(symbol_part_list(name)):\n            definition = next(\n                (\n                    candidate for candidate in definition_list"
+      "usage_context": "    Returns:\n        The definition, or None when no part of the name is a definition of the file.\n    \"\"\"\n    part_list = symbol_part_list(callee_name)\n    if len(part_list) > 1:\n        whole_list = _definition_index(definition_list)[0].get(callee_name)\n        if whole_list:\n...\n    definition: DefinitionInfo | None = None\n    if start_line is not None:\n        name_dict = _definition_index(definition_list)[0]\n        for part in reversed(symbol_part_list(name)):\n            definition = next(\n                (\n                    candidate for candidate in name_dict.get(part, ())"
     },
     {
       "lines": [
@@ -915,9 +938,9 @@
     },
     {
       "lines": [
-        1076,
-        1201,
-        1269
+        1079,
+        1204,
+        1272
       ],
       "name": "symbol_part_list",
       "file": "codetwine/codetwine/import_binding_py/import_binding.py",
@@ -925,15 +948,15 @@
     },
     {
       "lines": [
-        145,
-        182,
-        227,
-        274,
-        337,
-        338,
-        498,
-        523,
-        566
+        147,
+        184,
+        229,
+        276,
+        340,
+        341,
+        510,
+        535,
+        584
       ],
       "name": "symbol_part_list",
       "file": "codetwine/codetwine/import_reference_py/import_reference.py",
@@ -941,12 +964,12 @@
     },
     {
       "lines": [
-        184,
-        405,
-        430,
-        516,
-        555,
-        576
+        186,
+        408,
+        442,
+        528,
+        573,
+        594
       ],
       "name": "usage_root_name",
       "file": "codetwine/codetwine/import_reference_py/import_reference.py",
@@ -954,10 +977,10 @@
     },
     {
       "lines": [
-        311,
-        370,
-        424,
-        545
+        313,
+        373,
+        436,
+        563
       ],
       "name": "UsageInfo",
       "file": "codetwine/codetwine/import_reference_py/import_reference.py",
@@ -965,7 +988,7 @@
     },
     {
       "lines": [
-        337
+        340
       ],
       "name": "UsageInfo.name",
       "file": "codetwine/codetwine/import_reference_py/import_reference.py",
@@ -973,7 +996,7 @@
     },
     {
       "lines": [
-        340
+        343
       ],
       "name": "UsageInfo.line",
       "file": "codetwine/codetwine/import_reference_py/import_reference.py",
@@ -981,23 +1004,40 @@
     },
     {
       "lines": [
-        411
+        413
       ],
       "name": "extract_typed_aliases",
       "file": "codetwine/codetwine/import_reference_py/import_reference.py",
-      "usage_context": "\n    alias_list = [\n        alias for alias in [\n            *extract_typed_aliases(root_node, type_name_set, usage_node_types),\n            *extract_value_aliases(root_node, usage_node_types, is_type_name),\n        ]\n        if alias.name not in symbol_dict"
+      "usage_context": "        return is_class_name(name) if usage_node_types.get(\"typed_alias_class_only\") else True\n\n    # A variable declared with a tracked type keeps it whatever it is given\n    declare_alias_list = extract_typed_aliases(root_node, type_name_set, usage_node_types)\n    declare_alias_dict = typed_alias_dict(declare_alias_list)\n    alias_list = [\n        alias for alias in ["
     },
     {
       "lines": [
-        412
+        414,
+        427
+      ],
+      "name": "typed_alias_dict",
+      "file": "codetwine/codetwine/import_reference_py/import_reference.py",
+      "usage_context": "\n    # A variable declared with a tracked type keeps it whatever it is given\n    declare_alias_list = extract_typed_aliases(root_node, type_name_set, usage_node_types)\n    declare_alias_dict = typed_alias_dict(declare_alias_list)\n    alias_list = [\n        alias for alias in [\n            *declare_alias_list,\n...\n        ]\n        if alias.name not in symbol_dict\n    ]\n    alias_dict = typed_alias_dict(alias_list)\n    alias_name_set = set(alias_dict)\n    # The names that are a usage also where no alias counts for them\n    plain_name_set = ("
+    },
+    {
+      "lines": [
+        419
       ],
       "name": "extract_value_aliases",
       "file": "codetwine/codetwine/import_reference_py/import_reference.py",
-      "usage_context": "    alias_list = [\n        alias for alias in [\n            *extract_typed_aliases(root_node, type_name_set, usage_node_types),\n            *extract_value_aliases(root_node, usage_node_types, is_type_name),\n        ]\n        if alias.name not in symbol_dict\n    ]"
+      "usage_context": "        alias for alias in [\n            *declare_alias_list,\n            *(\n                alias for alias in extract_value_aliases(\n                    root_node, usage_node_types, is_type_name, import_line_dict,\n                )\n                if typed_alias(declare_alias_dict, alias.name, alias.start_line) is None"
     },
     {
       "lines": [
-        425
+        422
+      ],
+      "name": "typed_alias",
+      "file": "codetwine/codetwine/import_reference_py/import_reference.py",
+      "usage_context": "                alias for alias in extract_value_aliases(\n                    root_node, usage_node_types, is_type_name, import_line_dict,\n                )\n                if typed_alias(declare_alias_dict, alias.name, alias.start_line) is None\n            ),\n        ]\n        if alias.name not in symbol_dict"
+    },
+    {
+      "lines": [
+        437
       ],
       "name": "extract_usages",
       "file": "codetwine/codetwine/import_reference_py/import_reference.py",
@@ -1005,16 +1045,16 @@
     },
     {
       "lines": [
-        432
+        444
       ],
       "name": "typed_alias_type",
       "file": "codetwine/codetwine/import_reference_py/import_reference.py",
-      "usage_context": "    ):\n        root_name = usage_root_name(usage.name, track_name_set)\n        if root_name in alias_name_set:\n            type_name = typed_alias_type(alias_list, root_name, usage.line)\n            if type_name is not None:\n                usage.name = type_name + usage.name[len(root_name):]\n            elif root_name not in plain_name_set:"
+      "usage_context": "    ):\n        root_name = usage_root_name(usage.name, track_name_set)\n        if root_name in alias_name_set:\n            type_name = typed_alias_type(alias_dict, root_name, usage.line)\n            if type_name is not None:\n                usage.name = type_name + usage.name[len(root_name):]\n            elif root_name not in plain_name_set:"
     },
     {
       "lines": [
-        438,
-        549
+        450,
+        567
       ],
       "name": "deduplicate_usage_list",
       "file": "codetwine/codetwine/import_reference_py/import_reference.py",

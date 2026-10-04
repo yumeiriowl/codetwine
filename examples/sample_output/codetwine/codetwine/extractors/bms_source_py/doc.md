@@ -4,120 +4,125 @@
 
 **Overview**
 
-Parse BMS (Basic Mapping Support) source files containing DFHMSD/DFHMDI/DFHMDF macro definitions and extract their symbolic map structures as COBOL data item definitions.
+Parse BMS (Basic Mapping Support) source files containing DFHMSD/DFHMDI/DFHMDF macros and extract their symbolic map definitions as structured COBOL data items.
 
-This file is used to:
-- Call `read_bms_source()` from a file parser to convert BMS macro text into a `CobolSource` object containing symbolic map definitions and mapset names for downstream analysis
-- Enable COBOL programs to reference BMS-generated copybook structures by extracting the data items (records, fields, and their variants) that a COPY statement would provide
+This file serves these situations:
 
-The file depends on `codetwine/extractors/cobol_source.py` for `CobolDefinition`, `CobolSource`, and `DATA_ITEM_TYPE` to represent extracted map structures in the standard COBOL definition format. It uses `codetwine/utils/file_utils.py` only to split source text into lines. The file `codetwine/parsers/ts_parser.py` calls `read_bms_source()` when processing files with BMS extensions to parse their content.
+- Call `read_bms_source()` with the text content of a BMS file to obtain a `CobolSource` containing the symbolic map records and fields as COBOL data item definitions, along with mapset names as copy statement aliases.
+- Use the returned `CobolSource` to access line-indexed definitions of map records (input/output variants), field groups, and extended attributes that a COBOL program would receive via a COPY statement of the mapset.
+- Integrate BMS file parsing into a broader source analysis pipeline that treats BMS files similarly to COBOL files by producing the same `CobolSource` structure.
 
-The parsing strategy skips statements and fields whose labels are not valid COBOL words (via the `_NAME_RE` pattern), silently omitting them from the result without error reporting. Line continuation in assembler format (column 72) and operand parsing within quotes and parentheses are handled to reconstruct complete statements and key-value operand pairs.
+The file depends on `CobolSource`, `CobolDefinition`, and `line_list_of()` from project modules `cobol_source.py` and `file_utils.py` to represent and return parsed results in a format consistent with COBOL parsing. It is used by `ts_parser.py` to parse BMS files identified by extension and produce a `CobolSource` for inclusion in project analysis. BMS parsing produces no import or reference lists, only definitions and copy names.
+
+The file treats all macro labels that do not match the COBOL name pattern (letters, digits, hyphens, starting with a letter) as unnamed and omits them from results. BMS statements can span multiple lines via continuation characters in column 72; operands are parsed up to the first unquoted blank, and remarks are discarded. Mapsets with TYPE=FINAL are ignored.
 
 **Definitions**
 
 ## `_CONTINUE_COLUMN`
 
-The zero-based column index (71, meaning column 72 in one-based notation) where the continuation marker appears in assembler format BMS source lines; a non-space character here indicates the statement continues on the next line.
+Column index (0-based) marking position 72 of a BMS assembler statement, where a non-blank character indicates the statement continues on the next line.
 
 ## `_CONTINUE_START_COLUMN`
 
-The zero-based column index (15, meaning column 16) where text resumes on a continuation line in assembler format BMS source.
+Column index (0-based) marking position 16, where the text of a continuation line begins in a BMS assembler statement.
 
 ## `_ATTRIBUTE_TUPLE`
 
-A tuple of (attribute name, letter suffix) pairs defining the extended field attributes (COLOR, PS, HILIGHT, VALIDN, OUTLINE, SOSI, TRANSP) that BMS symbolic maps can include in their output record definitions, in the order the symbolic map holds them; used to generate suffixed field names in output records.
+Tuple of (attribute name, field suffix letter) pairs defining the extended attributes (COLOR, PS, HILIGHT, VALIDN, OUTLINE, SOSI, TRANSP) that BMS fields can have and their corresponding letters appended to field names in the symbolic map.
 
 ## `_EXTATT_ATTRIBUTE_TUPLE`
 
-A tuple of the default extended attributes (COLOR, PS, HILIGHT, VALIDN) that are included in symbolic map fields when the BMS mapset specifies `EXTATT=YES` without listing specific attributes via DSATTS.
+Tuple of attribute names (COLOR, PS, HILIGHT, VALIDN) that are automatically included in every field when EXTATT=YES is specified without an explicit DSATTS list.
 
 ## `_LENGTH_LETTER`
 
-The letter "L" appended to field names in the input record to create length data items in symbolic maps.
+The letter "L" that ends the name of the length field created for each BMS field in the input record of a symbolic map.
 
 ## `_FLAG_LETTER`
 
-The letter "F" appended to field names in the input record to create flag data items in symbolic maps.
+The letter "F" that ends the name of the flag (status) field created for each BMS field in the input record of a symbolic map.
 
 ## `_ATTRIBUTE_LETTER`
 
-The letter "A" appended to field names in the input record to create attribute data items in symbolic maps; these are defined as children of a FILLER that redefines the flag field.
+The letter "A" that ends the name of the extended attribute field created for each BMS field in the input record of a symbolic map.
 
 ## `_INPUT_LETTER`
 
-The letter "I" appended to map and field names to create input record variants in symbolic maps.
+The letter "I" that ends the name of the input record variant of each map and its fields in a symbolic map.
 
 ## `_OUTPUT_LETTER`
 
-The letter "O" appended to map and field names to create output record variants in symbolic maps.
+The letter "O" that ends the name of the output record variant of each map and its fields in a symbolic map.
 
 ## `_RECORD_LEVEL`
 
-The COBOL level number 1 assigned to the input and output records of each map in the symbolic map structure.
+The COBOL data item level number (1) assigned to map record definitions (the input and output record groups).
 
 ## `_FIELD_LEVEL`
 
-The COBOL level number 2 assigned to fields directly within map records, or level 3 when a field has OCCURS.
+The COBOL data item level number (2) assigned to field definitions directly under a map record, or level 3 if the field has OCCURS.
 
 ## `_NAME_RE`
 
-A compiled regex pattern matching valid COBOL words (starting with a letter, followed by letters, digits, or hyphens) used to validate BMS statement labels and group names; labels not matching this pattern are excluded from the extracted definitions.
+Compiled regular expression pattern matching valid COBOL names: a letter followed by zero or more letters, digits, or hyphens.
 
 ## `_STATEMENT_HEAD_RE`
 
-A compiled regex pattern extracting the label and operation (upper-cased) from the beginning of an assembler source line, up to column 72.
+Compiled regular expression pattern matching the label and operation at the start of a BMS assembler statement, capturing both as separate groups.
 
 ## `_Statement`
 
-A dataclass representing one assembler statement parsed from BMS source, holding its label (empty if absent), upper-case operation name (DFHMSD, DFHMDI, DFHMDF, etc.), the operand text excluding remarks, and the range of source lines it spans including continuations.
+Dataclass representing one parsed assembler statement from a BMS source, holding its label, upper-case operation name (DFHMSD, DFHMDI, DFHMDF, etc.), operand text without remarks, and the 1-based line range it spans including continuations.
 
 ## `_Field`
 
-A dataclass representing a named field (or a group via GRPNAME) within a BMS map, storing its name, optional OCCURS count, source line range, and a list of member fields for groups.
+Dataclass representing either a named field or a field group (GRPNAME) defined in a BMS map, holding its upper-case name, OCCURS count (0 if absent), line range, and a list of member fields for groups.
 
 ## `_Map`
 
-A dataclass representing one map (DFHMDI statement) within a BMS mapset, holding its name, the letters of extended attributes its fields receive, source line range, and the list of fields and groups it contains.
+Dataclass representing one map (DFHMDI statement) within a mapset, holding its upper-case name, the list of extended attribute letters applicable to its fields, the line range of all its statements, and its list of top-level fields and field groups.
 
-## `_statement_list`
+## `_statement_list()`
 
-Parses assembler format BMS source lines into complete statements by handling line continuation (checking column 72), extracting labels and operations, and building operand text while respecting quotes to avoid splitting at spaces or commas inside quoted strings; comments (lines starting with "*") and blank lines are skipped.
+Parse a BMS source into a list of assembler statements by reading lines, handling comment lines (starting with "*"), joining continuation lines (identified by non-blank character in column 72), and extracting operands up to the first unquoted blank; returns statements in source order with line numbers and operand text.
 
-## `_operand_dict`
+## `_operand_dict()`
 
-Splits BMS operand text of the form "KEY=value,..." into a dictionary by splitting at commas outside quotes and parentheses, returning uppercase keys mapped to values as written; keys without "=" have empty string values.
+Split a BMS operand string of the form "KEY=value,..." into a dictionary mapping upper-case keys to their values, respecting nested parentheses and quoted strings so commas inside them are not treated as delimiters; operands without "=" receive empty-string values.
 
-## `_value_list`
+## `_value_list()`
 
-Extracts and returns a list of upper-case items from operand values such as "(COLOR,HILIGHT)" or "YES" by stripping parentheses and splitting at commas.
+Extract and return a list of upper-case items from a BMS operand value such as "(COLOR,HILIGHT)" or "YES" by stripping parentheses and splitting at commas.
 
-## `_attribute_list`
+## `_attribute_list()`
 
-Determines the extended attribute letters (COLOR, PS, HILIGHT, etc.) that fields in a map will have in its symbolic map by checking the mapset and map DFHMSD/DFHMDI operands, preferring explicit DSATTS over the EXTATT=YES default, returning the letters in `_ATTRIBUTE_TUPLE` order.
+Determine which extended attribute letters should appear in a map's symbolic map fields by examining the DSATTS operand (if present), falling back to EXTATT=YES defaults, or returning an empty list; takes a merged operand dictionary from both mapset and map levels.
 
-## `_read_map_list`
+## `_read_map_list()`
 
-Traverses a list of parsed assembler statements to extract all maps (DFHMDI) and their fields (DFHMDF) from mapsets (DFHMSD), building a list of `_Map` objects and a list of mapset names; statements and fields with non-COBOL-word labels are silently skipped, and group membership (via GRPNAME) is tracked.
+Process a list of BMS statements to extract map definitions and mapset names, building a tree of maps containing fields and field groups; ignores statements with non-COBOL-word labels and mapsets marked TYPE=FINAL; returns a tuple of the extracted maps in source order and the list of mapset names.
 
-## `_item_definition`
+## `_item_definition()`
 
-Constructs a single `CobolDefinition` representing a symbolic map data item with the given name, source line range, COBOL level number, and group indicator; called to create definitions for records, fields, and their suffixed variants (L, F, A, I, O, and attribute letters).
+Create a `CobolDefinition` representing one data item of a BMS symbolic map with the given name, line range, level, and group status; used internally to generate definitions for records, fields, and field attributes.
 
-## `_field_definition_list`
+## `_field_definition_list()`
 
-Generates all the `CobolDefinition` entries that a BMS field produces in the input and output records of its map: the field's length (L), flag (F), and attribute (A) items in the input record, the field itself and attribute suffix variants (COLOR, PS, etc.) in the output record, and for groups, the input (I) and output (O) members; each definition spans the field's source lines.
+Generate all `CobolDefinition` objects for a single BMS field, including the length field (L), flag field (F), attribute field (A), input variant (I), extended attribute variants (one per attribute letter), output variant (O), and for field groups, the input and output variants of each member; returns definitions spanning the field's statement lines.
 
-## `read_bms_source`
+## `read_bms_source()`
 
-Parses a complete BMS source file containing DFHMSD/DFHMDI/DFHMDF macro definitions and returns a `CobolSource` with the symbolic map data item definitions extracted and sorted by source line, and the mapset names as copybook alternatives; this is the public entry point called by the file parser to convert BMS files into COBOL-compatible definition structures.
-
-# Summary
+Parse a BMS source file into a `CobolSource` by extracting statements, maps, and fields; create definitions for each map's input and output records and all their component fields with extended attributes; return the result with definitions sorted by line range and mapset names as copy statement aliases; the returned `CobolSource` has empty import and reference lists.
 
 # Summary
 
-**Responsibility:** Parse BMS (Basic Mapping Support) source files containing DFHMSD/DFHMDI/DFHMDF macro definitions and extract their symbolic map structures as COBOL data item definitions compatible with copybook references.
+# Summary: codetwine/extractors/bms_source.py
 
-**Main Public Definition:** `read_bms_source()` converts BMS macro text into a `CobolSource` object containing symbolic map definitions and mapset names for downstream analysis.
+**Single Responsibility**
+Parse BMS (Basic Mapping Support) assembler source files to extract symbolic map definitions as structured COBOL data items, producing a CobolSource object compatible with COBOL parsing output.
 
-**Key Handling:** Processes assembler-format BMS source with line continuation (column 72), reconstructs complete statements, parses operand key-value pairs, validates labels as COBOL words, extracts maps and fields, generates input/output record variants with suffixed items (length, flag, attribute), and handles extended attributes (COLOR, PS, HILIGHT, VALIDN, OUTLINE, SOSI, TRANSP) based on mapset configuration.
+**Main Public Definition**
+`read_bms_source()` — parses BMS file text and returns a CobolSource containing map records, fields, and extended attributes as COBOL definitions, with mapset names as copy aliases.
+
+**Key Terms**
+Handles DFHMSD/DFHMDI/DFHMDF macros defining mapsets and maps; extracts symbolic map records (input/output variants), fields with length/flag/attribute suffixes, field groups, and extended attributes (COLOR, PS, HILIGHT, VALIDN, OUTLINE, SOSI, TRANSP); processes assembler continuation lines; validates COBOL-compliant names; ignores TYPE=FINAL mapsets and malformed labels.

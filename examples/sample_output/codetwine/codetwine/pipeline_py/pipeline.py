@@ -43,6 +43,12 @@ logger = logging.getLogger(__name__)
 # File names of the design document in the output directory of a file
 _DOC_FILE_TUPLE = ("doc.json", "doc.md")
 
+# File name of the dependency info in the output directory of a file
+_DEPENDENCY_FILE_NAME = "file_dependencies.json"
+
+# File names the output directory of a file keeps for what is written there
+_OUTPUT_FILE_NAME_SET = {_DEPENDENCY_FILE_NAME, *_DOC_FILE_TUPLE}
+
 
 def _to_internal_dep_list(
     project_dep_list_raw: list[dict],
@@ -138,7 +144,8 @@ def _process_file_dependencies(
     language_dep_list: list[dict],
 ) -> tuple[list[str], dict[str, str]]:
     """Analyze dependency info for each file and save file_dependencies.json
-    and a copy of the original file to the output directory.
+    and a copy of the original file to the output directory. A file named like a file
+    written there (file_dependencies.json, doc.json, doc.md) is not copied.
 
     When the analysis of a file fails, the file_dependencies.json and the copy that a
     previous run left in its output directory are removed. For a file analyzed without
@@ -179,11 +186,13 @@ def _process_file_dependencies(
 
             _to_output_format(dep_result, base_output_dir)
 
-            with open(os.path.join(output_file_dir, "file_dependencies.json"), "w", encoding="utf-8") as f:
+            with open(os.path.join(output_file_dir, _DEPENDENCY_FILE_NAME), "w", encoding="utf-8") as f:
                 json.dump(dep_result, f, indent=2, ensure_ascii=False)
 
-            # Copy the original file to the output directory
-            shutil.copy2(file_abs, os.path.join(output_file_dir, os.path.basename(file_rel)))
+            # Copy the original file to the output directory, unless it is named like
+            # a file written there
+            if os.path.basename(file_rel) not in _OUTPUT_FILE_NAME_SET:
+                shutil.copy2(file_abs, os.path.join(output_file_dir, os.path.basename(file_rel)))
 
             # Remove the design document a previous run left for a file without a language
             if dep_result["language"] == "":
@@ -196,7 +205,7 @@ def _process_file_dependencies(
             logger.error(f"  FAIL: {file_rel}: {e}")
             fail_file_list.append(file_rel)
             # Remove what a previous run left for this file
-            for output_name in ("file_dependencies.json", os.path.basename(file_rel)):
+            for output_name in (_DEPENDENCY_FILE_NAME, os.path.basename(file_rel)):
                 with contextlib.suppress(OSError):
                     os.remove(os.path.join(output_file_dir, output_name))
 

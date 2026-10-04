@@ -4,82 +4,77 @@
 
 **Overview**
 
-Initialize and run an interactive Q&A agent that answers questions about a software project by exploring its knowledge graph through an LLM-powered reasoning loop.
+Orchestrate interactive Q&A against a codebase by combining a DSPy RLM agent with a knowledge store and specialized query tools.
 
-The file is used by developers and analysts who need to ask natural language questions about project structure and behavior:
-- Call `main()` to start an interactive Q&A session where users enter questions and receive code-grounded answers.
-- Call `create_qa_agent(knowledge_path)` to initialize a configured dspy.RLM agent that combines file graph navigation, definition search, and source code verification.
-- Call `ask(rlm, question)` to submit a question to an already-initialized agent and retrieve the answer text.
-- Modify configuration constants (`LLM_MODEL`, `SUB_LLM_MODEL`, `OUTPUT_LANGUAGE`, `TARGET_KNOWLEDGE_PATH`) to adapt the agent to different LLM providers, endpoints, output languages, or knowledge sources.
+This file is used when:
+- A developer calls `create_qa_agent()` to initialize an RLM-based agent configured with project knowledge, LLM settings, and sandboxed code execution capabilities.
+- A developer calls `ask()` to pose a question and receive an answer synthesized by the agent from project analysis data.
+- A developer runs `main()` to enter an interactive loop where questions are answered until the session terminates.
 
-The file depends on `knowledge_store.py` to open and query project knowledge from either JSON or SQLite format, and on `qa_tools.py` to provide the tools that the LLM agent uses to search text, retrieve file details, read source code, and traverse the definition dependency graph. No dependent information is provided.
+The file depends on `knowledge_store.py` to open and query either JSON or SQLite knowledge files, retrieving the project dependency graph and per-file summaries that populate the `project_data` dictionary passed to the RLM sandbox. It depends on `qa_tools.py` to provide five query functions (`get_file_detail`, `search_text`, `read_source_file`, `get_files_using`, `graph_search`) that the RLM agent invokes during reasoning to access definitions, source code, design documents, and dependency information. No dependent files are documented as using this module.
 
-The agent uses dspy.RLM with a Deno-based Python sandbox to safely execute LLM-generated code; instructions embed a dynamic schema of the project's design document sections and remind the agent to verify answers against actual source code rather than relying on assumption. The Deno process is explicitly shut down on exit to clean up system resources.
+The instructions template embeds dynamic content—the doc section schema and output language—to guide the agent's reasoning. The `PythonInterpreter` is configured with Deno-specific flags (`--node-modules-dir=false`, `--allow-read`) and automatic `DENO_DIR` detection to support sandboxed Python execution. The design passes only the file graph and summaries to the sandbox (in `project_data`), keeping detailed definitions and source code behind the host-side tools to manage sandbox size and enforce access patterns.
 
 **Definitions**
 
 ## `LLM_MODEL`
 
-The litellm-format model identifier used by the primary LLM instance that drives the reasoning loop; examples include `"anthropic/claude-sonnet-5"` and `"openai/gpt-4"`. Modify this constant to select which LLM provider and model version the agent uses.
+The litellm-format model identifier used by the main dspy.LM instance that orchestrates the agent's reasoning loop. Examples include "anthropic/claude-sonnet-5" or "openai/gpt-4".
 
 ## `SUB_LLM_MODEL`
 
-The litellm-format model identifier available to the agent within the sandbox when it calls `llm_query` or `llm_query_batched` tools; may differ from the primary model to use a faster or cheaper variant for sub-tasks.
+The litellm-format model identifier used by the sub_lm instance within the RLM sandbox for any LLM calls made during tool invocation and code execution. Allows independent configuration from the main orchestrating LLM.
 
 ## `LLM_API_KEY`
 
-The API key read from the `LLM_API_KEY` environment variable, required by the LLM provider for authentication.
+The API key string sourced from the LLM_API_KEY environment variable, passed to dspy.LM initialization for authentication with the configured LLM provider.
 
 ## `LLM_API_BASE`
 
-Optional API base URL for non-standard LLM endpoints such as Ollama or Azure; when unset, the LLM uses its provider's default endpoint.
+An optional API base URL for non-standard LLM endpoints such as Ollama or Azure, set to None by default to use the provider's standard endpoint.
 
 ## `OUTPUT_LANGUAGE`
 
-The natural language in which the agent writes its final answer; embedded into the agent instructions to guide output formatting.
+The natural language string (e.g., "English") used to instruct the agent to format all answers in the specified language.
 
 ## `TARGET_KNOWLEDGE_PATH`
 
-The file path to either `project_knowledge.json` or `project_knowledge.sqlite`, which the agent loads and queries to explore the project structure.
+The file path to the knowledge file, either project_knowledge.json or project_knowledge.sqlite, which is loaded at startup to populate the agent's knowledge base.
 
 ## `project_data`
 
-Global dict populated by `load_project()` and passed to the RLM agent; holds the project name and the file dependency graph (callers, callees, and file summaries) but not source code or design documents, which are retrieved on-demand through tools.
+A module-level dictionary holding the loaded project information: project_name and project_dependencies (the file graph with summaries). This dictionary is passed as an input variable to the RLM sandbox and remains accessible throughout the agent's lifetime.
 
 ## `INSTRUCTIONS_TEMPLATE`
 
-Multi-line template string that becomes the dspy.Signature instructions; embeds template variables `<<<DOC_SCHEMA>>>` (the design document section list) and `<<<RLM_OUTPUT_LANGUAGE>>>` (the output language) after substitution. It instructs the agent on the project_data schema, investigation rules (verify answers against source code, use tools to fetch definitions and designs), and provides code examples for common queries.
+A template string that guides the RLM agent's behavior during reasoning, defining investigation rules, schema documentation, and code examples. The template includes placeholder markers (`<<<DOC_SCHEMA>>>`, `<<<RLM_OUTPUT_LANGUAGE>>>`) that are replaced with dynamic content before the Signature is instantiated.
 
-## `build_doc_schema(store)`
+## `build_doc_schema`
 
-Extract the design document section list from the first file that has one and return it as a formatted markdown table of section IDs and titles, embedded into the agent instructions to document which design sections are available for each file.
+Extracts the design document section list from the first file in the knowledge store that contains sections and returns a formatted markdown table listing each section's id and title. This table is embedded into the instructions template to document the doc schema available to the agent.
 
-## `load_project(knowledge_path)`
+## `load_project`
 
-Open the knowledge file at the given path (JSON or SQLite, auto-detected by extension), initialize the shared qa_tools store, and return a dict with project name and file dependency graph; logs the count of loaded files. This function must be called before the agent can navigate the project.
+Opens a knowledge file (JSON or SQLite) via `knowledge_store.open_store()`, assigns the resulting store to `qa_tools.store` for use by query functions, and builds the project_data dictionary containing project_name and the project dependency graph. Returns the project_data dict after printing confirmation of the file count loaded.
 
-## `create_interpreter()`
+## `create_interpreter`
 
-Create and configure a PythonInterpreter with Deno 2.x flags (`--node-modules-dir=false`, `--allow-read`) to safely execute Python code generated by the LLM; locates the Deno cache directory from environment or `deno info` output and constructs the appropriate deno command.
+Instantiates a dspy PythonInterpreter configured with Deno 2.x runtime parameters: automatically detects the DENO_DIR from deno info or environment, constructs a deno run command with --node-modules-dir=false and appropriate --allow-read permissions, and returns the configured interpreter for sandboxed code execution.
 
-## `create_qa_agent(knowledge_path)`
+## `create_qa_agent`
 
-Open the knowledge file, initialize both primary and sub LLMs, embed doc schema and output language into the instructions, create a dspy.Signature and PythonInterpreter, and assemble and return a dspy.RLM instance configured with the five qa_tools functions (get_file_detail, search_text, read_source_file, get_files_using, graph_search) in verbose mode.
+Loads the knowledge file, initializes main and sub LLMs with the configured API credentials, builds dynamic instructions by embedding doc schema and output language into the template, constructs a dspy Signature for the project_data-and-question-to-answer task, creates the PythonInterpreter, and assembles a dspy.RLM agent with the five query tools. Sets the main LLM at module level and returns the fully initialized RLM instance.
 
-## `ask(rlm, question)`
+## `ask`
 
-Submit a question to the initialized RLM agent along with the current project_data and return the answer text; called once per user input during the interactive loop.
+Invokes the RLM agent with the current project_data and a user question, returning the answer text from the prediction result. This is the primary entry point for obtaining answers after the agent is initialized.
 
-## `main()`
+## `main`
 
-Check that the knowledge file exists, initialize the RLM agent, print initialization status, enter an interactive loop that reads user questions and prints answers (exiting on "exit", "quit", or "q" or on keyboard interrupt), and ensure the Deno process is shut down in a finally block on exit.
+Implements the interactive Q&A loop: validates that the knowledge file exists, initializes the RLM agent, and repeatedly prompts the user for questions (supporting exit commands: exit, quit, q). For each non-empty question, calls ask() and prints the answer. Ensures the interpreter's Deno process is shut down when the session terminates.
 
 # Summary
 
-# Summary: rlm_qa_agent.py
+# Summary
 
-**Single Responsibility:** Initialize and run an interactive Q&A agent that answers questions about software projects by exploring knowledge graphs through LLM-powered reasoning loops with code verification.
-
-**Main Public Definitions:** `main()`, `create_qa_agent()`, `ask()`, `load_project()`, `create_interpreter()`, `build_doc_schema()`.
-
-**Key Terms:** Interactive Q&A session, knowledge graph navigation, LLM reasoning, dspy.RLM agent, Deno sandbox, source code verification, file dependency graph, design document sections, litellm model configuration, natural language questions, project exploration tools.
+Orchestrates interactive Q&A against a codebase using a DSPy RLM agent augmented with project knowledge and specialized query tools. Loads knowledge files (JSON or SQLite) to populate a project dependency graph and file summaries, then initializes an agent configured with LLM credentials, dynamic instructions, and sandboxed code execution via Deno. Primary public functions—`create_qa_agent()`, `ask()`, and `main()`—enable agent initialization, single-question answering, and interactive Q&A loops. Delegates file access to five tools (`get_file_detail`, `search_text`, `read_source_file`, `get_files_using`, `graph_search`) that query project data without loading it into the sandbox, maintaining isolation and controlling information flow.

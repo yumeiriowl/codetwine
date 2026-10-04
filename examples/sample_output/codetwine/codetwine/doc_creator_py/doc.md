@@ -4,199 +4,206 @@
 
 **Overview**
 
-Generate design documents for source code files by assembling prompts with source code, dependencies, and context, sending them to an LLM, and saving results as JSON and Markdown with progressive fallback strategies for context window overflow.
+Generate comprehensive design documents for source files by assembling LLM prompts from source code, dependency metadata, and design document summaries, with progressive fallback strategies for context window overflow.
 
-**Situations where another file would use this module:**
-- Call `generate_all_docs()` from the pipeline to produce design documents for all files in dependency order, receiving a list of files that failed document generation.
-- Call `load_doc()` to retrieve a previously saved design document from a file's output directory for comparison or reuse.
-- Use the internal fallback stages (code summarization, caller usage reduction, source splicing) when LLM prompts exceed token limits, automatically shrinking context without manual intervention.
+- Call `generate_all_docs()` to process all files in topologically sorted dependency order, parallelizing within each level, building a map of file summaries for use as context in downstream files, and returning a list of files that failed to generate complete documents.
+- Call `load_doc()` to retrieve a previously generated design document from a file's output directory (doc.json format).
+- Call `_generate_file_doc()` indirectly via `generate_all_docs()` to produce a single file's design document, including sections and a summary, from source code and file_dependencies.json.
+- Call `_build_section_prompt()` to assemble the complete LLM prompt for one documentation section, incorporating source code, dependency information, design document summaries of callees, and section-specific instructions.
+- Call `_topological_sort_by_level()` to arrange files by dependency depth so files with no dependencies are processed first, enabling their summaries to inform the documentation of dependent files.
 
-**Project fit:**
-The file depends on `codetwine/config/settings.py` for configuration values (OUTPUT_LANGUAGE, SUMMARY_MAX_CHARS, CODE_SUMMARY_TRIGGER_LINES, MAX_WORKERS, DOC_TEMPLATE_PATH, ENABLE_CODE_SUMMARY), `codetwine/utils/file_utils.py` for file I/O, hashing, and path conversion, `codetwine/llm/client.py` for LLM generation and `codetwine/config/logger.py` for progress logging. It is called by `codetwine/pipeline.py` to generate and manage all design documents after dependency analysis.
+The file depends on `codetwine/config/settings.py` for LLM configuration, output language, character limits, feature flags, and template paths; `codetwine/llm/client.py` to call the LLM for text generation; `codetwine/utils/file_utils.py` to read source files, compute hashes, resolve output directories, and transform paths between project-relative and output formats; and `codetwine/config/logger.py` for progress reporting. It is called by `codetwine/pipeline.py` to generate all design documents after dependency analysis, passing changed files to enable incremental regeneration.
 
-**Design decisions:**
-Four-stage fallback strategy handles context window overflow: stages 1–2 drop content without LLM calls (caller usage bodies, dependency doc summaries); stages 3–4 use LLM to summarize large code blocks (dependency symbols, then source definitions) and cache results by code hash to avoid regenerating identical summaries across files. Topological sorting by dependency depth enables parallel generation within each level while holding dependency document summaries in memory for context in downstream levels. Manual edits to doc.md are synced back to doc.json via timestamp comparison, with regeneration triggered only when source files change or callees are regenerated.
+Design decisions: The file implements a four-stage fallback strategy when LLM calls exceed the context window, progressively dropping caller usage bodies, dependency summaries, and then summarizing large dependency symbols and source definitions via cached LLM calls, to ensure documents can be generated even for files with extensive dependencies or large implementations. Manual edits to doc.md are synchronized back to doc.json when the markdown file is newer, preserving user modifications across regeneration cycles. Summaries of dependency files are carried forward in a map between topological levels to provide contextual information without retaining full section text, reducing memory overhead.
 
 **Definitions**
 
-## `HEADER_TARGET_FILE`
-
-Constant format string identifying the target file in the prompt header.
-
-## `HEADER_SOURCE_CODE`
-
-Constant heading labeling the source code section in the prompt.
-
-## `HEADER_CALLEE_USAGES`
-
-Constant heading introducing the dependencies (external functions/classes used by this file) section in the prompt.
-
-## `CALLEE_USAGES_SCHEMA_NOTE`
-
-Constant explanation text describing the schema and meaning of callee usage entries (name, from, dependency source code).
-
-## `CALLEE_SOURCE_CODE_LABEL`
-
-Constant label prefix for the source code block of each dependency symbol shown in the prompt.
-
-## `HEADER_CALLER_USAGES`
-
-Constant heading introducing the dependents (external files using this file) section in the prompt.
-
-## `CALLER_USAGES_SCHEMA_NOTE`
-
-Constant explanation text describing the schema of caller usage entries (name, from, usage location).
-
-## `CALLER_SOURCE_CODE_LABEL`
-
-Constant label prefix for the source code snippet around each usage location shown in the prompt.
-
-## `HEADER_CALLEE_CONTEXT`
-
-Constant heading introducing the design document summaries of dependency files in the prompt.
-
-## `CALLEE_CONTEXT_NOTE`
-
-Constant explanation text advising how to interpret the dependency file summaries for context.
-
-## `HEADER_REQUEST`
-
-Constant heading introducing the section-specific request in the prompt.
-
-## `SECTION_REQUEST_TEMPLATE`
-
-Constant format string for the main request instruction, parameterized by section title.
-
-## `OUTPUT_LANGUAGE_INSTRUCTION`
-
-Constant format string instructing the LLM to write output in a specified language.
-
-## `FACTUAL_ACCURACY_INSTRUCTION`
-
-Constant instruction emphasizing that output must be based only on provided source code, not speculation or contradictions.
-
-## `HEADER_IMPL_CONTEXT`
-
-Constant heading for the corresponding implementation file section in the prompt (used for header files).
-
-## `IMPL_CONTEXT_NOTE`
-
-Constant explanation text describing the role of the implementation file source in understanding header declarations.
-
-## `HEADER_DOC_CONTENT`
-
-Constant heading listing the design document sections in the summary generation prompt.
-
-## `SUMMARY_CHAR_LIMIT`
-
-Constant format string specifying the character limit for the summary output.
-
-## `CODE_SUMMARY_PROMPT`
-
-Constant format string for the LLM prompt to summarize a code symbol, parameterized by name, character limit, output language, and code text.
-
-## `CODE_SUMMARY_MARKER`
-
-Constant format string for a placeholder marker prepended to a summarized code block, parameterized by symbol name.
-
-## `CODE_SUMMARY_FAILED_NOTE`
-
-Constant fallback text appended when code summarization fails due to context window overflow.
-
 ## `_topological_sort_by_level`
 
-Sort files by dependency depth using Kahn's algorithm, returning a list of lists where each inner list contains files at one dependency level (0 = no dependencies); log circular dependencies and include unprocessed files in the last level if cycles exist. Used by `generate_all_docs()` to determine processing order.
+Arrange files by dependency depth using Kahn's algorithm, grouping files into levels where level 0 contains files with no dependencies and level N contains files depending only on files at level N-1 or below, enabling parallel processing within each level and sequential context-passing between levels. Returns files as a list of lists (one inner list per level), with circular dependencies detected and logged, placing such files in the final level.
 
 ## `_usage_part_list`
 
-Build prompt lines listing either callee usages (dependencies) or caller usages (dependents) from a usage list, including symbols and their associated source code in indented blocks. Parameterized by path key, context key, and labels to support both dependency and dependent usage types.
+Format a list of dependency or dependent usages (from callee_usages or caller_usages in file_dependencies.json) into prompt lines, each usage appearing as a bullet point with symbol name and source file path, optionally followed by an indented code block when source code context is available. Used internally to build the "External Functions/Classes Used" and "External Files Using" sections of the prompt.
 
 ## `_build_section_prompt`
 
-Assemble the complete LLM prompt for one design document section, including the target file header, source code, optional implementation file context, callee and caller usages with their source snippets, dependency file summaries, and section-specific instructions. Returns the full prompt string ready to send to the LLM.
+Assemble the complete LLM prompt for one documentation section by combining the target file's name, source code, callee and caller usage information (with source code snippets), design document summaries of dependency files, section-specific instructions, output language requirement, and factual accuracy constraints. Returns the full prompt string ready to send to the LLM.
 
 ## `_build_summary_prompt`
 
-Assemble the LLM prompt for generating a summary of the entire design document from all its generated sections, including the target file name, section content, summary instruction, and character limit. Returns the prompt string.
+Construct the LLM prompt for generating a concise design document summary from all previously generated sections, including the target file's name, each section's title and content, summary instructions from the template, a character limit from SUMMARY_MAX_CHARS, and output language specification. Returns the assembled prompt string.
 
 ## `_build_callee_context_summary`
 
-Extract and concatenate design document summaries of all dependency files from the doc_summary_map into a single context string, deduplicating files and converting output-format paths back to relative paths. Used to enrich section generation prompts with upstream module documentation.
+Extract design document summaries from the doc_summary_map for all files listed in the target file's callee_usages (dependencies), deduplicate them by file, and concatenate them into a single string formatted as bullet points. This context is inserted into section prompts to help the LLM understand the responsibilities and public interfaces of external modules.
 
 ## `_line_count`
 
-Count the number of lines in a text block by adding one to the newline count.
+Return the number of lines in a text block by counting newlines and adding one, used to determine whether a code symbol is large enough to trigger LLM summarization during context-overflow fallback.
 
 ## `_summarize_code`
 
-Call the LLM to generate a concise behavior summary of a code symbol (function, class, etc.), caching the result by SHA256 hash to avoid redundant generation. On context window overflow, return a fallback string combining the first line and a note. Used in fallback stages 3–4 to shrink large code blocks while preserving behavior information.
+Generate a concise behavior description of a code symbol via the LLM, caching results by SHA256 hash to avoid re-summarizing identical code across files and sections. On failure or context window exceeded, returns a deterministic fallback consisting of the code's first line (signature) and a note that the summary is unavailable.
 
 ## `_reduce_caller_usages`
 
-Return a shallow copy of file_dependencies.json with caller usage_context bodies removed, keeping only metadata (name, file, lines). Used as fallback stage 1 to reduce prompt size when context window is exceeded.
+Return a shallow copy of file_dependencies.json with usage_context bodies (source code snippets) removed from caller_usages, retaining name, file, and line information. Used as stage 1 of context-overflow fallback to shrink the prompt without invoking the LLM.
 
 ## `_summarize_callee_usages`
 
-Return a copy of file_dependencies.json where large (>CODE_SUMMARY_TRIGGER_LINES) dependency source code blocks are replaced with LLM behavior summaries. Used as fallback stage 3 to shrink dependency context while preserving semantic information.
+Return a copy of file_dependencies.json where large callee target_context symbols (those exceeding CODE_SUMMARY_TRIGGER_LINES) are replaced by LLM-generated behavior summaries, while small symbols are kept verbatim. Implements stage 3 of context-overflow fallback, using the shared summary_cache to avoid redundant summarization.
 
 ## `_select_outermost_large_definitions`
 
-Filter a definitions list to select only the outermost large definitions (spanning > trigger_line_count lines), excluding nested definitions within already-selected outer ranges. Used to avoid redundant summarization of methods nested in large classes.
+Identify definitions in the source file that exceed CODE_SUMMARY_TRIGGER_LINES in length, then filter to keep only outermost definitions (excluding nested ones like class methods when the class itself is already selected). Returns the filtered list sorted by start_line.
 
 ## `_splice_large_definitions`
 
-Replace large definitions in the target file's source code with LLM behavior summaries, inserting placeholder markers and spliced summaries in place of the original definition text. Used as fallback stage 4 when the source file itself is too large to fit in context even after other reductions.
+Replace large definitions in the source code with LLM-generated behavior summaries, inserting summary blocks at the positions of the original definitions while preserving non-definition lines and small definitions unchanged. Implements stage 4 of context-overflow fallback to shrink the source itself when the file is too large, relying on 1-based line numbers and start_line/end_line ranges from file_dependencies.json definitions.
 
 ## `_build_implementation_context`
 
-Find and read the source code of the implementation file (.cpp, .c, etc.) corresponding to a header file, searching by base name in the output directory structure. Returns empty string for non-header files or when no matching implementation file is found. Used to provide implementation details as context when documenting header files.
+Retrieve the source code of a C/C++ implementation file (.cpp, .c, .cc, .cxx) corresponding to a header file (.h, .hpp, .hh, .hxx) by searching for a same-named implementation file in the output directory tree. Returns empty string for non-header files or when no implementation file is found, used to provide implementation details to the LLM when documenting header files.
 
 ## `_generate_section_with_fallback`
 
-Generate one design document section by attempting a full prompt first, then progressively shrinking it across four fallback stages (drop caller bodies, drop dependency summaries, summarize large dependencies, summarize large source definitions) until the LLM succeeds or all stages are exhausted. Returns the generated section text or None if all stages fail.
+Attempt to generate one documentation section via the LLM, falling back through four cumulative prompt reduction stages if context window is exceeded: stage 0 is the full prompt, stage 1 drops caller usage source snippets, stage 2 drops dependency design document summaries, stage 3 summarizes large callee dependency symbols, and stage 4 summarizes large definitions in the source itself. Stages 3–4 only run when ENABLE_CODE_SUMMARY is true and use the shared summary_cache. Returns the generated section text or None if all stages fail.
 
 ## `_generate_file_doc`
 
-Generate a complete design document for one file: read source code and file_dependencies.json from the output directory, build callee context summaries, retrieve implementation context for headers, generate each template section with fallback, and return a document dict with sections, summary, and source hash. Returns None if generation fails completely.
+Generate a complete design document for one file by reading its source code and file_dependencies.json from the output directory, building callee context from doc_summary_map, fetching the corresponding implementation file context if it is a header, generating each template section via `_generate_section_with_fallback()`, generating a summary from all sections, and returning a document dict containing file path, sections, summary, and source file hash. Returns None if the source file or dependencies metadata cannot be read, or if no sections are successfully generated.
 
 ## `_generate_summary`
 
-Call the LLM to generate a summary of the entire design document from all its sections and the summary template instruction. Returns the summary text or None on failure.
+Generate a summary of the complete design document by calling the LLM with a prompt built from the target file's path, all section contents, summary instructions from the template, and SUMMARY_MAX_CHARS character limit. Returns the summary text or None on failure.
 
 ## `_find_source_file`
 
-Locate the copied source file in a file's output directory by checking for a file with the same basename as the original file_rel path. Returns the absolute path if found, None otherwise.
+Locate the copied source file in a file's output directory by checking for a file with the same basename as the target file in the given output directory. Returns the absolute path if found, None otherwise.
 
 ## `load_doc`
 
-Read and parse doc.json from a file's output directory, returning the design document dict or None if the file does not exist or is invalid JSON.
+Read a design document (doc.json) from a file's output directory, parsing and returning it as a Python dict. Returns None if the file does not exist or cannot be read due to JSON decode or I/O errors.
 
 ## `_save_doc`
 
-Write a design document to both doc.md (Markdown format) and doc.json (JSON format) in the output directory, stripping duplicate section title headers that the LLM may include and formatting sections hierarchically. Writes doc.md first so doc.json is never older than doc.md.
+Write a design document to both Markdown and JSON formats in the output directory: doc.md (human-editable format) and doc.json (structured format for programmatic access). Strips duplicate section title headers that the LLM may have included in its response before writing. The Markdown file is written first to ensure doc.json is never older than doc.md, supporting subsequent timestamp-based synchronization.
 
 ## `_parse_md_sections`
 
-Split doc.md text by known section titles (level-1 headings) and extract the content between each pair, returning a dict mapping section title to content. Used to parse manual edits from doc.md for sync back to doc.json.
+Split a Markdown file's text by known section title delimiters (matching `# {title}` lines) and return a dict mapping each section title to its content. Sections not present in the Markdown are omitted from the result, used to extract manually edited content when synchronizing doc.md back to doc.json.
 
 ## `_sync_md_to_json`
 
-Sync manual edits from doc.md back to doc.json when the MD file is newer, parsing the MD, comparing section content, applying diffs to the JSON, and re-saving both files. Skips sections where the next section is missing from MD to avoid boundary ambiguity.
+Synchronize manual edits from doc.md back to doc.json when the Markdown file is newer, parsing section content from doc.md, comparing it against the JSON, and re-saving the JSON if any section or summary differs. Skips synchronization if the next section heading (in JSON order) is missing from the Markdown, as section boundaries would be inaccurate. Re-writes doc.md after updating JSON to align timestamps and content.
 
 ## `_is_doc_complete`
 
-Check whether a design document contains all expected sections (matching the template) and a non-empty summary (if the template has a summary_prompt). Returns False if any section is missing, extra, or the summary is empty when expected.
+Check whether a design document contains all expected sections (as defined by the template) and a non-empty summary (when the template includes a summary_prompt). Returns false if the section set is incomplete or the summary is missing, true otherwise.
 
 ## `_needs_regeneration`
 
-Determine whether a file's design document must be regenerated by checking if changed_files is unspecified (full rebuild), the file itself changed, or any of its callees (dependencies) changed or were regenerated in this run. Returns True if regeneration is needed.
+Determine whether a file's design document needs to be regenerated by checking whether changed_files is None (full regeneration mode), the file itself is in changed_files, or any of its callee dependencies (from callee_set_dict) are in changed_files or new_doc_file_set (files regenerated so far in this run). Used during incremental processing to skip files unaffected by changes.
 
 ## `generate_all_docs`
 
-Main entry point to generate design documents for all files in the project. Load the template, topologically sort files by dependency depth, process each level in parallel up to max_workers, accumulate dependency document summaries for use as context in subsequent levels, and save each document as JSON and Markdown. On incremental runs with changed_files specified, reuse existing complete documents when no source or callee changes occurred. Return a list of files whose documents failed generation or are incomplete.
+Main entry point to generate design documents for all files in the project by loading the template, topologically sorting files by dependency depth, processing files level-by-level in parallel batches, maintaining a doc_summary_map of generated summaries for use as context in downstream files, and saving each document in JSON and Markdown formats. When changed_files is specified, reuses existing documents for unchanged files whose dependencies are also unchanged, supporting incremental regeneration. Returns a list of relative file paths that failed to generate complete documents (missing sections or summary).
+
+## `HEADER_TARGET_FILE`
+
+Format string for the prompt section heading identifying the target file, used in section and summary prompts.
+
+## `HEADER_SOURCE_CODE`
+
+Section heading label for the target file's source code in prompts.
+
+## `HEADER_CALLEE_USAGES`
+
+Section heading label for external functions and classes used by the target file (its dependencies).
+
+## `CALLEE_USAGES_SCHEMA_NOTE`
+
+Explanation of the schema for callee_usages items (name and from fields) and a note that dependency source code snippets are provided to clarify external dependencies.
+
+## `CALLEE_SOURCE_CODE_LABEL`
+
+Label prefix printed before a dependency's source code snippet in the prompt.
+
+## `HEADER_CALLER_USAGES`
+
+Section heading label for external files using the target file (its dependents).
+
+## `CALLER_USAGES_SCHEMA_NOTE`
+
+Explanation of the schema for caller_usages items (name and file fields).
+
+## `CALLER_SOURCE_CODE_LABEL`
+
+Label prefix printed before a caller's usage location source code in the prompt.
+
+## `HEADER_CALLEE_CONTEXT`
+
+Section heading label for design document summaries of dependency files.
+
+## `CALLEE_CONTEXT_NOTE`
+
+Explanation that the following content is summaries of design documents for dependency files, to be used as reference when understanding external module responsibilities.
+
+## `HEADER_REQUEST`
+
+Section heading label for the LLM request or instruction portion of the prompt.
+
+## `SECTION_REQUEST_TEMPLATE`
+
+Format string for the LLM instruction to generate a specific documentation section, with {title} replaced by the section title.
+
+## `OUTPUT_LANGUAGE_INSTRUCTION`
+
+Format string for the instruction to write output in a specific language (from OUTPUT_LANGUAGE setting), with {language} replaced.
+
+## `FACTUAL_ACCURACY_INSTRUCTION`
+
+Instruction emphasizing that descriptions must be based only on provided source code and dependency information, prohibiting speculation or contradictions with the implementation.
+
+## `HEADER_IMPL_CONTEXT`
+
+Section heading label for the corresponding implementation file context when documenting header files.
+
+## `IMPL_CONTEXT_NOTE`
+
+Explanation that the following is the source code of the implementation file matching a header file, to clarify how declarations are implemented.
+
+## `HEADER_DOC_CONTENT`
+
+Section heading label for the design document content when building a summary prompt.
+
+## `SUMMARY_CHAR_LIMIT`
+
+Format string for specifying the character limit for the summary, with {max_chars} replaced by SUMMARY_MAX_CHARS.
+
+## `CODE_SUMMARY_PROMPT`
+
+Format string for the LLM prompt to summarize a code symbol's behavior, with {name} (symbol name), {max_chars} (character limit), {language} (output language), and {code} (the code itself) replaced. Used during context-overflow fallback to shrink large code blocks while retaining their functional meaning.
+
+## `CODE_SUMMARY_MARKER`
+
+Header prefix (e.g., "# [summarized] {name}") inserted into the source code before an LLM-generated behavior summary during large-definition splicing, with {name} replaced by the symbol name.
+
+## `CODE_SUMMARY_FAILED_NOTE`
+
+Deterministic fallback text appended when code summarization fails, indicating that the body is omitted and summary generation is unavailable.
+
+## `_HEADER_EXT_SET`
+
+Set of C/C++ header file extensions (.h, .hpp, .hh, .hxx) used to detect header files for which implementation context should be retrieved.
+
+## `_IMPL_EXT_LIST`
+
+List of implementation file extensions (cpp, c, cc, cxx) searched when locating the implementation file matching a header.
 
 # Summary
 
-# Summary
+# doc_creator.py Summary
 
-`doc_creator.py` generates design documents for source code files by assembling prompts with source code, dependencies, and context, then sending them to an LLM. It handles context window overflow through a four-stage fallback strategy that progressively reduces content (dropping caller bodies, dependency summaries, then summarizing large code blocks via LLM). Main public definitions include `generate_all_docs()` for batch generation in dependency order, `load_doc()` for retrieving saved documents, and `_generate_file_doc()` for single-file generation. The module manages topological sorting, prompt assembly, LLM caching by code hash, Markdown-to-JSON sync for manual edits, and parallel processing within dependency levels.
+Generates comprehensive design documents for source files by orchestrating LLM calls with progressive fallback strategies for context window overflow. Main entry point `generate_all_docs()` processes files in topological dependency order, parallelizing within levels and maintaining a summary map for downstream context. Core functions include `_generate_file_doc()` for single-file documentation, `_build_section_prompt()` for assembling LLM prompts with source code and dependency information, and `_generate_section_with_fallback()` for handling context limits by successively dropping caller snippets, summaries, and large code blocks. Supports incremental regeneration via changed-file tracking, manual markdown synchronization, and C/C++ header-implementation pairing. Depends on LLM client, file utilities, settings, and logger.

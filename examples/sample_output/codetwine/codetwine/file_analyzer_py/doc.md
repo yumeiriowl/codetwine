@@ -4,36 +4,35 @@
 
 **Overview**
 
-Analyze source files to extract definitions, usages, and dependencies for downstream JSON output by resolving references across single files and multi-file projects.
+Analyze a single source file to extract its definitions, resolve its references to definitions in other files or itself, and produce structured dependency information for JSON serialization.
 
-- Call `get_file_dependencies()` from `pipeline.py` to produce file-level analysis data containing definitions, callee usages, same-file usages, and caller usages for each project file.
-- Query the returned dict's "definitions" key to access structured definition entries with name, type, line range, context, and optional language-specific fields (name_line, level, is_group for COBOL/BMS).
-- Query "callee_usages" to see which external definitions this file references and where.
-- Query "same_file_usages" to see which internal definitions this file references and where.
-- Query "caller_usages" to see which other project files reference definitions in this file and where.
+- Call `get_file_dependencies()` from a file processing pipeline to obtain a dictionary containing the file's relative path, language, detected encoding, definitions with source context, and three categories of usage data (callee, same-file, and caller usages).
+- Use `_definition_entry()` internally to format each definition as a dictionary entry with name, type, line range, and source text for inclusion in the output definitions list.
 
-This file serves as the central per-file analysis entry point in the pipeline. It depends on `definition_source.py` and `definitions.py` to extract definitions via AST parsing, `usage_analysis.py` to group and filter resolved references, `reference_target.py` and `ts_parser.py` to resolve references across the codebase, `settings.py` to determine language-specific extraction rules, and `file_utils.py` to read and normalize file content. The `pipeline.py` module calls `get_file_dependencies()` once per file to build the complete dependency graph.
+This file serves as the primary analysis entry point for the pipeline (`codetwine/pipeline.py`), which calls `get_file_dependencies()` for each project file and writes results to JSON. It orchestrates language detection via `language_ext()`, definition extraction via `file_definition_list()`, reference resolution via `reference_target_list()`, and usage grouping via three builders (`build_callee_usages()`, `build_same_file_usages()`, `build_caller_usages()`) from the extractors package. It depends on file utilities for reading content and splitting lines, and on parser and reference modules for AST generation and language-specific reference handling.
 
-Files without a language (detected by `language_ext()` returning "") are handled gracefully by returning empty definition and usage lists; encoding detection is performed and reported for all files. Reference resolution follows language-specific strategies (COBOL, C#, R, or import-based) determined by file extension, with COBOL and R files requiring AST tree access only when same-file references need line-range filtering.
+Files without a language (determined by `EXT_TO_DEFINITION_DICT`) are fast-tracked to return empty analysis results without parsing. For files with a language, the syntax tree is parsed only when `reference_kind()` indicates the file requires tree-range resolution (currently only R); otherwise `root_node` is set to None to avoid redundant parsing overhead. Definition source context is extracted by indexing into line lists computed from decoded UTF-8 content.
 
 **Definitions**
 
 ## `_definition_entry`
 
-Transform a single `DefinitionInfo` object and its file's content into a JSON-ready dict entry by including name, type, line range, and extracted source context, plus optional fields (name_line, level, is_group) when present for COBOL and BMS definitions. Called once per definition to build the "definitions" list returned by `get_file_dependencies()`.
+Formats a definition into a dictionary entry for JSON output by extracting its metadata (name, type, start and end line numbers) and source context text from the file's content line list. Includes optional fields (name_line, level, is_group) only when present, which occur for COBOL and BMS sources to support hierarchical data item analysis.
 
 ## `get_file_dependencies`
 
-Analyze a target file and return a dict containing its definitions, callee usages, same-file usages, and caller usages as strings formatted for JSON output. For each file, extracts definitions via `file_definition_list()`, resolves references via `reference_target_list()`, groups usages by target via `build_callee_usages()`, `build_same_file_usages()`, and `build_caller_usages()`, detects file encoding, and returns metadata including the file's language extension. Files without a language return empty usage lists and None for detected_encoding; reference resolution dispatches to language-specific strategies based on `reference_kind()`.
+Main analysis function that processes a single file to produce comprehensive dependency information: definitions with source context, references to other files (callee_usages), internal references (same_file_usages), and usages by dependent files (caller_usages). Detects the file's language via extension, skips parsing for files without a language, resolves all references through language-specific strategies, and returns a dictionary keyed by file, language, detected_encoding, and the three usage categories. Receives shared project context (project_file_set and caller_map) to avoid rebuilding them per file.
 
 # Summary
 
 # Summary: codetwine/file_analyzer.py
 
-**Single Responsibility:** Analyzes individual source files to extract definitions, usages, and dependencies, serving as the central per-file analysis entry point in the pipeline that produces structured data for downstream JSON output.
+**Single Responsibility**
+Analyze individual source files to extract their definitions, resolve references to definitions elsewhere, and produce structured dependency information for JSON output.
 
-**Main Public Definitions:**
-- `get_file_dependencies()` — primary entry point called by pipeline.py for each file; returns definitions, callee usages, same-file usages, and caller usages
-- `_definition_entry()` — transforms DefinitionInfo objects into JSON-ready dicts with name, type, line range, context, and language-specific fields
+**Main Public Definitions**
+- `get_file_dependencies()`: Primary entry point that processes a file and returns a dictionary with its relative path, language, encoding, definitions with source context, and three categories of usage data (callee, same-file, and caller usages).
+- `_definition_entry()`: Formats individual definitions as dictionary entries with name, type, line range, and source text.
 
-**Key Responsibilities:** Extracts definitions via AST parsing; resolves references across single files and projects using language-specific strategies (COBOL, C#, R, or import-based); groups and filters usages into three categories; detects file encoding; handles files without detected language gracefully by returning empty results. Integrates with definition_source.py, definitions.py, usage_analysis.py, reference_target.py, ts_parser.py, settings.py, and file_utils.py.
+**Key Terms**
+Language detection via file extension; definition extraction; reference resolution; usage grouping across three categories; AST parsing (conditionally applied based on language needs); source context extraction from decoded UTF-8 content; JSON serialization; integration point for the file processing pipeline.

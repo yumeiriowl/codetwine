@@ -27,11 +27,43 @@ _definition_cache: OrderedDict[str, tuple[list[DefinitionInfo], bytes]] = Ordere
 # absolute path -> definitions in line order
 _definition_list_cache: dict[str, list[DefinitionInfo]] = {}
 
+# Lookups of the definition lists a definition was looked up in, by the id of the list:
+# (the list, {name: its definitions in line order}, ids of its top-level definitions)
+_definition_index_cache: dict[
+    int, tuple[list[DefinitionInfo], dict[str, list[DefinitionInfo]], set[int]]
+] = {}
+
 
 def clear_definition_source_cache() -> None:
     """Forget the definitions and text of every file."""
     _definition_cache.clear()
     _definition_list_cache.clear()
+    _definition_index_cache.clear()
+
+
+def _definition_index(
+    definition_list: list[DefinitionInfo],
+) -> tuple[dict[str, list[DefinitionInfo]], set[int]]:
+    """Return the lookups of a definition list, built once per list.
+
+    Args:
+        definition_list: Definitions of a file, sorted by start_line.
+
+    Returns:
+        ({name: the definitions of that name in line order}, the ids of the
+        definitions select_top_level_definitions() keeps).
+    """
+    cache_entry = _definition_index_cache.get(id(definition_list))
+    if cache_entry is None or cache_entry[0] is not definition_list:
+        name_dict: dict[str, list[DefinitionInfo]] = {}
+        for definition in definition_list:
+            name_dict.setdefault(definition.name, []).append(definition)
+        cache_entry = (
+            definition_list, name_dict,
+            {id(definition) for definition in select_top_level_definitions(definition_list)},
+        )
+        _definition_index_cache[id(definition_list)] = cache_entry
+    return cache_entry[1], cache_entry[2]
 
 
 def file_definition_list(absolute_path: str, definition_dict: dict[str, str]) -> list[DefinitionInfo]:
@@ -127,13 +159,13 @@ def _find_by_path(
         top-level one first, then the first in line order. None when the first part
         names nothing.
     """
+    name_dict, top_level_id_set = _definition_index(definition_list)
     last_definition: DefinitionInfo | None = None
     owner_list: list[DefinitionInfo] | None = None
     for part in part_list:
         match_list = [
-            definition for definition in definition_list
-            if definition.name == part
-            and (owner_list is None or _is_inside(definition, owner_list))
+            definition for definition in name_dict.get(part, ())
+            if owner_list is None or _is_inside(definition, owner_list)
         ]
         if not match_list:
             break
@@ -143,7 +175,6 @@ def _find_by_path(
         ]
         if owner_list is None:
             # The first part names a top-level definition before a member of the same name
-            top_level_id_set = {id(d) for d in select_top_level_definitions(definition_list)}
             own_list.sort(key=lambda definition: id(definition) not in top_level_id_set)
         last_definition = (own_list or match_list)[0]
         owner_list = match_list
@@ -170,9 +201,9 @@ def find_definition(
     """
     part_list = symbol_part_list(callee_name)
     if len(part_list) > 1:
-        for definition in definition_list:
-            if definition.name == callee_name:
-                return definition
+        whole_list = _definition_index(definition_list)[0].get(callee_name)
+        if whole_list:
+            return whole_list[0]
     for start in range(len(part_list)):
         definition = _find_by_path(definition_list, part_list[start:])
         if definition is not None:
@@ -238,11 +269,12 @@ def source_definition(
     definition_list, content = _file_definition(absolute_path, definition_dict)
     definition: DefinitionInfo | None = None
     if start_line is not None:
+        name_dict = _definition_index(definition_list)[0]
         for part in reversed(symbol_part_list(name)):
             definition = next(
                 (
-                    candidate for candidate in definition_list
-                    if candidate.name == part and candidate.start_line == start_line
+                    candidate for candidate in name_dict.get(part, ())
+                    if candidate.start_line == start_line
                 ),
                 None,
             )

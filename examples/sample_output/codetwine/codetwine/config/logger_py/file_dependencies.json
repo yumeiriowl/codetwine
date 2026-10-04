@@ -122,16 +122,16 @@
     },
     {
       "lines": [
-        159,
-        268,
-        282,
-        294,
-        296,
-        302,
+        166,
+        277,
+        291,
+        303,
         305,
-        321,
-        328,
-        346
+        311,
+        314,
+        330,
+        337,
+        355
       ],
       "name": "log_progress",
       "file": "codetwine/codetwine/pipeline_py/pipeline.py",

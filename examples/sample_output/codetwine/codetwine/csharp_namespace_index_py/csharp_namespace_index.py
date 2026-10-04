@@ -323,6 +323,25 @@ def _is_type_fit(
     return True
 
 
+def _exact_type_count(
+    member: CsharpMember, argument_type_tuple: tuple[str | None, ...], is_extension: bool,
+) -> int:
+    """Return how many arguments of a call have exactly the type of their parameter.
+
+    Args:
+        member: The declaration.
+        argument_type_tuple: Type name of each argument of the call, None where unknown.
+        is_extension: Whether the call is written on a value, which is the argument of
+            the first parameter.
+    """
+    offset = 1 if is_extension else 0
+    return sum(
+        1 for index, argument_type in enumerate(argument_type_tuple)
+        if argument_type is not None and index + offset < len(member.parameter_type_tuple)
+        and member.parameter_type_tuple[index + offset] == argument_type
+    )
+
+
 def _declaration_line(
     csharp_type: CsharpType,
     member_name: str,
@@ -352,7 +371,8 @@ def _declaration_line(
     Returns:
         The line of the one method declaration of the name that takes that number of
         arguments, or of the one among several of them whose parameter types the
-        arguments fit (_is_type_fit); the line of the first declaration of the name
+        arguments fit (_is_type_fit), an exact type before a wider one; the line of the
+        first declaration of the name
         when the member is not called or the call fits none or several; the line of
         the type when it declares no member of the name.
     """
@@ -373,6 +393,16 @@ def _declaration_line(
             type_fit_list = [
                 member for member in fit_list
                 if _is_type_fit(member, argument_type_tuple, is_extension)
+            ]
+            # Of several that fit, the ones with the most parameters of exactly the
+            # type of their argument (Show(int) before Show(double) for Show(1))
+            exact_count_list = [
+                _exact_type_count(member, argument_type_tuple, is_extension)
+                for member in type_fit_list
+            ]
+            type_fit_list = [
+                member for member, exact_count in zip(type_fit_list, exact_count_list)
+                if exact_count == max(exact_count_list)
             ]
             fit_list = type_fit_list if len(type_fit_list) == 1 else fit_list
         if len(fit_list) == 1:

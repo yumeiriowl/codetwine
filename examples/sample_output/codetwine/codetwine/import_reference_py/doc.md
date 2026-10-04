@@ -4,91 +4,75 @@
 
 **Overview**
 
-Resolve each reference in a source file to the definition it names by following import statements and applying language-specific scoping rules.
+Resolve each symbol reference in a source file to the definition it names by tracing import statements and following bindings through project files.
 
-- Call `import_reference_target_list()` to get the definitions that each usage in a file refers to, receiving a list of `ImportReferenceTarget` objects pairing usage names with their target files and definition names.
+- Call `import_reference_target_list()` to get a list of `ImportReferenceTarget` objects, each mapping a usage to the file and name where its definition resides.
 - Call `clear_import_reference_cache()` when the project file set changes to invalidate cached resolution results.
-- Call `ImportReferenceTarget` to access the name, line, file, and definition_name of a resolved reference.
+- Use `ImportReferenceTarget` to access the usage name, line number, target file path, and definition name of each resolved reference.
 
-This file depends on `import_binding.py` to map import statement bindings to their definitions across files, `definition_source.py` to retrieve definition metadata by name, `definitions.py` and `usages.py` to extract and analyze definitions and usages from AST nodes, and `ts_parser.py` to parse source files. It is used by `usage_analysis.py` to map reference targets to their source definitions and by `reference_target.py` to dispatch reference resolution for multiple languages.
+This file depends on the import binding infrastructure (`ImportBinder` from `codetwine/import_binding.py`) to map import-statement-bound names to their definitions, the definition extraction machinery (`DefinitionInfo`, `extract_definitions()` from `codetwine/extractors/definitions.py`) to identify and classify definitions by type, the usage extraction system (`UsageInfo`, `extract_usages()` from `codetwine/extractors/usages.py`) to find symbol references in code, and the syntax tree parser (`parse_file()` from `codetwine/parsers/ts_parser.py`) to read and parse source files. The file is used by `codetwine/extractors/usage_analysis.py` to populate reference metadata and by `codetwine/reference_target.py` as the import-language implementation of the polymorphic reference resolution interface.
 
-The function `import_reference_target_list()` caches its results per file using `import_target_cache` keyed by absolute path and validated against the current `project_file_set`, clearing automatically when the project composition changes or when `clear_import_reference_cache()` is called. Processing follows a four-step pipeline: cache lookup, extraction of import bindings and symbol names, detection of usages in the file, and resolution of each usage to its definition target through scope bindings, member bindings, module visibility rules, and symbol bindings.
+Resolution results are cached in `import_target_cache` keyed by absolute file path and associated with the project file set they were built for; the cache is invalidated when the project file set changes or when `clear_import_reference_cache()` is called. A name an import statement binds on specific lines (scope binding) takes precedence over whole-file bindings and visibility from outside the project; names defined inside closed Rust inline modules without `use super::*` are hidden from outer scopes; C++ members accessed by name alone inside a function defined outside its class are resolved to class members before import-bound names.
 
 **Definitions**
 
 ## `ImportReferenceTarget`
 
-A dataclass holding the resolved location of a usage: the name as written in the referring file, the 1-based line number, the relative path of the file containing the definition, and the definition name (joined with "." or "::") as looked up in that file. Used as the return value of `import_reference_target_list()` to report what each reference resolves to.
+A dataclass holding the resolution of a single symbol usage: its name as written in the file, the line it appears on, the relative path of the file containing the definition, and the fully-qualified name used to look up that definition in the target file. Used by callers to understand what definition a usage refers to and to locate the source text of that definition.
 
-## `_own_name_set()`
+## `_own_name_set`
 
-Returns the names a file defines at its top level and in its nested scopes, excluding names that import statements bind, names shadowed by attached or transparent definitions, and names defined only inside other definitions. Called during step 3 of `import_reference_target_list()` to determine which usages are self-references versus imports.
+Computes the set of names a file defines at its top level apart from import bindings, excluding names in `ATTACHED_DEFINITION_TYPE_SET` and `TRANSPARENT_DEFINITION_TYPE_SET`, names shadowed by file-wide import bindings, and names that appear only inside other definitions. Returns the union of top-level and nested definitions that pass the `is_own` filter. Called during reference resolution to distinguish definitions the file owns from those imported from other files.
 
-## `_import_target_list()`
+## `_import_target_list`
 
-Builds the target list for a usage whose root name is bound by an import statement, by following member accesses through files and applying C++ base class and C/Rust implementation resolution. Returns one primary target plus additional targets for each file that implements a declared function. Called for usages that start with imported names to produce their complete resolution chain.
+Builds the resolution targets for a symbol usage whose root name is bound by an import statement, following module members through `ImportBinder.member_binding()`, resolving to the default export when a binding names a file, and including implementation files from `ImportBinder.implement_file_list()`. Returns one primary target and zero or more secondary targets for function implementations (C/C++) or impl-block definitions (Rust). Called when a usage starts with an imported name to determine all files that define the symbol.
 
-## `_scope_binding()`
+## `_scope_binding`
 
-Returns the binding of the smallest scope (fewest lines) that encloses a usage and binds its root name, with ties broken by longest name then first occurrence. Matches bindings whose scope lines contain the usage line and whose name is a leading part of the usage name when split at "." or "::". Called to check whether a usage is bound by an import statement written in a function or block rather than at file scope.
+Finds the innermost scope-binding (a name bound for a range of lines) that applies to a usage by matching its line number and checking that the bound name is a leading part of the usage name. Returns the binding with the smallest line range, then the longest name, breaking ties by appearance order; returns None if no scope binding matches. Used to give import statements written inside functions precedence over file-wide import bindings.
 
-## `_member_scope_dict()`
+## `_member_scope_dict`
 
-Reorganizes `ImportBinder.member_scope_list()` output from (start_line, end_line, member_dict) tuples into a {member_name: [(start_line, end_line, binding), ...]} dictionary. Used as a lookup structure to quickly find member bindings by name on a given line.
+Reorganizes the member scope list from `ImportBinder.member_scope_list()` into a dictionary keyed by member name, mapping each name to a list of (start line, end line, binding) tuples. Called once during reference resolution to enable efficient lookup of which members are accessible by name alone on a given line in a C++ function.
 
-## `_member_scope_binding()`
+## `_member_scope_binding`
 
-Returns the binding for a usage's first name part when it is written inside a C++ member function or class and refers to a class member by name alone, selecting the smallest enclosing scope. Called to resolve member accesses in C++ contexts where a member can be written without its class prefix.
+Finds the member accessible by its name alone on a given line inside a C++ function by selecting the member from the smallest enclosing line range. Returns the binding or None if no member with that name is accessible on that line. Used to resolve member access written without the class name inside a function defined outside its class.
 
-## `_pattern_reference_function()`
+## `_pattern_reference_function`
 
-Returns a memoized function that tells whether a name written in a Rust pattern refers to a constant, static, struct, or variant rather than binding the name. Reads the file's definition types and constructs a cache to avoid repeated lookups during pattern analysis. Called only for languages with `pattern_reference_types` in their usage node type settings; returns None for others.
+Builds a memoizing function that identifies whether a name written in a Rust pattern refers to a constant, static, struct, or variant (returning True) rather than binding a new name (returning False). Checks both the file's own definitions and bindings to project files, reading definition types from the language settings' `pattern_reference_types` and `pattern_variant_types`. Returns None for languages without pattern reference support. Called once per file to support tracking usages in match expressions and other patterns.
 
-## `_closed_module_scope()`
+## `_closed_module_scope`
 
-Returns the (start_line, end_line) of the innermost Rust inline module at a given line that does not take over the names of its surrounding module (no `use super::*`). Returns None when all surrounding modules are open or no module encloses the line. Called to determine whether a name is hidden by Rust module visibility rules.
+Finds the innermost Rust inline module around a line that does not have `use super::*`, meaning it closes the view of names from outside. Returns the (start line, end line) tuple of that module or None if all modules around the line take over outer names. Used to determine whether a top-level name is hidden from inside an inline module.
 
-## `_module_visibility()`
+## `_module_visibility`
 
-Tells whether a name is hidden by a Rust inline module that closes the view, by returning `_INSIDE` when the name is defined inside that module, `_HIDDEN` when it is defined outside, or None when visibility is not constrained. Applies only to single-part names not prefixed with module paths, and only when a closed module exists. Called to enforce Rust module scoping rules during reference resolution.
+Determines whether a Rust inline module without `use super::*` hides the definition of a usage's root name from the usage's location. Returns `_INSIDE` if the name is defined inside the module, `_HIDDEN` if it is a top-level or imported name that the module closes off, or None if no module hides the name. Skips checks for module-path prefixes (crate::, self::, super::) and multi-part names. Called during resolution to enforce Rust's inline-module scope rules.
 
-## `clear_import_reference_cache()`
+## `clear_import_reference_cache`
 
-Clears the `import_target_cache` dictionary, discarding all cached reference resolutions. Called by dependency graph builders when the project file set changes or when cached data must be invalidated.
+Clears all entries from `import_target_cache`, discarding all cached reference resolutions across all files and projects. Called when the set of project files changes or when the cache must be invalidated.
 
-## `_usage_list()`
+## `_usage_list`
 
-Extracts and deduplicates usages from a file's AST, tracking imported names, locally defined names, names bound in scopes, member names, and type names. Substitutes type aliases for variables declared with tracked types on their declaration lines. Returns usages in the order `extract_usages()` produces them, filtered to include only names that the file can resolve. Called during step 4 of `import_reference_target_list()` to determine which code locations reference names that need resolution.
+Extracts and deduplicates all symbol usages from a file's AST, filtering by tracked names, resolving typed aliases (variables declared with a tracked type and variables assigned tracked type instances), and excluding names bound locally inside scopes. Replaces each usage name with its type name when the name is aliased to a tracked type. Returns usages in source order without duplicates. Called to collect all the symbol references in a file that need to be resolved to definitions.
 
-## `import_reference_target_list()`
+## `import_reference_target_list`
 
-Resolves each reference in a file to the definition it names, returning one `ImportReferenceTarget` per usage in extraction order. Applies import bindings from `ImportBinder.symbol_dict()`, names the file defines itself via `_own_name_set()`, scope-limited bindings via `scope_binding_list()`, C++ member bindings via `member_scope_list()`, and Rust module visibility via `module_scope_list()`. Results are cached per file and validated against the current project file set using `project_cache_value()`, with cache keys based on absolute file paths. Called by `reference_target.py` to dispatch to language-specific reference resolution.
-
-## `_MODULE_PATH_ROOT_SET`
-
-A set of strings ("crate", "self", "super", "Self", "") representing the prefixes of Rust paths that are not subject to module visibility constraints in `_module_visibility()`.
-
-## `_INSIDE`
-
-A string constant returned by `_module_visibility()` indicating that a name is defined inside the module that closes the view.
-
-## `_HIDDEN`
-
-A string constant returned by `_module_visibility()` indicating that a name is defined outside the module that closes the view, making it inaccessible.
-
-## `import_target_cache`
-
-A module-level dictionary caching resolved references by absolute file path, storing tuples of (project_file_set, list of ImportReferenceTarget objects). Entries are validated against the current project file set and cleared by `clear_import_reference_cache()` or when the file set changes.
+Resolves every symbol usage in a file to the definition it refers to by consulting cached results or by reconstructing the resolution from import statements, scope bindings, module visibility rules, member scope lookups, and the file's own definitions. Caches results keyed by absolute file path along with the project file set they were built for. Returns one `ImportReferenceTarget` per usage in source order, with the target's file and definition name indicating where the definition resides. The primary entry point for external callers and the core of the reference resolution system.
 
 # Summary
 
-# Summary: codetwine/import_reference.py
+# Summary: import_reference.py
 
-**Responsibility:** Resolve each reference (usage) in a source file to its definition by following import statements and applying language-specific scoping rules.
+**Single Responsibility:** Resolve symbol usages in source files to their definitions by tracing import statements and following bindings through the project.
 
-**Main Public API:**
-- `import_reference_target_list()` — returns resolved targets for all usages in a file
-- `ImportReferenceTarget` — dataclass holding resolved reference location and definition name
-- `clear_import_reference_cache()` — invalidates cached resolutions when project changes
+**Main Public Definitions:**
+- `ImportReferenceTarget`: Dataclass mapping a usage to its definition's file and name
+- `import_reference_target_list()`: Core entry point returning resolved targets for all usages in a file
+- `clear_import_reference_cache()`: Invalidates cached resolution results
 
-**Key Terms:** Import binding resolution, scope binding, member access resolution, C++ class members, Rust module visibility, type aliases, pattern references, definition targets, usage extraction, cache validation.
+**Key Terms:** Import binding resolution, scope bindings, member access in C++, Rust inline-module visibility, pattern references, definition extraction, usage extraction, caching by file path and project file set.

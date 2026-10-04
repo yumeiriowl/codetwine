@@ -4,37 +4,39 @@
 
 **Overview**
 
-Parse command-line arguments, resolve project and output directories from CLI flags and environment configuration, initialize logging and LLM capabilities, and orchestrate the complete dependency analysis pipeline.
+Parse command-line arguments, resolve configuration directories, and orchestrate the complete source code analysis pipeline from dependency extraction through design document generation and consolidated output production.
 
-This file serves as the application entry point that developers invoke to analyze a project:
-- Call `main()` to start the entire analysis workflow, which accepts optional `--project-dir` and `--output-dir` command-line arguments and processes the specified project.
-- Inspect `resolve_dirs()` to understand how directory resolution prioritizes CLI arguments over environment defaults, particularly the special case where specifying only `--project-dir` defaults the output to `{REPO_ROOT}/output` rather than using `DEFAULT_OUTPUT_DIR` from configuration.
-- Review `parse_args()` to see the documented command-line interface and expected argument names.
+The file serves as the application entry point in these situations:
 
-This file integrates the configuration layer (reading `DEFAULT_PROJECT_DIR`, `DEFAULT_OUTPUT_DIR`, `ENABLE_LLM_DOC`, and `REPO_ROOT`), the logging system (calling `setup_logging()` once at startup), and the pipeline orchestrator (calling `process_all_files()` asynchronously). The pipeline module uses this file's instantiated `LLMClient` to generate design documents if `ENABLE_LLM_DOC` is true.
+- A developer runs `uv run main.py` with optional `--project-dir` and `--output-dir` flags to analyze a project and invoke `parse_args()` and `resolve_dirs()` for argument resolution before calling `process_all_files()`.
+- The pipeline calls `process_all_files()` from `codetwine/pipeline.py` to execute the full analysis workflow, which depends on `main.py` establishing the correct project and output directories.
+- The LLM-based design document generation feature checks `ENABLE_LLM_DOC` and conditionally creates an `LLMClient` instance to pass to the pipeline.
+- Logging infrastructure is initialized by `setup_logging()` before any analysis runs to configure console and file output across the entire execution.
 
-Directory resolution implements a three-tier fallback: CLI arguments take highest priority, then environment variables, then built-in defaults—with a documented exception where `--project-dir` alone overrides `DEFAULT_OUTPUT_DIR`. The async pipeline execution is managed via `asyncio.run()`, delegating all analysis work to `process_all_files()`.
+This file depends on `codetwine/config/settings.py` for configuration values (DEFAULT_PROJECT_DIR, DEFAULT_OUTPUT_DIR, REPO_ROOT, ENABLE_LLM_DOC) and environment-driven LLM settings; `codetwine/config/logger.py` for centralized logging setup; `codetwine/llm/client.py` for the LLMClient class used in document generation; and `codetwine/pipeline.py` for the core async analysis orchestration. No files are documented as depending on main.py.
+
+Directory resolution implements a specific policy: when `--project-dir` is specified without `--output-dir`, the hardcoded default of `{REPO_ROOT}/output` is used instead of DEFAULT_OUTPUT_DIR from `.env`, supporting a use case where custom projects should write to a predictable location rather than inheriting environment configuration.
 
 **Definitions**
 
 ## `parse_args`
 
-Parse command-line arguments for `--project-dir` and `--output-dir` options and return the result as a namespace object; callers use this to obtain user-supplied overrides before applying configuration defaults.
+Parse `--project-dir` and `--output-dir` command-line flags and return an argparse.Namespace object. Called once at startup to capture user-supplied directory overrides before passing results to `resolve_dirs()`.
 
 ## `resolve_dirs`
 
-Determine the effective project and output directories by combining CLI arguments with configuration defaults (`DEFAULT_PROJECT_DIR`, `DEFAULT_OUTPUT_DIR`, `REPO_ROOT`); implements the special behavior that when only `--project-dir` is provided, the output directory defaults to `{REPO_ROOT}/output` rather than `DEFAULT_OUTPUT_DIR`.
+Determine the project_dir and output_dir tuple by applying precedence rules: CLI arguments take priority, then DEFAULT_PROJECT_DIR and DEFAULT_OUTPUT_DIR from settings.py, with special handling that defaults output_dir to `{REPO_ROOT}/output` when only `--project-dir` is supplied. Called during main initialization to unify configuration from CLI arguments and `.env` file into canonical paths for pipeline execution.
 
 ## `main`
 
-Initialize logging via `setup_logging()`, parse command-line arguments, resolve directories, instantiate an `LLMClient` if `ENABLE_LLM_DOC` is enabled (otherwise pass `None`), and asynchronously execute the complete project analysis pipeline via `process_all_files()`.
+Initialize logging via `setup_logging()`, parse command-line arguments, resolve directory paths, conditionally instantiate LLMClient if ENABLE_LLM_DOC is true, and invoke the async pipeline via `process_all_files()`. Serves as the single entry point for the application when run as a script.
 
 # Summary
 
 # main.py Summary
 
-**Responsibility:** Application entry point that orchestrates the complete dependency analysis pipeline by parsing CLI arguments, resolving project directories, initializing logging and LLM capabilities, and delegating analysis work to the pipeline module.
+**Single Responsibility:** Entry point that orchestrates the source code analysis pipeline by parsing CLI arguments, resolving configuration directories, initializing logging, and conditionally enabling LLM-based document generation before invoking the core async analysis workflow.
 
-**Public Definitions:** `parse_args()` extracts command-line flags; `resolve_dirs()` combines CLI arguments with configuration defaults following a three-tier priority (CLI > environment > built-in); `main()` coordinates initialization and async pipeline execution.
+**Main Public Definitions:** `parse_args()` captures `--project-dir` and `--output-dir` command-line flags; `resolve_dirs()` applies precedence rules favoring CLI arguments over environment configuration, with special handling to default output to `{REPO_ROOT}/output` when only project directory is specified; `main()` coordinates logging setup, argument parsing, directory resolution, LLM client instantiation, and pipeline invocation.
 
-**Key Concepts:** Directory resolution with special handling where `--project-dir` alone defaults output to `{REPO_ROOT}/output`; conditional LLMClient instantiation based on `ENABLE_LLM_DOC` configuration; integration of logging setup and async pipeline orchestration via `asyncio.run()`.
+**Key Concepts:** Command-line argument parsing, configuration directory resolution, logging initialization, LLM integration, async pipeline orchestration, environment-driven settings, hardcoded fallback behavior.

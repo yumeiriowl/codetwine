@@ -1,12 +1,12 @@
 # Changelog
 
-## Unreleased
+## 0.4.0 - 2026-10-04
 
 ### Added
 - C/C++: a class, struct or union declared with a macro between the keyword and its name (`class EXPORT Shape : public Base { ... }`) is read as that type: the macro name is read as spaces before parsing, and stays a usage of the macro on its line (`ts_parser.class_macro_cache`)
 - C++: inside a member function defined outside its class and inside a class, a member of the class or of a base class written by its name alone is linked to that member, and a member written with a class that only a base class declares is linked to the base class (`ImportBinder.member_scope_list()`, `ImportBinder.inherit_binding()`)
 - Python: `from m import *` takes the names the `__all__` of `m` lists (`__all__ = [...]`, `+=`, `.extend([...])`, `.append("...")` with string constants), else the names of `m` that do not start with `_` (`imports.python_all_name_list()`, `ImportBinder.star_name_set()`)
-- Python, JS/TS: a variable given an object of a class inside a function is named after the class from that line on (`e = Engine(); e.run()` and `const e = new Engine(); e.run()` are `Engine.run`), as is a variable or parameter annotated with a class in Python and TypeScript (`usages.extract_value_aliases()`; `typed_alias_name_field_dict`, `typed_alias_value_dict`, `typed_alias_new_dict` and `typed_alias_class_only` of the usage settings)
+- Python, JS/TS: a variable given an object of a class inside a function is named after the class from that line on (`e = Engine(); e.run()` and `const e = new Engine(); e.run()` are `Engine.run`) until it is given anything else (another value, a destructuring, the variable of a loop or of a `catch`), as is a variable or parameter annotated with a class in Python and TypeScript, which keeps that class (`usages.extract_value_aliases()`; `typed_alias_name_field_dict`, `typed_alias_value_dict`, `typed_alias_new_dict` and `typed_alias_class_only` of the usage settings)
 - A variable declared with a type the file defines itself is named after that type, as one declared with an imported type is (Java, Kotlin, C/C++, Python, TypeScript)
 - JS/TS: a module that starts with `#` is resolved through `imports` of the nearest `package.json`, and a module that names a package of the project through `exports`, `types`, `module` and `main` of its `package.json`, with a build output path looked up under `src/` (`package_path.py`)
 - JS/TS: of the `tsconfig.json` / `jsconfig.json` files, the one that covers the file through `files`, `include` and `exclude` is taken, also among the files the nearest one names in `references`
@@ -15,8 +15,8 @@
 - JS/TS, Python definitions: a destructuring target with a default value or a rest (`const { a: b = 1, c = 2, ...rest } = obj`, `first, *rest = values`)
 - Rust: a name a pattern of `match` / `if let` / `while let` / `let` binds is no usage of a name of the file, and a constant, static, struct or enum variant written in a pattern is (`pattern_reference_types`, `pattern_variant_types` of the usage settings)
 - Rust: `Self::NAME` inside a `trait` is read as `Trait::NAME`
-- Rust: inside an inline module without `use super::*`, a top-level name of the file and a name a `use` declaration of the file binds are not linked (`ImportBinder.module_scope_list()`)
-- C#: among the declarations of a method that take the number of arguments of a call, the one whose parameter types fit the arguments is taken when the file tells their types (`CsharpMember.parameter_type_tuple`, `CsharpReference.argument_type_tuple`)
+- Rust: inside an inline module without `use super::*`, a top-level name of the file other than a `macro_rules!` macro and a name a `use` declaration of the file binds are not linked (`ImportBinder.module_scope_list()`, `module_open_types` of the usage settings)
+- C#: among the declarations of a method that take the number of arguments of a call, the one whose parameter types fit the arguments is taken when the file tells their types, a parameter of exactly the type of its argument before a wider one (`CsharpMember.parameter_type_tuple`, `CsharpReference.argument_type_tuple`)
 - `definition_source.file_definition_list()` and `definition_source.file_content()`: the definitions and the text of a file without its syntax tree
 - `file_dependencies.json`: `callee_usages[]` and `same_file_usages[]` carry `target_name` and `target_start_line`, the `definitions[].name` and `definitions[].start_line` of the definition the usage leads to (`null` when it leads to none) (`definition_source.source_definition()`)
 - Rust: a `use` declaration inside a block or an inline module is bound for the lines of that block or module only, and a path starting with a name it binds is resolved through it (`ImportInfo.scope_line_tuple`, `ImportBinder.scope_binding_list()`)
@@ -171,6 +171,7 @@
 - `is_file_unchanged()`
 
 ### Fixed
+- A project file named `file_dependencies.json`, `doc.json` or `doc.md` is not copied to its output directory, where the copy replaced the dependency information of the file
 - C#: `Type.Member` written inside a type with a constructor led to the constructor when `Member` is not static
 - C#, COBOL, R: two references of one line that write the same name and lead to two definitions were kept as one
 - Rust: a name a module only re-exports from outside the project (`pub use std::collections::HashMap;`) gives no usage

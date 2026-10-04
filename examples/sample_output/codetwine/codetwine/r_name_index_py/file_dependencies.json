@@ -656,7 +656,7 @@
       "from": "codetwine/codetwine/config/settings_py/settings.py",
       "target_context": "def language_ext(path: str) -> str:\n    \"\"\"Return the extension whose language settings a file is analyzed with.\n\n    A file recorded by set_copy_target_ext() gets the extension recorded for it, and a\n    file recorded by set_no_language_file() none. Every other file gets its own\n    extension when it is a key of EXT_TO_DEFINITION_DICT; the extensions of the\n    languages with ignore_ext_case are matched in any case.\n\n    Examples:\n        \"src/app.py\"          -> \"py\"\n        \"src/MAIN.Cbl\"        -> \"cbl\"\n        \"R/utils.R\"           -> \"r\"\n        \"config.yaml\"         -> \"\"\n        \"dcl/DCLCUST.dcl\"     -> \"cpy\" (when a COPY statement names it)\n        \"docs/notes.qmd\"      -> \"\" (when it has no R code chunk)\n\n    Args:\n        path: A file path. A relative path is taken from the current directory when\n            it is looked up among the recorded files.\n\n    Returns:\n        The extension (without the dot, a key of EXT_TO_DEFINITION_DICT), or \"\" for a\n        file without a language.\n    \"\"\"\n    path_abs = os.path.abspath(path)\n    copy_target_ext = _copy_target_ext_dict.get(path_abs)\n    if copy_target_ext:\n        return copy_target_ext\n    if path_abs in _no_language_path_set:\n        return \"\"\n    ext = os.path.splitext(path)[1].lstrip(\".\")\n    if ext in EXT_TO_DEFINITION_DICT:\n        return ext\n    if ext.lower() in _IGNORE_CASE_EXT_SET:\n        return ext.lower()\n    return \"\"",
       "target_name": "language_ext",
-      "target_start_line": 1241
+      "target_start_line": 1251
     },
     {
       "lines": [
@@ -666,7 +666,7 @@
       "from": "codetwine/codetwine/config/settings_py/settings.py",
       "target_context": "R_EXT_SET: set[str] = {\n    ext for ext, definition_dict in EXT_TO_DEFINITION_DICT.items()\n    if definition_dict is R_DEFINITION_DICT\n}",
       "target_name": "R_EXT_SET",
-      "target_start_line": 1178
+      "target_start_line": 1188
     },
     {
       "lines": [
@@ -696,7 +696,7 @@
       "from": "codetwine/codetwine/config/settings_py/settings.py",
       "target_context": "R_MARKDOWN_EXT_SET: set[str] = {\"rmd\", \"qmd\"}",
       "target_name": "R_MARKDOWN_EXT_SET",
-      "target_start_line": 1184
+      "target_start_line": 1194
     },
     {
       "lines": [
@@ -1542,7 +1542,7 @@
     },
     {
       "lines": [
-        364
+        366
       ],
       "name": "r_name_index_cache.clear",
       "file": "codetwine/codetwine/extractors/dependency_graph_py/dependency_graph.py",
@@ -1550,7 +1550,7 @@
     },
     {
       "lines": [
-        367
+        369
       ],
       "name": "r_target_cache.clear",
       "file": "codetwine/codetwine/extractors/dependency_graph_py/dependency_graph.py",
@@ -1613,7 +1613,7 @@
     },
     {
       "lines": [
-        343
+        352
       ],
       "name": "r_name_index_cache.clear",
       "file": "codetwine/codetwine/pipeline_py/pipeline.py",
@@ -1621,7 +1621,7 @@
     },
     {
       "lines": [
-        344
+        353
       ],
       "name": "r_target_cache.clear",
       "file": "codetwine/codetwine/pipeline_py/pipeline.py",

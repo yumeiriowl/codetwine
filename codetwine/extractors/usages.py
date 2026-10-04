@@ -103,7 +103,8 @@ class _UsageSetting:
 
     name_set: set[str]                 # Names whose usages are tracked
     member_name_set: set[str]          # Names tracked when written after self / this
-    alias_list: list["TypedAlias"]     # Variables tracked on the lines they are declared for
+    # Variable name -> the lines it is tracked for (typed_alias_dict)
+    alias_dict: dict[str, list["TypedAlias"]]
     usage_node_types: dict             # The EXT_TO_USAGE_NODE_TYPE_DICT entry of the language
     # Name an import statement binds -> lines of those statements
     import_line_dict: dict[str, set[int]] = field(default_factory=dict)
@@ -218,14 +219,14 @@ def _is_local_name(node: Node, name: str, setting: _UsageSetting) -> bool:
     Returns:
         True when a scope_types node among the ancestors of node binds the name
         (_local_name_set) and the name is no typed variable declared inside that scope
-        for the line of the node (alias_list). A scope whose type is a key of scope_body_dict binds
+        for the line of the node (alias_dict). A scope whose type is a key of scope_body_dict binds
         its names only for the nodes inside that field of it (Python: a default value
         or an annotation of a function is read outside the function).
     """
     scope_type_set = setting.type_set("scope_types")
     if not scope_type_set:
         return False
-    alias = typed_alias(setting.alias_list, name, node.start_point[0] + 1)
+    alias = typed_alias(setting.alias_dict, name, node.start_point[0] + 1)
     scope_body_dict = setting.usage_node_types.get("scope_body_dict", {})
     child = node
     current = node.parent
@@ -448,7 +449,7 @@ def extract_usages(
     setting = _UsageSetting(
         name_set=imported_names,
         member_name_set=member_names or set(),
-        alias_list=alias_list or [],
+        alias_dict=typed_alias_dict(alias_list or []),
         usage_node_types=usage_node_types,
         import_line_dict=import_line_dict or {},
         is_reference_name=is_reference_name,
@@ -884,18 +885,22 @@ def extract_value_aliases(
     root_node: Node,
     usage_node_types: dict,
     is_type_name: Callable[[str], bool],
+    import_line_dict: dict[str, set[int]] | None = None,
 ) -> list[TypedAlias]:
     """Traverse the AST to find the variables given an object of a tracked type.
 
     e = Engine() (Python) and const e = new Engine() (JS / TS) make e stand for Engine
     from the line of the assignment to the end of the innermost scope_types node around
-    it (a function). A later assignment of any other value to the same variable ends
-    that: it gives a TypedAlias without a type for its own lines. An assignment outside
-    every scope_types node is not read.
+    it (a function). A later node that gives the same variable anything else (another
+    value, a destructuring, the variable of a loop) ends that: it gives a TypedAlias
+    without a type for its own lines. A type written with a name a scope around the
+    value binds (var Engine = pick(); const e = new Engine()) is no tracked type. An
+    assignment outside every scope_types node is not read.
 
     Settings read:
-        typed_alias_value_dict: node type -> (field of the variable, field of the value;
-            "" for the first named child)
+        typed_alias_value_dict: node type -> (field of the variable or of a pattern of
+            variables, field of the value; "" for the first named child, None for a
+            node whose value is not read)
         typed_alias_new_dict:   node type of a value that makes an object -> field
             naming its type
 
@@ -903,15 +908,23 @@ def extract_value_aliases(
         root_node: The AST root node covering the entire file.
         usage_node_types: The EXT_TO_USAGE_NODE_TYPE_DICT entry of the language.
         is_type_name: Returns whether a name written as the type names a tracked type.
+        import_line_dict: Name an import statement binds -> lines of those statements;
+            such a name is no name a scope binds.
 
     Returns:
-        The TypedAlias of every assignment to a variable that is given an object of a
-        tracked type somewhere in its scope, in no particular order.
+        The TypedAlias of every node that gives a value to a variable that is given an
+        object of a tracked type somewhere in its scope, in no particular order.
     """
     value_dict = usage_node_types.get("typed_alias_value_dict", {})
     if not value_dict or not usage_node_types.get("typed_alias_new_dict"):
         return []
     scope_types = usage_node_types.get("scope_types", set())
+    pattern_type_set = usage_node_types.get("pattern_types", set())
+    pattern_field_dict = usage_node_types.get("pattern_field_dict", {})
+    setting = _UsageSetting(
+        name_set=set(), member_name_set=set(), alias_dict={},
+        usage_node_types=usage_node_types, import_line_dict=import_line_dict or {},
+    )
 
     alias_list: list[TypedAlias] = []
     stack = [root_node]
@@ -922,28 +935,42 @@ def extract_value_aliases(
         if field_tuple is None:
             continue
         name_field, value_field = field_tuple
-        name_node = node.child_by_field_name(name_field)
-        value_node = (
-            node.child_by_field_name(value_field) if value_field
-            else next(iter(node.named_children), None)
-        )
-        # Python: with Engine() as e holds the name in an as_pattern_target
-        if name_node is not None and name_node.type != "identifier" and name_node.named_child_count == 1:
-            name_node = name_node.named_children[0]
-        if name_node is None or name_node.type != "identifier" or value_node is None:
+        target_node = node.child_by_field_name(name_field)
+        if target_node is None:
             continue
+        if value_field is None:
+            value_node = None
+        elif value_field:
+            value_node = node.child_by_field_name(value_field)
+        else:
+            value_node = next(iter(node.named_children), None)
         scope_node = _scope_node(
             node, scope_types, root_node, usage_node_types.get("opaque_types", set()),
         )
         if scope_node is None or scope_node is root_node:
             continue
-        type_name = _new_type_name(value_node, usage_node_types)
-        if type_name is not None and not is_type_name(type_name):
+        # Python: with Engine() as e holds the name in an as_pattern_target
+        name_node = target_node
+        if name_node.type != "identifier" and name_node.named_child_count == 1:
+            name_node = name_node.named_children[0]
+        if name_node.type == "identifier":
+            name_list = [name_node.text.decode("utf-8")]
+            type_name = (
+                _new_type_name(value_node, usage_node_types) if value_node is not None else None
+            )
+            if type_name is not None and (
+                not is_type_name(type_name)
+                or _is_local_name(value_node, symbol_part_list(type_name)[0], setting)
+            ):
+                type_name = None
+        else:
+            # A pattern of several variables gives none of them an object of its own
+            name_list = pattern_name_list(target_node, pattern_type_set, pattern_field_dict)
             type_name = None
-        alias_list.append(TypedAlias(
-            name_node.text.decode("utf-8"), type_name,
-            node.start_point[0] + 1, scope_node.end_point[0] + 1,
-        ))
+        alias_list.extend(
+            TypedAlias(name, type_name, node.start_point[0] + 1, scope_node.end_point[0] + 1)
+            for name in name_list
+        )
 
     typed_key_set = {
         (alias.name, alias.end_line) for alias in alias_list if alias.type_name is not None
@@ -951,11 +978,21 @@ def extract_value_aliases(
     return [alias for alias in alias_list if (alias.name, alias.end_line) in typed_key_set]
 
 
-def typed_alias(alias_list: list[TypedAlias], name: str, line: int) -> TypedAlias | None:
+def typed_alias_dict(alias_list: list[TypedAlias]) -> dict[str, list[TypedAlias]]:
+    """Return the aliases of a file by their variable names, in the order of the list."""
+    alias_dict: dict[str, list[TypedAlias]] = {}
+    for alias in alias_list:
+        alias_dict.setdefault(alias.name, []).append(alias)
+    return alias_dict
+
+
+def typed_alias(
+    alias_dict: dict[str, list[TypedAlias]], name: str, line: int,
+) -> TypedAlias | None:
     """Return the alias a variable name counts under on a line.
 
     Args:
-        alias_list: The aliases of a file (extract_typed_aliases, extract_value_aliases).
+        alias_dict: The aliases of a file by their variable names (typed_alias_dict).
         name: A variable name.
         line: Line the name is written on (1-based).
 
@@ -964,26 +1001,28 @@ def typed_alias(alias_list: list[TypedAlias], name: str, line: int) -> TypedAlia
         fewest lines. None when no alias of that name counts for the line.
     """
     match_list = [
-        alias for alias in alias_list
-        if alias.name == name and alias.start_line <= line <= alias.end_line
+        alias for alias in alias_dict.get(name, ())
+        if alias.start_line <= line <= alias.end_line
     ]
     if not match_list:
         return None
     return min(match_list, key=lambda alias: alias.end_line - alias.start_line)
 
 
-def typed_alias_type(alias_list: list[TypedAlias], name: str, line: int) -> str | None:
+def typed_alias_type(
+    alias_dict: dict[str, list[TypedAlias]], name: str, line: int,
+) -> str | None:
     """Return the type a variable name stands for on a line.
 
     Args:
-        alias_list: The aliases of a file (extract_typed_aliases, extract_value_aliases).
+        alias_dict: The aliases of a file by their variable names (typed_alias_dict).
         name: A variable name.
         line: Line the name is written on (1-based).
 
     Returns:
         The type of typed_alias(); None when there is no such alias or it has no type.
     """
-    alias = typed_alias(alias_list, name, line)
+    alias = typed_alias(alias_dict, name, line)
     return alias.type_name if alias is not None else None
 
 

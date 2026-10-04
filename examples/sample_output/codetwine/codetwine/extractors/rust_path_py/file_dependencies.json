@@ -593,7 +593,7 @@
     },
     {
       "lines": [
-        505
+        506
       ],
       "name": "macro_path_list",
       "file": "codetwine/codetwine/extractors/usages_py/usages.py",
@@ -601,7 +601,7 @@
     },
     {
       "lines": [
-        704
+        705
       ],
       "name": "path_segment_list",
       "file": "codetwine/codetwine/extractors/usages_py/usages.py",
@@ -609,7 +609,7 @@
     },
     {
       "lines": [
-        1443
+        1446
       ],
       "name": "inline_module_scope_list",
       "file": "codetwine/codetwine/import_binding_py/import_binding.py",

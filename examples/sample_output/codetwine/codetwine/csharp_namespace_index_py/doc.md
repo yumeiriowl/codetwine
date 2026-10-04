@@ -4,178 +4,185 @@
 
 **Overview**
 
-Resolve C# references to their type and member definitions within a project by building a namespace index and matching reference names against declarations using C# lookup semantics.
+Resolve C# name references to their type and member definitions by indexing project namespaces, types, and using directives, then matching reference chains through scope-aware namespace lookup and type member traversal.
 
-- Call `csharp_reference_target_list()` with a file path, project file set, and project directory to resolve all references in a C# file and receive a list of targets mapping each reference to its definition location and line number.
-- Call `_get_namespace_index()` or use the module-level `namespace_index_cache` to obtain a cached namespace index for a project, which maps type paths and extension methods to their declarations for efficient repeated lookups.
-- Call `_build_namespace_index()` to parse all C# files in a project and construct an index of namespaces, types, members, and extension methods in declaration order.
-- Use `CsharpNamespaceIndex` to inspect a project's type declarations, namespaces, extension methods, and global using directives organized by relative path and type path.
-- Use `CsharpReferenceTarget` to access the resolved definition information: the name written, line number, file path, definition name qualified by type and member, and declaration line in the definition file.
+- Call `csharp_reference_target_list()` to resolve all references in a C# file to their definitions across the project, receiving one target per reference-definition pair with file location and declaration line.
+- Call `_get_namespace_index()` internally to build and cache the namespace, type, and extension method registry of a project's C# files for reuse across multiple files.
+- Use `CsharpNamespaceIndex` and `CsharpReferenceTarget` dataclasses as the cached index structure and resolution output respectively in other modules.
+- Build the index by calling `_build_namespace_index()` once per project when the project file set changes, parsing all C# files and extracting their declarations.
 
-This file depends on `codetwine/extractors/csharp_source.py` to parse C# declarations, scopes, types, members, using directives, and references from AST nodes, and on `codetwine/parsers/ts_parser.py` to read and parse source files. It depends on `codetwine/config/settings.py` to determine which files are C# and `codetwine/utils/project_cache.py` to cache indexes and resolved references by project file set. The file is used by `codetwine/reference_target.py` to resolve C# references through the public `csharp_reference_target_list()` function, by `codetwine/extractors/usage_analysis.py` to convert reference targets to definition locations, and by `codetwine/extractors/dependency_graph.py` and `codetwine/pipeline.py` to clear cached indexes and targets when analysis resets.
+This file depends on `codetwine/extractors/csharp_source.py` to parse C# file ASTs and extract namespace scopes, using directives, type declarations, and reference chains; on `codetwine/parsers/ts_parser.py` to obtain cached AST root nodes and file content; and on `codetwine/config/settings.py` to identify C# files by extension. The file `codetwine/reference_target.py` calls `csharp_reference_target_list()` as its primary entry point to resolve references, and `codetwine/extractors/usage_analysis.py` and `codetwine/extractors/dependency_graph.py` use the `CsharpReferenceTarget` dataclass and cache-clearing functions.
 
-Namespace resolution follows C# semantics: looking up names among type members first (including partial types), then in enclosing scopes from innermost to outermost, applying alias, namespace, and static using directives, and handling global using directives from the project directory. Type lookups support generic type parameters (arity) with fallback to any arity when exact matches fail. Method overload resolution considers argument count and parameter types, with automatic widening for numeric types. Both the `namespace_index_cache` and `csharp_target_cache` are invalidated when the project file set changes, ensuring stale definitions are not returned.
+The module implements two-level caching: `namespace_index_cache` stores the per-project namespace index indexed by project directory and validated by project file set, and `csharp_target_cache` stores resolved reference targets per file and revalidates against project file set changes. Lookup chains are cached within each `_ReferenceResolver` instance to avoid redundant resolution of the same name in the same scope. References that cannot be resolved to a project definition return an empty target list.
 
 **Definitions**
 
-## `CsharpReferenceTarget`
-
-A resolved reference mapping a name written in one file to the declaration it refers to in another, recording the name used, reference line, definition file, qualified definition name (type.member when applicable), and the line number of the declaration for jump-to-definition support.
-
-## `_TypeEntry`
-
-Stores one declaration of a type paired with its relative file path for efficient grouping of multiple declarations of the same type across files (partial types).
-
-## `CsharpNamespaceIndex`
-
-The complete index of a C# project containing mappings of relative file paths to declarations, type paths to type declarations, all project namespaces and their prefixes, extension method names to declaring types, project directory locations for each file, and global using directives per .csproj directory; used as the primary lookup structure for resolving references.
-
-## `_LookupStep`
-
-Represents one namespace level in the scope chain where a name is looked up, paired with the using directives written in that scope, used to simulate C# namespace resolution by traversing from innermost to outermost scope.
-
-## `_Match`
-
-Captures a successful name lookup result: the type declarations matched, the name written by the reference, the fully qualified definition name (including member if present), the number of reference parts consumed, the member name if applicable, and whether the first part named the type; returned by name matching functions to guide reference target construction.
-
-## `_project_dir_dict()`
-
-Maps each C# file to its nearest ancestor .csproj directory (or empty string if none) by walking upward from the file location, enabling grouping of files under project configuration directories for global using directive scoping.
-
-## `_add_declaration()`
-
-Indexes one parsed C# file into the namespace index by recording its declaration, extracting and adding all unique namespaces and namespace prefixes to the namespace set, collecting global using directives by project directory, and cataloging all type declarations and extension methods for later lookup.
-
-## `_build_namespace_index()`
-
-Parses all C# files from a project file set, filters them by C# extension, constructs a project directory mapping, and returns a complete CsharpNamespaceIndex; logs and skips files that cannot be parsed.
-
-## `_get_namespace_index()`
-
-Returns the namespace index for a project from the module-level `namespace_index_cache`, building and caching it on first access; the cache is invalidated when the project file set changes, ensuring stale indexes are not reused.
-
-## `_find_type()`
-
-Follows a sequence of name parts through namespace and type nesting to locate a type declaration, starting from a given namespace and consuming parts as namespaces until one names a type, then consuming remaining parts as nested type paths; returns the namespace, type path, start position, and end position of the type match, or None if no type is found.
-
-## `_is_constructor_match()`
-
-Returns true when a match refers to the constructors of a type (all members with the matched name are constructor declarations), used to disambiguate between constructors and static members when resolving names.
-
-## `_is_static_name()`
-
-Returns true when a match refers to a name written through a type (the first part names the type and the match is either the type itself or a static/const/enum member), distinguishing static access patterns for overload resolution.
-
-## `_is_type_fit()`
-
-Determines whether the argument types of a method call fit the parameter types of a method declaration by checking each argument against its corresponding parameter, allowing None values (unknown types), parameters of type `object` or `dynamic`, numeric type widening, and extra arguments to params parameters.
-
-## `_declaration_line()`
-
-Returns the line number of a type declaration or, when a member is specified, the line of its declaration; when a member is called with a known argument count, selects the overload matching that count; when multiple overloads match, uses argument types to select the best fit, or returns the first overload if ambiguous.
-
-## `_ReferenceResolver`
-
-Resolves all references of one C# file by matching reference names against the project namespace index using C# lookup semantics, handling namespaces, using directives (alias, namespace, static), type members, extension methods, and attribute name suffixes; maintains caches of lookup steps and matched names to avoid redundant computation.
-
-## `_ReferenceResolver.__init__()`
-
-Initializes the resolver with the project namespace index, file path, file declarations, and the .csproj directory of the file, and prepares internal caches for lookup steps and name matches.
-
-## `_ReferenceResolver._scope_index()`
-
-Returns the index in the file's scope list of the innermost scope (namespace or file) that encloses a given line, used to determine which using directives and namespace context apply to a reference.
-
-## `_ReferenceResolver._step_list()`
-
-Builds the sequence of lookup steps (namespaces with their using directives) for resolving a name written in a scope, starting from the innermost scope and walking outward to the file scope, appending global using directives of the project at the file scope, caching the result.
-
-## `_ReferenceResolver._absolute_using()`
-
-Resolves the name of a using directive from the namespace it is written in by looking up each name in successively broader namespaces (current, parent, global), returning the directive with the full qualified name of the first match, or the original directive if no match is found.
-
-## `_ReferenceResolver._outer_type_list()`
-
-Returns the type declarations of the file that enclose a given line, sorted from innermost to outermost, used to resolve references against member names of surrounding types.
-
-## `_ReferenceResolver._select_entry_list()`
-
-Filters a list of type declarations by priority: declarations in the same file if requested, else declarations under the same .csproj directory, else all declarations; used to disambiguate partial types and imported names.
-
-## `_ReferenceResolver._match_name()`
-
-Looks up a name from a namespace using a prefix (from a using directive alias or type member context) by finding the type it names, optionally taking the part after the type as a member name, filtering by type arity, and returning a match with the name written by the reference and qualified definition name.
-
-## `_ReferenceResolver._match_outer_type()`
-
-Matches the first part of a reference against the members of types enclosing the reference line (including partial types from other files), returning a match when one of the types defines the first part as a member.
-
-## `_ReferenceResolver._match_step()`
-
-Matches a reference in one namespace and its using directives by trying the namespace itself, alias using directives, namespace using directives (treating the first part as a type), and static using directives (treating the first part as a member); returns the first match found.
-
-## `_ReferenceResolver._match_reference()`
-
-Resolves a reference to a type or member by attempting exact generic arity matching, then fallback to any arity if exact matching fails; for attribute references, also tries appending "Attribute" suffix to the last part, returning the match or None.
-
-## `_ReferenceResolver._match_written()`
-
-Delegates name matching to either global namespace lookup (when the reference starts with "global::") or relative scope lookup, depending on the reference kind.
-
-## `_ReferenceResolver._match_namespace()`
-
-Returns the first match found when looking up a reference in each enclosing namespace from innermost to outermost, used for relative (non-global) name resolution.
-
-## `_ReferenceResolver._match_chain()`
-
-Matches a relative (non-global) reference by first attempting to match against members of surrounding types, then against enclosing namespaces; when a member match consumes only the first part of a multi-part chain, prefers a namespace type match if the namespace name is static or the member is a constructor.
-
-## `_ReferenceResolver._extension_entry_list()`
-
-Returns type declarations that define an extension method of a given name and accepting a given argument count, by collecting candidates from the extension method index and filtering to those visible from the reference line through namespace and using directive scoping.
-
-## `_ReferenceResolver.resolve()`
-
-Resolves a single reference to a list of targets by matching the leading parts of the reference name to a type or member, then optionally matching the last part to an extension method if the reference is a call on a value and the leading parts do not consume all parts; returns one target per declaration file of each matched definition.
-
-## `csharp_reference_target_list()`
-
-Resolves all references of a C# file to their definitions by reading the file's declarations and references, matching each reference name using the project namespace index with C# semantics, and returning targets in line order without duplicates; results are cached by absolute file path and project file set.
-
-## `namespace_index_cache`
-
-Module-level cache mapping project directory to (project file set, CsharpNamespaceIndex) pairs, enabling fast reuse of namespace indexes across repeated analyses of the same project.
-
-## `csharp_target_cache`
-
-Module-level cache mapping absolute file path to (project file set, list of CsharpReferenceTarget) pairs, enabling fast reuse of resolved reference targets across repeated analyses of the same file.
-
 ## `_ANY_TYPE_SET`
 
-Set of type names (`object`, `dynamic`) that match any parameter type during method overload resolution, representing universally compatible types in C#.
+Constant set containing the type names `"object"` and `"dynamic"` that match any parameter type during method overload resolution, allowing arguments of unknown type to fit any parameter.
 
 ## `_WIDER_TYPE_DICT`
 
-Dictionary mapping numeric type names to the set of wider types they can be implicitly converted to (e.g., `char` → `int`, `uint`, etc.), used to determine whether an argument type fits a parameter type during overload resolution.
+Constant mapping from numeric type names to the wider numeric types they implicitly convert to when passed as arguments, used by `_is_type_fit()` to determine whether an argument type satisfies a parameter type through numeric widening.
 
 ## `_PROJECT_FILE_EXT`
 
-The file extension (`.csproj`) of C# project configuration files, used to locate project boundaries for scoping global using directives.
+Constant string `".csproj"` (lowercase with dot) used to identify C# project files when determining which directory above a C# file contains its project configuration.
 
 ## `_ATTRIBUTE_SUFFIX`
 
-The suffix (`Attribute`) appended to an attribute reference name when the exact name does not match, allowing `[Route]` to resolve to `RouteAttribute`.
+Constant string `"Attribute"` appended to attribute reference names during lookup to resolve short forms like `[Route]` to their full declarations like `RouteAttribute`.
+
+## `namespace_index_cache`
+
+Module-level cache dictionary mapping project directory to a tuple of (project file set, CsharpNamespaceIndex), used to avoid re-parsing and re-indexing C# files when the project file set has not changed. Cache entries are validated by `project_cache_value()` and cleared by dependent modules when the project state changes.
+
+## `csharp_target_cache`
+
+Module-level cache dictionary mapping absolute file path to a tuple of (project file set, resolved target list), used to avoid re-resolving references in a file when the project file set has not changed. Cache entries are validated by `project_cache_value()` and cleared by dependent modules.
+
+## `CsharpReferenceTarget`
+
+Dataclass representing one resolved reference in a C# file, containing the name as written, the line number, the relative file path containing the definition, the qualified definition name (type.member), and the declaration line in that file; used as the output of reference resolution for downstream usage analysis.
+
+## `_TypeEntry`
+
+Dataclass pairing a type declaration with its containing file's relative path, used as the value type in the namespace index's type and extension method dictionaries to track all declarations of each type and method name across the project.
+
+## `CsharpNamespaceIndex`
+
+Dataclass storing the indexed namespace, type, and using directive metadata of a project's C# files, containing dictionaries mapping (namespace, type path) to type entries, extension method names to declaring types, and files to their nearest .csproj directory, plus the set of all project namespaces and global using directives per .csproj directory; passed to `_ReferenceResolver` to resolve references.
+
+## `_LookupStep`
+
+Dataclass representing one namespace and its associated using directives to search when resolving a name chain, used internally by `_ReferenceResolver` to structure the hierarchical namespace lookup process from innermost to global scope.
+
+## `_Match`
+
+Dataclass representing a partial or complete match of a reference name to a type or type member, containing the matched type entries, the name parts written, the definition name with member if applicable, the count of reference parts consumed, and metadata about whether the first part names the type; used internally to pass resolution state between lookup methods.
+
+## `_project_dir_dict()`
+
+Builds a mapping from each C# file to its nearest ancestor .csproj file directory by walking up the directory tree, used by `_build_namespace_index()` to associate each file with its project configuration for later lookup of global using directives.
+
+## `_add_declaration()`
+
+Indexes one C# file's namespace scopes, types, and extension methods into the namespace index, registering all namespace prefixes, global using directives, type entries keyed by (namespace, path), and extension method names, called by `_build_namespace_index()` for each parsed file.
+
+## `_build_namespace_index()`
+
+Parses all C# files in a project, extracts their declarations using `read_csharp_declaration()`, and indexes them into a CsharpNamespaceIndex by calling `_add_declaration()` for each file; returns the complete index for caching, with files that fail to parse logged as warnings and omitted from the index.
+
+## `_get_namespace_index()`
+
+Returns the cached namespace index for a project, building it via `_build_namespace_index()` on first call or when the project file set changes, storing the result in `namespace_index_cache` with project file set validation.
+
+## `_find_type()`
+
+Traces a tuple of name parts through a namespace to locate a type, advancing through nested types once the first type is found, returning the namespace, type path, and part indices on success or None when the chain leads to no type in the project.
+
+## `_is_constructor_match()`
+
+Returns true if a `_Match` represents constructors of a type and nothing else, determined by checking that all declarations of the matched member name are constructors.
+
+## `_is_static_name()`
+
+Returns true if a `_Match` represents a name accessed through a type (not through an instance), determined by checking that the first part names the type and the match is either the type itself or a static, const, or enum member.
+
+## `_is_type_fit()`
+
+Determines whether the arguments of a method call can satisfy the parameters of a method declaration by checking argument count (with params support), type matching (exact or numeric widening), and handling unknown argument types and any-type parameters like `object` and `dynamic`.
+
+## `_exact_type_count()`
+
+Counts how many arguments of a method call have exact type matches with their corresponding parameters, used to select the best overload when multiple methods fit an argument count.
+
+## `_declaration_line()`
+
+Locates the declaration line of a type or member within a type by returning the type's start line if the member is not found, the first member declaration if not called, or (when called) the unique method declaration matching the argument count and types, with preference for exact type matches over implicit conversions.
+
+## `_ReferenceResolver`
+
+Class that resolves all references in a single C# file by storing the namespace index and file's declarations, computing scope-based lookup steps, caching matches to avoid redundant lookups, and implementing reference resolution via namespace traversal, using directive application, and member lookup; instantiated once per file by `csharp_reference_target_list()`.
+
+## `_ReferenceResolver.__init__()`
+
+Initializes a resolver for one C# file by storing the namespace index, file path, and declarations, preparing internal caches for scope lookup steps and name matches.
+
+## `_ReferenceResolver._scope_index()`
+
+Returns the index in the file's scope list of the innermost namespace scope containing a given line, used to locate the immediate namespace context of a reference.
+
+## `_ReferenceResolver._step_list()`
+
+Computes the sequence of namespaces a name is looked up in starting from a scope, proceeding from the innermost scope outward through parent scopes and ending at the global namespace, with each step including the using directives (and global using directives at file scope) that apply there; cached by scope index.
+
+## `_ReferenceResolver._absolute_using()`
+
+Resolves a using directive's namespace or type name to its full qualified name by checking whether each part built from the directive is a project namespace or leads to a project type, starting from the namespace the directive is written in and working upward to the global namespace.
+
+## `_ReferenceResolver._outer_type_list()`
+
+Returns the type declarations that contain a given line, sorted from outermost to innermost, used to find the enclosing types where member references are resolved.
+
+## `_ReferenceResolver._select_entry_list()`
+
+Filters type entry candidates according to priority: own file first if requested, then entries under the same .csproj directory, then all entries; used to choose which file's declaration to resolve a reference to when a type is declared in multiple files.
+
+## `_ReferenceResolver._match_name()`
+
+Looks up a reference name from a namespace, optionally prefixed by using directive or enclosing type names, traversing through namespaces until a type is found then continuing into the type for members, with support for type arity checking and any-arity fallback; returns a `_Match` on success or None if the chain leads nowhere.
+
+## `_ReferenceResolver._match_outer_type()`
+
+Resolves a reference's first part as a member of the types enclosing the reference line, searching from innermost to outermost type and collecting member declarations across partial type definitions.
+
+## `_ReferenceResolver._match_step()`
+
+Looks up a reference within a single namespace step by trying the namespace itself, alias using directives, namespace using directives (combining matches from multiple), and static using directives in that order; returns the first successful `_Match`.
+
+## `_ReferenceResolver._match_reference()`
+
+Resolves a reference by attempting lookup first with exact type arity, then with any-arity fallback; for attribute references, also attempts the name with `"Attribute"` suffix appended; used for non-member references (type, attribute, name, etc.).
+
+## `_ReferenceResolver._match_written()`
+
+Routes reference lookup to either `_match_name()` for absolute references (prefixed with "global::") or `_match_chain()` for relative ones.
+
+## `_ReferenceResolver._match_namespace()`
+
+Finds the first namespace in the lookup step list (from innermost scope outward) that provides a match for a reference via `_match_step()`.
+
+## `_ReferenceResolver._match_chain()`
+
+Resolves a relative reference by checking outer type members first, then namespaces, with special handling for `this.` references (members only), constructors, and static member access; disambiguates between member and namespace matches when a short name could refer to either.
+
+## `_ReferenceResolver._extension_entry_list()`
+
+Locates extension method declarations visible at a call site by filtering project extension methods by name and argument count, then checking which declaring types are visible through the namespace lookup steps at that line (direct namespace, using namespace directives, or using static directives).
+
+## `_ReferenceResolver.resolve()`
+
+Resolves a single reference by matching its leading parts to a type or member, then resolving the last part as an extension method if the leading parts do not consume it and the reference is a call on a value; returns a list of `CsharpReferenceTarget` objects, one per definition file, or empty if no definition is found.
+
+## `csharp_reference_target_list()`
+
+Resolves all references in a C# file to their project definitions by retrieving the cached namespace index, creating a `_ReferenceResolver` for the file, iterating through references extracted by `csharp_reference_list()`, calling `resolve()` on each, deduplicating by target signature, and storing the sorted results in the target cache; the entry point called by `reference_target.py`.
 
 # Summary
 
 # Summary: csharp_namespace_index.py
 
-**Responsibility**: Build and cache a namespace index for C# projects, then resolve references to their type and member definitions using C# lookup semantics.
+**Single Responsibility**
 
-**Main Public Definitions**:
-- `csharp_reference_target_list()` — resolves all references in a C# file
-- `CsharpNamespaceIndex` — project-wide index of types, namespaces, and members
-- `CsharpReferenceTarget` — maps a reference to its definition location
-- `namespace_index_cache`, `csharp_target_cache` — module-level caches
+Resolve C# name references to their type and member definitions across a project by indexing namespaces, types, and using directives, then matching reference chains through scope-aware lookup and type member traversal.
 
-**Key Concepts**: Parses C# source files to extract declarations, namespaces, using directives (alias, namespace, static), and references. Indexes types and extension methods by qualified name. Resolves references by simulating C# name lookup: matching against type members and enclosing scopes, applying using directives, handling generic arity, performing method overload resolution with numeric type widening, and supporting attribute name suffixes. Caches results per project file set to avoid redundant parsing and lookup.
+**Main Public Definitions**
+
+- `csharp_reference_target_list()` — resolves all references in a C# file to definitions, returning targets with file locations and declaration lines
+- `CsharpNamespaceIndex` — cached index structure storing namespace, type, and using directive metadata per project
+- `CsharpReferenceTarget` — resolved reference output containing name, line, definition file path, qualified definition name, and declaration line
+
+**Key Terms**
+
+Namespace indexing, using directives, type declarations, extension methods, reference resolution, scope-based lookup, type member traversal, method overload resolution, type compatibility, nested types, global using directives, .csproj association, attribute name resolution, type arity, two-level caching.

@@ -601,7 +601,8 @@ _RUST_IMPORT_QUERY = """
 # typed_alias_name_field_dict: typed_alias_parent_types node type -> field holding its
 #                 variable ("" for its first named child); its type is in the field "type"
 # typed_alias_value_dict: AST node type that gives a variable a value -> (field of the
-#                 variable, field of the value; "" for its first named child)
+#                 variable or of a pattern of variables, field of the value; "" for its
+#                 first named child, None for a node whose value is not read)
 # typed_alias_new_dict: AST node type of a value that makes an object -> field naming its
 #                 type; a variable given such a value of a tracked type inside a function
 #                 is tracked under the type name from that line on
@@ -625,6 +626,8 @@ _RUST_IMPORT_QUERY = """
 #                 of binding it (Rust: a constant, a static, a struct without fields)
 # pattern_variant_types: definition types whose members such a name refers to as well
 #                 (Rust: the variants of an enum)
+# module_open_types: definition types every inline module of the file sees without a use
+#                 declaration (Rust: a macro_rules! macro)
 # opaque_types:   AST node types inside a scope whose inner nodes bind nothing in it
 # unbind_types:   AST node types naming names that are not local (Python global / nonlocal)
 # call_ignores_local: True when the name of a called function is never a local variable (Java)
@@ -648,7 +651,10 @@ _PYTHON_USAGE_NODE_TYPE_DICT = {
     "typed_alias_name_field_dict": {
         "typed_parameter": "", "typed_default_parameter": "name", "assignment": "left",
     },
-    "typed_alias_value_dict": {"assignment": ("left", "right"), "as_pattern": ("alias", "")},
+    "typed_alias_value_dict": {
+        "assignment": ("left", "right"), "as_pattern": ("alias", ""),
+        "named_expression": ("name", "value"), "for_statement": ("left", None),
+    },
     "typed_alias_new_dict": {"call": "function"},
     "typed_alias_class_only": True,
     "scope_types": {
@@ -737,7 +743,10 @@ _JS_USAGE_NODE_TYPE_DICT = {
         "variable_declarator": "name", "required_parameter": "pattern",
         "optional_parameter": "pattern",
     },
-    "typed_alias_value_dict": {"variable_declarator": ("name", "value")},
+    "typed_alias_value_dict": {
+        "variable_declarator": ("name", "value"), "assignment_expression": ("left", "right"),
+        "for_in_statement": ("left", None), "catch_clause": ("parameter", None),
+    },
     "typed_alias_new_dict": {"new_expression": "constructor"},
     "scope_types": {
         "function_declaration", "generator_function_declaration", "function_expression",
@@ -867,6 +876,7 @@ _RUST_USAGE_NODE_TYPE_DICT = {
     "pattern_field_dict": {"parameter": "pattern", "match_pattern": ""},
     "pattern_reference_types": {"const_item", "static_item", "struct_item"},
     "pattern_variant_types": {"enum_item"},
+    "module_open_types": {"macro_definition"},
 }
 
 _SQL_USAGE_NODE_TYPE_DICT = {

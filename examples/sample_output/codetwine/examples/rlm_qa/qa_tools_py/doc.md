@@ -4,63 +4,63 @@
 
 **Overview**
 
-Provide query tools for a large language model agent to navigate and analyze source code project structure, definitions, dependencies, and design documentation stored in a KnowledgeStore.
+Provide query tools for a retrieval-augmented generation (RAG) agent to analyze project dependencies, definitions, and design documentation stored in a KnowledgeStore.
 
-This file is used to:
-- Call `read_source_file()` to retrieve the full text of a source file by its project path for detailed code inspection.
-- Call `get_file_detail()` to fetch a file's definitions (with line ranges), callee and caller usages, and design document for focused analysis.
-- Call `search_text()` to find where a keyword appears across the project in documentation, definitions, and dependency contexts.
-- Call `get_files_using()` to identify which files depend on a target file by examining callee usage patterns.
-- Call `graph_search()` to explore definition dependencies as a graph, traversing outgoing dependencies (what a definition uses) or incoming dependents (what uses a definition) within a specified hop distance.
+This file is used by developers and AI agents to:
+- Call `read_source_file()` to retrieve the full text of any source file in the analyzed project
+- Call `get_file_detail()` to obtain a file's definitions, dependency usages (callee and caller), and design document sections
+- Call `search_text()` to find occurrences of keywords across definitions, documentation summaries, and dependency contexts
+- Call `get_files_using()` to identify which files depend on a specified target file
+- Call `graph_search()` to explore transitive dependency relationships up to N hops away in either direction
 
-The file relies on `codetwine/utils/file_utils.py` to decode and normalize line endings when reading source text from the project's output directory. The file `examples/rlm_qa/rlm_qa_agent.py` uses all tool functions as methods passed to a DSPy RLM agent, along with accessing the module-level `store` variable to retrieve project metadata (name, dependencies list) and to build documentation schema for LLM instructions.
+The file depends on `codetwine/utils/file_utils.py` only to import `read_source_text()` for reading file content. It is used exclusively by `examples/rlm_qa/rlm_qa_agent.py`, which initializes the module-level `store` variable and exposes these functions as tools to a language model agent for code question-answering tasks.
 
-The module uses a module-level `store` variable (a KnowledgeStore instance) initialized by external code rather than created internally, allowing the store to be shared across multiple tool function calls and preventing the entire analysis from being held in memory at once. All tool functions check that `store` is initialized and return error dictionaries or lists on failure rather than raising exceptions, supporting graceful degradation in agent execution. The `graph_search()` function caches file entries it reads to avoid redundant store lookups during BFS traversal.
+All functions implement defensive error handling by checking whether the module-level `store` variable has been initialized via `load_project()` before proceeding; functions return error dictionaries or lists containing error messages when the store is unavailable or lookup operations fail. The `search_text()` function limits result size through an early-exit pattern once a hit count threshold is reached, preventing excessive memory consumption when searching large projects.
 
 **Definitions**
 
 ## `store`
 
-Module-level variable holding a KnowledgeStore instance (either backed by project_knowledge.json or project_knowledge.sqlite) that is initialized externally and shared across all tool function calls. Must be set before calling any tool function; all tools check this and return error messages if it is None.
+Module-level variable holding a KnowledgeStore instance that reads project analysis data from either `project_knowledge.json` or `project_knowledge.sqlite`. Initialized by `load_project()` in the calling code and referenced by all query functions to fetch file entries, search definitions, and iterate over project dependencies; when `None`, all tool functions return error responses.
 
 ## `SEARCH_HIT_LIMIT`
 
-Constant set to 40 that defines the maximum number of search results `search_text()` returns before it stops scanning the project.
+Constant threshold (40) that controls the maximum number of search results `search_text()` returns before it stops scanning remaining files, ensuring bounded output from large-scale keyword searches across the entire project.
 
 ## `read_source_file()`
 
-Read and return the full text content of a source file identified by its project-relative path (the same path as listed in project_data file fields). Strips a leading project_name/ prefix if present, constructs the full path within the store's base directory, and delegates to `read_source_text()` for encoding-aware reading with normalized line endings. Returns an error message string if the store is not initialized or if file reading fails with an OSError.
+Reads and returns the complete source code of a file specified by its project-relative path, stripping any project name prefix and using the store's base directory to locate the file on disk. Used by callers who need the raw source text of a narrowed-down candidate file to inspect function bodies, variable declarations, or implementation details; raises an error if the store is uninitialized or the file cannot be read.
 
 ## `get_file_detail()`
 
-Query the store for a single file's structured metadata: its definitions with start/end line numbers and context, callee usages (dependencies it has on other definitions) and caller usages (where it is used by other definitions), and its design documentation (summary and titled sections). Accepts the exact file path as it appears in project_data. Returns a dictionary with file_dependencies and doc keys on success, or an error dictionary if the file is not found or the store is uninitialized.
+Retrieves a single file's analysis record, including its definitions (name, type, line range, source context), callee usages (dependencies it calls), caller usages (dependents that call it), and design documentation (summary and sections). Callers use this to examine detailed metadata for files they have already identified as relevant, rather than fetching the entire project index; returns an error dict if the file is not found or the store is uninitialized.
 
 ## `search_text()`
 
-Perform a case-insensitive keyword search across the entire project, returning hits from design document summaries and section content, definition source context, and callee and caller usage contexts. Stops scanning and returns early once the hit limit (default 40) is reached. Each hit is a dictionary recording the kind (summary, section, definition, callee, or caller), file path, and name of the matched entity.
+Performs a case-insensitive keyword search across all project files' design document summaries and sections, definition source contexts, and dependency usage contexts, returning a list of hit records identifying where the keyword appears and the kind of match (summary, section, definition, callee, or caller). Results are limited to a configurable maximum (default 40) to prevent excessive output; useful for discovering related code when starting from a problem description or feature name.
 
 ## `get_files_using()`
 
-Find all files in the project that depend on a specified target file by traversing the callee_usages of every file and collecting entries whose from field partially matches the target_file path. Returns a list of dictionaries, each pairing a file path with the callee usage record that references the target file.
+Returns a list of all files that depend on a specified target file by traversing the callee_usages of every file in the project and collecting entries whose "from" field contains a partial match to the target file path. Callers use this to understand the impact surface of a file or to identify which consumers might be affected by changes.
 
 ## `_find_definition()`
 
-Search a list of definitions for the first one matching a given name and return it, or None if not found. Used internally to locate a definition by name within a file's definition list.
+Helper that performs a linear search through a definitions list to locate and return the first definition matching a given name, or `None` if no match exists. Used internally by `graph_search()` to resolve definition names to their metadata records.
 
 ## `_is_usage_in()`
 
-Determine whether a callee usage (a call to another definition) occurs within the line range of a current definition. Handles the pseudo definition "__module__" to mean usages outside all named definitions. Used by `graph_search()` to filter callee usages that belong to a specific definition.
+Helper that determines whether a callee usage (a dependency call) occurs within the line range of a specific definition by checking if any usage lines fall between the definition's start and end lines. For the pseudo definition `"__module__"`, returns true if usage lines exist outside all real definitions. Used by `graph_search()` to filter which dependencies belong to a specific definition versus module-level scope.
 
 ## `_enclosing_definition()`
 
-Find the definition in a file that contains a caller usage (a location where the current definition is called), returning both the definition name and type. Returns the tuple ("__module__", "") if no named definition contains any of the usage lines, indicating module-level usage. Used by `graph_search()` to identify which definition in the dependent file makes each call.
+Helper that searches a file's definitions to find which definition contains a caller usage by checking if the usage's line numbers fall within any definition's range. Returns a tuple of the enclosing definition's name and type, or `("__module__", "")` if no definition contains the usage lines. Used by `graph_search()` to identify the source location of incoming dependency references.
 
 ## `graph_search()`
 
-Perform a breadth-first search for definitions reachable within a specified hop distance from a named definition, treating definitions as nodes and dependencies as edges. Supports direction control: "outgoing" follows callee usages (dependencies the definition has), "incoming" follows caller usages (definitions that depend on it), or "both" explores both directions. Performs exact match search first, then falls back to partial match if the definition is not found. Returns a dictionary containing the start node key, hop count, direction, lists of visited nodes (with their file, name, type, hop distance, and direction), and edge records (source, target, hop). Caches file entries during traversal to avoid redundant store reads.
+Performs a breadth-first search of the dependency graph starting from a named definition, exploring transitive dependencies up to a specified hop distance and in a specified direction (outgoing callee dependencies, incoming callers, or both). Returns a graph structure containing visited nodes (definitions with their file, type, hop count, and direction) and edges representing dependency relationships. Caches file entries during traversal to avoid redundant store lookups; useful for understanding how a definition fits into the larger architecture and identifying all code that transitively depends on or is depended upon by it.
 
 # Summary
 
-# Summary of qa_tools.py
+# Summary
 
-This module provides query tools for LLM agents to explore project structure and code analysis through a shared KnowledgeStore. It enables retrieval of source files, file metadata (definitions, usages, documentation), keyword searching across the project, and graph-based traversal of definition dependencies in both directions. Main public functions are `read_source_file()`, `get_file_detail()`, `search_text()`, `get_files_using()`, and `graph_search()`. The module handles graceful error handling and result caching to support agent-driven code navigation without holding the entire project in memory.
+Provides query tools for RAG agents to analyze project dependencies and documentation stored in a KnowledgeStore. Enables retrieval of source files, file analysis records including definitions and dependency metadata, keyword searches across documentation and code, identification of dependent files, and breadth-first traversal of transitive dependency graphs. Main public functions: `read_source_file()`, `get_file_detail()`, `search_text()`, `get_files_using()`, and `graph_search()`. Handles defensive initialization checks, bounded search result sizes, and graph traversal with direction control.

@@ -4,162 +4,168 @@
 
 **Overview**
 
-Index COBOL files and BMS sources by file name and program name, and resolve COPY and CALL statements to their target files and definitions.
+Build and maintain indexes of COBOL files and BMS sources in a project, resolving COPY and CALL statements to their target files, and tracing data name and procedure name references to their definitions across files and copybooks.
 
-This file is used when:
-- `resolve_cobol_module_path()` is called to convert a COPY or CALL statement module string to a project file path, returning the relative path of the target file or None if unresolved.
-- `cobol_reference_target_list()` is called to resolve all references in a COBOL file to their definitions, returning a list of CobolReferenceTarget objects with definition locations and names.
-- `register_copy_target()` is called to find files without a language that COPY statements name, recording them as COBOL copybooks with extension "cpy" and updating the project's language settings.
+- Call `resolve_cobol_module_path()` to convert a COPY or CALL statement name into the relative path of its target file, applying path precedence rules that prefer files matching the full path, files in named libraries, COBOL extensions, and path ordering.
+- Call `cobol_reference_target_list()` to resolve all references (data names, procedure names, program calls) in a COBOL file to their definitions, with support for qualified names (OF/IN chains), COPY statement REPLACING operands, and automatic copybook inclusion.
+- Call `register_copy_target()` to discover and index COBOL copybooks among files without an assigned language by following COPY statements from known COBOL files, recording them with the copybook extension and validating their content as COBOL text.
+- Call `replace_name()` to apply COPY ... REPLACING operands to data names, handling prefix, suffix, and substring replacements with colon-delimited markers.
 
-The file builds on COBOL parsing from `cobol_source.py` and format utilities from `cobol_format.py` to create searchable indexes of program names and file names, then uses those indexes to resolve module references and qualify data names. It provides the primary interface between import resolution (via `imports.py`) and reference targeting for COBOL files. Downstream files `dependency_graph.py`, `usage_analysis.py`, `reference_target.py`, and `import_to_path.py` use its public functions to look up COBOL module paths and resolve references to definitions. The file maintains two module-level caches: `file_index_cache` holds per-project file indexes keyed by project directory, and `reference_target_cache` holds resolved reference lists keyed by absolute file path; both caches are invalidated when the project file set changes or are manually cleared.
+This file provides the core resolution mechanism that import_to_path.py, usage_analysis.py, and reference_target.py depend on to bind COBOL references to their definitions. It relies on parse_file() from ts_parser.py and split_cobol_source() from cobol_format.py to read and tokenize COBOL sources, on language_ext() and has_language() from settings.py to identify file types, and on project_cache_value() from project_cache.py to cache indexes and resolved references by project file set. Two global caches (file_index_cache and reference_target_cache) are cleared by dependency_graph.py and pipeline.py to release memory between analyses.
+
+File indexes are built once per project file set and cached indefinitely; reference targets are cached per file and cleared when the project file set changes. The copybook discovery process (register_copy_target()) follows COPY statements recursively, checking each unindexed file against the text content criteria (_is_cobol_text) or whole-file-name matching (_is_named_whole) before recording it as a copybook; detected copybooks update project settings via set_copy_target_ext() to persist them across subsequent indexing.
 
 **Definitions**
 
 ## `file_index_cache`
 
-Module-level cache mapping project directory to a tuple of (project file set the index was built from, CobolFileIndex), used by `_get_file_index()` to avoid rebuilding the index on repeated calls with the same project file set.
+Module-level dictionary caching CobolFileIndex objects by project directory, keyed with the project file set they were built for; cleared by dependency_graph.py and pipeline.py between analyses to release memory.
 
 ## `reference_target_cache`
 
-Module-level cache mapping absolute file path to a tuple of (project file set the targets were resolved with, list of CobolReferenceTarget), used by `cobol_reference_target_list()` to avoid re-resolving references when the project file set has not changed.
+Module-level dictionary caching resolved reference lists by absolute file path, keyed with the project file set they were resolved with; cleared by dependency_graph.py and pipeline.py between analyses to release memory.
 
 ## `CobolFileIndex`
 
-Dataclass holding three dictionaries that index COBOL files and BMS sources: `file_name_dict` maps upper-case file names (with and without extension, plus copy_name_list entries) to lists of file paths in path order; `program_dict` maps upper-case program and ENTRY names to lists of files that define them in path order; `program_file_set` tracks which files define any program or ENTRY.
+Dataclass holding three dictionaries that index COBOL files and BMS sources by file name (with and without extension, and by copy names or mapset names), by program or ENTRY name, and a set of files that define programs; created by _build_file_index() and retrieved from cache by _get_file_index() for use in path resolution functions.
 
-## `_cobol_source()`
+## `_cobol_source`
 
-Parse a COBOL file or BMS source at the given relative path and project directory, returning its CobolSource object; logs and returns None if reading or parsing raises an exception.
+Parse a COBOL or BMS file at the given relative path using parse_file(), returning its CobolSource or None if reading or parsing fails; logs the exception and is used internally by index-building and reference-resolution functions.
 
-## `_add_file_name()`
+## `_add_file_name`
 
-Index a file in `file_name_dict` by its basename (upper-case, with and without extension) and by each name in the provided name_list, appending the file path to the list for each name if not already present.
+Add a file to the file_name_dict of a CobolFileIndex under its base file name (uppercase, with and without extension) and under any additional names in the provided list, maintaining path order; called by _add_source() and register_copy_target().
 
-## `_is_cobol_file()`
+## `_is_cobol_file`
 
-Return whether a project file is analyzed as COBOL by checking if its language extension (from `language_ext()`) is in COBOL_EXT_SET.
+Return True if a project file is identified as COBOL by language_ext(), used to decide which files' COPY statements should be followed during copybook registration.
 
-## `_add_source()`
+## `_add_source`
 
-Index a COBOL file or BMS source by calling `_add_file_name()` with its copy_name_list, then indexing each of its definitions with type in CALL_TARGET_TYPE_TUPLE in `program_dict` and `program_file_set`.
+Index a parsed COBOL or BMS source by adding its file name and copy_name_list entries to file_name_dict, and by adding each definition matching CALL_TARGET_TYPE_TUPLE to program_dict; called during index building and copybook registration.
 
-## `_sort_file_index()`
+## `_sort_file_index`
 
-Sort all file lists in a CobolFileIndex (both `file_name_dict` and `program_dict` values) by path order.
+Sort the file lists within a CobolFileIndex's file_name_dict and program_dict into path order, called after adding files to ensure consistent results when multiple files match a name.
 
-## `_source_file_list()`
+## `_source_file_list`
 
-Return a sorted list of relative paths for COBOL files and BMS sources in a project file set by filtering based on language extension.
+Return a sorted list of COBOL and BMS files from a project file set, filtering by language_ext() membership in COBOL_EXT_SET and BMS_EXT_SET; used by _build_file_index() and register_copy_target() to identify which files to parse.
 
-## `_build_file_index()`
+## `_build_file_index`
 
-Parse all COBOL files and BMS sources in a project file set, build a CobolFileIndex from those that parse successfully, and sort it; files that fail to parse are logged and excluded.
+Parse all COBOL and BMS sources in a project file set, build their CobolFileIndex by calling _add_source() for each, sort the index, and return it; called by _get_file_index() on cache miss.
 
-## `_get_file_index()`
+## `_get_file_index`
 
-Return a CobolFileIndex for a project, retrieving it from `file_index_cache` if it was built for the same project file set, or building and caching it via `_build_file_index()` if not.
+Retrieve or build the CobolFileIndex for a project, checking file_index_cache first and building via _build_file_index() if the cached entry matches the current project file set; called by resolve_cobol_module_path() and register_copy_target().
 
-## `_copybook_path()`
+## `_copybook_path`
 
-Resolve a COPY statement name to a project file by finding candidates matching the copybook name in `file_index_dict`, filtering by skip_file_set, and selecting the best match according to a priority order: exact path match, library directory match, COBOL extension, BMS source, current directory location, copybook extension, files defining no program, path order.
+Resolve a COPY statement name and library to a project file path by searching the file_name_dict of a CobolFileIndex, applying a multi-criterion sort order that prioritizes full path matches, files in the named library directory, COBOL extensions, BMS sources, current directory proximity, copybook extension, files without programs, and path order; skip_file_set excludes already-tried candidates during retry loops.
 
-## `_program_path()`
+## `_program_path`
 
-Resolve a CALL statement name to a project file by finding candidates in `program_dict` for files defining that program or ENTRY name, or falling back to files in `file_name_dict` that define programs and match the name without extension; among candidates, prefer the current file, then files in the current directory, then path order.
+Resolve a CALL statement name to a project file path by searching program_dict for a matching program or ENTRY name, falling back to file_name_dict if needed, and selecting by proximity to the current file and path order; used by resolve_cobol_module_path() and _program_target_dict().
 
-## `resolve_cobol_module_path()`
+## `resolve_cobol_module_path`
 
-Convert a COBOL COPY or CALL module string (via `cobol_module_part()`) to a project file path by consulting a cached CobolFileIndex, calling `_copybook_path()` for COPY or `_program_path()` for CALL, and returning None if the resolved file is the current file itself.
+Convert a COPY or CALL statement module string (as produced by ImportInfo.name and .library) to a project file path using the appropriate resolution function (_copybook_path or _program_path), returning None if no match exists or if the match is the current file itself; called by import_to_path.py for import resolution and by register_copy_target() and _add_copybook_candidate() for copybook following.
 
-## `replace_name()`
+## `replace_name`
 
-Apply COPY ... REPLACING operands to a name by matching leading, trailing, or full-text replacements with case-insensitivity and support for delimiter-based partial replacement using ":" syntax; return the replaced name or the original if no operand matches.
+Apply one or more COPY ... REPLACING operands to a data name, implementing LEADING prefix replacement, TRAILING suffix replacement, exact string matching, and colon-delimited substring replacement; returns the replaced name or the original if no operand matches, used by _Candidate.local_name() and _Candidate.find_definition_list().
 
-## `_copy_name_list()`
+## `_copy_name_list`
 
-Extract and return a list of (copybook name, library name) tuples from a CobolSource's import_list, selecting only those imports with kind equal to COPY_KIND.
+Extract the (copybook name, library name) tuples from a parsed CobolSource's import_list by filtering for COPY_KIND entries; used by register_copy_target() to populate the copy_name_dict queue.
 
-## `_is_named_whole()`
+## `_is_named_whole`
 
-Return whether a copybook name matches the whole file basename by comparing the last path component (upper-case, with backslashes converted to forward slashes) to the file's basename (upper-case).
+Return True if a copybook name (with backslash-to-slash normalization) matches the base file name of a file in uppercase comparison; used by register_copy_target() to decide whether an unindexed file should be registered as a copybook without content inspection.
 
-## `_is_cobol_text()`
+## `_is_cobol_text`
 
-Return whether a file's text contains COBOL content by reading the file, splitting it via `split_cobol_source()`, and checking for data items, file descriptions, or procedure division statements via `has_statement()`; logs and returns False if reading or parsing fails.
+Return True if the text of a file contains COBOL structure (data items, file descriptions, or procedure division statements), checked by reading and splitting the source via split_cobol_source() and inspecting for ITEM_UNIT, FILE_UNIT, or PROCEDURE_UNIT with valid grammar; used by register_copy_target() to validate unindexed files before recording them as copybooks.
 
-## `register_copy_target()`
+## `register_copy_target`
 
-Find files without a language that COPY statements name and record them as COBOL copybooks by: parsing COBOL files and BMS sources once and indexing them, indexing files without a language, following COPY statements to find candidates, recording files as copybook targets when they match the whole copybook name or contain COBOL text, and updating the project's language settings via `set_copy_target_ext()`; return a dict mapping file paths to extension "cpy".
+Discover unindexed files that COPY statements name, validate them as COBOL by name or content (_is_cobol_text or _is_named_whole), record them with the copybook extension via set_copy_target_ext(), follow their COPY statements recursively, and cache the resulting file index; called by dependency_graph.py during project initialization to enable copybook resolution.
 
 ## `CobolReferenceTarget`
 
-Dataclass representing one resolved reference in a COBOL file, holding the definition name (as written in the referring file after REPLACING), the reference line number, the file path containing the definition, and the CobolDefinition object itself (None if the program file was not read).
+Dataclass holding the name, line, file path, and optional definition of one resolved reference, returned by cobol_reference_target_list() and used by usage_analysis.py to build usage ranges and definition information.
 
 ## `_Candidate`
 
-Dataclass representing a file (the referring file or a copybook it includes) whose definitions may be referred to, holding the file path, its CobolSource, the line of the COPY statement (0 for the referring file itself), REPLACING operands from the COPY statement, and a lazily-built dictionary mapping upper-case local names to CobolDefinition lists for non-program definitions.
+Dataclass representing a file (the referring file or a copybook it includes) whose definitions can be referenced, storing its CobolSource, the line of the COPY statement bringing it in, REPLACING operands to apply to names, and a lazily-built definition_dict for name lookup; created by _candidate_list() and _add_copybook_candidate().
 
-## `_Candidate.local_name()`
+## `_Candidate.local_name`
 
-Return the name of a definition as the referring file writes it by applying the candidate's REPLACING operands via `replace_name()`.
+Return the name of a definition as the referring file writes it by applying the candidate's REPLACING operands via replace_name(); used by _Candidate.find_definition_list() and _name_target().
 
-## `_Candidate.find_definition_list()`
+## `_Candidate.find_definition_list`
 
-Return a list of definitions (excluding programs and ENTRY names) whose local name matches the given upper-case name, building the definition_dict on first use.
+Return the definitions of a name (excluding programs and ENTRY names) whose local_name matches the given name, building the definition_dict on first use; used by _is_under(), _target_under_qualifier(), and _name_target().
 
-## `_add_copybook_candidate()`
+## `_add_copybook_candidate`
 
-Recursively add copybooks brought in by COPY statements of a holder file to a candidate_list in line order, resolving each COPY via `resolve_cobol_module_path()`, skipping circular includes via open_file_set, and combining REPLACING operands from nested COPY statements.
+Traverse the COPY statements of a file, resolving each to a project file via resolve_cobol_module_path(), creating _Candidate objects for each copybook with accumulated REPLACING operands, and recursively adding their copybooks to the candidate_list in depth-first order; used by _candidate_list() to build the complete set of files that can supply definitions.
 
-## `_candidate_list()`
+## `_candidate_list`
 
-Return a list of _Candidate objects representing the referring file plus all copybooks its COPY statements bring in (and their copybooks) in line order, by starting with the referring file and recursively calling `_add_copybook_candidate()`.
+Return the referring file plus all copybooks its COPY statements bring in (via _add_copybook_candidate()), in line order with copybooks following the COPY that includes them; used by cobol_reference_target_list() to resolve data and procedure names.
 
-## `_is_under()`
+## `_is_under`
 
-Return whether a qualifier names a definition that holds another definition's line range, or (for a copybook) whether a definition of the referring file holds the COPY statement's line; used to evaluate qualified names like "FLD OF GROUP".
+Return True if a qualifier name refers to a definition that structurally contains another definition (by nesting range), or for a copybook, if a definition in the referring file contains the COPY statement line; used by _target_under_qualifier() to validate qualified name references.
 
-## `_target_under_qualifier()`
+## `_target_under_qualifier`
 
-Resolve a qualified name (with OF / IN qualifiers) to a definition by finding the first definition whose line range is held under all qualifier definitions, returning a tuple of (candidate, definition) or None.
+Find the first definition matching a qualified name (with OF/IN chains) in the candidate_list by checking that each qualifier names a containing definition via _is_under(); returns (candidate, definition) or None if no match, used by _name_target() to resolve qualified references.
 
-## `_program_target_dict()`
+## `_program_target_dict`
 
-Return a dict mapping (upper-case program name, statement line) to (program name as written, resolved file path) for each CALL statement of a COBOL file that resolves to another file.
+Return a dictionary mapping (program name uppercase, statement line) to (program name as written, target file path) for each CALL statement in a CobolSource that resolves to another file; used by cobol_reference_target_list() to avoid re-resolving CALL targets.
 
-## `_program_definition()`
+## `_program_definition`
 
-Return the first program or ENTRY definition of a CobolSource with a matching upper-case name, or None if the source is None or no such definition exists.
+Return the first program or ENTRY definition of a CobolSource matching an uppercase name, or None if the source is None or no definition matches; used by _call_target() to find the definition of a called program.
 
-## `_first_program_definition()`
+## `_first_program_definition`
 
-Return the first program or ENTRY definition of a CobolSource, or None if the source is None or no such definition exists.
+Return the first program or ENTRY definition of a CobolSource, or None if the source is None or contains no programs; used by _call_target() as a fallback when the specific program name is not defined in the called file.
 
-## `_call_target()`
+## `_call_target`
 
-Resolve a CALL statement to its target by looking up the program file in `program_target_dict`, finding the matching program or ENTRY definition in that file (or the first program if no match), and returning a CobolReferenceTarget; if no program file is found, look for the program in the referring file itself.
+Resolve a CALL reference to a CobolReferenceTarget by looking up the target file in program_target_dict, retrieving its CobolSource, and finding the matching or first program/ENTRY definition; returns None if the call is within the same file and no definition exists there, used by cobol_reference_target_list().
 
-## `_name_target()`
+## `_name_target`
 
-Resolve a data or procedure name to its target by checking if it is qualified and matching qualifiers via `_target_under_qualifier()`, or otherwise finding the first definition of that name in the referring file or its copybooks in COPY statement order, returning a CobolReferenceTarget or None.
+Resolve a data or procedure name reference to a CobolReferenceTarget by searching for the name under qualifiers via _target_under_qualifier() if qualified, or else finding the first definition of the name in candidate_list order; returns None if no definition exists, used by cobol_reference_target_list().
 
-## `cobol_reference_target_list()`
+## `cobol_reference_target_list`
 
-Resolve all references in a COBOL file to their definitions by: retrieving cached results if available for the same project file set, building a candidate list via `_candidate_list()` and a program target dict via `_program_target_dict()`, resolving each reference via `_call_target()` or `_name_target()`, deduplicating by (name, line, file, definition_line), and caching the sorted result; return a list of CobolReferenceTarget objects in line order.
+Resolve all references in a COBOL file to their definitions by building a candidate_list of the file and its copybooks, collecting CALL targets via _program_target_dict(), and resolving each reference via _call_target() or _name_target(); return sorted unique targets in line order, with results cached per file in reference_target_cache by project file set, called by reference_target.py to supply usage analysis.
 
 # Summary
 
-# codetwine/cobol_file_index.py Summary
+# Summary: codetwine/cobol_file_index.py
 
-**Single Responsibility:**
-Index COBOL files and BMS sources by file and program name, then resolve COPY and CALL statements to target files and definitions.
+**Single Responsibility**
 
-**Main Public Definitions:**
-- `resolve_cobol_module_path()` – converts COPY/CALL module strings to project file paths
+Build and maintain indexes of COBOL files and BMS sources in a project, resolving COPY and CALL statements to target files, and tracing data name and procedure name references to their definitions across files and copybooks.
+
+**Main Public Definitions**
+
+- `resolve_cobol_module_path()` – converts COPY or CALL statement names to file paths
 - `cobol_reference_target_list()` – resolves all references in a COBOL file to their definitions
-- `register_copy_target()` – identifies and records unnamed COBOL copybooks
-- `CobolFileIndex` – indexes files by name and programs by definition
-- `CobolReferenceTarget` – represents one resolved reference with location and definition
+- `register_copy_target()` – discovers and indexes copybooks by following COPY statements
+- `replace_name()` – applies COPY REPLACING operands to data names
+- `CobolFileIndex` – indexes files by name, program name, and copy names
+- `CobolReferenceTarget` – holds a resolved reference with its definition location
 
-**Key Terms:**
-Module references, copybooks, program definitions, data names, qualified names, REPLACING operands, file indexing, reference resolution, definition lookup, circular includes, COPY/CALL statements.
+**Key Terms**
+
+COPY statements, copybook resolution, CALL statements, qualified names (OF/IN chains), REPLACING operands, copybook discovery, definition lookup, data names, procedure names, program definitions, path precedence, file indexing, caching.

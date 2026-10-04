@@ -135,7 +135,7 @@
       "from": "codetwine/codetwine/config/settings_py/settings.py",
       "target_context": "def language_ext(path: str) -> str:\n    \"\"\"Return the extension whose language settings a file is analyzed with.\n\n    A file recorded by set_copy_target_ext() gets the extension recorded for it, and a\n    file recorded by set_no_language_file() none. Every other file gets its own\n    extension when it is a key of EXT_TO_DEFINITION_DICT; the extensions of the\n    languages with ignore_ext_case are matched in any case.\n\n    Examples:\n        \"src/app.py\"          -> \"py\"\n        \"src/MAIN.Cbl\"        -> \"cbl\"\n        \"R/utils.R\"           -> \"r\"\n        \"config.yaml\"         -> \"\"\n        \"dcl/DCLCUST.dcl\"     -> \"cpy\" (when a COPY statement names it)\n        \"docs/notes.qmd\"      -> \"\" (when it has no R code chunk)\n\n    Args:\n        path: A file path. A relative path is taken from the current directory when\n            it is looked up among the recorded files.\n\n    Returns:\n        The extension (without the dot, a key of EXT_TO_DEFINITION_DICT), or \"\" for a\n        file without a language.\n    \"\"\"\n    path_abs = os.path.abspath(path)\n    copy_target_ext = _copy_target_ext_dict.get(path_abs)\n    if copy_target_ext:\n        return copy_target_ext\n    if path_abs in _no_language_path_set:\n        return \"\"\n    ext = os.path.splitext(path)[1].lstrip(\".\")\n    if ext in EXT_TO_DEFINITION_DICT:\n        return ext\n    if ext.lower() in _IGNORE_CASE_EXT_SET:\n        return ext.lower()\n    return \"\"",
       "target_name": "language_ext",
-      "target_start_line": 1241
+      "target_start_line": 1251
     },
     {
       "lines": [
@@ -145,7 +145,7 @@
       "from": "codetwine/codetwine/config/settings_py/settings.py",
       "target_context": "COBOL_EXT_SET: set[str] = {\n    ext for ext, definition_dict in EXT_TO_DEFINITION_DICT.items()\n    if definition_dict is COBOL_DEFINITION_DICT\n}",
       "target_name": "COBOL_EXT_SET",
-      "target_start_line": 1157
+      "target_start_line": 1167
     },
     {
       "lines": [
@@ -168,7 +168,7 @@
       "from": "codetwine/codetwine/config/settings_py/settings.py",
       "target_context": "EXT_TO_LANGUAGE_DICT: dict[str, Language] = _expand_ext_aliases(\n    {ext: lang_config.language for ext, lang_config in _LANG_REGISTRY.items()}\n)",
       "target_name": "EXT_TO_LANGUAGE_DICT",
-      "target_start_line": 1146
+      "target_start_line": 1156
     },
     {
       "lines": [
@@ -178,7 +178,7 @@
       "from": "codetwine/codetwine/config/settings_py/settings.py",
       "target_context": "BMS_EXT_SET: set[str] = {\n    ext for ext, definition_dict in EXT_TO_DEFINITION_DICT.items()\n    if definition_dict is BMS_DEFINITION_DICT\n}",
       "target_name": "BMS_EXT_SET",
-      "target_start_line": 1187
+      "target_start_line": 1197
     },
     {
       "lines": [
@@ -198,7 +198,7 @@
       "from": "codetwine/codetwine/config/settings_py/settings.py",
       "target_context": "R_MARKDOWN_EXT_SET: set[str] = {\"rmd\", \"qmd\"}",
       "target_name": "R_MARKDOWN_EXT_SET",
-      "target_start_line": 1184
+      "target_start_line": 1194
     },
     {
       "lines": [
@@ -218,7 +218,7 @@
       "from": "codetwine/codetwine/config/settings_py/settings.py",
       "target_context": "C_FAMILY_EXT_SET: set[str] = {\n    ext for ext, lang_config in _LANG_REGISTRY.items()\n    if (lang_config.import_resolve_dict or {}).get(\"bind\") == \"include\"\n} | {\n    alias for alias, canonical in _EXT_ALIAS_DICT.items()\n    if (_LANG_REGISTRY[canonical].import_resolve_dict or {}).get(\"bind\") == \"include\"\n}",
       "target_name": "C_FAMILY_EXT_SET",
-      "target_start_line": 1163
+      "target_start_line": 1173
     },
     {
       "lines": [
@@ -393,7 +393,7 @@
     {
       "lines": [
         191,
-        971
+        1001
       ],
       "name": "parse_file",
       "file": "codetwine/codetwine/csharp_namespace_index_py/csharp_namespace_index.py",
@@ -401,9 +401,9 @@
     },
     {
       "lines": [
-        52,
-        293,
-        295
+        84,
+        325,
+        327
       ],
       "name": "parse_file",
       "file": "codetwine/codetwine/extractors/definition_source_py/definition_source.py",
@@ -411,7 +411,7 @@
     },
     {
       "lines": [
-        67
+        99
       ],
       "name": "parse_cache.get",
       "file": "codetwine/codetwine/extractors/definition_source_py/definition_source.py",
@@ -419,7 +419,7 @@
     },
     {
       "lines": [
-        68
+        100
       ],
       "name": "read_utf8_content",
       "file": "codetwine/codetwine/extractors/definition_source_py/definition_source.py",
@@ -432,6 +432,22 @@
       "name": "parse_file",
       "file": "codetwine/codetwine/extractors/dependency_graph_py/dependency_graph.py",
       "usage_context": "    language, import_query_str = get_import_params(file_ext)\n    if not language or file_ext not in EXT_TO_IMPORT_RESOLVE_DICT:\n        return set()\n    root_node = parse_file(file_path)[0]\n    callee_rel_set: set[str] = set()\n    for import_info in extract_imports(root_node, language, import_query_str):\n        resolved = resolve_module_to_project_path("
+    },
+    {
+      "lines": [
+        361
+      ],
+      "name": "parse_cache.clear",
+      "file": "codetwine/codetwine/extractors/dependency_graph_py/dependency_graph.py",
+      "usage_context": "        all_file_list = _filter_text_file_list(project_dir, file_list)\n\n    # Forget the syntax trees, the indexes and the resolved references of an earlier analysis\n    parse_cache.clear()\n    class_macro_cache.clear()\n    module_tree_cache.clear()\n    file_index_cache.clear()"
+    },
+    {
+      "lines": [
+        362
+      ],
+      "name": "class_macro_cache.clear",
+      "file": "codetwine/codetwine/extractors/dependency_graph_py/dependency_graph.py",
+      "usage_context": "\n    # Forget the syntax trees, the indexes and the resolved references of an earlier analysis\n    parse_cache.clear()\n    class_macro_cache.clear()\n    module_tree_cache.clear()\n    file_index_cache.clear()\n    namespace_index_cache.clear()"
     },
     {
       "lines": [
@@ -459,7 +475,7 @@
     },
     {
       "lines": [
-        490
+        502
       ],
       "name": "parse_file",
       "file": "codetwine/codetwine/import_reference_py/import_reference.py",
@@ -467,7 +483,7 @@
     },
     {
       "lines": [
-        546
+        564
       ],
       "name": "class_macro_cache.get",
       "file": "codetwine/codetwine/import_reference_py/import_reference.py",
@@ -475,7 +491,7 @@
     },
     {
       "lines": [
-        337
+        346
       ],
       "name": "parse_cache.clear",
       "file": "codetwine/codetwine/pipeline_py/pipeline.py",

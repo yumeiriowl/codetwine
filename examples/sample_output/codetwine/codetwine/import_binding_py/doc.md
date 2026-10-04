@@ -4,277 +4,266 @@
 
 **Overview**
 
-Map the names that import statements bind in source files across a multi-language project to their definitions by following re-exports, package boundaries, and language-specific scoping rules.
+Map the names bound by import statements in a project's files to their definitions by following imports through files that re-export them until reaching files that define them.
 
-When a developer needs to resolve where a name comes from:
-- Call `import_binder()` with project metadata to obtain an `ImportBinder` instance (cached per project file set), then call methods like `symbol_dict()` to retrieve the definitions accessible to a file through its imports.
-- Call `scope_binding_list()` to get names bound for specific line ranges (for imports inside functions or blocks) and their definitions, used when a usage appears on a particular line.
-- Call `default_binding()` to resolve JavaScript/TypeScript default exports and `member_binding()` to follow dotted or scope-qualified accesses after an import binds a module.
-- Call `import_file_set()` to discover which project files an import statement resolves to, and `import_line_dict()` to map imported names back to their import statement line numbers.
-- Call `implement_file_list()` to find where a C++/Rust member is defined when a header only declares it or when an impl block extends a type from another file.
+When another file needs to resolve a symbol usage to its definition across project boundaries, it calls `import_binder()` to obtain a binder for the project, then calls methods like `symbol_dict()` to get bindings for a file's import names, `scope_binding_list()` for names bound in specific line ranges, or `implement_file_list()` to find additional files that implement type members in other languages. For C++ member access without a class prefix, `member_scope_list()` returns the members visible inside functions and classes. To determine what a JavaScript default export value refers to, code calls `default_binding()`.
 
-The file is the central dependency resolution engine: it relies on `codetwine/extractors/` modules (imports, definitions, usages) to parse individual files, on `codetwine/import_to_path.py` to resolve module strings to file paths, and on `codetwine/rust_module_tree.py` and language-specific extractors (Rust paths, COBOL) for specialized resolution. The `codetwine/import_reference.py` module consumes its `SymbolBinding` data class and binder methods to build usage-to-definition targets, and `codetwine/extractors/dependency_graph.py` uses it to compute import relationships.
+This file depends on `extract_imports()`, `local_export_dict()`, `module_export_list()`, and `python_all_name_list()` from the imports extractor to read import statements and export metadata from parsed files; on `file_definition_list()` to extract top-level definitions and members from files; on `resolve_module_to_project_path()` and `detect_source_roots()` from import resolution to map module strings to file paths; on `parse_file()` to parse files into syntax trees; and on configuration modules for language-specific settings. The file is used by `import_reference.py` to resolve usage references through import bindings to their target definitions, and by `dependency_graph.py` to determine which files an import statement reads from.
 
-The binder caches results per file and project to avoid re-reading syntax trees; all caching is keyed by project file set, invalidated by `clear_import_binder_cache()` when the project changes. Exceptions during import or definition parsing are logged as warnings, and the affected file is treated as having no bindings rather than failing the entire analysis, allowing partial results for projects with syntax errors or missing dependencies.
+The module caches binding results per file and per project to avoid recomputing expensive transitive follows; a binder instance is kept per project file set via `project_cache_value()` and cleared when the file set changes. The module logs warnings when files cannot be parsed or their import statements read, but continues with partial information rather than failing.
 
 **Definitions**
 
 ## `SymbolBinding`
 
-A pairing of a project file and an optional definition name that represents what an import statement or export binds; used throughout the binder to track where a name leads and whether it names a specific definition or an entire file/module. When `name` is `None`, the binding stands for the file as a whole (a module namespace); when `name` is present, it identifies a specific definition within that file.
+Represents what a name refers to after being bound by an import statement or export: a file path (`file_rel`) and optionally a definition name (`name`) within that file. When `name` is `None`, the binding refers to the file as a module or namespace. Used throughout the module to track where a name originated and followed to its definition.
 
 ## `ScopeBinding`
 
-Associates a bound name with a line range (function body, block, or statement) and its definition, used for import statements that do not bind for the entire file (Python imports inside functions, JavaScript dynamic imports, Rust use declarations in blocks). The `binding` field is `None` when the name is bound but does not resolve to a project definition.
+Represents a name bound for a specific line range of a file, with a start and end line, the bound name, and a `SymbolBinding` stating what it refers to or `None` when it refers to nothing in the project. Used to track imports and re-exports written inside functions, blocks, or inline modules that apply only to those line ranges.
 
 ## `_FileBinding`
 
-Internal data structure capturing what import and export statements of a single file write as bindings: names for the whole file, re-exports without binding, wildcard imports from other files, and scope-limited bindings. It also tracks which files the import statements resolve to and which definitions are members of classes for C++ member scoping.
+Internal dataclass aggregating all the bindings that the import and export statements of a single file create: names bound for the whole file, names passed through by export statements, wildcard imports, inline module boundaries, and the lines of each import statement. Populated once per file by language-specific bind functions and cached.
 
 ## `_TreeFact`
 
-Internal data structure holding language-specific facts extracted from a file's syntax tree in a single parse: import statements, package declarations, Python `__all__` lists, JavaScript export aliases, C++ base class names, and Rust inline module boundaries. Built once per file and reused to avoid re-parsing.
+Internal dataclass holding the facts extracted from a file's syntax tree that are needed to compute its bindings: import statements, line count, package declaration (Java/Kotlin), Python `__all__`, local and module exports (JavaScript/TypeScript), inline module scopes (Rust), and base class names (C++). Read once per file and cached.
 
-## `clear_import_binder_cache`
+## `clear_import_binder_cache()`
 
-Discard all cached binders across all projects; called when project configuration or file sets change to force rebuilding on next use.
+Forget all cached binders for all projects; called when clearing analysis caches after the project file set changes or analysis configuration is updated.
 
-## `import_binder`
+## `import_binder()`
 
-Return the `ImportBinder` for a project, creating it once per unique project file set and caching it until the file set changes or the cache is cleared. This is the entry point for obtaining a binder to query symbol bindings.
+Return the cached `ImportBinder` for a project and file set, building it once if not yet built for that file set. Used whenever import bindings for a project are needed.
 
-## `_join_module`
+## `_join_module()`
 
-Join a module path string and a name into a single module path following Python semantics (e.g., `"pkg"` + `"core"` becomes `"pkg.core"`); used when resolving `from module import name` to check if `name` is itself a module.
+Join a Python module name (e.g., `"pkg"`) with a submodule name (e.g., `"core"`) into a qualified module string (e.g., `"pkg.core"`), handling relative imports with leading dots.
 
-## `_package_name`
+## `_package_name()`
 
-Extract the package name declared by a Java or Kotlin file from its syntax tree (the `package` statement), returning `None` if no package is declared.
+Extract the package name declared in a Java or Kotlin file's package statement by traversing the AST, returning `None` if no package is declared. Used to group Java/Kotlin files by package for import resolution.
 
-## `_base_class_name_dict`
+## `_base_class_name_dict()`
 
-Extract the base class names of each class in a C++ file by walking the syntax tree and matching class definitions with their base class clauses, returning a dictionary mapping class names to lists of their base classes without namespaces or template arguments.
+Extract the base class names of each class in a C++ file by traversing class definitions with bodies and collecting base class names from base clause nodes, returning a dictionary mapping class names to lists of base class names without template arguments. Used to resolve member lookups when a member is not found in a class itself but in a base class.
 
 ## `ImportBinder`
 
-The main binder class that reads import and export statements from project files, resolves them to target files, and follows re-exports to find definitions. It manages caches for file bindings, symbol visibility, exports, packages (Java/Kotlin), function implementations (C/C++), and class members, supporting multi-language resolution with language-specific bind strategies.
+Main class managing the resolution of import bindings for a project; initialized once per project and file set, it reads import statements from files and follows names through re-exports to their definitions. Stores cached binding information per file and per project, including which files import which others, which names are visible at each location, and where type members are defined in other files.
 
-## `ImportBinder.__init__`
+## `_file_ext()`
 
-Initialize a binder for a project by storing the project directory and file set, detecting source roots for the language-specific resolution strategies, and setting up internal caches. Called once per project file set by `import_binder()`.
+Return the language extension determined for a file by `language_ext()`, used to look up language-specific configuration for parsing and binding.
 
-## `_file_ext`
+## `_bind_kind()`
 
-Return the file extension (language identifier) of a project file as determined by `language_ext()`, used throughout to look up language-specific settings.
+Return the "bind" configuration value for a file's language (e.g., `"module"` for Python, `"export"` for JavaScript), or `None` if the language has no import resolution configured.
 
-## `_bind_kind`
+## `top_level_name_list()`
 
-Look up the `"bind"` value from the import resolve configuration of a file's language (e.g., `"module"` for Python, `"export"` for JavaScript, `"include"` for C/C++), determining which binding strategy applies; returns `None` if the file's language has no import resolve configuration.
+Return the top-level definition names of a file by calling `top_level_definition_names()`, cached per file; returns an empty list and logs a warning if the file cannot be read.
 
-## `top_level_name_list`
+## `_tree_fact()`
 
-Return the outermost definition names of a file using `top_level_definition_names()`, cached once per file; logs a warning and returns an empty list if the file cannot be parsed.
+Parse a file once and extract the facts needed for binding: import statements, line count, and language-specific metadata (package names, `__all__`, exports, etc.). Results are cached and reused across all binding operations for the file.
 
-## `_tree_fact`
+## `_definition_list()`
 
-Parse a file once and extract language-specific facts (imports, package names, exports, base classes, inline modules) into a `_TreeFact`, reading the syntax tree a single time but extracting multiple pieces of information to avoid re-parsing.
+Return the definitions of a file by calling `file_definition_list()` with the file's language definition settings, used to look up member names and base classes.
 
-## `_definition_list`
+## `_resolve()`
 
-Return the definitions of a file by calling `file_definition_list()` with the file's language-specific definition dictionary.
+Resolve a module string written in a file to a project file path by calling `resolve_module_to_project_path()` with the project's source roots, returning `None` if the module is external or does not exist.
 
-## `_resolve`
+## `_file_binding()`
 
-Resolve a module string written in a file to a project file path using `resolve_module_to_project_path()` with the binder's source roots and project context.
+Return the bindings created by a file's import and export statements, computed once per file by reading its tree facts and applying the language-specific bind function. Results are cached; if an error occurs during reading, the file is marked as binding nothing and the error is logged.
 
-## `_file_binding`
+## `_bind_name()`
 
-Read and cache the import and export bindings of a single file once by selecting the appropriate bind function based on the file's language and calling it with the file's import statements and language facts. Registered in the cache before being filled to handle circular references (a file that imports itself).
+Internal helper that binds a name from an import statement to what it refers to, adding it to the file's binding maps based on whether it is bound for the whole file or a specific line range, and whether it should be passed on to files that import this file.
 
-## `_bind_name`
+## `_bind_module()`
 
-Helper for language-specific bind functions to bind a single imported or exported name, either for the whole file or for a line range (scope binding), with logic to skip `None` bindings and pass through export statements.
+Read Python import statements and populate a file's bindings: `import a.b.c` binds intermediate packages if they are project files, `from m import n` binds the name or the module if the file has no script, and `from m import *` takes names from the module's `__all__` or public names. Statements written inside functions bind their names for those function's lines.
 
-## `_bind_module`
+## `_bind_export()`
 
-Python-specific binding strategy: process `import`, `from import`, and `from import *` statements, resolving modules to files, binding names to definitions or modules, and tracking the file's `__all__` list.
+Read JavaScript/TypeScript import and export statements: import statements bind their module and names to what they refer to, export statements with sources pass names on to importing files, `export *` and `module.exports = require(...)` pass all names or the default export, and `require(...).member()` marks the access as a usage. Statements in function scopes bind for those lines.
 
-## `_bind_export`
+## `_bind_include()`
 
-JavaScript/TypeScript-specific binding strategy: process `import`, `require()`, `export`, and `export *` statements, binding names to definitions or modules, tracking local re-exports and module exports, and recording where names are used (require member access, dynamic import callbacks).
+Read C/C++ `#include` directives and bind every name from each included file as a wildcard import. Also extract the line ranges of functions defined as class members outside the class and classes themselves, storing them for member lookup.
 
-## `_bind_include`
+## `_bind_path()`
 
-C/C++-specific binding strategy: process `#include` directives to mark every included file as passing on all names, and extract member scopes (functions and classes) to enable member lookup in C++ files that define members of classes outside the class body.
+Read Rust `use` declarations and expand them to bound names and modules using `rust_import_name_dict()`, handling paths and inline modules that bind names for specific line ranges. Enum variants taken over by `use Enum::*` are tracked separately.
 
-## `_bind_path`
+## `_bind_path_import()`
 
-Rust-specific binding strategy: process `use` declarations and paths, resolving them through the Rust module tree, binding names to definitions with scope awareness (whole file or block/inline module), and handling enum variants and wildcard imports.
+Process a single Rust use declaration or path, resolving its module and determining which names it binds, adding them to the file's binding maps with appropriate line ranges and distinguishing between whole-file bindings and range-specific bindings.
 
-## `_bind_path_import`
+## `_bind_package()`
 
-Helper for `_bind_path` processing a single Rust `use` declaration or path, resolving the module, binding imported names, and returning variants of enums that the import takes over for a line range (to be added to scope bindings).
+Read Java and Kotlin import statements and bind names to types and members of packages: `import a.b.C` binds the type, `import a.b.*` binds all top-level names of package files, and `import static a.b.C.m` binds the member. Members of types are looked up from top-level definitions.
 
-## `_bind_package`
+## `_package_index()`
 
-Java/Kotlin-specific binding strategy: process `import` statements to resolve qualified names to types and members, handling wildcard imports, `import static` for members, and building a symbol dictionary for the file.
+Build and cache a mapping from package names (or directory paths for files without packages) to the files in each package by reading package statements from files with "package" bind kind; used to resolve package imports in Java and Kotlin.
 
-## `_package_index`
+## `_package_file_list()`
 
-Build once a dictionary mapping package names (and `/` + directory for files without a package statement) to the files that declare them, reading package statements from each file's syntax tree.
+Return the files belonging to a named package by looking them up in the package index, returning an empty list if the package does not exist.
 
-## `_package_file_list`
+## `_resolve_qualified_name()`
 
-Return the files of a Java or Kotlin package in path order by looking them up in `_package_index()`.
+Resolve a Java/Kotlin qualified name from an import statement to a definition by finding the longest leading part that matches a package, then looking up the next part among top-level names of that package's files, preferring files named after the type and nearest to the importing file.
 
-## `_resolve_qualified_name`
+## `_member_name_list()`
 
-Resolve a qualified name (e.g., `["com", "acme", "model", "User"]`) written in a Java/Kotlin import to a file and definition path by finding the longest leading part that is a package, then looking up the next part among the top-level names of that package's files, with preference for files named like the part.
+Return the names of definitions written inside a type (such as inner classes or static members) by finding container definitions matching the type name and collecting definitions nested within them.
 
-## `_member_name_list`
+## `_implicit_file_list()`
 
-Return the names of definitions nested inside a container type (class, interface) of a file, used for Java/Kotlin `import static Type.*` to enumerate members.
+Return files whose names are visible in a file without an import statement based on language-specific implicit visibility: Java/Kotlin files in the same package, or SQL files in the same language.
 
-## `_implicit_file_list`
+## `_module_part_file()`
 
-Return the files whose names a file can write without an import statement based on implicit visibility rules: same package (Java/Kotlin) or same language (SQL).
+When a Python file is a package's `__init__.py`, return the file of the submodule with a given name by resolving a relative import, used to handle `from package import submodule` when the package has no direct binding.
 
-## `_module_part_file`
+## `_take_over_file_list()`
 
-Return the file of a Python module inside a package by resolving `"." + name` relative to the package's `__init__.py`, used when an import names a module that has no script of its own.
+Return a file and all files it takes over as a whole (via `from m import *`, `#include`, `export *`, or `use super::*`) recursively, each appearing once in traversal order; used to compute which files' public names should be visible in a file.
 
-## `_take_over_file_list`
+## `_direct_name_dict()`
 
-Return a file and all files it recursively takes over as a whole (wildcard imports, includes, re-exports), visited in breadth-first order, used to compute transitive visibility. Files whose `"bind"` is in `_OWN_NAME_EXPORT_BIND_SET` take over no files.
+Return the names a file can directly pass on to importing files: the export re-exports and local exports, its top-level definitions, and its import bindings, in that priority order; for files with "package" or "own" bind kind, only top-level definitions are included.
 
-## `_direct_name_dict`
+## `_visible_name_dict()`
 
-Return the names another file can import directly from a file as they are written (not followed further): re-exports, top-level definitions, export aliases, and whole-file imports, in priority order. For `"bind"` values in `_OWN_NAME_EXPORT_BIND_SET`, only top-level definitions are returned.
+Return all names visible in a file by merging the direct names of the file and all files it takes over as a whole, with the first occurrence of each name kept; used to resolve re-exports and follow names to their definitions.
 
-## `_visible_name_dict`
+## `star_name_set()`
 
-Return every name visible from a file, including names from files it takes over as a whole, each followed only one level (not to the definition). Built once per file by merging `_direct_name_dict()` over `_take_over_file_list()`, with the first file defining a name winning.
+Return the names that `from file import *` takes from a file by computing the union of the file's top-level names, import bindings, and names taken from its wildcard imports, excluding names starting with `"_"`, or the names listed in `__all__` if present. Results are cached and synchronized across files that take over one another.
 
-## `star_name_set`
+## `_export_name_dict()`
 
-Return the names `from file import *` takes from a Python file: the `__all__` list if present, else the file's definitions and imported names (excluding those starting with `_`), with transitive closure over files that take each other over. Used to compute what wildcard imports provide in Python and languages with similar semantics.
+Return the names a file exports to importing files, each followed to the file and definition that ultimately provides it by calling `_follow()` on each visible name; cached per file.
 
-## `_export_name_dict`
+## `_follow()`
 
-Return every name visible from a file, each followed to the definition it ultimately binds to, used when another file imports from this one. Built once per file by following each binding in `_visible_name_dict()` to its definition via `_follow()`.
+Follow a binding through files that re-export it to the file that defines it, stepping through `_visible_name_dict()` at each file until reaching a name the file defines itself, returning a module file when a name is not found but the file is a Python package with that submodule, or stopping at a circular reference. Used to determine the source of every exported name.
 
-## `_follow`
+## `member_binding()`
 
-Follow a binding through re-export chains to the file that defines it: each step looks up the name in the file the binding names, stopping when a definition is found, when the name is not found (and is not a Python submodule), when a cycle is detected, or when the binding refers to the file itself. Bindings that stand for modules (name is `None`) are returned unchanged.
+Given a binding that refers to a file and a list of parts to traverse within that file, follow the parts through the file's exports to find nested definitions, returning the binding reached and any remaining parts, handling module files and looking up names in export dictionaries.
 
-## `member_binding`
+## `default_binding()`
 
-Follow the parts written after a name that stands for a module (e.g., `package.module.Name.method`) by recursively looking up each part in the module's exports, stopping when a part is not found or when a definition is reached. Returns the binding and any parts that could not be followed.
+Return the binding of the default export (CommonJS or ES6) of a JavaScript/TypeScript file by looking up `DEFAULT_EXPORT_NAME` in the file's export names, returning `None` for non-JavaScript files or files with no default export.
 
-## `default_binding`
+## `_implement_index()`
 
-Return the definition the default export of a JavaScript/TypeScript file binds to by looking it up in the export names, returning `None` for non-export files or files with no default export.
+Build and cache a mapping from function names to the files that define them, scanning all files with "include" bind kind and indexing function definitions with each possible prefix of their scoped names; used to find implementations of functions declared in headers.
 
-## `_implement_index`
+## `implement_file_list()`
 
-Build once a dictionary mapping function names to files that define them, read from C/C++ files by walking their definitions and handling members defined outside their class (using multiple lookup keys for different scope depths).
+Return other files that provide implementations of a definition, used for C/C++ function implementations and Rust impl block members; results are cached per file and name and delegated to language-specific find functions.
 
-## `implement_file_list`
+## `_find_implement_file_list()`
 
-Return the files that define a member or function that a file only declares (C/C++ function declarations, Rust impl members), looked up once per file and name using language-specific find functions.
+For a C/C++ file, return the source files that define a function the file only declares, by looking up the declaration's name in the implement index and checking that the source files include the header.
 
-## `_find_implement_file_list`
+## `_base_name_list()`
 
-Look up the C/C++ files that define a function declared in a header by checking the implementation index, filtering for files that include the header, and handling members defined outside their class.
+Return the names of base classes for a C++ class by looking up the class name in the file's base class mapping extracted from the syntax tree.
 
-## `_base_name_list`
+## `_class_member_binding_dict()`
 
-Return the base class names of a C++ class of a file by extracting them from the file's syntax tree.
+Return the accessible members of a C++ class (including inherited members from base classes in order) as a dictionary mapping member names to their bindings, cached per class; members of the class itself take precedence over inherited members of the same name.
 
-## `_class_member_binding_dict`
+## `member_scope_list()`
 
-Return the members of a C++ class (from the class itself and its base classes) as bindings, built once per class with breadth-first traversal of the base class hierarchy. A member of the class itself shadows a member of the same name from a base class.
+Return the line ranges of C++ functions defined as class members outside the class and classes themselves, along with the members visible by name alone in each range, filtering to include only members from other files.
 
-## `member_scope_list`
+## `inherit_binding()`
 
-Return the line ranges and member dictionaries for C++ functions defined outside their class and class bodies in a file, enabling name lookup of class members by name alone within those scopes.
+When a C++ usage refers to a member that only a base class defines, return the binding of that member in the base class; otherwise return the argument bindings unchanged. Used to redirect member accesses to the correct base class definition.
 
-## `inherit_binding`
+## `_impl_member_index()`
 
-Resolve a member access on a C++ class to the member of a base class when appropriate (e.g., `Comment.Value` becomes `Node.Value` when `Node` is a base of `Comment` and defines `Value`), used when a definition lies in a base class.
+Build and cache a mapping from `"Type::member"` strings to the files with impl blocks of the type that define the member, scanning all files with "path" bind kind (Rust); used to find impl blocks that extend a type.
 
-## `_impl_member_index`
+## `_find_impl_member_file_list()`
 
-Build once a dictionary mapping `"Type::member"` to files with impl blocks that define the member, read from Rust files by walking definitions within impl items.
+For a Rust file, return other files whose impl blocks define members of a type, by looking up the member in the impl index and checking that those files import the type.
 
-## `_find_impl_member_file_list`
+## `symbol_dict()`
 
-Look up the Rust files with impl blocks that define a member of a type of a file, checking that the files bind the type and finding the member in their implementation index.
+Return the names that can be written in a file by importing or implicitly (without an import statement), each mapped to the binding of the definition that provides it. This is the primary public method for looking up what a name refers to in a file, excluding names the file defines itself.
 
-## `symbol_dict`
+## `scope_binding_list()`
 
-Return the names a file can write that come from other project files: import bindings, implicit visibility names, and transitive names from wildcard imports, each followed to its definition. Used to resolve usage names to where they ultimately come from, excluding names the file defines at its top level.
+Return the names bound for specific line ranges in a file (import statements in functions, Rust use declarations in blocks) and the definitions they refer to, deduplicated and followed to their sources. Used to determine which names are available at a given line inside a scope.
 
-## `scope_binding_list`
+## `module_scope_list()`
 
-Return names bound for specific line ranges (import statements in functions, Rust use declarations in blocks, JavaScript export statements) and their definitions, used to resolve usages that appear on particular lines where scope-limited imports apply.
+Return the line ranges of inline modules (Rust `mod name { ... }`) and whether each inherits the names of the module around it via `use super::*`, returning an empty list for non-Rust files.
 
-## `module_scope_list`
+## `use_list()`
 
-Return the line ranges and scope-inheritance flags of Rust inline modules (blocks and `use super::*` declarations), used for scope-aware name lookup in Rust.
+Return the names accessed through member operations on imports (JavaScript `require(...).method()`) that should be treated as usages, paired with their line numbers.
 
-## `use_list`
+## `import_file_set()`
 
-Return the names where import statements are used directly (JavaScript `require("./m").method()`), recorded as (name, line) pairs for identifying usage locations that are also import accesses.
+Return the project files that the import statements of a file resolve to, used to determine import dependencies.
 
-## `import_file_set`
+## `import_line_dict()`
 
-Return the project files that the import statements of a file resolve to, used to compute import dependencies.
+Return a mapping from each name an import binds to the line numbers of the statements that bind it, optionally filtered to only statements that bind for the whole file; used to locate import statements.
 
-## `import_line_dict`
+## `_module_tree_fact()`
 
-Return a mapping from names to the line numbers of the import statements that bind them, distinguishing between whole-file imports and scope-limited imports via the `is_whole_file` parameter.
+Internal function that extracts Python `__all__` declarations from a file's syntax tree into a `_TreeFact`.
 
-## `_module_tree_fact`
+## `_export_tree_fact()`
 
-Extract Python `__all__` declarations from a file's syntax tree into a `_TreeFact`.
+Internal function that extracts JavaScript/TypeScript local and module exports from a file's syntax tree into a `_TreeFact`.
 
-## `_export_tree_fact`
+## `_include_tree_fact()`
 
-Extract JavaScript/TypeScript local export aliases and module exports from a file's syntax tree into a `_TreeFact`.
+Internal function that extracts C++ base class mappings from a file's syntax tree into a `_TreeFact`.
 
-## `_include_tree_fact`
+## `_path_tree_fact()`
 
-Extract C++ base class names from a file's syntax tree into a `_TreeFact`.
+Internal function that extracts Rust inline module scopes from a file's syntax tree into a `_TreeFact`.
 
-## `_path_tree_fact`
+## `_package_tree_fact()`
 
-Extract Rust inline module boundaries from a file's syntax tree into a `_TreeFact`.
-
-## `_package_tree_fact`
-
-Extract Java/Kotlin package declarations from a file's syntax tree into a `_TreeFact`.
+Internal function that extracts Java/Kotlin package declarations from a file's syntax tree into a `_TreeFact`.
 
 ## `_TREE_FACT_FUNCTION_DICT`
 
-Dictionary mapping bind strategy values (`"module"`, `"export"`, `"include"`, `"path"`, `"package"`) to functions that extract language-specific facts from syntax trees.
+Mapping from bind kind to the function that extracts language-specific facts needed for binding from a file's syntax tree, allowing each language to contribute custom data to `_TreeFact` during parsing.
 
 ## `_BIND_FUNCTION_DICT`
 
-Dictionary mapping bind strategy values to the language-specific binding methods that process import statements and build file bindings.
+Mapping from bind kind to the method that reads and processes import statements for a language, populating a file's `_FileBinding` with the names it binds and their targets.
 
 ## `_IMPLEMENT_FUNCTION_DICT`
 
-Dictionary mapping bind strategy values (`"include"`, `"path"`) to the methods that find files with implementations or impl members of declarations.
+Mapping from bind kind to the method that finds additional files implementing definitions from a file, supporting C/C++ function declarations and Rust impl blocks.
 
 # Summary
 
 # Summary: codetwine/import_binding.py
 
-**Responsibility:** Map import statement bindings to their definitions across multi-language projects by resolving module paths, following re-exports, and applying language-specific scoping rules.
+**Single Responsibility**: Maps names bound by import statements to their definitions by following imports and re-exports through project files until reaching the files that define them.
 
-**Main Public API:** `import_binder()` returns a cached `ImportBinder` instance; `SymbolBinding` pairs files with optional definition names; `ScopeBinding` associates names with line ranges and definitions.
+**Main Public Definitions**: `ImportBinder` (main class managing import resolution per project), `SymbolBinding` (file path and optional name within that file), `ScopeBinding` (name bound for specific line ranges), `import_binder()` (returns cached binder for project), `symbol_dict()` (names importable in a file), `scope_binding_list()` (names bound in line ranges), `default_binding()` (JavaScript default export), `member_scope_list()` (C++ member visibility), `implement_file_list()` (implementations in other files).
 
-**Key Methods:** `symbol_dict()` retrieves names accessible via imports; `scope_binding_list()` handles scope-limited bindings (functions, blocks); `member_binding()` and `default_binding()` resolve dotted accesses and default exports; `import_file_set()` discovers resolved files; `implement_file_list()` finds C++/Rust implementations.
-
-**Key Concepts:** Language-specific bind strategies (Python modules, JavaScript exports, C++ includes, Rust paths, Java packages); transitive visibility through re-exports and wildcard imports; member scoping for C++ classes and Rust impl blocks; caching per project file set with `clear_import_binder_cache()` for invalidation.
+**Key Concepts**: Import and export statement processing; transitive name resolution through re-exports; language-specific binding for Python (modules, `__all__`), JavaScript (exports, CommonJS), C/C++ (includes, base classes), Rust (use paths, impl blocks), Java/Kotlin (packages, static members); per-file and per-project caching; partial recovery from parse errors.

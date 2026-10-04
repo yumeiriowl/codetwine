@@ -1720,8 +1720,8 @@
     {
       "lines": [
         70,
-        327,
-        488
+        346,
+        518
       ],
       "name": "CsharpType",
       "file": "codetwine/codetwine/csharp_namespace_index_py/csharp_namespace_index.py",
@@ -1732,8 +1732,8 @@
         78,
         150,
         153,
-        387,
-        398
+        417,
+        428
       ],
       "name": "CsharpDeclaration",
       "file": "codetwine/codetwine/csharp_namespace_index_py/csharp_namespace_index.py",
@@ -1743,9 +1743,9 @@
       "lines": [
         88,
         96,
-        460,
-        484,
-        486
+        490,
+        514,
+        516
       ],
       "name": "CsharpUsing",
       "file": "codetwine/codetwine/csharp_namespace_index_py/csharp_namespace_index.py",
@@ -1778,10 +1778,10 @@
     {
       "lines": [
         259,
-        615,
-        640,
-        842,
-        902
+        645,
+        670,
+        872,
+        932
       ],
       "name": "join_name",
       "file": "codetwine/codetwine/csharp_namespace_index_py/csharp_namespace_index.py",
@@ -1789,16 +1789,19 @@
     },
     {
       "lines": [
-        300
+        300,
+        327
       ],
       "name": "CsharpMember",
       "file": "codetwine/codetwine/csharp_namespace_index_py/csharp_namespace_index.py",
-      "usage_context": "\n\ndef _is_type_fit(\n    member: CsharpMember, argument_type_tuple: tuple[str | None, ...], is_extension: bool,\n) -> bool:\n    \"\"\"Return whether the arguments of a call can be the parameters of a method declaration.\n"
+      "usage_context": "\n\ndef _is_type_fit(\n    member: CsharpMember, argument_type_tuple: tuple[str | None, ...], is_extension: bool,\n) -> bool:\n    \"\"\"Return whether the arguments of a call can be the parameters of a method declaration.\n\n...\n\n\ndef _exact_type_count(\n    member: CsharpMember, argument_type_tuple: tuple[str | None, ...], is_extension: bool,\n) -> int:\n    \"\"\"Return how many arguments of a call have exactly the type of their parameter.\n"
     },
     {
       "lines": [
         316,
-        318
+        318,
+        340,
+        341
       ],
       "name": "CsharpMember.parameter_type_tuple",
       "file": "codetwine/codetwine/csharp_namespace_index_py/csharp_namespace_index.py",
@@ -1806,7 +1809,7 @@
     },
     {
       "lines": [
-        359
+        379
       ],
       "name": "CsharpType.member_list_dict.get",
       "file": "codetwine/codetwine/csharp_namespace_index_py/csharp_namespace_index.py",
@@ -1814,7 +1817,7 @@
     },
     {
       "lines": [
-        361
+        381
       ],
       "name": "CsharpType.start_line",
       "file": "codetwine/codetwine/csharp_namespace_index_py/csharp_namespace_index.py",
@@ -1822,7 +1825,7 @@
     },
     {
       "lines": [
-        479
+        509
       ],
       "name": "CsharpUsing.part_tuple",
       "file": "codetwine/codetwine/csharp_namespace_index_py/csharp_namespace_index.py",
@@ -1830,28 +1833,28 @@
     },
     {
       "lines": [
-        526,
-        622,
-        643,
-        651,
-        671,
-        678,
-        686,
-        705,
-        712,
-        733,
-        739,
-        746,
-        751,
-        752,
-        755,
-        759,
-        765,
+        556,
+        652,
+        673,
+        681,
+        701,
+        708,
+        716,
+        735,
+        742,
+        763,
+        769,
+        776,
+        781,
+        782,
+        785,
         789,
-        793,
         795,
-        848,
-        874
+        819,
+        823,
+        825,
+        878,
+        904
       ],
       "name": "CsharpReference",
       "file": "codetwine/codetwine/csharp_namespace_index_py/csharp_namespace_index.py",
@@ -1859,16 +1862,16 @@
     },
     {
       "lines": [
-        571,
-        609,
-        676,
-        736,
-        794,
-        869,
-        881,
-        895,
-        898,
-        899
+        601,
+        639,
+        706,
+        766,
+        824,
+        899,
+        911,
+        925,
+        928,
+        929
       ],
       "name": "CsharpReference.part_tuple",
       "file": "codetwine/codetwine/csharp_namespace_index_py/csharp_namespace_index.py",
@@ -1876,8 +1879,8 @@
     },
     {
       "lines": [
-        574,
-        869
+        604,
+        899
       ],
       "name": "CsharpReference.arity_tuple",
       "file": "codetwine/codetwine/csharp_namespace_index_py/csharp_namespace_index.py",
@@ -1885,9 +1888,9 @@
     },
     {
       "lines": [
-        588,
-        790,
-        896
+        618,
+        820,
+        926
       ],
       "name": "THIS_REFERENCE",
       "file": "codetwine/codetwine/csharp_namespace_index_py/csharp_namespace_index.py",
@@ -1895,7 +1898,7 @@
     },
     {
       "lines": [
-        588
+        618
       ],
       "name": "NAME_REFERENCE",
       "file": "codetwine/codetwine/csharp_namespace_index_py/csharp_namespace_index.py",
@@ -1903,12 +1906,12 @@
     },
     {
       "lines": [
-        588,
-        734,
-        790,
-        867,
-        869,
-        896
+        618,
+        764,
+        820,
+        897,
+        899,
+        926
       ],
       "name": "CsharpReference.kind",
       "file": "codetwine/codetwine/csharp_namespace_index_py/csharp_namespace_index.py",
@@ -1916,7 +1919,7 @@
     },
     {
       "lines": [
-        676
+        706
       ],
       "name": "ALIAS_USING",
       "file": "codetwine/codetwine/csharp_namespace_index_py/csharp_namespace_index.py",
@@ -1924,8 +1927,8 @@
     },
     {
       "lines": [
-        689,
-        835
+        719,
+        865
       ],
       "name": "NAMESPACE_USING",
       "file": "codetwine/codetwine/csharp_namespace_index_py/csharp_namespace_index.py",
@@ -1933,8 +1936,8 @@
     },
     {
       "lines": [
-        703,
-        837
+        733,
+        867
       ],
       "name": "STATIC_USING",
       "file": "codetwine/codetwine/csharp_namespace_index_py/csharp_namespace_index.py",
@@ -1942,7 +1945,7 @@
     },
     {
       "lines": [
-        734
+        764
       ],
       "name": "ATTRIBUTE_REFERENCE",
       "file": "codetwine/codetwine/csharp_namespace_index_py/csharp_namespace_index.py",
@@ -1950,8 +1953,8 @@
     },
     {
       "lines": [
-        750,
-        870
+        780,
+        900
       ],
       "name": "CsharpReference.is_absolute",
       "file": "codetwine/codetwine/csharp_namespace_index_py/csharp_namespace_index.py",
@@ -1959,7 +1962,7 @@
     },
     {
       "lines": [
-        865
+        895
       ],
       "name": "CsharpReference.line",
       "file": "codetwine/codetwine/csharp_namespace_index_py/csharp_namespace_index.py",
@@ -1967,8 +1970,8 @@
     },
     {
       "lines": [
-        867,
-        896
+        897,
+        926
       ],
       "name": "MEMBER_REFERENCE",
       "file": "codetwine/codetwine/csharp_namespace_index_py/csharp_namespace_index.py",
@@ -1976,8 +1979,8 @@
     },
     {
       "lines": [
-        881,
-        894
+        911,
+        924
       ],
       "name": "CsharpReference.is_call",
       "file": "codetwine/codetwine/csharp_namespace_index_py/csharp_namespace_index.py",
@@ -1985,9 +1988,9 @@
     },
     {
       "lines": [
-        882,
-        904,
-        908
+        912,
+        934,
+        938
       ],
       "name": "CsharpReference.argument_count",
       "file": "codetwine/codetwine/csharp_namespace_index_py/csharp_namespace_index.py",
@@ -1995,8 +1998,8 @@
     },
     {
       "lines": [
-        888,
-        905
+        918,
+        935
       ],
       "name": "CsharpReference.argument_type_tuple",
       "file": "codetwine/codetwine/csharp_namespace_index_py/csharp_namespace_index.py",
@@ -2004,7 +2007,7 @@
     },
     {
       "lines": [
-        972
+        1002
       ],
       "name": "csharp_reference_list",
       "file": "codetwine/codetwine/csharp_namespace_index_py/csharp_namespace_index.py",

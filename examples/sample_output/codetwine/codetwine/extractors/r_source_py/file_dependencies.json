@@ -1704,7 +1704,7 @@
   "caller_usages": [
     {
       "lines": [
-        296
+        328
       ],
       "name": "r_definition_text",
       "file": "codetwine/codetwine/extractors/definition_source_py/definition_source.py",

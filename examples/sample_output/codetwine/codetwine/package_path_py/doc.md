@@ -4,68 +4,88 @@
 
 **Overview**
 
-Resolve module import paths defined in package.json "imports" and "exports" fields, and map package names to their entry points within a project.
+Resolve package.json "imports" and "exports" entries to determine the file paths that module strings can stand for in a project, with per-project caching of package metadata.
 
-A developer would use this file to:
-- Call `package_import_path_list()` to resolve "#"-prefixed import aliases defined in a package.json "imports" field to their corresponding file paths
-- Call `package_name_path_list()` to resolve bare package names (like "@acme/ui" or "react") to the entry points defined in package.json "exports", "main", or similar fields
-- Call `clear_package_path_cache()` when project state changes to discard cached package.json contents
+- Call `package_import_path_list()` to resolve module strings starting with "#" against the "imports" field of the nearest package.json above the importing file.
+- Call `package_name_path_list()` to resolve module strings naming a project package against its "exports" and entry point fields ("main", "module", "source", "typings", "types"), with fallback to file system paths under the package directory and its "src" subdirectory.
+- Call `clear_package_path_cache()` to discard cached package.json contents when project state changes.
 
-This file depends on `codetwine/path_config.py` for the `PathConfig` class to match module patterns against "imports"/"exports" entries, the `inside_project()` function to validate resolved paths stay within the project, and `read_json_file()` to parse package.json files. The file `codetwine/import_to_path.py` uses both `package_import_path_list()` and `package_name_path_list()` as part of resolving import statements to file paths; `codetwine/extractors/dependency_graph.py` calls `clear_package_path_cache()` to reset state during analysis.
+This file depends on `codetwine/path_config.py` to validate paths stay within project boundaries via `inside_project()` and to expand pattern-based "imports"/"exports" entries via `PathConfig.module_path_list()`. The file is used by `codetwine/import_to_path.py` to resolve non-relative module imports to candidate file paths, and by `codetwine/extractors/dependency_graph.py` to clear caches during analysis resets.
 
-Package.json files are cached per project directory and per relative directory path to avoid repeated file reads. Package names are cached per project directory keyed by the set of project files, allowing reuse across multiple lookups with the same file set. When a package name appears in multiple directories, the one in the directory that comes first in path order is retained.
+The module implements two-level caching: `package_file_cache` stores parsed package.json contents per directory to avoid redundant file reads, and `package_name_cache` stores computed package-by-name mappings per project file set to avoid recomputation when the set of project files changes. Paths in build outputs (like "dist/") are mirrored to their source equivalents (like "src/") when a package follows the pattern of having sources separate from build output.
 
 **Definitions**
 
 ## `package_file_cache`
 
-Module-level dictionary mapping project directories to caches of package.json contents, where each inner dictionary maps directory relative paths to their parsed package.json objects or None if no file exists. The cache avoids repeated reads of the same package.json file across multiple calls.
+Module-level dictionary caching parsed package.json file contents by project directory and relative directory path, to avoid re-reading and re-parsing the same files; the value is the parsed object or None if the file does not exist or cannot be read.
 
 ## `package_name_cache`
 
-Module-level dictionary mapping project directories to tuples of (project file set, package directory dictionary), caching the result of `_package_dir_dict()` so the expensive traversal of package.json files is performed only once per unique project file set.
+Module-level dictionary caching computed mappings of package names to their directories by project directory, paired with the project file set used to compute them; invalidated and recomputed when the project file set changes.
+
+## `_IMPORT_MODULE_START`
+
+Constant character "#" identifying module strings that use the package.json "imports" field for resolution.
+
+## `_ENTRY_KEY_TUPLE`
+
+Tuple of ordered field names ("types", "typings", "source", "module", "main") from package.json that specify the entry point of a package, tried in order to find the primary export path.
+
+## `_SOURCE_DIR_NAME`
+
+Constant directory name "src" representing the conventional location of source files in a package, used to map build output paths back to their source equivalents.
+
+## `_INDEX_FILE_NAME`
+
+Constant file name "index" representing the conventional default entry file of a directory, used as a fallback when no explicit entry point is specified.
 
 ## `clear_package_path_cache()`
 
-Clear both `package_file_cache` and `package_name_cache` to forget all cached package.json files and package names across all projects, used when the project state changes and cached information becomes stale.
+Discard all cached package.json file contents and package name mappings; called when project state changes to ensure subsequent lookups read current file system state.
 
 ## `_package_file()`
 
-Retrieve the parsed content of a package.json file at a given directory, reading it once per directory per project and caching the result to avoid repeated file I/O; returns None if the file does not exist or cannot be read.
+Retrieve the parsed content of a package.json file in a given directory, reading and caching it once per directory per project to minimize file I/O; returns None if the file does not exist or cannot be parsed as JSON.
 
 ## `_target_list()`
 
-Extract all file paths from a package.json "imports" or "exports" entry value, which may be a string, array of values, object with conditional exports (like "types", "import", "default"), or nested combinations thereof, flattening the result into a single list in the order encountered.
+Extract file paths from a package.json "imports" or "exports" entry value, which may be a string, a list of values, or an object with condition-based values (like "types" or "default"), recursively flattening the structure into a list of paths.
 
 ## `_pattern_path_list()`
 
-Resolve an "imports" or "exports" pattern dictionary entry against a module name (like "#internal/a" or "./sub"), using `PathConfig` to match the name against patterns containing a single "*" wildcard and return the corresponding target paths, filtered to those that remain within the project boundary.
+Resolve a module name or import specifier against a set of pattern-based entries (like those in "imports" or "exports" objects), using `PathConfig.module_path_list()` to handle wildcards, and return only paths that remain within the project boundary.
 
 ## `package_import_path_list()`
 
-Resolve a "#"-prefixed module string (like "#db" or "#internal/log") to the file paths it refers to according to the "imports" field of the nearest package.json in or above the directory containing the current file, traversing upward from the file's directory to the project root until an "imports" object is found.
+Return file paths that a module string starting with "#" can resolve to by consulting the "imports" field of the package.json in or above the file's directory; traverses up the directory tree to find a package.json with an "imports" field that matches the module name.
 
 ## `_package_dir_dict()`
 
-Map package names to their directories within a project by reading package.json files from every directory that contains a project file and every directory above those, returning the first occurrence of each package name when duplicates exist, with results cached per project and file set.
+Compute and cache the set of packages in a project by name, scanning package.json files in the directories containing project files and their parent directories; when two packages share the same name, the one in the earliest directory wins.
 
 ## `_source_path_list()`
 
-Given a path within a package, return that path followed by the same path with its first subdirectory replaced by "src" when it is a build output directory like "dist" (but not when it is already "src" or points outside the package), allowing resolution of both built and source versions of a module.
+Return a file path and, if the path appears to be in a build output directory (not "src"), also the corresponding path with the first directory under the package replaced by "src"; used to provide both compiled and source versions of a module.
 
 ## `package_name_path_list()`
 
-Resolve a bare package name (like "@acme/ui" or "react") to all candidate file paths it may refer to within the project, starting with paths defined in the package.json "exports" field, then entry point keys ("types", "typings", "source", "module", "main"), each followed by its source variant from `_source_path_list()`, then fallback paths constructed by appending the requested subpath or index file under the package directory and its "src" subdirectory, with duplicates removed while preserving order.
+Return file paths that a module string naming a project package can resolve to by checking the package's "exports" field (with pattern matching), then falling back to its entry point fields, and finally to file system lookups under the package directory and its "src" subdirectory; scoped package names (starting with "@") are matched before unscoped names.
 
 # Summary
 
 # Summary: codetwine/package_path.py
 
-**Single Responsibility:** Resolve module import paths from package.json "imports" and "exports" fields to file paths, and map package names to their entry points.
+**Single Responsibility**
 
-**Main Public Definitions:**
-- `package_import_path_list()` — resolves "#"-prefixed aliases to file paths
-- `package_name_path_list()` — resolves bare package names to entry points
-- `clear_package_path_cache()` — clears cached package.json data
+Resolve module strings to file paths by consulting package.json "imports" and "exports" fields, with project-scoped caching of package metadata.
 
-**Key Concepts:** Handles package.json parsing and caching per project directory; pattern matching against "imports"/"exports" entries with wildcard support; traversal of directory hierarchies to find package definitions; fallback to source directories ("src") for build outputs; validation that resolved paths stay within project boundaries; deduplication while preserving resolution order.
+**Main Public Functions**
+
+- `package_import_path_list()`: Resolves "#"-prefixed module strings against "imports" field
+- `package_name_path_list()`: Resolves package names against "exports" and entry point fields
+- `clear_package_path_cache()`: Invalidates all cached package data
+
+**Key Concepts**
+
+Handles two-level caching: parsed package.json files and computed package name mappings. Supports pattern-based import/export entries via `PathConfig` integration. Falls back through entry point fields ("types", "typings", "source", "module", "main"), then file system lookups in package and "src" directories. Mirrors build output paths (e.g., "dist/") to source equivalents (e.g., "src/") when appropriate. Maintains project boundaries using `inside_project()` validation. Scoped packages ("@namespace/name") are resolved before unscoped names.

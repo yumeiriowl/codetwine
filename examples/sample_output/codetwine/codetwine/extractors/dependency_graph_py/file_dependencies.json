@@ -84,8 +84,8 @@
       "name": "build_project_dependencies",
       "type": "function_definition",
       "start_line": 312,
-      "end_line": 399,
-      "context": "def build_project_dependencies(\n    project_dir: str,\n    file_list: list[str] | None = None,\n) -> list[dict]:\n    \"\"\"Analyze inter-file dependencies within the project and build a dependency graph in memory.\n\n    Return value structure (array):\n        [\n          {\n            \"file\":    \"project_name/src/foo.py/foo.py\",\n            \"callers\": [\"project_name/src/bar.py/bar.py\"],\n            \"callees\": [\"project_name/src/baz.py/baz.py\"],\n          },\n          ...\n        ]\n\n    Paths use the \"project_name/copy_path\" format.\n    Every non-empty text file that passes EXCLUDE_PATTERNS is listed. Import analysis\n    runs on the files with a language (has_language); every other file is listed with\n    empty callers and callees. A file without a language that a COBOL COPY statement\n    names is analyzed as a COBOL copybook, and keeps that language until the next call\n    for the project (register_copy_target). An R Markdown or Quarto file without an R\n    code chunk is analyzed without a language, until the next call for the project\n    (set_no_language_file).\n    The indexes built from the files of a project and the references resolved with\n    them are cleared: the Rust module trees (module_tree_cache), the C# namespace\n    indexes (namespace_index_cache, csharp_target_cache), the R name indexes\n    (r_name_index_cache, r_target_cache), the COBOL file indexes (file_index_cache,\n    reference_target_cache) and the names and references resolved through import\n    statements (clear_import_reference_cache, clear_import_binder_cache,\n    clear_import_path_cache), the definitions read for a definition's source\n    (clear_definition_source_cache) and the path settings of the JS/TS config files\n    (path_config_cache, the package and alias caches). The parse results (parse_cache) are kept.\n\n    Args:\n        project_dir: Root directory of the project to analyze.\n        file_list: File paths relative to project_dir. When given, only these files\n            are analyzed instead of walking project_dir.\n\n    Returns:\n        A list of file dependency information dicts.\n    \"\"\"\n    # == Step 1: Collect every non-empty text file ==============================\n    if file_list is None:\n        all_file_list = _collect_text_file_list(project_dir)\n    else:\n        all_file_list = _filter_text_file_list(project_dir, file_list)\n\n    # Forget the indexes and the resolved references of an earlier analysis\n    module_tree_cache.clear()\n    file_index_cache.clear()\n    namespace_index_cache.clear()\n    r_name_index_cache.clear()\n    reference_target_cache.clear()\n    csharp_target_cache.clear()\n    r_target_cache.clear()\n    clear_import_reference_cache()\n    clear_import_binder_cache()\n    clear_import_path_cache()\n    clear_definition_source_cache()\n    path_config_cache.clear()\n    clear_package_path_cache()\n    clear_alias_path_cache()\n\n    # R Markdown and Quarto files without an R code chunk are analyzed without a language,\n    # and files without a language that COBOL COPY statements name are analyzed as COBOL\n    set_no_language_file(project_dir, _no_chunk_document_list(project_dir, all_file_list))\n    register_copy_target(project_dir, [_to_rel(f, project_dir) for f in all_file_list])\n\n    # Only the files with a language take part in import resolution and dependency edges\n    language_file_list = [f for f in all_file_list if has_language(f)]\n\n    # == Step 2: Build the set of relative paths for project files ============\n    # A lookup set used to determine whether a module is within the project during import resolution\n    project_file_set = {_to_rel(file_path, project_dir) for file_path in language_file_list}\n\n    # == Step 3: Collect the files each file imports and refers to (callees) ==\n    file_callee_dict = _collect_callee_dict(language_file_list, project_dir, project_file_set)\n\n    # == Step 4: Build the callers (reverse lookup) index ==================\n    file_caller_dict: dict[str, list[str]] = {os.path.abspath(f): [] for f in language_file_list}\n    for caller_path, callee_set in file_callee_dict.items():\n        for callee_path in callee_set:\n            if callee_path in file_caller_dict:\n                file_caller_dict[callee_path].append(caller_path)\n\n    # == Step 5: Convert to \"project_name/copy_path\" paths ====================\n    return _to_output_entry_list(all_file_list, project_dir, file_caller_dict, file_callee_dict)"
+      "end_line": 401,
+      "context": "def build_project_dependencies(\n    project_dir: str,\n    file_list: list[str] | None = None,\n) -> list[dict]:\n    \"\"\"Analyze inter-file dependencies within the project and build a dependency graph in memory.\n\n    Return value structure (array):\n        [\n          {\n            \"file\":    \"project_name/src/foo.py/foo.py\",\n            \"callers\": [\"project_name/src/bar.py/bar.py\"],\n            \"callees\": [\"project_name/src/baz.py/baz.py\"],\n          },\n          ...\n        ]\n\n    Paths use the \"project_name/copy_path\" format.\n    Every non-empty text file that passes EXCLUDE_PATTERNS is listed. Import analysis\n    runs on the files with a language (has_language); every other file is listed with\n    empty callers and callees. A file without a language that a COBOL COPY statement\n    names is analyzed as a COBOL copybook, and keeps that language until the next call\n    for the project (register_copy_target). An R Markdown or Quarto file without an R\n    code chunk is analyzed without a language, until the next call for the project\n    (set_no_language_file).\n    The indexes built from the files of a project and the references resolved with\n    them are cleared: the Rust module trees (module_tree_cache), the C# namespace\n    indexes (namespace_index_cache, csharp_target_cache), the R name indexes\n    (r_name_index_cache, r_target_cache), the COBOL file indexes (file_index_cache,\n    reference_target_cache) and the names and references resolved through import\n    statements (clear_import_reference_cache, clear_import_binder_cache,\n    clear_import_path_cache), the definitions read for a definition's source\n    (clear_definition_source_cache) and the path settings of the JS/TS config files\n    (path_config_cache, the package and alias caches). The parse results (parse_cache) are kept.\n\n    Args:\n        project_dir: Root directory of the project to analyze.\n        file_list: File paths relative to project_dir. When given, only these files\n            are analyzed instead of walking project_dir.\n\n    Returns:\n        A list of file dependency information dicts.\n    \"\"\"\n    # == Step 1: Collect every non-empty text file ==============================\n    if file_list is None:\n        all_file_list = _collect_text_file_list(project_dir)\n    else:\n        all_file_list = _filter_text_file_list(project_dir, file_list)\n\n    # Forget the syntax trees, the indexes and the resolved references of an earlier analysis\n    parse_cache.clear()\n    class_macro_cache.clear()\n    module_tree_cache.clear()\n    file_index_cache.clear()\n    namespace_index_cache.clear()\n    r_name_index_cache.clear()\n    reference_target_cache.clear()\n    csharp_target_cache.clear()\n    r_target_cache.clear()\n    clear_import_reference_cache()\n    clear_import_binder_cache()\n    clear_import_path_cache()\n    clear_definition_source_cache()\n    path_config_cache.clear()\n    clear_package_path_cache()\n    clear_alias_path_cache()\n\n    # R Markdown and Quarto files without an R code chunk are analyzed without a language,\n    # and files without a language that COBOL COPY statements name are analyzed as COBOL\n    set_no_language_file(project_dir, _no_chunk_document_list(project_dir, all_file_list))\n    register_copy_target(project_dir, [_to_rel(f, project_dir) for f in all_file_list])\n\n    # Only the files with a language take part in import resolution and dependency edges\n    language_file_list = [f for f in all_file_list if has_language(f)]\n\n    # == Step 2: Build the set of relative paths for project files ============\n    # A lookup set used to determine whether a module is within the project during import resolution\n    project_file_set = {_to_rel(file_path, project_dir) for file_path in language_file_list}\n\n    # == Step 3: Collect the files each file imports and refers to (callees) ==\n    file_callee_dict = _collect_callee_dict(language_file_list, project_dir, project_file_set)\n\n    # == Step 4: Build the callers (reverse lookup) index ==================\n    file_caller_dict: dict[str, list[str]] = {os.path.abspath(f): [] for f in language_file_list}\n    for caller_path, callee_set in file_callee_dict.items():\n        for callee_path in callee_set:\n            if callee_path in file_caller_dict:\n                file_caller_dict[callee_path].append(caller_path)\n\n    # == Step 5: Convert to \"project_name/copy_path\" paths ====================\n    return _to_output_entry_list(all_file_list, project_dir, file_caller_dict, file_callee_dict)"
     }
   ],
   "callee_usages": [
@@ -120,7 +120,7 @@
       "from": "codetwine/codetwine/config/settings_py/settings.py",
       "target_context": "R_MARKDOWN_EXT_SET: set[str] = {\"rmd\", \"qmd\"}",
       "target_name": "R_MARKDOWN_EXT_SET",
-      "target_start_line": 1184
+      "target_start_line": 1194
     },
     {
       "lines": [
@@ -181,7 +181,7 @@
       "from": "codetwine/codetwine/config/settings_py/settings.py",
       "target_context": "def language_ext(path: str) -> str:\n    \"\"\"Return the extension whose language settings a file is analyzed with.\n\n    A file recorded by set_copy_target_ext() gets the extension recorded for it, and a\n    file recorded by set_no_language_file() none. Every other file gets its own\n    extension when it is a key of EXT_TO_DEFINITION_DICT; the extensions of the\n    languages with ignore_ext_case are matched in any case.\n\n    Examples:\n        \"src/app.py\"          -> \"py\"\n        \"src/MAIN.Cbl\"        -> \"cbl\"\n        \"R/utils.R\"           -> \"r\"\n        \"config.yaml\"         -> \"\"\n        \"dcl/DCLCUST.dcl\"     -> \"cpy\" (when a COPY statement names it)\n        \"docs/notes.qmd\"      -> \"\" (when it has no R code chunk)\n\n    Args:\n        path: A file path. A relative path is taken from the current directory when\n            it is looked up among the recorded files.\n\n    Returns:\n        The extension (without the dot, a key of EXT_TO_DEFINITION_DICT), or \"\" for a\n        file without a language.\n    \"\"\"\n    path_abs = os.path.abspath(path)\n    copy_target_ext = _copy_target_ext_dict.get(path_abs)\n    if copy_target_ext:\n        return copy_target_ext\n    if path_abs in _no_language_path_set:\n        return \"\"\n    ext = os.path.splitext(path)[1].lstrip(\".\")\n    if ext in EXT_TO_DEFINITION_DICT:\n        return ext\n    if ext.lower() in _IGNORE_CASE_EXT_SET:\n        return ext.lower()\n    return \"\"",
       "target_name": "language_ext",
-      "target_start_line": 1241
+      "target_start_line": 1251
     },
     {
       "lines": [
@@ -201,7 +201,7 @@
       "from": "codetwine/codetwine/config/settings_py/settings.py",
       "target_context": "EXT_TO_IMPORT_RESOLVE_DICT: dict[str, dict] = _expand_ext_aliases(\n    {ext: lang_config.import_resolve_dict for ext, lang_config in _LANG_REGISTRY.items()\n     if lang_config.import_resolve_dict is not None}\n)",
       "target_name": "EXT_TO_IMPORT_RESOLVE_DICT",
-      "target_start_line": 1323
+      "target_start_line": 1333
     },
     {
       "lines": [
@@ -251,7 +251,7 @@
       "from": "codetwine/codetwine/config/settings_py/settings.py",
       "target_context": "R_EXT_SET: set[str] = {\n    ext for ext, definition_dict in EXT_TO_DEFINITION_DICT.items()\n    if definition_dict is R_DEFINITION_DICT\n}",
       "target_name": "R_EXT_SET",
-      "target_start_line": 1178
+      "target_start_line": 1188
     },
     {
       "lines": [
@@ -277,6 +277,26 @@
       "lines": [
         361
       ],
+      "name": "parse_cache.clear",
+      "from": "codetwine/codetwine/parsers/ts_parser_py/ts_parser.py",
+      "target_context": "parse_cache: OrderedDict[str, tuple[Node | CobolSource, bytes]] = OrderedDict()",
+      "target_name": "parse_cache",
+      "target_start_line": 44
+    },
+    {
+      "lines": [
+        362
+      ],
+      "name": "class_macro_cache.clear",
+      "from": "codetwine/codetwine/parsers/ts_parser_py/ts_parser.py",
+      "target_context": "class_macro_cache: dict[str, list[tuple[str, int]]] = {}",
+      "target_name": "class_macro_cache",
+      "target_start_line": 48
+    },
+    {
+      "lines": [
+        363
+      ],
       "name": "module_tree_cache.clear",
       "from": "codetwine/codetwine/rust_module_tree_py/rust_module_tree.py",
       "target_context": "module_tree_cache: dict[str, tuple[set[str], \"RustModuleTree\"]] = {}",
@@ -285,7 +305,7 @@
     },
     {
       "lines": [
-        362
+        364
       ],
       "name": "file_index_cache.clear",
       "from": "codetwine/codetwine/cobol_file_index_py/cobol_file_index.py",
@@ -295,7 +315,7 @@
     },
     {
       "lines": [
-        363
+        365
       ],
       "name": "namespace_index_cache.clear",
       "from": "codetwine/codetwine/csharp_namespace_index_py/csharp_namespace_index.py",
@@ -305,7 +325,7 @@
     },
     {
       "lines": [
-        364
+        366
       ],
       "name": "r_name_index_cache.clear",
       "from": "codetwine/codetwine/r_name_index_py/r_name_index.py",
@@ -315,7 +335,7 @@
     },
     {
       "lines": [
-        365
+        367
       ],
       "name": "reference_target_cache.clear",
       "from": "codetwine/codetwine/cobol_file_index_py/cobol_file_index.py",
@@ -325,7 +345,7 @@
     },
     {
       "lines": [
-        366
+        368
       ],
       "name": "csharp_target_cache.clear",
       "from": "codetwine/codetwine/csharp_namespace_index_py/csharp_namespace_index.py",
@@ -335,7 +355,7 @@
     },
     {
       "lines": [
-        367
+        369
       ],
       "name": "r_target_cache.clear",
       "from": "codetwine/codetwine/r_name_index_py/r_name_index.py",
@@ -345,17 +365,17 @@
     },
     {
       "lines": [
-        368
+        370
       ],
       "name": "clear_import_reference_cache",
       "from": "codetwine/codetwine/import_reference_py/import_reference.py",
       "target_context": "def clear_import_reference_cache() -> None:\n    \"\"\"Forget the resolved references of every project.\"\"\"\n    import_target_cache.clear()",
       "target_name": "clear_import_reference_cache",
-      "target_start_line": 354
+      "target_start_line": 357
     },
     {
       "lines": [
-        369
+        371
       ],
       "name": "clear_import_binder_cache",
       "from": "codetwine/codetwine/import_binding_py/import_binding.py",
@@ -365,7 +385,7 @@
     },
     {
       "lines": [
-        370
+        372
       ],
       "name": "clear_import_path_cache",
       "from": "codetwine/codetwine/import_to_path_py/import_to_path.py",
@@ -375,17 +395,17 @@
     },
     {
       "lines": [
-        371
+        373
       ],
       "name": "clear_definition_source_cache",
       "from": "codetwine/codetwine/extractors/definition_source_py/definition_source.py",
-      "target_context": "def clear_definition_source_cache() -> None:\n    \"\"\"Forget the definitions and text of every file.\"\"\"\n    _definition_cache.clear()\n    _definition_list_cache.clear()",
+      "target_context": "def clear_definition_source_cache() -> None:\n    \"\"\"Forget the definitions and text of every file.\"\"\"\n    _definition_cache.clear()\n    _definition_list_cache.clear()\n    _definition_index_cache.clear()",
       "target_name": "clear_definition_source_cache",
-      "target_start_line": 31
+      "target_start_line": 37
     },
     {
       "lines": [
-        372
+        374
       ],
       "name": "path_config_cache.clear",
       "from": "codetwine/codetwine/path_config_py/path_config.py",
@@ -395,7 +415,7 @@
     },
     {
       "lines": [
-        373
+        375
       ],
       "name": "clear_package_path_cache",
       "from": "codetwine/codetwine/package_path_py/package_path.py",
@@ -405,7 +425,7 @@
     },
     {
       "lines": [
-        374
+        376
       ],
       "name": "clear_alias_path_cache",
       "from": "codetwine/codetwine/alias_path_py/alias_path.py",
@@ -415,17 +435,17 @@
     },
     {
       "lines": [
-        378
+        380
       ],
       "name": "set_no_language_file",
       "from": "codetwine/codetwine/config/settings_py/settings.py",
       "target_context": "def set_no_language_file(project_dir: str, file_rel_list: list[str]) -> None:\n    \"\"\"Record the files of a project that are analyzed without a language whatever their extension.\n\n    The files recorded before for the same project are forgotten.\n\n    Args:\n        project_dir: Root directory of the project.\n        file_rel_list: Paths relative to project_dir.\n    \"\"\"\n    project_prefix = os.path.join(os.path.abspath(project_dir), \"\")\n    for path in [path for path in _no_language_path_set if path.startswith(project_prefix)]:\n        _no_language_path_set.discard(path)\n    for file_rel in file_rel_list:\n        _no_language_path_set.add(os.path.abspath(os.path.join(project_dir, file_rel)))",
       "target_name": "set_no_language_file",
-      "target_start_line": 1225
+      "target_start_line": 1235
     },
     {
       "lines": [
-        379
+        381
       ],
       "name": "register_copy_target",
       "from": "codetwine/codetwine/cobol_file_index_py/cobol_file_index.py",
@@ -435,13 +455,13 @@
     },
     {
       "lines": [
-        382
+        384
       ],
       "name": "has_language",
       "from": "codetwine/codetwine/config/settings_py/settings.py",
       "target_context": "def has_language(path: str) -> bool:\n    \"\"\"Return whether a file is analyzed with a language of the registry.\n\n    Only such files get definitions, dependencies and design documents; every other\n    text file is carried through the analysis with those left empty.\n\n    Examples:\n        \"src/app.py\"    -> True\n        \"config.yaml\"   -> False\n        \"Makefile\"      -> False\n\n    Args:\n        path: A file path. A file recorded by set_copy_target_ext() is known by its\n            absolute path.\n\n    Returns:\n        True when language_ext() gives an extension.\n    \"\"\"\n    return language_ext(path) != \"\"",
       "target_name": "has_language",
-      "target_start_line": 1279
+      "target_start_line": 1289
     }
   ],
   "same_file_usages": [
@@ -468,8 +488,8 @@
         152,
         254,
         299,
-        379,
-        386
+        381,
+        388
       ],
       "name": "_to_rel",
       "target_name": "_to_rel",
@@ -526,7 +546,7 @@
     },
     {
       "lines": [
-        378
+        380
       ],
       "name": "_no_chunk_document_list",
       "target_name": "_no_chunk_document_list",
@@ -534,7 +554,7 @@
     },
     {
       "lines": [
-        389
+        391
       ],
       "name": "_collect_callee_dict",
       "target_name": "_collect_callee_dict",
@@ -542,7 +562,7 @@
     },
     {
       "lines": [
-        399
+        401
       ],
       "name": "_to_output_entry_list",
       "target_name": "_to_output_entry_list",
@@ -552,7 +572,7 @@
   "caller_usages": [
     {
       "lines": [
-        269
+        278
       ],
       "name": "build_project_dependencies",
       "file": "codetwine/codetwine/pipeline_py/pipeline.py",

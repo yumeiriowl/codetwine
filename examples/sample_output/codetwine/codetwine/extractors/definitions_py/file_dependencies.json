@@ -475,7 +475,7 @@
       "from": "codetwine/codetwine/config/settings_py/settings.py",
       "target_context": "PATTERN_FIELD_DICT: dict[str, str] = {\n    node_type: field_name\n    for lang_config in _LANG_REGISTRY.values() if lang_config.usage_node_type_dict\n    for node_type, field_name in lang_config.usage_node_type_dict.get(\"pattern_field_dict\", {}).items()\n}",
       "target_name": "PATTERN_FIELD_DICT",
-      "target_start_line": 1316
+      "target_start_line": 1326
     },
     {
       "lines": [
@@ -486,7 +486,7 @@
       "from": "codetwine/codetwine/config/settings_py/settings.py",
       "target_context": "PATTERN_TYPE_SET: set[str] = set().union(*(\n    lang_config.usage_node_type_dict.get(\"pattern_types\", set())\n    for lang_config in _LANG_REGISTRY.values() if lang_config.usage_node_type_dict\n))",
       "target_name": "PATTERN_TYPE_SET",
-      "target_start_line": 1312
+      "target_start_line": 1322
     }
   ],
   "same_file_usages": [
@@ -918,27 +918,39 @@
       "lines": [
         24,
         28,
-        37,
-        71,
-        95,
-        98,
-        106,
-        107,
+        33,
+        45,
+        46,
+        58,
+        69,
+        103,
+        127,
         130,
-        131,
-        154,
-        155,
+        138,
+        139,
+        163,
+        164,
         185,
-        204,
-        239
+        186,
+        216,
+        235,
+        270
       ],
       "name": "DefinitionInfo",
       "file": "codetwine/codetwine/extractors/definition_source_py/definition_source.py",
-      "usage_context": "# Cache of the definitions and the text of the files a definition was looked up in,\n# ordered from least to most recently used: absolute path -> (definitions in line order,\n# UTF-8 text of the file). The number of entries is capped by PARSE_CACHE_MAX_FILES.\n_definition_cache: OrderedDict[str, tuple[list[DefinitionInfo], bytes]] = OrderedDict()\n\n# Cache of the definitions of the files, which hold no syntax tree:\n# absolute path -> definitions in line order\n...\n\n# Cache of the definitions of the files, which hold no syntax tree:\n# absolute path -> definitions in line order\n_definition_list_cache: dict[str, list[DefinitionInfo]] = {}\n\n\ndef clear_definition_source_cache() -> None:"
+      "usage_context": "# Cache of the definitions and the text of the files a definition was looked up in,\n# ordered from least to most recently used: absolute path -> (definitions in line order,\n# UTF-8 text of the file). The number of entries is capped by PARSE_CACHE_MAX_FILES.\n_definition_cache: OrderedDict[str, tuple[list[DefinitionInfo], bytes]] = OrderedDict()\n\n# Cache of the definitions of the files, which hold no syntax tree:\n# absolute path -> definitions in line order\n...\n\n# Cache of the definitions of the files, which hold no syntax tree:\n# absolute path -> definitions in line order\n_definition_list_cache: dict[str, list[DefinitionInfo]] = {}\n\n# Lookups of the definition lists a definition was looked up in, by the id of the list:\n# (the list, {name: its definitions in line order}, ids of its top-level definitions)"
     },
     {
       "lines": [
-        52
+        63
+      ],
+      "name": "select_top_level_definitions",
+      "file": "codetwine/codetwine/extractors/definition_source_py/definition_source.py",
+      "usage_context": "            name_dict.setdefault(definition.name, []).append(definition)\n        cache_entry = (\n            definition_list, name_dict,\n            {id(definition) for definition in select_top_level_definitions(definition_list)},\n        )\n        _definition_index_cache[id(definition_list)] = cache_entry\n    return cache_entry[1], cache_entry[2]"
+    },
+    {
+      "lines": [
+        84
       ],
       "name": "extract_definitions",
       "file": "codetwine/codetwine/extractors/definition_source_py/definition_source.py",
@@ -946,7 +958,7 @@
     },
     {
       "lines": [
-        99
+        131
       ],
       "name": "DefinitionInfo.start_line",
       "file": "codetwine/codetwine/extractors/definition_source_py/definition_source.py",
@@ -954,7 +966,7 @@
     },
     {
       "lines": [
-        100
+        132
       ],
       "name": "DefinitionInfo.end_line",
       "file": "codetwine/codetwine/extractors/definition_source_py/definition_source.py",
@@ -962,19 +974,11 @@
     },
     {
       "lines": [
-        142
+        174
       ],
       "name": "ATTACHED_DEFINITION_TYPE_SET",
       "file": "codetwine/codetwine/extractors/definition_source_py/definition_source.py",
       "usage_context": "            break\n        own_list = [\n            definition for definition in match_list\n            if definition.type not in ATTACHED_DEFINITION_TYPE_SET\n        ]\n        if owner_list is None:\n            # The first part names a top-level definition before a member of the same name"
-    },
-    {
-      "lines": [
-        146
-      ],
-      "name": "select_top_level_definitions",
-      "file": "codetwine/codetwine/extractors/definition_source_py/definition_source.py",
-      "usage_context": "        ]\n        if owner_list is None:\n            # The first part names a top-level definition before a member of the same name\n            top_level_id_set = {id(d) for d in select_top_level_definitions(definition_list)}\n            own_list.sort(key=lambda definition: id(definition) not in top_level_id_set)\n        last_definition = (own_list or match_list)[0]\n        owner_list = match_list"
     },
     {
       "lines": [
@@ -1018,15 +1022,16 @@
     },
     {
       "lines": [
-        123
+        124,
+        968
       ],
       "name": "pattern_name_list",
       "file": "codetwine/codetwine/extractors/usages_py/usages.py",
-      "usage_context": "\ndef _pattern_name_list(node: Node, setting: _UsageSetting) -> list[str]:\n    \"\"\"Return the names a binding pattern binds (pattern_name_list with the settings of the file).\"\"\"\n    return pattern_name_list(\n        node, setting.type_set(\"pattern_types\"),\n        setting.usage_node_types.get(\"pattern_field_dict\", {}),\n    )"
+      "usage_context": "\ndef _pattern_name_list(node: Node, setting: _UsageSetting) -> list[str]:\n    \"\"\"Return the names a binding pattern binds (pattern_name_list with the settings of the file).\"\"\"\n    return pattern_name_list(\n        node, setting.type_set(\"pattern_types\"),\n        setting.usage_node_types.get(\"pattern_field_dict\", {}),\n    )\n...\n                type_name = None\n        else:\n            # A pattern of several variables gives none of them an object of its own\n            name_list = pattern_name_list(target_node, pattern_type_set, pattern_field_dict)\n            type_name = None\n        alias_list.extend(\n            TypedAlias(name, type_name, node.start_point[0] + 1, scope_node.end_point[0] + 1)"
     },
     {
       "lines": [
-        1074
+        1113
       ],
       "name": "declarator_name_node",
       "file": "codetwine/codetwine/extractors/usages_py/usages.py",
@@ -1085,8 +1090,8 @@
     },
     {
       "lines": [
-        525,
-        1000
+        528,
+        1003
       ],
       "name": "DEFAULT_EXPORT_NAME",
       "file": "codetwine/codetwine/import_binding_py/import_binding.py",
@@ -1094,7 +1099,7 @@
     },
     {
       "lines": [
-        762
+        765
       ],
       "name": "CONTAINER_DEFINITION_TYPE_SET",
       "file": "codetwine/codetwine/import_binding_py/import_binding.py",
@@ -1102,7 +1107,7 @@
     },
     {
       "lines": [
-        1237
+        1240
       ],
       "name": "ATTACHED_DEFINITION_TYPE_SET",
       "file": "codetwine/codetwine/import_binding_py/import_binding.py",
@@ -1110,10 +1115,10 @@
     },
     {
       "lines": [
-        55,
-        82,
-        237,
-        313
+        57,
+        84,
+        239,
+        315
       ],
       "name": "DefinitionInfo",
       "file": "codetwine/codetwine/import_reference_py/import_reference.py",
@@ -1121,9 +1126,9 @@
     },
     {
       "lines": [
-        85,
-        88,
-        91
+        87,
+        90,
+        93
       ],
       "name": "DefinitionInfo.name",
       "file": "codetwine/codetwine/import_reference_py/import_reference.py",
@@ -1131,7 +1136,7 @@
     },
     {
       "lines": [
-        86
+        88
       ],
       "name": "ATTACHED_DEFINITION_TYPE_SET",
       "file": "codetwine/codetwine/import_reference_py/import_reference.py",
@@ -1139,8 +1144,8 @@
     },
     {
       "lines": [
-        86,
-        87
+        88,
+        89
       ],
       "name": "DefinitionInfo.type",
       "file": "codetwine/codetwine/import_reference_py/import_reference.py",
@@ -1148,7 +1153,7 @@
     },
     {
       "lines": [
-        87
+        89
       ],
       "name": "TRANSPARENT_DEFINITION_TYPE_SET",
       "file": "codetwine/codetwine/import_reference_py/import_reference.py",
@@ -1156,7 +1161,7 @@
     },
     {
       "lines": [
-        90
+        92
       ],
       "name": "DefinitionInfo.end_line",
       "file": "codetwine/codetwine/import_reference_py/import_reference.py",
@@ -1164,7 +1169,7 @@
     },
     {
       "lines": [
-        90
+        92
       ],
       "name": "DefinitionInfo.start_line",
       "file": "codetwine/codetwine/import_reference_py/import_reference.py",
@@ -1172,7 +1177,7 @@
     },
     {
       "lines": [
-        97
+        99
       ],
       "name": "select_top_level_definitions",
       "file": "codetwine/codetwine/import_reference_py/import_reference.py",
@@ -1180,8 +1185,8 @@
     },
     {
       "lines": [
-        509,
-        522
+        521,
+        534
       ],
       "name": "CLASS_DEFINITION_TYPE_SET",
       "file": "codetwine/codetwine/import_reference_py/import_reference.py",

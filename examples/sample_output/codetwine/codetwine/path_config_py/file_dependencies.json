@@ -540,7 +540,7 @@
     },
     {
       "lines": [
-        372
+        374
       ],
       "name": "path_config_cache.clear",
       "file": "codetwine/codetwine/extractors/dependency_graph_py/dependency_graph.py",

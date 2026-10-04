@@ -4,189 +4,179 @@
 
 **Overview**
 
-Index the definitions, imports, and references of R files in a project to resolve each reference to the definition it refers to, supporting R's scoping rules, package structure, source file inclusion, box modules, Shiny apps, and testthat tests.
+Build and query a name index of R source files in a project to resolve references to their definitions, accounting for R's scoping rules including package structure, source file inclusion, Shiny app organization, testthat test helpers, and box module imports.
 
-- Call `r_reference_target_list()` to resolve each reference of an R file to the definition it refers to, receiving a list of targets with definition location and metadata.
-- Call `r_import_file_list()` to find the scripts an R file reads with `source()` or imports with `box::use`, receiving relative paths of imported scripts.
-- Call `RNameIndex` through internal functions to access the project's parsed R sources, indexed names, package structure, and source() edges.
-- Call `RReferenceTarget` to examine resolved references, receiving name, line, file location, and definition boundaries.
+The file is used to:
+- Call `r_reference_target_list()` to resolve each reference in an R file to the definitions it refers to, returning target metadata for usage analysis.
+- Call `r_import_file_list()` to obtain the scripts an R file reads via `source()` or box modules, for building dependency graphs.
+- Clear `r_name_index_cache` and `r_target_cache` when the project file set changes or caches need invalidation.
 
-This file relies on `r_source.py` to extract definitions, imports, and references from parsed R files; `ts_parser.py` to parse R source files into abstract syntax trees; `settings.py` to identify R file extensions and handle R Markdown files; and `project_cache.py` to validate cached indexes against project file set changes. Files `dependency_graph.py`, `usage_analysis.py`, and `pipeline.py` import `r_reference_target_list()`, `r_import_file_list()`, and the cache objects to build dependency graphs and analyze usage.
+The file depends on `codetwine/extractors/r_source.py` to parse R files into definitions, imports, and references; `codetwine/parsers/ts_parser.py` to obtain ASTs; and `codetwine/config/settings.py` to identify R file extensions and language settings. The file is consumed by `codetwine/extractors/dependency_graph.py` for building call graphs and clearing caches, `codetwine/extractors/usage_analysis.py` to resolve targets into source text ranges, and `codetwine/reference_target.py` as the entry point for R reference resolution.
 
-The module caches both name indexes (project-level structures mapping files to definitions) and resolved reference targets (per-file lists of references and their targets) to avoid recomputation when the project file set has not changed. Caching is keyed by project directory for indexes and by absolute file path for targets, with cache validation via `project_cache_value()`. Files that cannot be read or parsed are logged as warnings and excluded from the index rather than raising exceptions.
+The module maintains two global caches: `r_name_index_cache` stores parsed project indexes by project directory, and `r_target_cache` stores resolved reference targets by file path, both keyed by project file set to ensure cache validity across incremental updates. References unresolvable in the project scope (e.g., from external packages) silently return no targets.
 
 **Definitions**
 
 ## `RReferenceTarget`
 
-Records where a reference of an R file resolves to: the name used, the line it appears on, the file and definition containing it, the name used to look it up, and the definition's line range. Used by downstream analysis to link references to their targets and extract definition text.
+Holds metadata for one resolved reference of an R file: the name used at the reference site, the line number, the relative path of the file containing the definition, the lookup key for that definition, and the start and end lines of the definition in the target file. A single reference may resolve to multiple targets when the same name is defined in multiple files of the lookup table.
 
 ## `_BoxModule`
 
-Represents the result of one argument to `box::use`: either a module script file of the project or a package of the project by name. Populated by `_box_module()` and used to resolve member access (owner$name) through module bindings.
+Represents one argument of a box::use import: either a module script within the project (identified by relative file path) or a package of the project (identified by package name). Distinguishes between local module paths and package references for name resolution.
 
 ## `_BoxScope`
 
-Collects the names that `box::use` calls of one file bind: names attached one by one (`attach_table`), names from modules that attach all (`attach_all_table`), and modules bound to aliases (`module_dict`). Built by `_box_scope()` and used by `_ReferenceResolver` to locate names visible through box imports.
+Tracks the names attached by box::use calls within a single file: names bound individually (`attach_table`), names from attach-all imports (`attach_all_table`), and the box modules bound to names (`module_dict`). Used to resolve names visible to a file through its box imports without recursing through transitive box dependencies.
 
 ## `RNameIndex`
 
-Central data structure holding the indexed state of R files in a project: parsed sources by file, top-level names defined by each file, script file set with case-insensitive lookup, directory and package structure, source() edges, and box module bindings. Populated by `_build_name_index()` and queried by `_ReferenceResolver` to resolve references.
+Central index of an R project's structure, built once per project file set and cached. Contains source files with their extracted definitions and imports; top-level name tables per file and per package; script file metadata grouped by directory and package; source() and box::use() dependency edges; and box scopes for name attachment. Enables O(1) name lookups and dependency traversal for reference resolution.
 
 ## `_file_table`
 
-Extracts the top-level names an R file defines, excluding class members and S4/S3 method definitions (entries where `is_member` or `is_attach` is true). Used during indexing to populate `RNameIndex.table_dict` and later to look up names visible to references.
+Extract the top-level names a file defines, excluding class members and method attachments (is_member, is_attach) to preserve only names visible to other files. Used during index construction to populate per-file and per-package name tables.
 
 ## `_merge_table`
 
-Combines multiple name tables into one by concatenating entry lists for each name across tables in order. Used to merge the definitions from multiple files (e.g., all scripts in a package's R directory, or all modules in a box attachment chain).
+Combine multiple name tables into one by extending each name's entry list. Preserves order and allows multiple definitions of the same name across different files or modules.
 
 ## `_ancestor_dir_list`
 
-Returns the directory of a file and every ancestor directory up to the project root, in nearest-first order. Used to search for package DESCRIPTION files, resolve relative `source()` paths, and determine scope chain for names visible through enclosing directories.
+Return a file's directory and each ancestor directory up to the project root, nearest first. Used to search for script imports and DESCRIPTION files up the directory tree.
 
 ## `_package_name`
 
-Reads the value of the "Package:" field from a DESCRIPTION file in a given directory, returning the package name or None if the file does not exist or lacks the field. Used during indexing to map directories to package names.
+Read a DESCRIPTION file and extract the package name from its "Package:" field. Returns None if the file does not exist or lacks that field. Called during package indexing to identify package boundaries.
 
 ## `_add_package`
 
-Populates `RNameIndex` with package structure: the package directory containing each file, the directories of all packages by name, the scripts in each package's R directory, and the merged name table of each package. Walks ancestor directories to find DESCRIPTION files for each indexed file.
+Index the packages of the project: assign each file to its nearest enclosing package directory (via DESCRIPTION), collect package names and their directories, and build name tables for each package's R/ directory. Updates `package_dir_dict`, `package_name_dict`, `package_file_dict`, and `package_table_dict` in the index.
 
 ## `_source_file`
 
-Resolves a `source()` path relative to a file to the actual R script in the project, trying the path from the file's directory and parent directories, then case-insensitive matching if exact paths fail. Returns the relative path or None for absolute paths or paths with no matching script.
+Resolve a source() call path to a project script by searching from the file's directory upward, then checking case-insensitive matches. Returns None for root paths or unresolvable imports. Accounts for R's behavior of relative path resolution and case-insensitive file systems.
 
 ## `_box_module_file`
 
-Resolves a box module path (with "/") to the R script it refers to: a file at `<path>.R/.r` or `<path>/__init__.R/.r`, searched from the file's directory for relative paths (./,../) or from the file's directory and ancestors for module-style paths. Returns the relative path or None if no script matches.
+Resolve a box module path (with "/") to a project script, trying both `.R` and `.r` extensions and `__init__` files. Distinguishes relative paths ("./" or "../") from project-root-relative paths. Returns None if no matching script exists.
 
 ## `_import_file`
 
-Returns the script a `source()` call or `box::use` with a module path leads to by dispatching to `_source_file()` or `_box_module()`. Used to build the source file dependency edges in `RNameIndex`.
+Dispatch source() and box::use() import paths to their resolver functions. Returns the relative path of an imported script, or None for package imports (library, box package references) and unresolvable paths.
 
 ## `_add_source_edge`
 
-Builds the source file dependency graph in `RNameIndex`: for each file, resolves its `source()` calls to scripts and records which files source each script. Populates `RNameIndex.source_file_dict` and `RNameIndex.reader_file_dict`.
+Index source() call dependencies: populate `source_file_dict` (files each script reads) and `reader_file_dict` (scripts that read each file). Used by reference resolution to follow transitive source() chains.
 
 ## `_reach_list`
 
-Traverses a directed graph of edges (file-to-file dependencies) from a list of start files and returns all reachable files in order, with no duplicates and start files first. Used to follow chains of `source()` calls and reverse-source readers.
+Traverse an edge dictionary starting from a list of files, returning all reachable files in breadth-first order without duplicates. Used to follow source() chains and reader chains during name lookup scope construction.
 
 ## `_package_dir_list`
 
-Returns the directories of packages a file refers to by a package name: if the file itself is in a package of that name, returns that package only; otherwise returns all packages in the project with that name, in path order. Used to resolve `library()` and `box::use()` package references.
+Return the project package directories a file names with a given package name (library(), box::use()), preferring the file's own package if it has that name. Used to resolve library() imports and namespace-qualified names.
 
 ## `_package_table`
 
-Returns the merged name table of all packages a file refers to by a package name. Used to look up names in `pkg::name` syntax and to find names that `library()` or `box::use()` make visible.
+Get the name table of packages matching a package name, merging tables from multiple packages if the name is ambiguous. Used to resolve library() and namespace-qualified references like pkg::name.
 
 ## `_box_module`
 
-Resolves one argument of `box::use` to the module it refers to: a file path with "/" becomes a `_BoxModule` with a file if the script exists, a single-part path becomes a `_BoxModule` with a package name if a package exists, or None if neither matches. Used to bind module names and resolve member access.
+Resolve one box::use argument to a module (script or package). Distinguishes paths with "/" (module scripts via `_box_module_file`) from single names (package references). Returns None if the path or package does not exist in the project.
 
 ## `_module_table`
 
-Returns the top-level names a box module makes visible to the file that binds it: its own names plus the names its own `box::use` calls attach (excluding circular imports detected via `visit_set`). Used by `_box_scope()` and `_ReferenceResolver` to resolve names attached by box imports.
+Extract the names a box module exposes to a file that binds it: for scripts, combines the module's own top-level names with names attached by its box::use calls; for packages, returns the package's name table. Handles circular box dependencies by marking visited files and avoiding infinite recursion.
 
 ## `_box_scope`
 
-Builds the `_BoxScope` of a file: the names box::use calls bind to (one by one and in bulk), and the modules bound to aliases for member access. Detects cycles in module attachments and caches the scope when no cycles back to the caller. Called once per file during reference resolution.
+Build the scope of box::use attachments for a file by resolving all its box::use imports and populating `attach_table`, `attach_all_table`, and `module_dict`. Caches results in `box_scope_dict` unless the resolution encountered a circular dependency back to a caller.
 
 ## `_build_name_index`
 
-Parses all R files in a project, extracts their definitions and imports, and builds the complete `RNameIndex` with file tables, package structure, and source() edges. Logs warnings for files that cannot be read or parsed and excludes them from the index.
+Parse all R files in a project file set, extract their definitions and imports, index packages and source() edges, and return a complete `RNameIndex`. Logs warnings and skips files that fail to parse.
 
 ## `_get_name_index`
 
-Returns the cached `RNameIndex` for a project or builds it on first call, storing it in `r_name_index_cache` keyed by project directory with the project file set as a validity check. Reused for multiple files until the project file set changes.
+Return the cached `RNameIndex` for a project if it matches the current file set, or build and cache a new one. Ensures the index remains valid across incremental file set changes via `project_cache_value`.
 
 ## `_ReferenceResolver`
 
-Resolves each reference in one R file to the definitions it refers to by building lookup tables, following scope rules (file, box imports, source() chains, Shiny app globals, testthat helpers, package), and handling package and member access syntax. Instantiated once per file in `r_reference_target_list()`.
+Resolve each reference in one R file to the definitions it refers to, applying R's visibility rules. Instantiates with a file and builds its lookup scope (files and names it can see), then answers reference queries by searching that scope in priority order.
 
 ## `_ReferenceResolver._with_source`
 
-Expands a list of files to include all files reached by following their `source()` calls recursively, optionally excluding a skip set. Used to include definitions from all scripts in a source chain when building scope.
+Filter a list of scripts to those not in a skip set, following source() edges to include transitively sourced files. Used to expand lookup scopes with source() chains.
 
 ## `_ReferenceResolver._reader_file_list`
 
-Returns files that read the current file with `source()`, followed up through their readers, and all files those readers source. Used to make names visible to files that include the current file.
+Build the list of files that read the current file with source(), followed up through their readers, plus all scripts those files read. Included in the lookup scope so names from sourcing files are visible.
 
 ## `_ReferenceResolver._is_app_dir`
 
-Tests whether a directory is a Shiny app directory by checking for app.R or server.R. Used to identify app contexts where global.R and R/ scripts are mutually visible.
+Check whether a directory contains app.R or server.R, indicating a Shiny app. Used to identify app directories for Shiny-specific name scoping.
 
 ## `_ReferenceResolver._app_file_list`
 
-Returns the names visible to a file in a Shiny app context: global.R and the R directory scripts when the file is app.R, ui.R, server.R, or a script in the R directory. Used to add app-scoped names to the lookup chain.
+Return the Shiny app scripts visible to a file: for app.R, ui.R, server.R, or R/ scripts of an app, return global.R and the app's R/ scripts; otherwise return empty. App files see global.R and each other's names.
 
 ## `_ReferenceResolver._test_helper_file_list`
 
-Returns the helper and setup scripts in a testthat directory for a file in that directory. Used to include test helper definitions when resolving names in test files.
+Return the helper and setup scripts in the testthat/ directory of a test file. These scripts' names are visible to the test file.
 
 ## `_ReferenceResolver._library_file_set_list`
 
-Returns the scripts of project packages attached with `library()` or `require()`, in reverse order of attachment (last-attached first), excluding the file's own package. Used to add package definitions to the lookup chain.
+Collect the package scripts attached by library() / require() in the file and its sourced files, returning one set per package in reverse attachment order. Excludes the file's own package. Used to add package scopes to the lookup list.
 
 ## `_ReferenceResolver._lookup_file_set_list`
 
-Builds the ordered list of file sets where a name is looked up: the file itself, box imports, sourced files, source readers, Shiny app globals, testthat helpers, the file's package, and attached packages. Implements the complete R scoping rules for this indexer.
+Build the ordered list of file sets a name lookup searches, reflecting R's visibility rules: the file itself and box attachments, then its package (if applicable), then sourced files, then reading files, then app and test files, then the package (if not already included), then library packages. Empty sets are excluded.
 
 ## `_ReferenceResolver._lookup`
 
-Caches and returns the definitions a name resolves to in the current file, searching the file's own names, box attachments, and then the lookup file set chain in order. Each name is looked up at most once per file.
+Return the definitions of a name the file sees, caching the result. Delegates to `_find_entry_list` on first call per name.
 
 ## `_ReferenceResolver._find_entry_list`
 
-Searches for definitions of a name in the lookup file set chain: first the file's own tables and box attachments, then the first file set that defines the name. Used by `_lookup()` to resolve bare name references.
+Search for a name's definitions in priority order: the file's own table, box attachments (one by one, then whole), then the file's lookup scopes in order. Returns the first non-empty list found or an empty list if not found.
 
 ## `_ReferenceResolver._package_table`
 
-Returns and caches the names of packages a package name resolves to. Used to resolve `pkg::name` and `pkg:::name` syntax and to look up names attached by `library()`.
+Get and cache the name table of a package named by the file, used for namespace-qualified references.
 
 ## `_ReferenceResolver._member_entry_list`
 
-Resolves a chain of member accesses after a box module (owner$name$a$b): follows intermediate names that are also modules, then looks up the final name in the terminal module. Used to resolve `owner$member` and deeper chains.
+Follow a chain of names after a box module (e.g., logic$data$load), descending into nested modules if the file binds them to other modules, and resolving the final name in the innermost module's table. Returns the definitions the final name refers to.
 
 ## `_ReferenceResolver._entry_list`
 
-Dispatches reference resolution based on syntax: `pkg::name` looks up in the package, `owner$name` looks up in the module bound to owner, and bare names use the lookup chain. Used to resolve the target of each reference.
+Dispatch a reference to the appropriate lookup based on its kind: namespace-qualified names (`pkg::name`) are looked up in the package table; member references (`owner$name`) are looked up in box modules or as simple names; other references are looked up through the file's scope.
 
 ## `_ReferenceResolver._method_target_list`
 
-For each S3 method in the file (function named `generic.class`), finds the generic function it refers to by looking up progressively shorter prefixes until a function that calls `UseMethod` is found. Returns targets pointing from the method to the generic at line 1 of the method.
+Find the generics each S3 method of the file is written for. For each top-level function whose name contains dots (e.g., print.person), try splitting it at each dot from right to left and find the longest generic name that refers to a function calling UseMethod. Returns one target per generic-method pair.
 
 ## `_ReferenceResolver.target_list`
 
-Returns all targets for references and S3 methods in the file by resolving each reference through `_entry_list()` and calling `_method_target_list()`. Used by `r_reference_target_list()` to produce final results.
+Resolve all references and S3 methods of the file to their definitions, returning one `RReferenceTarget` per reference-definition pair.
 
 ## `r_reference_target_list`
 
-Main entry point: resolves each reference of an R file to the definition it refers to, handling all R scoping rules (packages, box modules, source chains, Shiny apps, testthat). Returns targets in line order without duplicates, cached by absolute file path with project file set validation.
+Main entry point: resolve all references of an R file to the definitions they refer to, applying R scoping rules including packages, source() chains, Shiny app organization, testthat helpers, and box modules. Returns a deduplicated sorted list of targets, cached by file path and project file set; empty for unparseable files.
 
 ## `r_import_file_list`
 
-Returns the scripts an R file reads with `source()` or imports with `box::use`, in line order without duplicates or the file itself. Used by downstream code to build call graphs and dependency edges.
-
-## `r_name_index_cache`
-
-Module-level cache mapping project directory to (project file set, `RNameIndex`), used to reuse indexes across multiple reference resolutions and imports lookups. Cleared when the project file set changes or cache is explicitly cleared.
-
-## `r_target_cache`
-
-Module-level cache mapping absolute file path to (project file set, list of `RReferenceTarget`), used to reuse reference resolution results within a project. Cleared when the project file set changes or cache is explicitly cleared.
+Return the relative paths of scripts imported by an R file via source() and box::use(), in line order without duplicates, excluding the file itself. Used to build R project dependency graphs.
 
 # Summary
 
 # Summary: codetwine/r_name_index.py
 
-**Responsibility:** Index R project definitions and resolve references to their targets, handling R's scoping rules including packages, box modules, source file chains, Shiny apps, and testthat tests.
+**Responsibility:** Build and query an index of R project definitions to resolve references according to R's scoping rules, including packages, source() chains, Shiny apps, testthat helpers, and box modules.
 
 **Main Public Definitions:**
-- `RReferenceTarget`: Records where a reference resolves to, including name, location, and definition boundaries.
-- `RNameIndex`: Central index of project R files, their definitions, package structure, and source dependencies.
-- `r_reference_target_list()`: Resolves each reference in an R file to its definition.
-- `r_import_file_list()`: Returns scripts imported via `source()` or `box::use()`.
+- `r_reference_target_list()` — resolve all references in an R file to their definitions
+- `r_import_file_list()` — list scripts imported via source() and box::use()
 
-**Key Capabilities:** Parses R source files, extracts definitions and imports, builds file-level and project-level name tables, resolves package and module dependencies, follows source chains and Shiny app contexts, detects box module cycles, and implements R's full scoping rules. Caches indexes and results by project to avoid recomputation when files unchanged.
+**Key Concepts:** Name indexing by file and package; lookup scope construction reflecting R visibility rules; reference resolution through namespace qualification, member access, and S3 method matching; caching by project file set; silent handling of unresolvable external references.

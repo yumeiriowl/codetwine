@@ -564,13 +564,13 @@
     {
       "lines": [
         139,
-        390,
-        416,
-        474,
-        530,
-        556,
-        591,
-        642
+        393,
+        419,
+        477,
+        533,
+        559,
+        594,
+        645
       ],
       "name": "ImportInfo",
       "file": "codetwine/codetwine/import_binding_py/import_binding.py",
@@ -579,7 +579,7 @@
     {
       "lines": [
         143,
-        1432
+        1435
       ],
       "name": "local_export_dict",
       "file": "codetwine/codetwine/import_binding_py/import_binding.py",
@@ -588,7 +588,7 @@
     {
       "lines": [
         144,
-        1433
+        1436
       ],
       "name": "module_export_list",
       "file": "codetwine/codetwine/import_binding_py/import_binding.py",
@@ -604,8 +604,8 @@
     },
     {
       "lines": [
-        407,
-        613
+        410,
+        616
       ],
       "name": "ImportInfo.scope_line_tuple",
       "file": "codetwine/codetwine/import_binding_py/import_binding.py",
@@ -613,7 +613,7 @@
     },
     {
       "lines": [
-        412
+        415
       ],
       "name": "ImportInfo.is_export",
       "file": "codetwine/codetwine/import_binding_py/import_binding.py",
@@ -621,8 +621,8 @@
     },
     {
       "lines": [
-        605,
-        609
+        608,
+        612
       ],
       "name": "ImportInfo.module",
       "file": "codetwine/codetwine/import_binding_py/import_binding.py",
@@ -630,9 +630,9 @@
     },
     {
       "lines": [
-        609,
-        622,
-        637
+        612,
+        625,
+        640
       ],
       "name": "ImportInfo.names",
       "file": "codetwine/codetwine/import_binding_py/import_binding.py",
@@ -640,7 +640,7 @@
     },
     {
       "lines": [
-        1427
+        1430
       ],
       "name": "python_all_name_list",
       "file": "codetwine/codetwine/import_binding_py/import_binding.py",

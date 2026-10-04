@@ -18,6 +18,8 @@ from codetwine.extractors.usages import (
     extract_usages,
     extract_value_aliases,
     symbol_part_list,
+    typed_alias,
+    typed_alias_dict,
     typed_alias_type,
     usage_root_name,
 )
@@ -318,7 +320,7 @@ def _module_visibility(
 
     Rust: inside mod name { ... } without use super::*, a top-level name of the file
     and a name a use declaration of the file binds are not visible; a name defined
-    inside the module is. A path from a module (crate::, self::, super::), a path that
+    inside the module is, and so is a macro_rules! macro of the file. A path from a module (crate::, self::, super::), a path that
     is bound as a whole and a name that is neither (a member of a type) are not judged.
 
     Args:
@@ -326,7 +328,8 @@ def _module_visibility(
         usage: The usage.
         root_name: The name of symbol_dict the usage starts from, or its first part.
         definition_list: The definitions of the file.
-        top_level_name_set: The top-level definition names of the file.
+        top_level_name_set: The top-level definition names of the file that an inline
+            module does not see.
         symbol_dict: The names of the file that come from other project files.
 
     Returns:
@@ -406,14 +409,23 @@ def _usage_list(
             return False
         return is_class_name(name) if usage_node_types.get("typed_alias_class_only") else True
 
+    # A variable declared with a tracked type keeps it whatever it is given
+    declare_alias_list = extract_typed_aliases(root_node, type_name_set, usage_node_types)
+    declare_alias_dict = typed_alias_dict(declare_alias_list)
     alias_list = [
         alias for alias in [
-            *extract_typed_aliases(root_node, type_name_set, usage_node_types),
-            *extract_value_aliases(root_node, usage_node_types, is_type_name),
+            *declare_alias_list,
+            *(
+                alias for alias in extract_value_aliases(
+                    root_node, usage_node_types, is_type_name, import_line_dict,
+                )
+                if typed_alias(declare_alias_dict, alias.name, alias.start_line) is None
+            ),
         ]
         if alias.name not in symbol_dict
     ]
-    alias_name_set = {alias.name for alias in alias_list}
+    alias_dict = typed_alias_dict(alias_list)
+    alias_name_set = set(alias_dict)
     # The names that are a usage also where no alias counts for them
     plain_name_set = (
         own_name_set | member_name_set
@@ -429,7 +441,7 @@ def _usage_list(
     ):
         root_name = usage_root_name(usage.name, track_name_set)
         if root_name in alias_name_set:
-            type_name = typed_alias_type(alias_list, root_name, usage.line)
+            type_name = typed_alias_type(alias_dict, root_name, usage.line)
             if type_name is not None:
                 usage.name = type_name + usage.name[len(root_name):]
             elif root_name not in plain_name_set:
@@ -538,7 +550,13 @@ def import_reference_target_list(
         _pattern_reference_function(file_ext, definition_list, binding_dict, project_dir),
     )
     module_scope_list = binder.module_scope_list(file_rel)
-    top_level_name_set = set(binder.top_level_name_list(file_rel)) if module_scope_list else set()
+    # The top-level names an inline module does not see: the ones no definition of a
+    # module_open_types type carries
+    open_type_set = (EXT_TO_USAGE_NODE_TYPE_DICT.get(file_ext) or {}).get("module_open_types", set())
+    top_level_name_set = (
+        set(binder.top_level_name_list(file_rel))
+        - {definition.name for definition in definition_list if definition.type in open_type_set}
+    ) if module_scope_list else set()
     # A macro name read as spaces in front of a class name is a usage of the macro, and
     # a member read where its module is required a usage of the member
     extra_usage_list = [

@@ -271,7 +271,7 @@
   "caller_usages": [
     {
       "lines": [
-        373
+        375
       ],
       "name": "clear_package_path_cache",
       "file": "codetwine/codetwine/extractors/dependency_graph_py/dependency_graph.py",

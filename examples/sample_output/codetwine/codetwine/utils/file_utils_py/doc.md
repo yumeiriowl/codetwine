@@ -4,104 +4,107 @@
 
 **Overview**
 
-Provide utilities for reading, analyzing, and converting file paths in a multi-encoding-aware codebase, with special handling for text file detection and line ending normalization.
+Manage reading, encoding detection, and line-break normalization of source files, plus path transformations between project-relative and copy-destination directory structures.
 
-This file supports:
-- `read_source()` to decode files with BOM detection, UTF-8 fallback, and SOURCE_ENCODING options, returning both text and the encoding used
-- `is_text_file()` to quickly determine if a file is text by inspecting its first 8192 bytes for BOM, NUL bytes, and whitespace
-- `line_list_of()` to split text into lines normalized to `\n`, matching line numbering used throughout analysis
-- `rel_to_copy_path()` and `copy_path_to_rel()` to convert between project-relative paths and the pipeline's output directory structure, which inserts a `{stem}_{ext}` subdirectory per file
-- `resolve_file_output_dir()` to compute where a file's analysis artifacts are written
-- `compute_file_hash()` to generate SHA256 hashes for detecting changed files
+- Call `read_source()` to read a text file and obtain its decoded content and the encoding used (checking BOM, UTF-8, SOURCE_ENCODING list, charset-normalizer detection, or UTF-8 with replacement in that order).
+- Call `is_text_file()` to determine whether a file is non-empty text by probing its first 8192 bytes for absence of NUL bytes and presence of non-whitespace content.
+- Call `line_list_of()` to split text into lines at `\n`, `\r\n`, or lone `\r`, matching the line breaks that line numbers in analysis results reference.
+- Call `rel_to_copy_path()` and `copy_path_to_rel()` to convert between project-relative paths and the `{parent_dir}/{stem}_{ext}/{filename}` copy-destination structure that the pipeline uses.
+- Call `detected_encoding()` to retrieve only the charset-normalizer-detected encoding when a file requires detection, or None when BOM, UTF-8, or SOURCE_ENCODING decoded it successfully.
+- Call `compute_file_hash()` to compute the SHA256 hash of a file for change detection.
+- Call `resolve_file_output_dir()` to obtain the absolute output directory path for a file's processed artifacts.
 
-The file depends on `SOURCE_ENCODING` from `codetwine/config/settings.py` to configure fallback encodings for files that do not decode as UTF-8. It is used across the pipeline: `doc_creator.py` reads source text and computes hashes for documentation; `dependency_graph.py` filters text files and normalizes line endings for parsing; `file_analyzer.py` splits content into lines and queries detected encodings; `output.py` constructs and navigates the output directory structure; `cobol_format.py`, `ts_parser.py`, and `usage_analysis.py` read and normalize source text for language-specific analysis; `pipeline.py` orchestrates encoding validation, hash comparison, and output directory creation.
+This file is the central hub for file I/O operations in the project. It depends on `SOURCE_ENCODING` from codetwine/config/settings.py to configure fallback encoding attempts. Multiple analysis and output modules call its functions: cobol_file_index and extractors read source files; doc_creator reads source text, computes hashes, and resolves output directories; dependency_graph filters text files and normalizes line breaks; file_analyzer extracts definitions and detects encodings; output.py and pipeline.py manage path transformations and change detection; parsers (ts_parser, cobol_format) process source text; and examples/rlm_qa retrieves file contents. The pipeline calls check_source_encoding() at startup to validate SOURCE_ENCODING codec names.
 
-Error handling follows an open-fail policy: `read_source()` raises `OSError` if a file cannot be read, but always produces decodable text (via charset-normalizer detection or UTF-8 with replacement). `is_text_file()` returns `False` for unreadable files rather than raising. Line ending normalization treats lone `\r`, `\r\n`, and standard `\n` consistently, preserving character positions so line numbers remain accurate across all text operations.
+Encoding detection uses a multi-stage fallback strategy: BOM detection takes absolute priority (steps 1), then UTF-8 (step 2), then SOURCE_ENCODING list entries (step 3), then charset-normalizer detection (step 4), and finally UTF-8 with replacement of invalid bytes (step 5). Steps 1-3 succeed only if decoding the entire file without error; the detected flag returned by `_decode_source()` distinguishes detection (steps 4-5) from explicit encoding declaration (steps 1-3).
 
 **Definitions**
 
 ## `_TEXT_PROBE_SIZE`
 
-Constant (8192 bytes) controlling how much of a file `is_text_file()` reads to decide whether it is text. Balances speed against accuracy for binary detection in large files.
+Number of leading bytes (8192) that `is_text_file()` reads to classify a file as text or binary, balancing detection accuracy against I/O cost.
 
 ## `_HASH_CHUNK_SIZE`
 
-Constant (8192 bytes) specifying the buffer size for streaming file reads in `compute_file_hash()`, allowing efficient hashing of arbitrarily large files without loading them entirely into memory.
+Size in bytes (8192) of each read operation when computing SHA256 file hashes, matching the text probe size for consistency.
 
 ## `_LONE_CR_RE`
 
-Compiled regex pattern that matches a carriage return (`\r`) not followed by a line feed (`\n`), enabling `lone_cr_to_lf()` to normalize sole `\r` line endings while preserving `\r\n` pairs.
+Compiled regex pattern matching a carriage return (`\r`) not followed by a newline, used by `lone_cr_to_lf()` to normalize line breaks to the `\n` convention.
 
 ## `_BOM_CODEC_TUPLE`
 
-Ordered list of (BOM byte string, codec name) pairs for UTF-32 LE/BE, UTF-8, and UTF-16 LE/BE. The order ensures that longer BOMs are checked first, so the first matching BOM correctly identifies the file's encoding and the codec that drops it during decoding.
+Ordered list of (BOM byte sequence, codec name) tuples for UTF-32 LE/BE, UTF-8, and UTF-16 LE/BE, checked in this order so the first matching BOM determines the file's encoding.
 
 ## `_bom_codec()`
 
-Return the codec name for a BOM found at the start of a byte string, or `None` if no recognized BOM is present. Used internally by `is_text_file()` and `_decode_source()` to detect encoding before attempting to decode.
+Detect and return the codec name for a BOM (byte order mark) at the start of file bytes, or None if no BOM is present; used by encoding detection to handle UTF-16 and UTF-32 files correctly.
 
 ## `is_text_file()`
 
-Determine whether a file is non-empty text by reading its first 8192 bytes and checking for BOM, NUL bytes, and non-whitespace content. Returns `False` for unreadable files, empty files, or those containing NUL bytes (indicating binary content). Called by `dependency_graph.py` to filter files for analysis and skip binary files.
+Classify a file as non-empty text by examining its first 8192 bytes for a BOM-declared codec, NUL bytes, or whitespace-only content, returning False on read errors; used by dependency_graph to filter binary files from analysis.
 
 ## `check_source_encoding()`
 
-Validate that every encoding name in `SOURCE_ENCODING` is a codec Python recognizes. Raises `ValueError` with instructions if any name is unknown, preventing silent failures during file decoding. Called by `pipeline.py` during initialization before processing files.
+Validate that every encoding name in SOURCE_ENCODING is a recognized Python codec, raising ValueError if an unknown encoding is encountered; called once at pipeline startup to fail fast on configuration errors.
 
 ## `_decode_source()`
 
-Decode file bytes using a priority sequence: BOM-identified codec, UTF-8, encodings from `SOURCE_ENCODING`, charset-normalizer detection, and finally UTF-8 with replacement. Returns the decoded text, the codec name used (or empty string for replacement), and a boolean indicating whether detection was required. Used internally by `read_source()` and `detected_encoding()`.
+Attempt to decode file bytes using BOM codec, UTF-8, SOURCE_ENCODING list entries, charset-normalizer detection, and finally UTF-8 with replacement, returning the decoded text, the codec that succeeded, and a flag indicating whether detection was necessary.
 
 ## `read_source()`
 
-Read a file and decode it using the priority sequence of `_decode_source()`, returning both the text and the name of the codec that decoded it (or empty string if replacement was used). Line breaks are preserved as-is in the file. Called throughout the codebase (`cobol_file_index.py`, `doc_creator.py`, `dependency_graph.py`, `ts_parser.py`, `path_config.py`, `usage_analysis.py`) to load source code for analysis with encoding awareness.
+Read a file and decode it using the multi-stage encoding strategy (BOM, UTF-8, SOURCE_ENCODING, detection, fallback), returning the decoded text and codec name (empty string if fallback was used); the primary API for source file reading across extractors and parsers.
 
 ## `detected_encoding()`
 
-Return the encoding charset-normalizer detects for a file, or `None` if a BOM, UTF-8, or `SOURCE_ENCODING` decodes it without detection. Used by `file_analyzer.py` to record when a file's encoding required guessing rather than explicit identification.
+Return the charset-normalizer-detected encoding for a file, or None if BOM, UTF-8, or SOURCE_ENCODING decoded it successfully; used by file_analyzer to annotate which files required detection.
 
 ## `lone_cr_to_lf()`
 
-Replace every lone `\r` (not part of `\r\n`) with `\n`, preserving character positions so line numbers remain valid. Used by `dependency_graph.py`, `ts_parser.py`, and `read_source_text()` to normalize line endings before further processing.
+Replace each carriage return not part of `\r\n` with a newline, preserving text length and character positions, so `\r\n` and lone `\r` line breaks both become `\n`.
 
 ## `line_list_of()`
 
-Split text into lines by normalizing lone `\r` to `\n`, then splitting on `\n`. Returns a list of lines without line breaks, excluding any trailing empty line. Used throughout analysis (`cobol_source.py`, `bms_source.py`, `r_source.py`, `usage_analysis.py`, `file_analyzer.py`, `cobol_format.py`) to enumerate lines with consistent numbering that matches the source file's structure.
+Split text into lines at `\n`, `\r\n`, or lone `\r`, returning lines without their terminators and excluding a trailing empty line if the text ends with a break; matches the line numbering convention used throughout analysis results.
 
 ## `read_source_text()`
 
-Read a file with `read_source()` and normalize all line breaks (`\r\n` and lone `\r`) to `\n`, returning text where lines match those of `line_list_of()`. Called by `doc_creator.py` and `examples/rlm_qa/qa_tools.py` to load source code with uniform line endings for display or further processing.
+Read a file using `read_source()` and normalize all line breaks (`\r\n` and lone `\r`) to `\n`, producing text whose lines are those of `line_list_of()`; used by doc_creator and extractors when line-based processing is required.
 
 ## `_to_dir_name()`
 
-Generate an output directory name from a filename by replacing the extension's leading dot with an underscore (e.g., "settings.py" → "settings_py"), or returning the filename unchanged if it has no extension. Helper for `rel_to_copy_path()` that enables the pipeline's directory structure to distinguish files with the same stem but different extensions.
+Convert a filename to an output directory name by replacing the dot in the extension with an underscore (e.g. "settings.py" → "settings_py"), leaving files without extensions unchanged; supports the copy-destination directory structure.
 
 ## `rel_to_copy_path()`
 
-Convert a project-relative path to the pipeline's output directory structure by inserting a `{stem}_{ext}` subdirectory between the parent directory and filename (e.g., "config/utils.py" → "config/utils_py/utils.py"). Used by `dependency_graph.py` and `output.py` to map source files to their output locations where analysis results are stored.
+Transform a project-relative path to the copy-destination structure `{parent_dir}/{stem}_{ext}/{filename}`, ensuring files with the same stem but different extensions (e.g. utils.c and utils.h) receive separate directories.
 
 ## `copy_path_to_rel()`
 
-Restore a copy-destination path to a project-relative path by removing the inserted `{stem}_{ext}` subdirectory, inverting `rel_to_copy_path()`. Used by `doc_creator.py` and `output.py` to recover source file paths from output directory structures.
+Restore a copy-destination path to its original project-relative form by removing the inserted `{stem}_{ext}` directory layer; the inverse of `rel_to_copy_path()` for path round-tripping.
 
 ## `output_path_to_rel()`
 
-Convert a "project_name/copy_destination_path" format path to a project-relative path by removing the project name prefix and applying `copy_path_to_rel()`. Used by `doc_creator.py`, `output.py`, and `pipeline.py` to extract source-relative paths from full output paths for reporting and dependency mapping.
+Convert a "project_name/copy_destination_path" format path back to a source-relative path by stripping the project name prefix and calling `copy_path_to_rel()`; reverses the output path format generated by output.py.
 
 ## `resolve_file_output_dir()`
 
-Compute the absolute output directory path where a file's analysis artifacts are written, given a base output directory and the file's relative path. Applies `rel_to_copy_path()` and returns its parent directory. Called by `doc_creator.py`, `output.py`, and `pipeline.py` to create and access output directories for each source file.
+Compute the absolute output directory path for a file's processed artifacts as `{base_output_dir}/{parent_dir}/{stem}_{ext}/`, following the structure produced by `rel_to_copy_path()`; used by file_analyzer and pipeline to locate where analysis results are stored.
 
 ## `compute_file_hash()`
 
-Return the SHA256 hash of a file as a hex string, reading in 8192-byte chunks to handle large files efficiently. Called by `doc_creator.py` and `pipeline.py` to detect whether a file has changed since the last analysis run, enabling incremental processing.
+Calculate the SHA256 hash of a file and return it as a hexadecimal string, reading in 8192-byte chunks to handle large files efficiently; used by pipeline for change detection.
 
 # Summary
 
-# Summary: codetwine/utils/file_utils.py
+# Summary: file_utils.py
 
-**Single Responsibility:** Provide encoding-aware file reading, text detection, path conversion, and hashing utilities for the codebase analysis pipeline.
+**Single Responsibility:**
+Central hub for file I/O operations: reading and decoding source files with multi-stage encoding detection (BOM, UTF-8, SOURCE_ENCODING list, charset-normalizer, fallback), classifying text vs. binary files, normalizing line breaks, transforming paths between project-relative and copy-destination directory structures, computing file hashes, and resolving output directories.
 
-**Main Public Definitions:** `read_source()`, `read_source_text()`, `is_text_file()`, `check_source_encoding()`, `detected_encoding()`, `line_list_of()`, `lone_cr_to_lf()`, `rel_to_copy_path()`, `copy_path_to_rel()`, `output_path_to_rel()`, `resolve_file_output_dir()`, `compute_file_hash()`.
+**Main Public Functions:**
+`read_source()`, `read_source_text()`, `is_text_file()`, `detected_encoding()`, `line_list_of()`, `check_source_encoding()`, `rel_to_copy_path()`, `copy_path_to_rel()`, `output_path_to_rel()`, `resolve_file_output_dir()`, `compute_file_hash()`, `lone_cr_to_lf()`
 
-**Key Capabilities:** BOM detection and multi-encoding fallback chains; binary file detection via NUL bytes and whitespace checks; line ending normalization (`\r`, `\r\n` → `\n`) preserving character positions; SHA256 file hashing with streaming reads; conversion between project-relative paths and pipeline output directory structures (which insert `{stem}_{ext}` subdirectories per file).
+**Key Concepts:**
+File encoding detection with fallback strategy; BOM handling; line-break normalization across `\n`, `\r\n`, lone `\r`; copy-destination path structure (`{parent}/{stem}_{ext}/{filename}`); SHA256 hashing; text file classification by NUL-byte absence and non-whitespace content; SOURCE_ENCODING configuration validation.

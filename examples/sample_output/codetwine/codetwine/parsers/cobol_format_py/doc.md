@@ -4,635 +4,236 @@
 
 **Overview**
 
-Parse COBOL source files in fixed and free formats into grammatically-readable units by handling format detection, tokenization, continuation lines, literals, and non-ASCII characters.
+Parse COBOL source files into statements (units) that a grammar can read, handling fixed-format and free-format syntax, comments, continuations, and non-ASCII characters.
 
-This file is used by:
-- `split_cobol_source()` to convert raw COBOL source text into a `CobolText` object containing units (data items, file descriptions, SELECT entries, procedure sentences), programs, COPY statements, CALL/ENTRY statements, EXEC blocks, and word references with qualifier information.
-- `item_unit()` to generate a synthetic data item unit for grammar validation of whether a word is recognized as an item name.
-- `CobolText` data structure consumers in `codetwine/extractors/cobol_source.py` to read unit definitions and references via the `text`, `origin_line_list`, `word_list`, and `kind` fields of `CobolUnit` objects.
-- `codetwine/cobol_file_index.py` to identify COBOL programs and copybooks by checking for units of kind `ITEM_UNIT`, `FILE_UNIT`, or `PROCEDURE_UNIT`.
+Callers use this file to:
+- Call `split_cobol_source()` to convert COBOL source text into a `CobolText` object containing units (data items, file descriptions, SELECT entries, procedure division sentences), program metadata, COPY statements, CALL statements, and word references for semantic analysis.
+- Call `item_unit()` to construct a minimal data item unit for testing whether the grammar recognizes a given word as an item name.
+- Call `literal_value()` to extract the content of a literal token (removing quotes and prefix) or return the text unchanged if it is not a literal.
+- Call `qualifier_tuple()` to find the qualifying names that follow OF/IN keywords after a given word in a statement.
+- Call `code_text_list()` to extract the code portion of each source line (columns 8–72 of fixed-format lines, full free-format lines) with comments and continuations handled.
 
-The file depends on `line_list_of()` from `codetwine/utils/file_utils.py` to normalize line endings across different line break conventions (`\n`, `\r\n`, `\r`), ensuring consistent line numbering throughout the parsing pipeline. Files consuming this module use it to extract COBOL language elements (definitions, references, structure) for indexing and source analysis.
+The file depends on `line_list_of()` from `codetwine/utils/file_utils.py` to normalize line breaks. It is used by `codetwine/cobol_file_index.py` to identify whether a file contains COBOL code (checking for ITEM_UNIT, FILE_UNIT, or PROCEDURE_UNIT), and by `codetwine/extractors/cobol_source.py` to parse units with tree-sitter and extract definitions and references.
 
-Design decisions: Column positions in fixed-format COBOL are counted with full-width characters (East Asian width classes W/F) as two columns, and ambiguous-width characters (A class) are treated as full-width when the file contains any wide character, requiring a stand-in character (`\u3013`) for accurate column slicing. The format (free/fixed/variable) is inferred from line structure and format directives; when ambiguous, free format is preferred. Stand-in names replace words containing non-ASCII characters outside the letters, digits, and hyphen set so the grammar can parse them; the mapping is recorded for later reconstruction. Continuation lines are tracked separately from line content to handle literals and words split across lines as single tokens.
+The file handles column-width differences for East Asian characters by treating ambiguous-width characters as full-width (two columns) when the file contains any wide character, normalizing columns consistently across fixed-format line layout rules. Tab expansion occurs at parse entry points; the file works only with expanded lines thereafter. A literal or word that spans lines is merged into a single token. Comments are dropped during tokenization; EXEC blocks and COPY statements are recorded separately and not included in units passed to the grammar.
 
 **Definitions**
 
-## `_INDICATOR_COLUMN`
+## `split_cobol_source`
 
-The fixed-format column position (0-based, value 6) that holds the indicator character marking comment lines, continuation lines, debug lines, or directives; used to check line format validity and extract the code area starting at column 7.
-
-## `_CODE_START_COLUMN`
-
-The fixed-format column (0-based, value 7) where the code area of a fixed-format line begins; columns 1–6 are the sequence/indicator area, columns 7–72 are the code area.
-
-## `_CODE_END_COLUMN`
-
-The fixed-format column (0-based, value 72) after the last column of the code area; columns 73–80 are the identification area in traditional fixed format when the right margin is present.
-
-## `_LINE_END_COLUMN`
-
-The fixed-format column (0-based, value 80) marking the last column of a fixed-format line.
-
-## `_TAB_SIZE`
-
-The column width (value 8) to which tab characters are expanded during preprocessing.
-
-## `_WIDE_CLASS_SET`
-
-The set of East Asian width classes ("W", "F") that indicate a character occupies two columns; used to calculate line width for column-based slicing.
-
-## `_AMBIGUOUS_CLASS`
-
-The East Asian width class "A" (ambiguous) that may occupy one or two columns depending on context; treated as two columns when the file contains any full-width character.
-
-## `_WIDE_STAND_IN`
-
-A full-width stand-in character (U+3013) written in place of ambiguous-width characters during column counting to ensure accurate column-based text extraction.
-
-## `_INDICATOR_CHAR_SET`
-
-The set of valid indicator column characters (" ", "*", "/", "-", "d", "D", "$") defining what makes a line a valid fixed-format line.
-
-## `_COMMENT_INDICATOR_CHAR_SET`
-
-The indicator characters ("*", "/") that mark a line as a comment, so no code is extracted from it.
-
-## `_NO_CODE_INDICATOR_CHAR_SET`
-
-The indicator characters ("*", "/", "d", "D", "$") that indicate a line holds no executable code (comment, debug, or directive).
-
-## `_LEFT_MARGIN`
-
-The blank prefix string (seven spaces) written at the start of each code line in output units to position code in the fixed-format code area.
-
-## `_CODE_WIDTH`
-
-The number of columns (value 65) available in the code area of a fixed-format line (columns 7–72).
-
-## `_DIRECTIVE_START_RE`
-
-A regex matching the start of a compiler directive line (">>", or "$"/"@" followed by a word) to identify directive statements that do not contain code.
-
-## `_COMMENT_START`
-
-The character "*" marking the start of a free-format comment line when it appears in column 1.
-
-## `_INLINE_COMMENT_START`
-
-The sequence "*>" that starts an inline comment anywhere in a line, ending the line's code.
-
-## `_OPERAND_END_CHAR_SET`
-
-The characters (")", '"', "'") that can end an operand in a continuation check for free-format lines; used to determine if an indented "*" continues an expression or starts a comment.
-
-## `_LEVEL_SEQUENCE_AREA_RE`
-
-A regex matching a sequence area (columns 1–6) holding only a level number (1–2 decimal digits) and whitespace; used to detect data item definitions in the sequence area.
-
-## `_WORD_SEQUENCE_AREA_RE`
-
-A regex matching a sequence area holding a word followed by other text, indicating the sequence area contains code rather than a sequence number.
-
-## `_RECORD_LEVEL_RANGE`
-
-A range of valid level numbers (1–49) for data items in a record structure.
-
-## `_OTHER_LEVEL_SET`
-
-A set of level numbers (66, 77, 78, 88) for RENAMES, standalone items, and condition names not part of a record.
-
-## `_OPTION_LINE_RE`
-
-A regex matching compiler option lines starting with "CBL" or "PROCESS"; these lines contain no grammar code.
-
-## `_FORMAT_DIRECTIVE_RE`
-
-A regex extracting the source format ("FREE", "FIXED", "VARIABLE") from format directive lines (">>SOURCE FORMAT IS", "$SET SOURCEFORMAT").
-
-## `_SPACE_RE`
-
-A regex matching one or more whitespace characters; used to tokenize code by skipping spaces between tokens.
-
-## `_LITERAL_START_RE`
-
-A regex matching the start of a literal: optional prefix (up to 2 letters) followed by a quote character; used to identify and extract string/hex/alphanumeric literals.
-
-## `_PSEUDO_TEXT_RE`
-
-A regex matching pseudo-text delimiters "==" ... "==" used in COPY REPLACING clauses.
-
-## `_NAME_TAG_PATTERN`
-
-A regex pattern for name tags (":word:") embedded in host variable references in EXEC blocks.
-
-## `_WORD_RE`
-
-A regex matching a COBOL word: letters, digits, underscore, hyphen, or non-ASCII characters, with optional name tags; used to extract identifiers and variable names.
-
-## `_PICTURE_RE`
-
-A regex matching a picture string (any non-space sequence); used to extract PIC clause values without further parsing.
-
-## `GRAMMAR_NAME_RE`
-
-A regex matching names the grammar recognizes: ASCII letters, digits, and hyphens; used to distinguish whether a word needs a stand-in name.
-
-## `_PICTURE_WORD_SET`
-
-The keywords ("PIC", "PICTURE") that precede a picture string in a clause.
-
-## `_NO_CODE_WORD_SET`
-
-Keywords ("EJECT", "SKIP1", "SKIP2", "SKIP3") that start statements holding no code; these are dropped during parsing.
-
-## `_QUALIFIER_WORD_SET`
-
-The qualifier keywords ("OF", "IN") used in data item references to build qualifier tuples (e.g., X OF Y IN Z).
-
-## `_IDENTIFICATION_WORD_SET`
-
-The keywords ("IDENTIFICATION", "ID") that start the identification division header.
-
-## `_DATA_SECTION_WORD_SET`
-
-The section keywords ("FILE", "WORKING-STORAGE", "LOCAL-STORAGE", "LINKAGE", "SCREEN", "REPORT") in the data division.
-
-## `_NO_UNIT_SECTION_WORD_SET`
-
-Section keywords ("SCREEN", "REPORT") whose statements are not parsed into units because the grammar does not read them.
-
-## `_FILE_ENTRY_WORD_SET`
-
-The keywords ("FD", "SD") that start file descriptions; these are units.
-
-## `_OPERATOR_CHAR_SET`
-
-Operator characters ("=", "<", ">") that require spaces around them when adjacent to words; used for token spacing.
-
-## `_SEPARATOR_TEXT_SET`
-
-Separator tokens (",", ";") that separate clauses; used in name suffix detection.
-
-## `IDENTIFICATION_DIVISION`
-
-Constant string "IDENTIFICATION" naming the first division of a COBOL program.
-
-## `ENVIRONMENT_DIVISION`
-
-Constant string "ENVIRONMENT" naming the division containing SELECT entries and I/O configuration.
-
-## `DATA_DIVISION`
-
-Constant string "DATA" naming the division containing data item definitions and file descriptions.
-
-## `PROCEDURE_DIVISION`
-
-Constant string "PROCEDURE" naming the division containing executable statements and paragraphs.
-
-## `_DIRECTIVE_MODE`
-
-Constant string "directive" indicating a line is a format directive with no code.
-
-## `_FREE_MODE`
-
-Constant string "free" indicating a line is in free-format source.
-
-## `_FIXED_MODE`
-
-Constant string "fixed" indicating a line is in fixed-format source with right margin at column 72.
-
-## `_VARIABLE_MODE`
-
-Constant string "variable" indicating a line is in fixed-format source without right margin (SOURCEFORMAT VARIABLE).
-
-## `_NO_TEXT_BEYOND`
-
-Constant string "" indicating nothing but blanks or a floating comment exists past the code area of a fixed-format line.
-
-## `_TAG_BEYOND`
-
-Constant string "tag" indicating an identification field (sequence/tag) exists past the code area and the line has the right margin.
-
-## `_CODE_BEYOND`
-
-Constant string "code" indicating executable code runs past the code area, so the line has no right margin.
-
-## `ITEM_UNIT`
-
-Constant string "item" identifying a unit that is a data item definition.
-
-## `FILE_UNIT`
-
-Constant string "file" identifying a unit that is a file description (FD/SD).
-
-## `SELECT_UNIT`
-
-Constant string "select" identifying a unit that is a SELECT entry.
-
-## `PROCEDURE_UNIT`
-
-Constant string "procedure" identifying a unit that is a sentence of the procedure division.
-
-## `_START_LINE_DICT`
-
-A mapping from unit kind to the list of header lines written before each unit's statement (identification division, data division, relevant section) to make the unit parseable by the grammar.
-
-## `_FILLER_ITEM_LINE`
-
-The constant line "01 FILLER PIC X." appended after file descriptions to make them valid units.
-
-## `_CONTINUE_LINE`
-
-The constant line "CONTINUE." appended after procedure sentences that are single names.
-
-## `_STAND_IN_PREFIX`
-
-The initial prefix "QX" for stand-in names replacing words with non-ASCII characters; extended with "Q" characters to avoid collision with source words.
-
-## `_STAND_IN_PREFIX_CHAR`
-
-The character "Q" appended to the stand-in prefix to avoid collisions.
-
-## `_Token`
-
-A dataclass representing one token (word, literal, picture, pseudo-text, period, or other character) with its kind, text, source line, column position, gap/glue flags, and position index; the basic unit produced by tokenization.
-
-## `_Token.kind`
-
-The token type: "word", "literal", "picture", "pseudo", "period", or "other".
-
-## `_Token.text`
-
-The token's source text, possibly with transformations (upper-case literal prefix, non-ASCII picture characters as "9", "<>" as "NOT =").
-
-## `_Token.line`
-
-The source line number (1-based) where the token starts.
-
-## `_Token.column`
-
-The column (0-based) in the code text where the token starts; initialized to 0 and set later.
-
-## `_Token.has_gap`
-
-Whether whitespace or a line start precedes the token.
-
-## `_Token.is_glue`
-
-Whether the token continues a previous line (continuation line with no literal break).
-
-## `_Token.position`
-
-The index of the token among all tokens in the file.
-
-## `CobolUnit`
-
-A dataclass representing one statement parsed into a unit (data item, file description, SELECT entry, or procedure sentence) with fixed-format text, origin line list, word list, token positions, and a flag for name suffixes; the output unit passed to the grammar.
-
-## `CobolUnit.kind`
-
-The unit type (ITEM_UNIT, FILE_UNIT, SELECT_UNIT, or PROCEDURE_UNIT).
-
-## `CobolUnit.text`
-
-The fixed-format text of the unit with header lines followed by statement lines; ready to parse with the COBOL grammar.
-
-## `CobolUnit.origin_line_list`
-
-A list mapping each line of the unit text to its source line number (1-based), or 0 for synthetic header lines.
-
-## `CobolUnit.word_list`
-
-A list of (word text, source line) tuples for each word in the statement, used to match tree-sitter nodes to source lines.
-
-## `CobolUnit.start_position`
-
-The token index of the first token of the statement among all file tokens.
-
-## `CobolUnit.end_position`
-
-The token index of the last token of the statement.
-
-## `CobolUnit.has_name_suffix`
-
-Whether a token immediately follows the first word after the unit's first token without a gap, indicating a name constructed with operators.
-
-## `CobolCopy`
-
-A dataclass representing a COPY statement or EXEC SQL INCLUDE with the copybook name, source lines, token position, optional library name, and replacing operands.
-
-## `CobolCopy.name`
-
-The copybook name to be copied.
-
-## `CobolCopy.line`
-
-The source line (1-based) of the COPY/INCLUDE statement.
-
-## `CobolCopy.end_line`
-
-The last source line of the COPY/INCLUDE statement (may span multiple lines).
-
-## `CobolCopy.position`
-
-The token index of the COPY/EXEC keyword.
-
-## `CobolCopy.library`
-
-The library name if the COPY uses "OF library" syntax.
-
-## `CobolCopy.replacing_list`
-
-The REPLACING operands as (position, old text, new text) tuples, where position is "" (any), "LEADING", or "TRAILING".
-
-## `CobolText`
-
-A dataclass collecting all parsed units and metadata from a COBOL file: units, program/entry/call information, COPY statements, non-unit words, and code line list; the primary output of split_cobol_source().
-
-## `CobolText.unit_list`
-
-Data items, file descriptions, SELECT entries, and procedure sentences in source order.
-
-## `CobolText.name_dict`
-
-Mapping from stand-in names (upper-case) to their source text for words with non-ASCII characters.
-
-## `CobolText.program_list`
-
-Tuples of (program name, program start line, PROGRAM-ID line) for each PROGRAM-ID.
-
-## `CobolText.program_end_list`
-
-Tuples of (program name, END PROGRAM line) for each END PROGRAM statement.
-
-## `CobolText.entry_list`
-
-Tuples of (entry name, ENTRY line) for each ENTRY statement.
-
-## `CobolText.copy_list`
-
-COPY statements and EXEC SQL INCLUDE blocks with names and replacement info.
-
-## `CobolText.call_list`
-
-Tuples of (program name, is literal, line) for each CALL statement and EXEC CICS PROGRAM() reference.
-
-## `CobolText.word_list`
-
-Tuples of (word, line, qualifier tuple) for words in non-unit statements, with qualifiers from OF/IN/colon syntax.
-
-## `CobolText.code_line_list`
-
-Source lines containing tokens, in ascending order.
-
-## `CobolText.other_statement_position_list`
-
-Token indices of the first token of each non-unit statement (division/section headers, PROGRAM-ID, etc.).
-
-## `_char_width`
-
-Return the column width (1 or 2) of a character based on its East Asian width class; full-width characters (W/F) count as 2 columns.
-
-## `_column_line_list`
-
-Convert lines to a version where ambiguous-width characters are replaced with a stand-in full-width character if the file contains any full-width characters, ensuring accurate column counting; otherwise return lines as-is.
-
-## `_line_width`
-
-Return the total column width of a line by summing character widths; ASCII lines use character count, non-ASCII lines sum individual character widths.
-
-## `_column_slice`
-
-Extract the substring of a line occupying a given column range (start to end), accounting for multi-column characters; used to extract fixed-format fields like indicator, code area, and identification area.
-
-## `_indicator`
-
-Extract the indicator column character from a fixed-format line; return "" if no character starts in the indicator column due to line length or wide character positioning.
-
-## `_is_directive_line`
-
-Determine whether a line is a compiler directive by checking if a directive pattern appears at the line start or from the indicator column onward.
-
-## `_format_directive`
-
-Extract the source format name ("FREE", "FIXED", "VARIABLE") from a format directive line, or return None if the line is not a format directive.
-
-## `_is_fixed_line`
-
-Determine whether a line can be a fixed-format line by checking if it is blank, short, an option line, a directive, or has a valid indicator character; used to infer source format before the first directive.
-
-## `_fixed_code_text`
-
-Extract the code text (columns 8–end) from a fixed-format line with code, excluding lines that are comments, directives, or compiler options; used to extract the executable content.
-
-## `_has_code_in_sequence_area`
-
-Determine whether columns 1–6 of a fixed-format line contain code (not a sequence number) by checking for a word followed by text or a level number before other code; used to infer free-format source.
-
-## `_is_free_start`
-
-Determine whether lines before the first format directive are free-format source by checking if any line is not a valid fixed-format line or contains code in the sequence area.
-
-## `_line_mode_list`
-
-Return the read mode (directive/free/fixed/variable) for each line, applying format directives and inferring free format for lines before the first directive.
-
-## `_code_area_end_state`
-
-Return the state of the code area at its end (column 72): an open quote character, "*>" for a floating comment start, or "" for closed state; used to determine if code/literals extend past column 72.
-
-## `_beyond_code_area`
-
-Determine the content type (none/tag/code) past column 72 of a fixed-format line by checking for open literals, floating comments, sequence numbers, and next-line continuation; used to infer whether the file has a right margin.
-
-## `_has_right_margin`
-
-Determine whether fixed-format lines have a right margin at column 72 by counting lines with identification fields (tag) versus lines with code past column 72; more tags indicate a right margin.
-
-## `_is_free_comment_line`
-
-Determine whether a free-format line starting with "*" is a comment or a continuation of an operand from the previous line; continuation occurs when the last line ends with an operand and does not end its sentence.
-
-## `_code_text_list`
-
-Return the code text and continuation flag for each line by splitting based on format mode, handling comments, literals, and right margin; returns a list of (code text, is continuation) tuples.
+Main entry point: tokenizes source lines, splits tokens into statements, replaces non-ASCII names with stand-in names, and returns a `CobolText` object containing units, programs, COPY statements, CALL statements, ENTRY statements, and word references. Processes fixed-format and free-format source, applying format directives to switch modes, and decides whether the file has a right margin (code area ending at column 72) by checking whether most lines with text past column 72 contain code or identification fields.
 
 ## `code_text_list`
 
-Extract code from each line of a COBOL source by expanding tabs, determining format and right margin, and returning one code string per line; used as the public interface for code extraction.
-
-## `_literal_end`
-
-Find the position after the closing quote of a literal, accounting for doubled quotes as quote characters within the literal; return None if the literal is not closed on the line.
-
-## `_is_picture_position`
-
-Determine whether the next token should be read as a picture string by checking if the last token is PIC/PICTURE or IS following PIC/PICTURE.
-
-## `_picture_token`
-
-Parse a picture string (non-space sequence) and return it as a token, converting non-ASCII characters to "9"; a final period is left for the next token.
-
-## `_line_token_list`
-
-Tokenize the code of one line, handling open literals from the previous line, continuation lines, and gaps; return (token list, open literal or None) tuple; open literals have their text extended in place.
-
-## `_next_token`
-
-Read and return the next token starting at a position in one line's code, recognizing pictures, literals (with prefix and quote), "<>" as "NOT =", pseudo-text, words, periods, and other characters; return (token, position after, open literal if unclosed) tuple.
-
-## `_source_token_list`
-
-Tokenize all code of a COBOL file by processing each line, handling continuation lines and merging glued words; return all tokens in source order with position indices.
-
-## `_word`
-
-Return the upper-case text of the word at a token list index, or "" if the token is not a word.
-
-## `_statement_end`
-
-Find the index of the period ending a statement, or return the token count if no period is found.
-
-## `_exec_end`
-
-Find the index of the END-EXEC keyword closing an EXEC block, or return None if not found.
-
-## `_replacing_list`
-
-Parse REPLACING operands (old BY new) from tokens, extracting position modifiers (LEADING/TRAILING) and operand texts; operands must be single words or pseudo-texts without internal spaces.
+Extract the code portion from each source line, expanding tabs and dropping comments and compiler option lines. Returns a list of strings (one per input line) where each string is the code area of a fixed-format line (columns 8–72, or to line end if no right margin is detected) or the entire free-format line; lines without code return empty strings. Used by callers to analyze line-by-line code content without parsing structure.
 
 ## `literal_value`
 
-Extract the content of a literal (removing prefix and quotes) or return the text unchanged if it is not a literal.
+Return the content of a literal token (text between opening and closing quote, after any prefix letter) or the input text unchanged if it is not a literal. Used to extract program names, copybook names, and literal operands from tokens.
 
 ## `qualifier_tuple`
 
-Extract the names that qualify a word (X OF Y IN Z) by following OF/IN keywords after a word's position; return them as a tuple in order.
-
-## `_host_structure_name`
-
-Extract the structure name from a host variable reference in EXEC blocks written as :STRUCT.NAME, or return "" if the word is not in that format.
-
-## `_is_level_number`
-
-Return whether a word is a decimal level number (1–2 digits).
-
-## `_is_division_header`
-
-Determine whether tokens at an index are the start of a division header (word and DIVISION keyword).
-
-## `_first_statement_start`
-
-Find the index of the first statement after skipping EXEC blocks, COPY statements, and periods at the file start.
-
-## `_start_division`
-
-Determine the division (IDENTIFICATION, ENVIRONMENT, DATA, or PROCEDURE) containing the first statement, inferring from the first statement's keyword.
-
-## `_call_name_token`
-
-Extract the program name token from a CALL or ENTRY statement, handling call convention modifiers like STATIC; return the word or literal token, or None if not found.
-
-## `_Split`
-
-A class that processes token streams into units and records what is parsed without the grammar (programs, COPY, CALL, EXEC, ENTRY); maintains division/section context and coordinates unit creation.
-
-## `_Split.__init__`
-
-Initialize the splitter with a token list, output recorder, starting division, and parsing state flags.
-
-## `_Split.run`
-
-Process all tokens into statements, categorize them as units or non-unit records, and return the (unit kind, tokens) list.
-
-## `_Split._record_word_list`
-
-Record the words of a non-unit statement with their line numbers and qualifiers into the output cobol_text.
-
-## `_Split._statement`
-
-Collect tokens for one statement, ending at a period or division header; skip COPY and EXEC in code areas, and drop no-code keywords; handle IDENTIFICATION division separately.
-
-## `_Split._read_statement`
-
-Route a statement to the appropriate reader based on its first word and current division; return the next token index.
-
-## `_Split._read_program`
-
-Record a PROGRAM-ID and its name; if the name is on the next line, fetch it; return next token index.
-
-## `_Split._read_environment`
-
-Process environment division statements: SELECT entries become units, others are recorded as non-unit words.
-
-## `_Split._read_data`
-
-Process data division statements: section headers set the current section, data items and file descriptions become units in most sections, SCREEN/REPORT sections are recorded as non-unit words.
-
-## `_Split._read_procedure`
-
-Process procedure division sentences: record CALL and ENTRY names, convert ENTRY to CALL in the unit, skip DECLARATIVES, and make sentences units.
-
-## `_Split._read_exec`
-
-Process EXEC blocks: record SQL INCLUDE as COPY, record CICS PROGRAM() as CALL, record host variables as non-unit words, replace the block with CONTINUE in procedure division units.
-
-## `_Split._read_copy`
-
-Record a COPY statement with its name, library, and REPLACING operands; return the index after the statement.
-
-## `_put_stand_in_name`
-
-Replace each word containing non-ASCII characters (outside ASCII letters, digits, hyphen) with a generated stand-in name, recording the mapping in cobol_text.name_dict; extend the stand-in prefix to avoid collisions.
-
-## `_short_literal`
-
-Truncate a literal to a given width while preserving its quotes and not splitting doubled quotes; used to fit literals into the code area.
-
-## `_token_gap`
-
-Return the space between two consecutive tokens (" " or ""), accounting for gaps, operator characters, and word boundaries.
-
-## `_code_line_text_list`
-
-Convert tokens of one source line into one or more fixed-format code lines (max 65 characters) by truncating literals and wrapping long lines; preserve the first token's indentation if it fits.
-
-## `_short_text`
-
-Truncate code text to the code width, cutting literals carefully to avoid incomplete quotes.
-
-## `_is_name_only`
-
-Determine whether a sentence is a single name, or a name followed by SECTION; used to detect trivial sentences.
-
-## `_has_name_suffix`
-
-Determine whether a token (other than period or separator) immediately follows the first word after the first token without a gap; indicates a name built with operators or pseudo-text.
-
-## `_unit`
-
-Create a CobolUnit from a statement by grouping tokens by source line, writing header lines, formatting code into fixed-format lines, and adding any required suffix lines (FILLER for files, CONTINUE for name-only procedure sentences).
+Return a tuple of names that qualify a word via OF or IN keywords (for example, "CODE-X OF REC-A IN FILE-B" returns `("REC-A", "FILE-B")`). Called during statement analysis to capture the qualified context of a name reference.
 
 ## `item_unit`
 
-Create a synthetic data item unit for a single character with the given name to test whether the grammar recognizes it as an item name; used for disambiguation.
+Construct and return a minimal `CobolUnit` of kind ITEM_UNIT representing a single-character data item with a given name. Used by semantic analysis to test whether the grammar recognizes a word as an item name without parsing a full file.
 
-## `split_cobol_source`
+## `CobolUnit`
 
-Parse a COBOL source file into units, programs, copybooks, calls, and metadata by tokenizing, splitting into statements, applying stand-in names, and formatting as fixed-format text; the main public entry point.
+Data class representing one statement (unit) that the grammar reads: a data item, file description, SELECT entry, or procedure division sentence. Fields include the fixed-format text to parse, origin line numbers for each text line (0 for synthetic header lines), a list of (word, line) tuples for words in the statement, token positions, and a boolean flag indicating whether a token is written immediately after the first word without whitespace (used to handle malformed names like `(PFX)-NAME`).
+
+## `CobolText`
+
+Container for all units and non-unit statements extracted from one COBOL file. Fields include unit_list (data items, file descriptions, SELECT entries, sentences), name_dict (stand-in name mappings for non-ASCII names), program_list (program names and their lines), program_end_list (END PROGRAM statements), entry_list (ENTRY statements), copy_list (COPY statements and EXEC SQL INCLUDE), call_list (CALL statements and EXEC CICS PROGRAM references), word_list (words in non-unit statements with their qualifying names), code_line_list (source lines containing code), and other_statement_position_list (token positions of non-unit statements like division headers).
+
+## `CobolCopy`
+
+Data class recording a COPY statement or EXEC SQL INCLUDE: name (copybook name), line (source line of statement start), end_line (last source line), position (token index), library (optional library name from OF/IN clause), and replacing_list (operands of the REPLACING phrase as position/old/new tuples).
+
+## `_Token`
+
+Internal data class representing one token: kind (word, literal, picture, pseudo, period, other), text, source line (1-based), column in code area, flags for whitespace before the token (has_gap) and glue-continuation (is_glue), and position (index in the file's token list). Words on the same line that are glued by continuation are merged into a single word token.
+
+## `_char_width`
+
+Return the column width of a character: 2 for East Asian wide or fullwidth characters (east_asian_width in {W, F}), 1 otherwise. Used to count columns in fixed-format lines with non-ASCII text.
+
+## `_column_line_list`
+
+Normalize column width calculations by replacing ambiguous-width characters (east_asian_width A) with full-width stand-ins when the file contains any wide character. Returns the lines unchanged if the file is ASCII or has no wide characters (avoiding false positives on files with only ambiguous characters).
+
+## `_line_width`
+
+Return the total column width of a line, where each character contributes 1 or 2 columns based on `_char_width()`. Used to check whether lines fit within fixed-format column boundaries.
+
+## `_column_slice`
+
+Extract characters from a line that occupy columns in a given range [start, end), accounting for wide characters. Returns a substring that may contain fewer characters than the column range if wide characters are involved. Used to extract the indicator column, code area, and other fixed-format regions.
+
+## `_indicator`
+
+Return the character in the indicator column (column 6) of a fixed-format line, or "" if no character starts there. The indicator determines whether a line is a comment (*), continuation (-), or debug (D/d) line.
+
+## `_is_directive_line`
+
+Return whether a line contains a compiler directive (>>SOURCE FORMAT, >>IF, $SET, @OPTIONS, etc.) at the start of the line or the indicator column. Directives are parsed but not included in units.
+
+## `_format_directive`
+
+Extract the source format (FREE, FIXED, or VARIABLE) named by a directive line, or return None if the line is not a format directive. Used to track which format applies to following source lines.
+
+## `_is_fixed_line`
+
+Return whether a line can be a fixed-format source line: blank, short, a compiler option line, a directive, or holding a valid indicator character. Used during initial format detection.
+
+## `_fixed_code_text`
+
+Extract the code portion (columns 8 onward) from a fixed-format line, stripping surrounding whitespace, or return "" for lines without code (comments, directives, compiler options, debug lines).
+
+## `_has_code_in_sequence_area`
+
+Return whether columns 1–6 of a fixed-format line hold code rather than a sequence number. Detects free-format source written as fixed-format (names and operands in columns 1–6, or level numbers with code after column 7).
+
+## `_is_free_start`
+
+Return whether the source before the first format directive is free-format: true if any line cannot be fixed-format, has code in columns 1–6, or is the first code line with "-" in the indicator column.
+
+## `_line_mode_list`
+
+Return the mode (DIRECTIVE_MODE, FREE_MODE, FIXED_MODE, or VARIABLE_MODE) for each source line, tracking format directives to switch between free and fixed format.
+
+## `_code_area_end_state`
+
+Analyze the code area (columns 8–72) of a fixed-format line to determine what is left open at the end: the quote character of an unclosed literal, "*>" if a floating comment started, or "" if nothing is open. Used to decide whether the next line continues a literal.
+
+## `_beyond_code_area`
+
+Return what content (NO_TEXT_BEYOND, TAG_BEYOND, or CODE_BEYOND) lies in columns 73–80 of a fixed-format line. Distinguishes identification fields (tags, digits) from code that runs past column 72, accounting for open literals and floating comments.
+
+## `_has_right_margin`
+
+Return whether the code area of fixed-format lines ends at column 72 (right margin present) or extends to the line end. Counts lines with identification fields (TAG_BEYOND) vs. code past column 72 (CODE_BEYOND); a right margin is present if tag count ≥ code count.
+
+## `_is_free_comment_line`
+
+Return whether a free-format line starting with "*" is a comment line (true) or a continuation of an expression (false). "*" alone in column 1 or "*>" anywhere always starts a comment; an indented "*" continues an expression only if the previous line ends with an operand and the sentence is incomplete.
+
+## `_code_text_list`
+
+Return a list of (code text, is continuation) tuples for each source line, handling comment detection, fixed vs. free format, right margin detection, and column width adjustments for non-ASCII characters. Used internally by `code_text_list()` and token splitting.
+
+## `_literal_end`
+
+Find the position after the closing quote of a literal that starts at a given position, returning None if the literal is not closed by line end. A quote written twice counts as a literal character, not a closing quote.
+
+## `_is_picture_position`
+
+Return whether the next token after the last tokens is a picture string: true if the previous token is PIC or PICTURE, or if the previous two are PIC/PICTURE and IS.
+
+## `_picture_token`
+
+Parse a picture string starting at a position, replacing non-ASCII characters with "9" and returning the token and position after it. A trailing period, comma, or semicolon is left for the next token.
+
+## `_line_token_list`
+
+Tokenize the code of one source line, handling open literals from the previous line and continuation lines. Returns the tokens and any literal left without a closing quote. Implements glue-continuation for lines starting with "-" in the indicator column.
+
+## `_next_token`
+
+Parse the single token starting at a position: picture string (if position follows PIC/PICTURE), literal, "<>" (written as "NOT ="), pseudo-text (==...==), word, period, or other character. Returns the token, position after it, and the token itself if it is a literal without a closing quote.
+
+## `_source_token_list`
+
+Split all source lines into tokens in source order, merging literals and words that span lines and assigning each token a position index. Used as the first step of `split_cobol_source()`.
+
+## `_word`
+
+Return the upper-case text of the word at a token list index, or "" if the token is not a word. Helper for checking word values in statement analysis.
+
+## `_statement_end`
+
+Return the index of the period that ends a statement, or the token count if no period is found. Used to delimit statements.
+
+## `_exec_end`
+
+Return the index of END-EXEC that closes an EXEC block starting at a given index, or None if END-EXEC is not found.
+
+## `_replacing_list`
+
+Parse the operands of a REPLACING phrase (==old== BY ==new==, or LEADING/TRAILING variants) and return a list of (position, old text, new text) tuples. An operand is included only if its text is a single word (no spaces); pseudo-text delimiters are stripped.
+
+## `_host_structure_name`
+
+Return the name of a host structure that qualifies a word in an EXEC block (written as :STRUCT.NAME), or "" if the word is not written that way. Used when parsing EXEC SQL blocks.
+
+## `_is_level_number`
+
+Return whether a word consists only of decimal digits (is a level number).
+
+## `_is_division_header`
+
+Return whether tokens at an index are the first two words of a division header (IDENTIFICATION/ID DIVISION, ENVIRONMENT DIVISION, DATA DIVISION, PROCEDURE DIVISION).
+
+## `_first_statement_start`
+
+Return the token index of the first statement not in an EXEC block or COPY statement, skipping those structures at the file start. Used to determine which division the file begins with.
+
+## `_start_division`
+
+Return the division that the first real statement of a file belongs to (IDENTIFICATION, ENVIRONMENT, DATA, or PROCEDURE), used to initialize statement reading.
+
+## `_call_name_token`
+
+Return the token that names the program in a CALL or ENTRY statement, handling call conventions (STATIC "name") and returning None if no valid name token follows.
+
+## `_put_stand_in_name`
+
+Replace each word with non-ASCII characters in unit tokens with a unique stand-in name (QX1, QX2, ...), recording the mapping in cobol_text.name_dict. Stand-in prefixes are incremented to avoid collisions with existing words in the file.
+
+## `_short_literal`
+
+Cut a literal to a given width while keeping its quotes and prefix, avoiding cutting a doubled quote in half. Used when a line does not fit the code area.
+
+## `_token_gap`
+
+Return the whitespace (" " or "") that should be written between two consecutive tokens: a space if has_gap is true, or if an operator character requires spacing before or after.
+
+## `_code_line_text_list`
+
+Write the tokens of one source line as one or more fixed-format code area lines (up to 65 characters each), preserving indentation if the line fits, otherwise cutting literals and wrapping to subsequent lines.
+
+## `_short_text`
+
+Cut a line to the code area width (65 characters), preserving literal syntax if the line ends with a quote.
+
+## `_is_name_only`
+
+Return whether a statement is a single name (a paragraph name, label, or section header: name PERIOD or name SECTION [digits] PERIOD).
+
+## `_has_name_suffix`
+
+Return whether a token is written immediately after the first word following the first token of a statement without a gap (used to detect malformed names like CUST-(SFX) where a separator or period would normally follow the word).
+
+## `_unit`
+
+Write a statement as a `CobolUnit`, arranging tokens by source line, writing each line in fixed-format text (possibly across multiple lines if code does not fit the 65-character area), adding header lines and synthetic lines (FILLER after files, CONTINUE after single-name sentences), and collecting word/line metadata.
+
+## `_Split`
+
+Internal class that reads statements from the token list and sorts them into units (ITEM_UNIT, FILE_UNIT, SELECT_UNIT, PROCEDURE_UNIT) or non-unit statements. Handles division and section tracking, records PROGRAM-ID, END PROGRAM, ENTRY, COPY, CALL, and EXEC statements in `cobol_text`, and handles statement boundaries (periods, division headers).
 
 # Summary
 
 # Summary: codetwine/parsers/cobol_format.py
 
-**Single Responsibility:** Parse COBOL source files in fixed and free formats into grammatically-readable units by detecting format, tokenizing code, handling continuation lines and literals, and normalizing non-ASCII characters.
+**Single Responsibility:** Parse COBOL source files (fixed-format, free-format, with tabs, comments, continuations, and non-ASCII characters) into statements that a grammar can read, while extracting metadata about programs, copybooks, calls, and word references.
 
-**Main Public Definitions:**
-- `split_cobol_source()` – primary entry point converting raw COBOL text into CobolText object
-- `code_text_list()` – extracts code from each source line
-- `item_unit()` – creates synthetic data item for grammar validation
-- `CobolText` – output dataclass collecting units, programs, copies, calls, metadata
-- `CobolUnit` – represents one parsed statement (data item, file, SELECT, procedure)
+**Main Public Functions:**
+- `split_cobol_source()` — tokenize source and return units, programs, COPY/CALL statements, and word references
+- `code_text_list()` — extract code portions from source lines
+- `literal_value()` — extract content from literal tokens
+- `qualifier_tuple()` — find qualifying names after OF/IN keywords
+- `item_unit()` — construct a minimal test data item unit
 
-**Key Terms:** Fixed/free format detection, indicator/code columns, tab expansion, wide-character column counting with stand-in substitution, literal and picture parsing, continuation line handling, statement tokenization, COPY/CALL/EXEC/ENTRY extraction, word qualification (OF/IN), non-ASCII name mapping, fixed-format text generation with headers and wrapping.
+**Key Concepts:** Fixed-format (columns 1–72) and free-format source; format directives; continuation lines; comments; East Asian wide characters; stand-in names for non-ASCII identifiers; tokens (words, literals, pictures, pseudo-text, periods); statements; units (ITEM, FILE, SELECT, PROCEDURE); EXEC blocks; COPY and CALL tracking.

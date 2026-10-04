@@ -250,7 +250,7 @@
       "from": "codetwine/codetwine/config/settings_py/settings.py",
       "target_context": "EXT_TO_DEFINITION_DICT: dict[str, dict[str, str]] = _expand_ext_aliases(\n    {ext: lang_config.definition_dict for ext, lang_config in _LANG_REGISTRY.items()}\n)",
       "target_name": "EXT_TO_DEFINITION_DICT",
-      "target_start_line": 1151
+      "target_start_line": 1161
     },
     {
       "lines": [
@@ -562,15 +562,15 @@
   "caller_usages": [
     {
       "lines": [
-        361
+        363
       ],
       "name": "module_tree_cache.clear",
       "file": "codetwine/codetwine/extractors/dependency_graph_py/dependency_graph.py",
-      "usage_context": "        all_file_list = _filter_text_file_list(project_dir, file_list)\n\n    # Forget the indexes and the resolved references of an earlier analysis\n    module_tree_cache.clear()\n    file_index_cache.clear()\n    namespace_index_cache.clear()\n    r_name_index_cache.clear()"
+      "usage_context": "    # Forget the syntax trees, the indexes and the resolved references of an earlier analysis\n    parse_cache.clear()\n    class_macro_cache.clear()\n    module_tree_cache.clear()\n    file_index_cache.clear()\n    namespace_index_cache.clear()\n    r_name_index_cache.clear()"
     },
     {
       "lines": [
-        608
+        611
       ],
       "name": "rust_import_name_dict",
       "file": "codetwine/codetwine/import_binding_py/import_binding.py",
@@ -586,7 +586,7 @@
     },
     {
       "lines": [
-        338
+        347
       ],
       "name": "module_tree_cache.clear",
       "file": "codetwine/codetwine/pipeline_py/pipeline.py",

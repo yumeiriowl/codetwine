@@ -87,7 +87,7 @@
       "from": "codetwine/codetwine/config/settings_py/settings.py",
       "target_context": "def language_ext(path: str) -> str:\n    \"\"\"Return the extension whose language settings a file is analyzed with.\n\n    A file recorded by set_copy_target_ext() gets the extension recorded for it, and a\n    file recorded by set_no_language_file() none. Every other file gets its own\n    extension when it is a key of EXT_TO_DEFINITION_DICT; the extensions of the\n    languages with ignore_ext_case are matched in any case.\n\n    Examples:\n        \"src/app.py\"          -> \"py\"\n        \"src/MAIN.Cbl\"        -> \"cbl\"\n        \"R/utils.R\"           -> \"r\"\n        \"config.yaml\"         -> \"\"\n        \"dcl/DCLCUST.dcl\"     -> \"cpy\" (when a COPY statement names it)\n        \"docs/notes.qmd\"      -> \"\" (when it has no R code chunk)\n\n    Args:\n        path: A file path. A relative path is taken from the current directory when\n            it is looked up among the recorded files.\n\n    Returns:\n        The extension (without the dot, a key of EXT_TO_DEFINITION_DICT), or \"\" for a\n        file without a language.\n    \"\"\"\n    path_abs = os.path.abspath(path)\n    copy_target_ext = _copy_target_ext_dict.get(path_abs)\n    if copy_target_ext:\n        return copy_target_ext\n    if path_abs in _no_language_path_set:\n        return \"\"\n    ext = os.path.splitext(path)[1].lstrip(\".\")\n    if ext in EXT_TO_DEFINITION_DICT:\n        return ext\n    if ext.lower() in _IGNORE_CASE_EXT_SET:\n        return ext.lower()\n    return \"\"",
       "target_name": "language_ext",
-      "target_start_line": 1241
+      "target_start_line": 1251
     },
     {
       "lines": [
@@ -97,7 +97,7 @@
       "from": "codetwine/codetwine/config/settings_py/settings.py",
       "target_context": "EXT_TO_DEFINITION_DICT: dict[str, dict[str, str]] = _expand_ext_aliases(\n    {ext: lang_config.definition_dict for ext, lang_config in _LANG_REGISTRY.items()}\n)",
       "target_name": "EXT_TO_DEFINITION_DICT",
-      "target_start_line": 1151
+      "target_start_line": 1161
     },
     {
       "lines": [
@@ -107,7 +107,7 @@
       "from": "codetwine/codetwine/extractors/definition_source_py/definition_source.py",
       "target_context": "def file_definition_list(absolute_path: str, definition_dict: dict[str, str]) -> list[DefinitionInfo]:\n    \"\"\"Return the definitions of a file (extract_definitions), read once per file.\n\n    The file is parsed the first time; the definitions are kept without its syntax\n    tree until clear_definition_source_cache() is called.\n\n    Args:\n        absolute_path: Absolute path of the file.\n        definition_dict: Definition node settings of its language.\n\n    Returns:\n        The definitions sorted by start_line. The list is shared: it is not to be modified.\n    \"\"\"\n    definition_list = _definition_list_cache.get(absolute_path)\n    if definition_list is None:\n        definition_list = extract_definitions(parse_file(absolute_path)[0], definition_dict)\n        _definition_list_cache[absolute_path] = definition_list\n    return definition_list",
       "target_name": "file_definition_list",
-      "target_start_line": 37
+      "target_start_line": 69
     },
     {
       "lines": [
@@ -157,7 +157,7 @@
       "from": "codetwine/codetwine/extractors/definition_source_py/definition_source.py",
       "target_context": "def file_content(absolute_path: str) -> bytes:\n    \"\"\"Return the UTF-8 text of a file as parse_file() returns it, without parsing the file.\n\n    Args:\n        absolute_path: Absolute path of the file.\n\n    Returns:\n        The text of the entry of parse_cache when the file is in it, else the text\n        read from the file (read_utf8_content).\n    \"\"\"\n    cache_entry = parse_cache.get(absolute_path)\n    return cache_entry[1] if cache_entry is not None else read_utf8_content(absolute_path)",
       "target_name": "file_content",
-      "target_start_line": 57
+      "target_start_line": 89
     },
     {
       "lines": [
@@ -223,7 +223,7 @@
   "caller_usages": [
     {
       "lines": [
-        173
+        180
       ],
       "name": "get_file_dependencies",
       "file": "codetwine/codetwine/pipeline_py/pipeline.py",

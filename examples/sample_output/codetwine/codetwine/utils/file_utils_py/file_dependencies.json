@@ -442,9 +442,9 @@
     },
     {
       "lines": [
-        63,
-        64,
-        65
+        69,
+        70,
+        71
       ],
       "name": "output_path_to_rel",
       "file": "codetwine/codetwine/pipeline_py/pipeline.py",
@@ -452,8 +452,8 @@
     },
     {
       "lines": [
-        93,
-        169
+        99,
+        176
       ],
       "name": "resolve_file_output_dir",
       "file": "codetwine/codetwine/pipeline_py/pipeline.py",
@@ -461,7 +461,7 @@
     },
     {
       "lines": [
-        95
+        101
       ],
       "name": "compute_file_hash",
       "file": "codetwine/codetwine/pipeline_py/pipeline.py",
@@ -469,7 +469,7 @@
     },
     {
       "lines": [
-        261
+        270
       ],
       "name": "check_source_encoding",
       "file": "codetwine/codetwine/pipeline_py/pipeline.py",

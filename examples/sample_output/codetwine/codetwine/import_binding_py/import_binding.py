@@ -366,6 +366,9 @@ class ImportBinder:
             tree_fact = self._tree_fact(file_rel)
             import_info_list = tree_fact.import_info_list
             for import_info in import_info_list:
+                # A member read where its module is required binds no variable
+                if import_info.is_use:
+                    continue
                 for name in [*import_info.names, import_info.module_alias]:
                     if not name:
                         continue

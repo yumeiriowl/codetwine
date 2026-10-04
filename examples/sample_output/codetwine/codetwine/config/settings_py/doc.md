@@ -4,339 +4,372 @@
 
 **Overview**
 
-Centralize configuration settings, language-specific AST parsing rules, and per-file language detection to enable the codebase to analyze multi-language projects with tree-sitter.
+Manage configuration settings and language registry for source code analysis across multiple programming languages using tree-sitter parsers.
 
-When a developer or module needs to:
-- Detect which language to analyze a file with, call `language_ext()` or `has_language()` to return the file's language extension or whether it has a supported language.
-- Extract definitions, imports, or usage patterns from source code, use `EXT_TO_DEFINITION_DICT`, `EXT_TO_IMPORT_QUERY_DICT`, or `EXT_TO_USAGE_NODE_TYPE_DICT` to access language-specific AST node mappings.
-- Resolve import paths and dependencies, call `EXT_TO_IMPORT_RESOLVE_DICT` to retrieve module resolution rules by file extension.
-- Record special files like COBOL copybooks or R Markdown files without code chunks, call `set_copy_target_ext()` or `set_no_language_file()` to override default language detection.
-- Retrieve environment configuration, call `get_config_value()` or access constants like `LLM_MODEL`, `MAX_WORKERS`, `DOC_MAX_TOKENS` to read user settings.
+This file is used by developers and other project modules to:
+- Call `get_config_value()` to retrieve environment variables with type conversion and default values for LLM settings, paths, performance tuning, and analysis options.
+- Access `language_ext()` to determine which language's grammar settings should analyze a given file path, accounting for file extensions, case sensitivity, and special overrides.
+- Retrieve language-specific configuration via `EXT_TO_DEFINITION_DICT`, `EXT_TO_IMPORT_QUERY_DICT`, `EXT_TO_USAGE_NODE_TYPE_DICT`, and `EXT_TO_IMPORT_RESOLVE_DICT` to extract definitions, imports, and usage information from source code.
+- Call `has_language()` to check whether a file participates in language-based analysis.
+- Call `set_copy_target_ext()` and `set_no_language_file()` to register COBOL copybooks and R Markdown files without code chunks that require special handling.
+- Query extension sets like `COBOL_EXT_SET`, `C_FAMILY_EXT_SET`, `CSHARP_EXT_SET`, `R_EXT_SET`, and `R_MARKDOWN_EXT_SET` to identify files of specific language families.
 
-This file is the central registry for all per-language analysis rules and global configuration. It is imported by almost every other module in the codebase—including file_analyzer.py, import_binding.py, import_to_path.py, dependency_graph.py, reference_target.py, and parsers/ts_parser.py—to determine which language rules apply to each file and to configure LLM calls, caching, and performance. The file also loads environment variables via dotenv and converts them to typed Python values, eliminating type-conversion logic from callers.
+The file is the configuration hub of the codetwine project: it centralizes environment variable parsing, defines grammar and resolution rules for twelve programming languages, and provides lookup dictionaries that nearly every analysis module (dependency_graph.py, file_analyzer.py, import_binding.py, import_reference.py, ts_parser.py, definition_source.py, and others) consult to determine how to process a file. It imports tree-sitter language bindings and defines per-language AST node mapping dictionaries (like `PYTHON_DEFINITION_DICT`, `JAVA_DEFINITION_DICT`, etc.) that map AST node types to the fields holding definition names and usage context.
 
-The file maintains two internal dictionaries, `_copy_target_ext_dict` and `_no_language_path_set`, that allow override of language detection on a per-project basis. Language detection matches extensions case-insensitively for COBOL, BMS, and R files; all other languages match case-sensitively. The `_expand_ext_aliases()` function auto-generates public dictionaries from `_LANG_REGISTRY` by adding alias extensions (such as `.h` for C++), reducing duplication.
+The design uses sentinel values like `"__assignment__"` and `"__default_export__"` in definition dictionaries to signal that a name-extraction function must dispatch to specialized logic rather than simply reading a direct child node. Extension alias expansion via `_expand_ext_aliases()` avoids repeating configuration for file extensions that share language settings (e.g., ".h" uses C++ rules). Language registry design centralizes all per-language configuration in the `LangConfig` dataclass and `_LANG_REGISTRY` dictionary, auto-generating public lookup dictionaries from it. Parse and definition caching is configured via `PARSE_CACHE_MAX_FILES` with LRU eviction. The `_copy_target_ext_dict` and `_no_language_path_set` module-level dictionaries track project-specific file overrides and are cleared per project to prevent cross-project pollution.
 
 **Definitions**
 
 ## `get_config_value`
 
-Retrieve an environment variable, convert it to a specified type (str, int, float, or bool), and return a default value if the variable is not set; raise ValueError if the variable is required but missing. This function centralizes environment variable handling so that all callers use consistent type conversion and error reporting.
+Retrieves an environment variable, converts it to a specified type (str, int, float, or bool), and returns a default value if the variable is unset; raises `ValueError` if a required variable is missing. Used throughout the module to populate LLM settings (`LLM_API_KEY`, `LLM_MODEL`), path settings (`DEFAULT_PROJECT_DIR`, `DOC_TEMPLATE_PATH`), performance settings (`MAX_WORKERS`, `MAX_RETRIES`), and analysis settings (`ENABLE_LLM_DOC`, `SUMMARY_MAX_CHARS`).
 
-## `LangConfig`
+## `_REQUIRED`
 
-A frozen dataclass that bundles all language-specific settings for a single file extension: the tree-sitter Language object, definition node mappings, import extraction queries, usage tracking node types, module resolution rules, implicit visibility scope, and reference resolution strategy. Every entry in `_LANG_REGISTRY` is a LangConfig instance.
-
-## `_expand_ext_aliases`
-
-Generate a new dictionary from an input dictionary by adding alias extension entries based on `_EXT_ALIAS_DICT`; for example, if the input contains "cpp" and the alias dict maps "h" to "cpp", the output includes "h" pointing to the same value as "cpp". This function deduplicates language settings across similar extensions.
-
-## `EXT_TO_LANGUAGE_DICT`
-
-A public mapping of file extension (without dot) to tree-sitter Language object, auto-generated from `_LANG_REGISTRY` and expanded with aliases. Used by parsers and import extractors to obtain the Language object needed to parse source code.
-
-## `EXT_TO_DEFINITION_DICT`
-
-A public mapping of file extension to definition node mapping dictionary, auto-generated from `_LANG_REGISTRY` and expanded with aliases. Each value is a dict mapping AST node type to the field or child name that holds the definition's identifier; used by definition extractors to locate and name definitions in the AST.
-
-## `COBOL_EXT_SET`
-
-A set of COBOL file extensions (lower case: "cbl", "cob", "cpy") computed from `EXT_TO_DEFINITION_DICT`. Used to identify COBOL files so they can be parsed with special statement-splitting logic rather than tree-sitter parsing.
-
-## `C_FAMILY_EXT_SET`
-
-A set of C and C++ file extensions (e.g., "c", "cpp", "h", "hpp") computed from `_LANG_REGISTRY` by finding languages whose import_resolve_dict bind to "include". Used to identify C/C++ files for macro-aware parsing and include-based dependency resolution.
-
-## `CSHARP_EXT_SET`
-
-A set of C# file extensions ("cs") computed from `EXT_TO_DEFINITION_DICT`. Used to identify C# files so they can be analyzed with namespace-based reference resolution.
-
-## `R_EXT_SET`
-
-A set of R file extensions ("r", "rmd", "qmd") computed from `EXT_TO_DEFINITION_DICT`. Used to identify R scripts and R Markdown files so they can be parsed with R-specific import and definition extraction.
-
-## `R_MARKDOWN_EXT_SET`
-
-A set of R Markdown and Quarto file extensions ("rmd", "qmd"). Used to identify files whose source code is embedded in chunks within a document, requiring special parsing that extracts and blanks the R code chunks.
-
-## `BMS_EXT_SET`
-
-A set of BMS (Basic Mapping Support) file extensions ("bms") computed from `EXT_TO_DEFINITION_DICT`. Used to identify BMS sources, which are parsed with COBOL grammar but only to extract map definitions.
-
-## `_copy_target_ext_dict`
-
-A module-level dict mapping absolute file paths to language extensions, used to override language detection for COBOL copybooks and other files named by statements in other files. Filled by `set_copy_target_ext()`.
-
-## `set_copy_target_ext`
-
-Record the files of a project whose language comes from the files that name them (e.g., COBOL copybooks named by COPY statements), clearing any previously recorded files for the same project. Called during dependency graph construction to ensure copybooks are analyzed with the correct extension.
-
-## `_no_language_path_set`
-
-A module-level set of absolute file paths for files that are analyzed without a language despite having an extension with language settings (e.g., R Markdown files with no R code chunks). Filled by `set_no_language_file()`.
-
-## `set_no_language_file`
-
-Record the files of a project that are analyzed without a language whatever their extension, clearing any previously recorded files for the same project. Called during dependency graph construction to mark R Markdown or Quarto files that contain no R code chunks.
-
-## `language_ext`
-
-Return the extension whose language settings a file is analyzed with, consulting `_copy_target_ext_dict` and `_no_language_path_set` for overrides, matching case-insensitively for COBOL/BMS/R extensions, and returning an empty string for files without a supported language. Called by nearly every module to determine which language rules apply to a file.
-
-## `has_language`
-
-Return True if a file is analyzed with a language of the registry (i.e., `language_ext()` returns a non-empty string), indicating the file will have definitions and dependencies extracted. Used to filter files before analysis and to determine which files participate in the dependency graph.
-
-## `EXT_TO_IMPORT_QUERY_DICT`
-
-A public mapping of file extension to tree-sitter import extraction query string or None, auto-generated from `_LANG_REGISTRY` and expanded with aliases. Each non-None value is an S-expression query that matches import statements and captures the imported module name and individual names.
-
-## `EXT_TO_USAGE_NODE_TYPE_DICT`
-
-A public mapping of file extension to usage node type settings dict or None, auto-generated from `_LANG_REGISTRY` and expanded with aliases. Each dict contains keys like "call_types", "scope_types", "pattern_types" that define which AST node types represent usages, scopes, and patterns for tracking name references across a file.
-
-## `PATTERN_TYPE_SET`
-
-A set of AST node types across all languages that represent patterns (e.g., "tuple_pattern", "object_pattern") computed by collecting pattern_types from all language configs. Used during definition name extraction to recursively descend into patterns and bind all names they define.
-
-## `PATTERN_FIELD_DICT`
-
-A dict mapping pattern AST node types to the field name holding the inner pattern, computed by collecting pattern_field_dict entries from all language configs. Used with PATTERN_TYPE_SET to extract names from nested patterns.
-
-## `EXT_TO_IMPORT_RESOLVE_DICT`
-
-A public mapping of file extension to module resolution settings dict, auto-generated from `_LANG_REGISTRY` and expanded with aliases. Each dict contains keys like "separator", "bind", "index_ext_list", "alt_ext_list", and language-specific options (e.g., "try_init" for Python, "module_tree" for Rust) that govern how import paths are resolved to project files.
-
-## `EXT_TO_REFERENCE_KIND_DICT`
-
-A public mapping of file extension to reference resolution strategy string ("import", "cobol", "csharp", or "r"), auto-generated from `_LANG_REGISTRY` and expanded with aliases. Determines how a file's references to external names are resolved to definitions.
-
-## `EXT_TO_IMPLICIT_VISIBILITY_DICT`
-
-A public mapping of file extension to implicit visibility scope string ("package" or "project"), auto-generated from `_LANG_REGISTRY` and expanded with aliases. Indicates which files' definitions can be referenced without an import statement.
-
-## `SOURCE_ROOT_PATTERN_LIST`
-
-A list of directory path prefixes (e.g., "src/main/java/", "src/") that mark source root directories in standard Java, Kotlin, Scala, and Python project layouts. Used during import resolution to locate the root directory containing source files and infer package names.
-
-## `_PYTHON_IMPORT_QUERY`
-
-An S-expression query string matching Python import statements: `import X`, `import X as Y`, `from X import Y`, and `from X import *`. Captures the module name and individual imported names for dependency extraction.
-
-## `_JAVA_IMPORT_QUERY`
-
-An S-expression query string matching Java import declarations and capturing the scoped identifier as the imported module or class name.
-
-## `_C_IMPORT_QUERY`
-
-An S-expression query string matching C/C++ preprocessor include directives and capturing the include path.
-
-## `_KOTLIN_IMPORT_QUERY`
-
-An S-expression query string matching Kotlin import statements and capturing the qualified identifier.
-
-## `_RUST_IMPORT_QUERY`
-
-An S-expression query string matching Rust use declarations, mod items without a body, extern crate declarations, and scoped identifiers and type identifiers that may reference paths. Captures path items that are processed by rust_path.py.
-
-## `_JS_IMPORT_QUERY`
-
-A comprehensive S-expression query string matching JavaScript/TypeScript import, export, and require patterns, including CommonJS destructuring, dynamic imports with await, member access on required modules, and arrow functions passed as callbacks. Captures module names, individual names, namespace names, and member references.
-
-## `_PYTHON_USAGE_NODE_TYPE_DICT`
-
-A dict containing Python-specific AST node type settings for usage tracking: call_types (call), attribute_types (attribute), skip_parent_types to avoid false positives, scope_types (functions and comprehensions), binding patterns, and self_names (self, cls). Enables extraction of name usages and scope-based binding in Python code.
-
-## `_JAVA_USAGE_NODE_TYPE_DICT`
-
-A dict containing Java-specific AST node type settings for usage tracking: method invocations and field accesses as usages, skip rules to avoid false positives, formal parameters and declarations as binding patterns, and call_ignores_local=True because method names are never local variables in Java.
-
-## `_JS_USAGE_NODE_TYPE_DICT`
-
-A dict containing JavaScript/TypeScript-specific AST node type settings: call_expression and member_expression as usages, skip rules for imports and declarations, scope_types (functions and lambdas), pattern binding (object and array destructuring), and typed_alias tracking for variables assigned new objects.
-
-## `_C_USAGE_NODE_TYPE_DICT`
-
-A dict containing C/C++-specific AST node type settings: call_expression and field_expression as usages, skip rules for includes and function declarators, scope_types (functions and lambdas), pattern binding for declarations and parameters, and typed_alias tracking.
-
-## `_KOTLIN_USAGE_NODE_TYPE_DICT`
-
-A dict containing Kotlin-specific AST node type settings: call_expression and navigation_expression as usages, skip rules for imports and class/function declarations, scope_types (functions, lambdas, anonymous functions), and parameter/variable binding.
-
-## `_RUST_USAGE_NODE_TYPE_DICT`
-
-A dict containing Rust-specific AST node type settings: call_expression and field_expression as usages, path_types for scoped identifiers, macro_argument_types for loose tokens in macros, scope_types (functions, closures, match arms), pattern binding and pattern matching, and pattern_reference_types (const, static, struct) and pattern_variant_types (enum) for references within patterns.
-
-## `_SQL_USAGE_NODE_TYPE_DICT`
-
-A dict containing SQL-specific AST node type settings with minimal usage tracking (empty call and attribute types) and identifier_parent_types restricted to object_reference, reflecting SQL's simpler reference model.
+Sentinel object used as the default value parameter in `get_config_value()` to indicate that an environment variable is mandatory; when a variable is not set and `_REQUIRED` is the default, a `ValueError` is raised.
 
 ## `LLM_API_KEY`
 
-The API key for the LLM service, retrieved from the environment variable LLM_API_KEY or defaulting to an empty string. Used by the LLMClient to authenticate with the LLM endpoint.
+Environment variable or empty default string specifying the API key for the language model service; passed to `LLMClient` initialization.
 
 ## `LLM_MODEL`
 
-The name of the LLM model to use for generating documentation and code summaries, retrieved from the environment variable LLM_MODEL or defaulting to an empty string. Passed to the LLM client on initialization.
+Environment variable or empty default string specifying the name of the language model (e.g., "gpt-4"); validated in `LLMClient.__init__()` to be non-empty.
 
 ## `LLM_API_BASE`
 
-The base URL or endpoint of the LLM API service, retrieved from the environment variable LLM_API_BASE or defaulting to an empty string. Enables using alternative LLM services or on-premises deployments.
+Environment variable or empty default string specifying the API endpoint URL for the language model service; passed to `LLMClient` initialization.
 
 ## `OUTPUT_LANGUAGE`
 
-The natural language in which design documents and summaries should be generated, retrieved from the environment variable OUTPUT_LANGUAGE or defaulting to "English". Appended to LLM prompts to ensure output in the desired language.
+Environment variable or "English" default specifying the language in which design documents and code summaries should be generated; used in doc_creator.py to format prompts.
 
 ## `DOC_MAX_TOKENS`
 
-The maximum number of tokens to request from the LLM when generating design documents, retrieved from the environment variable DOC_MAX_TOKENS or defaulting to 16384. Passed to the LLM's generate method to control output length.
+Environment variable or default of 16384 specifying the maximum token count for a single LLM generation request; passed to `LLMClient.generate()`.
 
 ## `REPO_ROOT`
 
-The absolute path to the repository root directory, computed as the parent of the parent of the settings.py file's directory. Used as the default base for project directories and output directories.
+Absolute path to the root of the codetwine repository, computed from the settings.py file location; used in main.py and as a base for relative path defaults.
 
 ## `DEFAULT_PROJECT_DIR`
 
-The default project directory to analyze when none is specified on the command line, retrieved from the environment variable DEFAULT_PROJECT_DIR or defaulting to REPO_ROOT. Used by main.py to resolve the project directory.
+Environment variable or default repository root specifying the project directory to analyze when none is provided via command-line arguments.
 
 ## `DEFAULT_OUTPUT_DIR`
 
-The default directory where analysis results are written, retrieved from the environment variable DEFAULT_OUTPUT_DIR or defaulting to REPO_ROOT/output. Used by main.py to resolve the output directory.
+Environment variable or default of `REPO_ROOT/output` specifying the directory where analysis results (JSON, SQLite, and design documents) are written.
 
 ## `DOC_TEMPLATE_PATH`
 
-The path to the JSON template file defining the structure and prompts for design document generation, retrieved from the environment variable DOC_TEMPLATE_PATH or defaulting to REPO_ROOT/doc_template.json. Loaded by doc_creator.py to construct LLM prompts for each documentation section.
+Environment variable or default path specifying the location of the JSON template file that defines the sections and prompts for design document generation; read by doc_creator.py.
 
 ## `MAX_WORKERS`
 
-The maximum number of worker threads or processes for parallel execution, retrieved from the environment variable MAX_WORKERS or defaulting to 4. Passed to thread pools during parallel file analysis and document generation.
+Environment variable or default of 4 specifying the maximum number of worker threads for parallel file analysis; passed to `process_all_files()` in doc_creator.py and pipeline.py.
 
 ## `MAX_RETRIES`
 
-The number of retry attempts after an LLM rate limit error (0 means call once with no retry), retrieved from the environment variable MAX_RETRIES or defaulting to 3. Used by the LLM client to implement exponential backoff.
+Environment variable or default of 3 specifying the number of retry attempts after an LLM rate-limit error; validated in `LLMClient.__init__()` to be non-negative.
 
 ## `RETRY_WAIT`
 
-The number of seconds to wait between LLM retry attempts after a rate limit error, retrieved from the environment variable RETRY_WAIT or defaulting to 2. Used by the LLM client's async sleep.
+Environment variable or default of 2 specifying the number of seconds to wait between LLM retry attempts after a rate-limit error.
 
 ## `PARSE_CACHE_MAX_FILES`
 
-The maximum number of file parse results to keep in memory at once; the least recently used entry is discarded when the count exceeds this value, and 0 keeps every parse result until the run ends. Retrieved from the environment variable PARSE_CACHE_MAX_FILES or defaulting to 200.
+Environment variable or default of 200 specifying the maximum number of parsed files cached in memory; when exceeded, the least recently used entry is discarded. A value of 0 disables eviction and caches every parse result.
 
 ## `KNOWLEDGE_FORMAT_TUPLE`
 
-A tuple of accepted values for the KNOWLEDGE_FORMAT setting: ("json", "sqlite", "both"). Used by pipeline.py to validate the KNOWLEDGE_FORMAT setting before analysis begins.
+Tuple of allowed values for `KNOWLEDGE_FORMAT`: `("json", "sqlite", "both")`; validated before analysis begins.
 
 ## `KNOWLEDGE_FORMAT`
 
-The format in which the whole-project analysis result is written ("json" for JSON only, "sqlite" for SQLite only, or "both"), retrieved from the environment variable KNOWLEDGE_FORMAT, converted to lowercase, and defaulting to "json". Per-file JSON files are always written; this controls the format of the project-wide summary.
+Environment variable or "json" default specifying the output format for whole-project analysis results; must be a member of `KNOWLEDGE_FORMAT_TUPLE`. Controls whether `project_knowledge.json`, `project_knowledge.sqlite`, or both are written.
 
 ## `ENABLE_LLM_DOC`
 
-A boolean indicating whether to generate design documents using the LLM, retrieved from the environment variable ENABLE_LLM_DOC or defaulting to True. When False, the analysis skips document generation and returns only dependency information.
+Environment variable or default of `True` specifying whether to generate design documents using LLM; when `False`, analysis runs but design documents are skipped; passed to `process_all_files()` in pipeline.py.
 
 ## `SUMMARY_MAX_CHARS`
 
-The maximum character length for a file or section summary generated by the LLM, retrieved from the environment variable SUMMARY_MAX_CHARS or defaulting to 600. Passed to doc_creator.py when building summary prompts.
+Environment variable or default of 600 specifying the maximum character limit for a single file summary prompt used in design document generation.
 
 ## `ENABLE_CODE_SUMMARY`
 
-A boolean indicating whether to enable LLM summarization of large code blocks as a fallback when the design-document prompt exceeds the model context window, retrieved from the environment variable ENABLE_CODE_SUMMARY or defaulting to True. When False, context overflow is handled only by dropping caller/callee information without additional LLM calls.
+Environment variable or default of `True` specifying whether to enable LLM summarization of large code blocks as a fallback when the design document prompt exceeds the model context window.
 
 ## `CODE_SUMMARY_TRIGGER_LINES`
 
-The line count threshold above which code definitions and dependencies are candidates for LLM summarization during context-overflow fallback, retrieved from the environment variable CODE_SUMMARY_TRIGGER_LINES or defaulting to 40. Used by doc_creator.py to identify large symbols for summarization.
+Environment variable or default of 40 specifying the minimum line count for a definition or dependency symbol to be considered a candidate for LLM summarization during context-overflow fallback.
 
 ## `CODE_SUMMARY_MAX_CHARS`
 
-The target character limit for a single code behavior summary generated by the LLM, retrieved from the environment variable CODE_SUMMARY_MAX_CHARS or defaulting to 400. Passed to the code summary prompt.
+Environment variable or default of 400 specifying the maximum character limit for a single code behavior summary generated by LLM; used in doc_creator.py.
 
 ## `SOURCE_ENCODING`
 
-A list of Python codec names (e.g., "euc_jp", "cp932") tried in order on source files that have no BOM and are not valid UTF-8, retrieved and split from the environment variable SOURCE_ENCODING or defaulting to an empty list. Used by file_utils.py to decode files with various character encodings.
+List of Python codec names tried in order on a source file that has no BOM and is not valid UTF-8; populated by splitting the `SOURCE_ENCODING` environment variable by commas. Empty by default; a file that none of them decode is decoded with the encoding charset-normalizer detects.
+
+## `_SOURCE_ENCODING_ENV`
+
+Raw environment variable string for `SOURCE_ENCODING` before splitting; used to populate the `SOURCE_ENCODING` list.
 
 ## `EXCLUDE_PATTERNS`
 
-A list of fnmatch-style patterns used to exclude directories and files from project analysis, retrieved and split from the environment variable EXCLUDE_PATTERNS. If not set, defaults to a list including "__pycache__", ".git", ".github", ".venv", and "node_modules".
+List of glob patterns specifying files and directories to skip during project traversal; defaults to `["__pycache__", ".git", ".github", ".venv", "node_modules"]` if the environment variable is empty. Used by dependency_graph.py to filter out non-source directories.
+
+## `_EXCLUDE_PATTERNS_ENV`
+
+Raw environment variable string for `EXCLUDE_PATTERNS` before splitting; used to populate the `EXCLUDE_PATTERNS` list.
 
 ## `PYTHON_DEFINITION_DICT`
 
-A dict mapping Python AST node types to the field or child name holding the definition's identifier: function_definition → identifier, class_definition → identifier, expression_statement → __assignment__ (sentinel), etc. Used to extract definition names from Python AST nodes.
+Mapping of Python AST node types to the child node types holding their names (e.g., `"function_definition": "identifier"`); supports sentinel values like `"__assignment__"` for complex extraction logic. Extracted and analyzed by definition_source.py and definitions.py.
 
 ## `JAVA_DEFINITION_DICT`
 
-A dict mapping Java AST node types to definition name nodes: class_declaration, method_declaration, interface_declaration, enum_declaration, field_declaration → __variable_declarator__ (sentinel), etc. Used to extract definition names from Java AST nodes.
+Mapping of Java AST node types to name-holding child node types, including class, method, interface, enum, and field declarations. Used to extract definitions from Java source files.
 
 ## `CPP_DEFINITION_DICT`
 
-A dict mapping C++ AST node types to definition name nodes, with sentinel values for complex cases like class_specifier → __body_name__, function_definition → __function_declarator__, declaration → __init_declarator__. Used to extract definition names from C++ AST nodes.
+Mapping of C++ AST node types to name-holding child node types, supporting complex patterns like struct, class, namespace, function, and preprocessor definitions. Includes sentinel values for nested or multi-level name extraction.
 
 ## `C_DEFINITION_DICT`
 
-A dict mapping C AST node types to definition name nodes, with sentinel values similar to CPP_DEFINITION_DICT. Used to extract definition names from C AST nodes.
+Mapping of C AST node types to name-holding child node types for function, struct, union, enum, and preprocessor definitions; similar to `CPP_DEFINITION_DICT` but without C++-specific constructs.
 
 ## `KOTLIN_DEFINITION_DICT`
 
-A dict mapping Kotlin AST node types to definition name nodes: class_declaration, function_declaration, object_declaration, property_declaration → __kotlin_property__ (sentinel). Used to extract definition names from Kotlin AST nodes.
+Mapping of Kotlin AST node types to name-holding child node types for classes, functions, objects, enums, type aliases, and properties; includes the sentinel `"__kotlin_property__"` for property extraction.
 
 ## `JS_DEFINITION_DICT`
 
-A dict mapping JavaScript AST node types to definition name nodes: function_declaration, method_definition, class_declaration, field_definition, lexical_declaration → __variable_declarator__ (sentinel). Used to extract definition names from JavaScript AST nodes.
+Mapping of JavaScript AST node types to name-holding child node types for functions, methods, classes, fields, and variable declarations; supports CommonJS patterns and export statements with sentinel values.
 
 ## `TS_DEFINITION_DICT`
 
-A dict mapping TypeScript AST node types to definition name nodes, including method_signature and property_signature, type_alias_declaration, enum_declaration, and sentinel values like __variable_declarator__ and __member_assignment__. Used to extract definition names from TypeScript AST nodes.
+Mapping of TypeScript AST node types to name-holding child node types, extending JavaScript definitions with TypeScript-specific constructs like interfaces, abstract classes, method signatures, type aliases, and enums.
 
 ## `RUST_DEFINITION_DICT`
 
-A dict mapping Rust AST node types to definition name nodes: function_item, struct_item, enum_item, trait_item, impl_item → __impl_type__ (sentinel), mod_item → __inline_module__ (sentinel). Used to extract definition names from Rust AST nodes.
+Mapping of Rust AST node types to name-holding child node types for functions, structs, enums, traits, impl blocks, type aliases, constants, modules, and macros; includes sentinel values for impl blocks and modules.
 
 ## `CSHARP_DEFINITION_DICT`
 
-A dict mapping C# AST node types to definition name nodes, with __name_field__ sentinel for classes, structs, methods, properties, and __variable_declaration__ for fields. Used to extract definition names from C# AST nodes.
+Mapping of C# AST node types to name-holding child node types for classes, structs, interfaces, enums, records, methods, properties, events, and fields; uses the sentinel `"__name_field__"` for most type members and `"__variable_declaration__"` for field extraction.
 
 ## `COBOL_DEFINITION_DICT`
 
-A dict mapping COBOL AST node types to definition name nodes: program_definition → program_name, section_header → WORD, paragraph_header → WORD, data_description → entry_name. Used by cobol_source.py to extract definition names from COBOL AST.
+Mapping of COBOL AST node types to name-holding node types for program definitions, entry statements, section headers, paragraph headers, data descriptions, and file descriptions; read by cobol_source.read_cobol_source() and the values are not directly consulted.
 
 ## `BMS_DEFINITION_DICT`
 
-A dict mapping BMS source AST node types to definition name nodes: data_description → entry_name. Used by bms_source.py to extract symbolic map names from BMS source AST.
+Mapping containing a single COBOL data description node type for BMS symbolic map extraction; read by bms_source.read_bms_source().
 
 ## `R_DEFINITION_DICT`
 
-A dict mapping R AST node types to definition name nodes: function_definition, binary_operator (for operators), call (for S3 methods), argument. Used by r_source.py to extract definition names from R AST.
+Mapping of R AST node types for function definitions, binary operators (custom operators), and call/argument usages; read by r_source.r_definition_list() and the values are not directly consulted.
 
 ## `SQL_DEFINITION_DICT`
 
-A dict mapping SQL AST node types to definition name nodes: create_table, create_view, create_function, create_procedure → __object_reference__ (sentinel), create_index → identifier. Used to extract definition names from SQL AST nodes.
+Mapping of SQL AST node types to name-holding child node types for CREATE statements (tables, views, functions, procedures, types, sequences, triggers) and schema/index declarations; extracted by definition_source.py.
 
-## `_JS_SOURCE_EXT_DICT`
+## `_PYTHON_IMPORT_QUERY`
 
-A dict mapping JavaScript/TypeScript file extensions as written in imports to lists of possible source file extensions they can stand for: ".js" → [".ts", ".tsx", ".jsx"], ".mjs" → [".mts"]. Used during import resolution to match imported module names to actual source files.
+Tree-sitter query string (S-expression) describing patterns for Python import statements: import-as, from-import, wildcard imports, and dotted names; captures `@module` and `@name` and `@import_node`.
 
-## `_JS_TS_RESOLVE_DICT`
+## `_JS_IMPORT_QUERY`
 
-A dict containing JavaScript/TypeScript module resolution settings: separator="/", bind="export", index_ext_list and alt_ext_list with all JS/TS extensions, source_ext_dict for extension mapping, path_config_name_list (tsconfig.json, jsconfig.json), package_file_name, and alias_config_name_list (vite.config.ts, webpack.config.js, etc.). Used by import_to_path.py to resolve JS/TS import paths.
+Tree-sitter query string describing patterns for JavaScript and TypeScript import statements, including ES6 imports, CommonJS require, dynamic imports, and re-exports; captures multiple variants for default imports, namespace imports, named imports, and member access.
 
-## `_C_CPP_RESOLVE_DICT`
+## `_JAVA_IMPORT_QUERY`
 
-A dict containing C/C++ module resolution settings: separator="/", bind="include", alt_ext_list with all C/C++ extensions, try_bare_path=True, try_current_dir=True, min_path_end_part=1. Used by import_to_path.py to resolve C/C++ include paths.
+Tree-sitter query string for Java import declarations; captures scoped identifiers as `@module`.
 
-## `_EXT_ALIAS_DICT`
+## `_C_IMPORT_QUERY`
 
-A dict mapping file extension aliases to their canonical extensions: "h" → "cpp", "cc" → "cpp", "cxx" → "cpp", "kts" → "kt", "jsx" → "js", "mts" → "ts", etc. Used by _expand_ext_aliases() to auto-generate public dictionaries with alias entries.
+Tree-sitter query string for C and C++ preprocessor include directives; captures the include path as `@module`.
+
+## `_KOTLIN_IMPORT_QUERY`
+
+Tree-sitter query string for Kotlin import statements; captures qualified identifiers as `@module`.
+
+## `_RUST_IMPORT_QUERY`
+
+Tree-sitter query string for Rust use declarations, mod declarations without bodies, extern crate declarations, and scoped identifiers (paths); captures `@path_item` for each pattern and is further processed by rust_import_list in rust_path.py.
+
+## `_PYTHON_USAGE_NODE_TYPE_DICT`
+
+Dictionary mapping Python AST node types to usage tracking settings: call types, attribute types, names that skip usage tracking, scope types for local binding, pattern types, and self-reference names; used by import_reference.py to extract usages and dependencies.
+
+## `_JAVA_USAGE_NODE_TYPE_DICT`
+
+Dictionary of Java AST node types for usage tracking: method invocations, field access, scope types (methods, lambdas), local binding patterns, and type references; distinguishes typed aliases for variables and formal parameters.
+
+## `_JS_USAGE_NODE_TYPE_DICT`
+
+Dictionary of JavaScript AST node types for usage tracking: call expressions, member expressions, scope types (functions, lambdas, arrow functions), variable declarators, and pattern types; includes self-reference types for `this`.
+
+## `_C_USAGE_NODE_TYPE_DICT`
+
+Dictionary of C and C++ AST node types for usage tracking: call expressions, field expressions, scope types (function definitions, lambdas), local binding patterns, and pattern types; skips include directives.
+
+## `_KOTLIN_USAGE_NODE_TYPE_DICT`
+
+Dictionary of Kotlin AST node types for usage tracking: call expressions, navigation expressions (member access), scope types (functions, lambdas, secondary constructors), local binding patterns, and self-reference types.
+
+## `_RUST_USAGE_NODE_TYPE_DICT`
+
+Dictionary of Rust AST node types for usage tracking: call expressions, field expressions, scoped identifiers, use declarations, pattern types, local binding, scope types, and pattern reference/variant types; includes macro argument handling and module-open types.
+
+## `_SQL_USAGE_NODE_TYPE_DICT`
+
+Dictionary of SQL AST node types for usage tracking: empty call and attribute types, with `identifier_parent_types` restricting identifiers to object references; minimal usage tracking since SQL dependencies are usually explicit.
+
+## `LangConfig`
+
+Dataclass bundling all language-specific analysis settings: tree-sitter Language object, definition node mapping, import extraction query, usage node type dictionary, module resolution settings, implicit visibility scope, extension case sensitivity, and reference resolution kind. Used as the value type in `_LANG_REGISTRY`.
+
+## `_COBOL_LANG_CONFIG`
+
+Shared `LangConfig` instance for COBOL files with `reference_kind="cobol"`, `name_index=True`, and case-insensitive extension matching; reused by multiple COBOL file extensions.
+
+## `_BMS_LANG_CONFIG`
+
+`LangConfig` instance for BMS (Basic Mapping Support) sources parsed with the COBOL grammar; uses `BMS_DEFINITION_DICT`, case-insensitive matching, and `reference_kind="cobol"` but no import query.
+
+## `_R_LANG_CONFIG`
+
+`LangConfig` instance for R scripts and R Markdown/Quarto files; uses `R_DEFINITION_DICT`, case-insensitive matching, and `reference_kind="r"`.
 
 ## `_LANG_REGISTRY`
 
-A dict mapping canonical file extensions to LangConfig instances, containing all language-specific settings for each supported language (Python, Java, C, C++, Kotlin, JavaScript, TypeScript, Rust, C#, SQL, COBOL, BMS, R, etc.). The source of truth from which all public EXT_TO_* dictionaries are derived.
+Central dictionary mapping file extension strings (e.g., "py", "java", "cpp") to `LangConfig` objects defining grammar, definition extraction, import queries, usage tracking, and module resolution for each language; used to auto-generate public lookup dictionaries.
+
+## `_JS_TS_EXT_LIST`
+
+List of JavaScript and TypeScript file extensions: `[".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs"]`; used as a base for index and alternative extension lists in `_JS_TS_RESOLVE_DICT`.
+
+## `_C_CPP_EXT_LIST`
+
+List of C and C++ file extensions: `[".h", ".c", ".cpp", ".cc", ".cxx", ".hpp", ".hh", ".hxx"]`; used in `_C_CPP_RESOLVE_DICT`.
+
+## `_JS_SOURCE_EXT_DICT`
+
+Dictionary mapping JavaScript/TypeScript import extensions to the source file extensions they may resolve to; for example, ".js" can stand for ".ts", ".tsx", or ".jsx" files. Used by import_to_path.py during module resolution.
+
+## `_JS_TS_RESOLVE_DICT`
+
+Dictionary of module resolution settings for JavaScript/TypeScript: path separator "/", bind type "export", index file extensions, alternative extensions, tsconfig.json / jsconfig.json lookup, package.json parsing, and bundler config aliases (Vite, Webpack).
+
+## `_C_CPP_RESOLVE_DICT`
+
+Dictionary of module resolution settings for C/C++: path separator "/", bind type "include", bare path attempt, current directory resolution, and minimum path-end-part matching for header file discovery.
+
+## `EXT_TO_LANGUAGE_DICT`
+
+Expansion of `_LANG_REGISTRY` mapping file extensions (including aliases) to tree-sitter Language objects; used by ts_parser.py and other modules to get the parser for a given file.
+
+## `EXT_TO_DEFINITION_DICT`
+
+Expansion of `_LANG_REGISTRY` mapping file extensions (including aliases) to definition node mapping dictionaries; used by definition_source.py, file_analyzer.py, import_binding.py, and others to extract definitions.
+
+## `COBOL_EXT_SET`
+
+Set of all COBOL file extensions (lower case); used by cobol_file_index.py and ts_parser.py to identify COBOL files requiring statement-level parsing instead of whole-file tree-sitter parsing.
+
+## `C_FAMILY_EXT_SET`
+
+Set of C and C++ file extensions (including aliases) identified by the "include" bind type in import resolution settings; used by ts_parser.py to apply C-family-specific parsing (macro blanking).
+
+## `CSHARP_EXT_SET`
+
+Set of all C# file extensions; used by csharp_namespace_index.py to identify C# files for namespace-based reference resolution.
+
+## `R_EXT_SET`
+
+Set of all R file extensions (scripts, R Markdown, Quarto in lower case); used by dependency_graph.py, definition_source.py, import_reference.py, and r_name_index.py to identify R files requiring R-specific import and definition handling.
+
+## `R_MARKDOWN_EXT_SET`
+
+Set of R Markdown and Quarto file extensions (lower case): `{"rmd", "qmd"}`; used by ts_parser.py and dependency_graph.py to identify files needing R code chunk extraction.
+
+## `BMS_EXT_SET`
+
+Set of all BMS file extensions; used by cobol_file_index.py and ts_parser.py to identify BMS sources requiring symbolic map parsing.
 
 ## `_IGNORE_CASE_EXT_SET`
 
-A set of file extensions matched case-insensitively during language detection, computed from _LANG_REGISTRY by selecting extensions whose lang_config has ignore_ext_case=True (COBOL, BMS, R). Used by language_ext() to match extensions in any case.
+Set of file extensions whose language settings match extension strings without regard to case; populated from languages with `ignore_ext_case=True` (COBOL, BMS, R).
+
+## `_copy_target_ext_dict`
+
+Module-level dictionary mapping absolute file paths to extension strings representing the language settings to apply; used for COBOL copybooks named by COPY statements. Cleared per project by `set_copy_target_ext()`.
+
+## `set_copy_target_ext`
+
+Records files whose language comes from the files that name them rather than from their own extension (COBOL copybooks); clears previous entries for the same project directory and populates `_copy_target_ext_dict` with absolute path to extension mappings.
+
+## `_no_language_path_set`
+
+Module-level set of absolute file paths representing files analyzed without a language despite having an extension (R Markdown / Quarto without R code chunks). Cleared per project by `set_no_language_file()`.
+
+## `set_no_language_file`
+
+Records files of a project that are analyzed without a language whatever their extension; clears previous entries for the same project directory and populates `_no_language_path_set` with absolute file paths.
+
+## `language_ext`
+
+Returns the extension whose language settings should analyze a given file path: checks `_copy_target_ext_dict` overrides, `_no_language_path_set` (returns empty string), then the file's actual extension (case-sensitive or case-insensitive depending on `_IGNORE_CASE_EXT_SET`). Returns empty string for files without a supported language.
+
+## `has_language`
+
+Returns whether a file participates in language-based analysis (definitions, dependencies, design documents); returns `True` when `language_ext()` gives a non-empty extension. Used by pipeline.py and dependency_graph.py to filter files.
+
+## `EXT_TO_IMPORT_QUERY_DICT`
+
+Expansion of `_LANG_REGISTRY` mapping file extensions (including aliases) to import extraction query strings; used by import_binding.py and import_to_path.py to extract imports from source code.
+
+## `EXT_TO_USAGE_NODE_TYPE_DICT`
+
+Expansion of `_LANG_REGISTRY` mapping file extensions (including aliases) to usage node type dictionaries; used by import_binding.py and import_reference.py for scope handling, local binding, and pattern extraction during usage tracking.
+
+## `PATTERN_TYPE_SET`
+
+Set of all pattern AST node types across all languages; used by definitions.py to extract variable names from patterns (assignments, destructuring, for loops) during definition binding.
+
+## `PATTERN_FIELD_DICT`
+
+Dictionary mapping pattern node types to the field names that hold nested patterns; used by definitions.py to recursively extract variable names during definition binding.
+
+## `EXT_TO_IMPORT_RESOLVE_DICT`
+
+Expansion of `_LANG_REGISTRY` mapping file extensions (including aliases) to module resolution configuration dictionaries (containing keys like "separator", "bind", "index_ext_list", etc.); used by import_to_path.py during import path resolution.
+
+## `EXT_TO_REFERENCE_KIND_DICT`
+
+Expansion of `_LANG_REGISTRY` mapping file extensions (including aliases) to reference resolution kinds ("import", "cobol", "csharp", "r"); used by reference_target.py to determine how a file's dependencies are resolved.
+
+## `EXT_TO_IMPLICIT_VISIBILITY_DICT`
+
+Expansion of `_LANG_REGISTRY` mapping file extensions (including aliases) to implicit visibility scopes ("package" for Java/Kotlin, "project" for SQL, or absent); used by import_binding.py to find definitions that can be referenced without explicit imports.
+
+## `_expand_ext_aliases`
+
+Helper function that expands a settings dictionary keyed by canonical extensions (from `_LANG_REGISTRY.keys()`) to include alias extensions defined in `_EXT_ALIAS_DICT`; used to auto-generate all public `EXT_TO_*_DICT` dictionaries.
+
+## `_EXT_ALIAS_DICT`
+
+Dictionary mapping file extension aliases to their canonical extensions; for example, ".h" → "cpp", ".jsx" → "js", ".mts" → "ts". Used by `_expand_ext_aliases()` to auto-populate public dictionaries with alias entries.
+
+## `SOURCE_ROOT_PATTERN_LIST`
+
+List of directory path patterns (e.g., "src/main/java/", "src/") specifying standard Maven/Gradle and Python source layouts; used by import_to_path.py to locate source roots for resolving relative imports.
 
 # Summary
 
-# Summary of codetwine/config/settings.py
+# codetwine/config/settings.py Summary
 
-This file centralizes configuration and language-specific AST parsing rules for multi-language code analysis. It maintains a registry of supported languages (Python, Java, C/C++, JavaScript, TypeScript, Rust, C#, SQL, COBOL, R, etc.) with per-language AST node mappings for definitions, imports, and usage patterns. Public dictionaries like `EXT_TO_DEFINITION_DICT`, `EXT_TO_IMPORT_QUERY_DICT`, and `EXT_TO_IMPORT_RESOLVE_DICT` expose language rules by file extension. Core functions `language_ext()` and `has_language()` detect file languages with override support for special files like COBOL copybooks. Environment variables control LLM settings, caching, output formats, and parallel execution. Language-specific extension sets (COBOL_EXT_SET, C_FAMILY_EXT_SET, R_MARKDOWN_EXT_SET) enable specialized handling. Nearly every module imports this file to determine which language rules and configuration values apply.
+This configuration hub centralizes environment variable parsing and language registry for source code analysis across twelve programming languages using tree-sitter parsers. It manages LLM settings, file paths, performance tuning, and analysis options through `get_config_value()`. The module defines per-language AST node mappings and import extraction queries via a `LangConfig` dataclass and `_LANG_REGISTRY` dictionary, auto-generating public lookup dictionaries (`EXT_TO_DEFINITION_DICT`, `EXT_TO_IMPORT_QUERY_DICT`, `EXT_TO_USAGE_NODE_TYPE_DICT`, `EXT_TO_IMPORT_RESOLVE_DICT`) that nearly every analysis module consults. Key functions include `language_ext()` for determining applicable language settings by file extension or override, `has_language()` for checking language participation, and `set_copy_target_ext()`/`set_no_language_file()` for registering special files like COBOL copybooks and R Markdown without code chunks. Extension sets identify language families for targeted processing.

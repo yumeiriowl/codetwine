@@ -18,54 +18,68 @@
       "context": "_DOC_FILE_TUPLE = (\"doc.json\", \"doc.md\")"
     },
     {
+      "name": "_DEPENDENCY_FILE_NAME",
+      "type": "expression_statement",
+      "start_line": 47,
+      "end_line": 47,
+      "context": "_DEPENDENCY_FILE_NAME = \"file_dependencies.json\""
+    },
+    {
+      "name": "_OUTPUT_FILE_NAME_SET",
+      "type": "expression_statement",
+      "start_line": 50,
+      "end_line": 50,
+      "context": "_OUTPUT_FILE_NAME_SET = {_DEPENDENCY_FILE_NAME, *_DOC_FILE_TUPLE}"
+    },
+    {
       "name": "_to_internal_dep_list",
       "type": "function_definition",
-      "start_line": 47,
-      "end_line": 68,
+      "start_line": 53,
+      "end_line": 74,
       "context": "def _to_internal_dep_list(\n    project_dep_list_raw: list[dict],\n) -> list[dict]:\n    \"\"\"Convert the paths of build_project_dependencies' result to relative paths from the project root.\n\n    The result holds paths in \"project_name/copy_path\" format; the project name prefix is\n    removed and copy_path is restored to the original relative path.\n\n    Args:\n        project_dep_list_raw: Return value of build_project_dependencies.\n\n    Returns:\n        A dependency list converted to internal path format.\n    \"\"\"\n    return [\n        {\n            \"file\": output_path_to_rel(dep[\"file\"]),\n            \"callers\": [output_path_to_rel(caller) for caller in dep.get(\"callers\", [])],\n            \"callees\": [output_path_to_rel(callee) for callee in dep.get(\"callees\", [])],\n        }\n        for dep in project_dep_list_raw\n    ]"
     },
     {
       "name": "_detect_change_file_set",
       "type": "function_definition",
-      "start_line": 71,
-      "end_line": 97,
+      "start_line": 77,
+      "end_line": 103,
       "context": "def _detect_change_file_set(\n    all_file_list: list[str],\n    project_dir: str,\n    base_output_dir: str,\n) -> set[str]:\n    \"\"\"Detect changed files by comparing source file hashes with the ones recorded in doc.json.\n\n    The following files are returned as \"changed\":\n    - Files whose output has no readable doc.json.\n    - Files whose source hash differs from the source_hash recorded in doc.json.\n\n    Args:\n        all_file_list: List of all file relative paths within the project.\n        project_dir: Absolute path to the project root.\n        base_output_dir: Absolute path to the output root directory.\n\n    Returns:\n        A set of relative paths of files where changes were detected.\n    \"\"\"\n    changed_file_set: set[str] = set()\n    for file_rel in all_file_list:\n        file_abs = os.path.join(project_dir, file_rel)\n        doc = load_doc(resolve_file_output_dir(base_output_dir, file_rel))\n\n        if doc is None or doc.get(\"source_hash\") != compute_file_hash(file_abs):\n            changed_file_set.add(file_rel)\n    return changed_file_set"
     },
     {
       "name": "_ext_count_line",
       "type": "function_definition",
-      "start_line": 100,
-      "end_line": 113,
+      "start_line": 106,
+      "end_line": 119,
       "context": "def _ext_count_line(file_list: list[str]) -> str:\n    \"\"\"Count the files per extension and return it as one line, most common first.\n\n    Examples:\n        [\"a.py\", \"b.py\", \"c.md\", \"Makefile\"] -> \"py 2, md 1, (none) 1\"\n\n    Args:\n        file_list: File paths; only their extensions are looked at.\n\n    Returns:\n        \"<ext> <count>\" pairs joined by \", \". A file without an extension is \"(none)\".\n    \"\"\"\n    ext_count = Counter(os.path.splitext(f)[1].lstrip(\".\") or \"(none)\" for f in file_list)\n    return \", \".join(f\"{ext} {count}\" for ext, count in ext_count.most_common())"
     },
     {
       "name": "_to_output_format",
       "type": "function_definition",
-      "start_line": 116,
-      "end_line": 131,
+      "start_line": 122,
+      "end_line": 137,
       "context": "def _to_output_format(dep_result: dict, base_output_dir: str) -> None:\n    \"\"\"Convert the paths of a get_file_dependencies result to \"project_name/copy_path\" format.\n\n    The file field, callee_usages[].from and caller_usages[].file are rewritten in place.\n\n    Args:\n        dep_result: Return value of get_file_dependencies.\n        base_output_dir: Absolute path to the output root directory.\n    \"\"\"\n    dep_result[\"file\"] = to_output_path(base_output_dir, dep_result[\"file\"])\n    for usage in dep_result.get(\"callee_usages\", []):\n        if \"from\" in usage:\n            usage[\"from\"] = to_output_path(base_output_dir, usage[\"from\"])\n    for usage in dep_result.get(\"caller_usages\", []):\n        if \"file\" in usage:\n            usage[\"file\"] = to_output_path(base_output_dir, usage[\"file\"])"
     },
     {
       "name": "_process_file_dependencies",
       "type": "function_definition",
-      "start_line": 134,
-      "end_line": 203,
-      "context": "def _process_file_dependencies(\n    file_rel_list: list[str],\n    project_dir: str,\n    base_output_dir: str,\n    language_dep_list: list[dict],\n) -> tuple[list[str], dict[str, str]]:\n    \"\"\"Analyze dependency info for each file and save file_dependencies.json\n    and a copy of the original file to the output directory.\n\n    When the analysis of a file fails, the file_dependencies.json and the copy that a\n    previous run left in its output directory are removed. For a file analyzed without\n    a language, the design document (doc.json, doc.md) a previous run left is removed.\n\n    Args:\n        file_rel_list: List of relative paths of files to process.\n        project_dir: Absolute path to the project root.\n        base_output_dir: Absolute path to the output root directory.\n        language_dep_list: Dependency list (internal path format) of the files that have\n            a language. Import resolution looks up dependency targets in these only.\n\n    Returns:\n        A (fail list, detected encoding dict) tuple: the relative paths of the files\n        whose analysis failed, and {relative path: detected_encoding} of the files whose\n        encoding read_source() had to detect.\n    \"\"\"\n    log_progress(logger, f\"Extracting dependencies for {len(file_rel_list)} files...\")\n\n    # Lookups that are the same for every file, built once and passed to each call\n    project_file_set = {info[\"file\"] for info in language_dep_list}\n    caller_map = {info[\"file\"]: info.get(\"callers\", []) for info in language_dep_list}\n\n    fail_file_list: list[str] = []\n    detected_encoding_dict: dict[str, str] = {}\n    for file_rel in file_rel_list:\n        file_abs = os.path.join(project_dir, file_rel)\n        output_file_dir = resolve_file_output_dir(base_output_dir, file_rel)\n        try:\n            os.makedirs(output_file_dir, exist_ok=True)\n\n            dep_result = get_file_dependencies(\n                file_abs, project_dir,\n                project_file_set, caller_map,\n            )\n            if dep_result[\"detected_encoding\"] is not None:\n                detected_encoding_dict[file_rel] = dep_result[\"detected_encoding\"]\n\n            _to_output_format(dep_result, base_output_dir)\n\n            with open(os.path.join(output_file_dir, \"file_dependencies.json\"), \"w\", encoding=\"utf-8\") as f:\n                json.dump(dep_result, f, indent=2, ensure_ascii=False)\n\n            # Copy the original file to the output directory\n            shutil.copy2(file_abs, os.path.join(output_file_dir, os.path.basename(file_rel)))\n\n            # Remove the design document a previous run left for a file without a language\n            if dep_result[\"language\"] == \"\":\n                for output_name in _DOC_FILE_TUPLE:\n                    with contextlib.suppress(OSError):\n                        os.remove(os.path.join(output_file_dir, output_name))\n\n            logger.info(f\"  OK: {file_rel}\")\n        except Exception as e:\n            logger.error(f\"  FAIL: {file_rel}: {e}\")\n            fail_file_list.append(file_rel)\n            # Remove what a previous run left for this file\n            for output_name in (\"file_dependencies.json\", os.path.basename(file_rel)):\n                with contextlib.suppress(OSError):\n                    os.remove(os.path.join(output_file_dir, output_name))\n\n    return fail_file_list, detected_encoding_dict"
+      "start_line": 140,
+      "end_line": 212,
+      "context": "def _process_file_dependencies(\n    file_rel_list: list[str],\n    project_dir: str,\n    base_output_dir: str,\n    language_dep_list: list[dict],\n) -> tuple[list[str], dict[str, str]]:\n    \"\"\"Analyze dependency info for each file and save file_dependencies.json\n    and a copy of the original file to the output directory. A file named like a file\n    written there (file_dependencies.json, doc.json, doc.md) is not copied.\n\n    When the analysis of a file fails, the file_dependencies.json and the copy that a\n    previous run left in its output directory are removed. For a file analyzed without\n    a language, the design document (doc.json, doc.md) a previous run left is removed.\n\n    Args:\n        file_rel_list: List of relative paths of files to process.\n        project_dir: Absolute path to the project root.\n        base_output_dir: Absolute path to the output root directory.\n        language_dep_list: Dependency list (internal path format) of the files that have\n            a language. Import resolution looks up dependency targets in these only.\n\n    Returns:\n        A (fail list, detected encoding dict) tuple: the relative paths of the files\n        whose analysis failed, and {relative path: detected_encoding} of the files whose\n        encoding read_source() had to detect.\n    \"\"\"\n    log_progress(logger, f\"Extracting dependencies for {len(file_rel_list)} files...\")\n\n    # Lookups that are the same for every file, built once and passed to each call\n    project_file_set = {info[\"file\"] for info in language_dep_list}\n    caller_map = {info[\"file\"]: info.get(\"callers\", []) for info in language_dep_list}\n\n    fail_file_list: list[str] = []\n    detected_encoding_dict: dict[str, str] = {}\n    for file_rel in file_rel_list:\n        file_abs = os.path.join(project_dir, file_rel)\n        output_file_dir = resolve_file_output_dir(base_output_dir, file_rel)\n        try:\n            os.makedirs(output_file_dir, exist_ok=True)\n\n            dep_result = get_file_dependencies(\n                file_abs, project_dir,\n                project_file_set, caller_map,\n            )\n            if dep_result[\"detected_encoding\"] is not None:\n                detected_encoding_dict[file_rel] = dep_result[\"detected_encoding\"]\n\n            _to_output_format(dep_result, base_output_dir)\n\n            with open(os.path.join(output_file_dir, _DEPENDENCY_FILE_NAME), \"w\", encoding=\"utf-8\") as f:\n                json.dump(dep_result, f, indent=2, ensure_ascii=False)\n\n            # Copy the original file to the output directory, unless it is named like\n            # a file written there\n            if os.path.basename(file_rel) not in _OUTPUT_FILE_NAME_SET:\n                shutil.copy2(file_abs, os.path.join(output_file_dir, os.path.basename(file_rel)))\n\n            # Remove the design document a previous run left for a file without a language\n            if dep_result[\"language\"] == \"\":\n                for output_name in _DOC_FILE_TUPLE:\n                    with contextlib.suppress(OSError):\n                        os.remove(os.path.join(output_file_dir, output_name))\n\n            logger.info(f\"  OK: {file_rel}\")\n        except Exception as e:\n            logger.error(f\"  FAIL: {file_rel}: {e}\")\n            fail_file_list.append(file_rel)\n            # Remove what a previous run left for this file\n            for output_name in (_DEPENDENCY_FILE_NAME, os.path.basename(file_rel)):\n                with contextlib.suppress(OSError):\n                    os.remove(os.path.join(output_file_dir, output_name))\n\n    return fail_file_list, detected_encoding_dict"
     },
     {
       "name": "process_all_files",
       "type": "function_definition",
-      "start_line": 206,
-      "end_line": 355,
+      "start_line": 215,
+      "end_line": 364,
       "context": "async def process_all_files(\n    project_dir: str,\n    output_dir: str,\n    llm_client: LLMClient | None,\n    max_workers: int = MAX_WORKERS,\n    file_list: list[str] | None = None,\n) -> dict:\n    \"\"\"Analyze the entire project and output per-file dependency JSON, design documents,\n    and consolidated JSON.\n\n    Processing flow:\n    1. Build the project-wide dependency graph over every non-empty text file.\n    2. Extract dependency info for all files, changed or not.\n       A file without a language (has_language) gets empty lists.\n    3. Detect changed files and generate design documents in topological order\n       (regenerate only the impact range of changes). Only files with a language\n       get a design document.\n    3.5. Generate dependency graph + summary consolidated JSON.\n    4. Generate Mermaid dependency graph diagram.\n    5. Generate the consolidated result in the form KNOWLEDGE_FORMAT selects.\n\n    Args:\n        project_dir: Root directory of the project to analyze.\n        output_dir: Output directory for analysis results.\n        llm_client: LLM summary generation client.\n        max_workers: Maximum number of files to process concurrently.\n        file_list: File paths relative to project_dir. When given, only these files\n            are analyzed instead of walking project_dir. EXCLUDE_PATTERNS and the\n            text file check apply to them as well.\n\n    Returns:\n        A dict with the following keys.\n            \"file_count\": Number of files analyzed.\n            \"dependency_fail_list\": Relative paths of the files whose dependency\n                extraction failed.\n            \"doc_count\": Number of files that have a complete design document\n                (0 when ENABLE_LLM_DOC is False).\n            \"doc_fail_list\": Relative paths of the files left without a complete\n                design document (empty when ENABLE_LLM_DOC is False).\n            \"detected_encoding_dict\": {relative path: encoding} of the files whose\n                encoding was detected rather than taken from a BOM, UTF-8 or\n                SOURCE_ENCODING; the encoding is \"\" for a file read as UTF-8 with\n                invalid bytes replaced.\n\n    Raises:\n        ValueError: When KNOWLEDGE_FORMAT is not one of KNOWLEDGE_FORMAT_TUPLE, or\n            SOURCE_ENCODING names an unknown codec.\n    \"\"\"\n    # Checked before any analysis runs\n    if KNOWLEDGE_FORMAT not in KNOWLEDGE_FORMAT_TUPLE:\n        raise ValueError(\n            f\"KNOWLEDGE_FORMAT must be one of \"\n            f\"{' / '.join(KNOWLEDGE_FORMAT_TUPLE)}, but got '{KNOWLEDGE_FORMAT}'. \"\n            f\"Set it in the .env file or your shell.\"\n        )\n    check_source_encoding()\n\n    project_name = os.path.basename(project_dir)\n    base_output_dir = os.path.join(output_dir, project_name)\n    os.makedirs(base_output_dir, exist_ok=True)\n\n    # == Step 1: Build the project-wide dependency graph ====================\n    log_progress(logger, \"Analyzing project dependencies...\")\n    project_dep_list_raw = build_project_dependencies(project_dir, file_list)\n    project_dep_list = _to_internal_dep_list(project_dep_list_raw)\n\n    all_file_list = [info[\"file\"] for info in project_dep_list]\n\n    # The files with a tree-sitter language: the only ones with definitions,\n    # dependency targets and design documents\n    language_dep_list = [\n        info for info in project_dep_list\n        if has_language(os.path.join(project_dir, info[\"file\"]))\n    ]\n    language_file_list = [info[\"file\"] for info in language_dep_list]\n\n    log_progress(logger, f\"Files to analyze: {len(all_file_list)} ({_ext_count_line(all_file_list)})\")\n\n    # == Step 2: Extract dependency info for all files ========================\n    dependency_fail_list, detected_encoding_dict = _process_file_dependencies(\n        all_file_list, project_dir, base_output_dir,\n        language_dep_list,\n    )\n\n    # == Step 3: Generate design documents in topological order ================\n    doc_fail_list: list[str] = []\n    if ENABLE_LLM_DOC:\n        changed_file_set = _detect_change_file_set(language_file_list, project_dir, base_output_dir)\n        log_progress(logger, f\"Change detection: {len(changed_file_set)} changed / {len(language_file_list)} total\")\n\n        log_progress(logger, \"Generating design documents...\")\n        doc_fail_list = await generate_all_docs(\n            base_output_dir, language_dep_list, llm_client, max_workers,\n            changed_file_set,\n        )\n    else:\n        log_progress(logger, \"ENABLE_LLM_DOC=False: skipping design document generation\")\n\n    # == Step 3.5: Generate dependency graph + summary consolidated JSON ==========\n    log_progress(logger, \"Generating dependency graph + summary JSON...\")\n\n    # Build symbol-level dependencies once and share across the 3 subsequent functions\n    symbol_deps = build_symbol_level_deps(base_output_dir, all_file_list)\n\n    summary_map = build_summary_map(base_output_dir, all_file_list)\n\n    dep_summary_path = os.path.join(base_output_dir, \"project_dependency_summary.json\")\n    save_dependency_summary(base_output_dir, all_file_list, dep_summary_path, symbol_deps, summary_map)\n\n    # == Step 4: Generate Mermaid dependency graph ========================\n    mermaid_output_path = os.path.join(base_output_dir, \"dependency_graph.md\")\n    save_dependency_graph_as_mermaid(base_output_dir, mermaid_output_path, symbol_deps)\n\n    # == Step 5: Generate the consolidated result ============================\n    if KNOWLEDGE_FORMAT in (\"json\", \"both\"):\n        log_progress(logger, \"Generating consolidated JSON...\")\n        knowledge_path = os.path.join(base_output_dir, \"project_knowledge.json\")\n        save_consolidated_json(\n            base_output_dir, all_file_list, knowledge_path, symbol_deps, summary_map,\n        )\n\n    if KNOWLEDGE_FORMAT in (\"sqlite\", \"both\"):\n        log_progress(logger, \"Generating consolidated SQLite database...\")\n        knowledge_db_path = os.path.join(base_output_dir, \"project_knowledge.sqlite\")\n        save_consolidated_sqlite(\n            base_output_dir, all_file_list, knowledge_db_path, symbol_deps, summary_map,\n        )\n\n    # Clear parse result cache, Rust module tree cache, COBOL file index and reference\n    # caches, C# namespace index and reference caches and R name index and reference\n    # caches to free memory\n    parse_cache.clear()\n    module_tree_cache.clear()\n    file_index_cache.clear()\n    reference_target_cache.clear()\n    namespace_index_cache.clear()\n    csharp_target_cache.clear()\n    r_name_index_cache.clear()\n    r_target_cache.clear()\n\n    log_progress(logger, \"Analysis complete.\")\n\n    doc_count = len(language_file_list) - len(doc_fail_list) if ENABLE_LLM_DOC else 0\n    return {\n        \"file_count\":           len(all_file_list),\n        \"dependency_fail_list\": dependency_fail_list,\n        \"doc_count\":            doc_count,\n        \"doc_fail_list\":        doc_fail_list,\n        \"detected_encoding_dict\": detected_encoding_dict,\n    }"
     }
   ],
   "callee_usages": [
     {
       "lines": [
-        63,
-        64,
-        65
+        69,
+        70,
+        71
       ],
       "name": "output_path_to_rel",
       "from": "codetwine/codetwine/utils/file_utils_py/file_utils.py",
@@ -75,7 +89,7 @@
     },
     {
       "lines": [
-        93
+        99
       ],
       "name": "load_doc",
       "from": "codetwine/codetwine/doc_creator_py/doc_creator.py",
@@ -85,8 +99,8 @@
     },
     {
       "lines": [
-        93,
-        169
+        99,
+        176
       ],
       "name": "resolve_file_output_dir",
       "from": "codetwine/codetwine/utils/file_utils_py/file_utils.py",
@@ -96,7 +110,7 @@
     },
     {
       "lines": [
-        95
+        101
       ],
       "name": "compute_file_hash",
       "from": "codetwine/codetwine/utils/file_utils_py/file_utils.py",
@@ -106,9 +120,9 @@
     },
     {
       "lines": [
-        125,
-        128,
-        131
+        131,
+        134,
+        137
       ],
       "name": "to_output_path",
       "from": "codetwine/codetwine/output_py/output.py",
@@ -118,16 +132,16 @@
     },
     {
       "lines": [
-        159,
-        268,
-        282,
-        294,
-        296,
-        302,
+        166,
+        277,
+        291,
+        303,
         305,
-        321,
-        328,
-        346
+        311,
+        314,
+        330,
+        337,
+        355
       ],
       "name": "log_progress",
       "from": "codetwine/codetwine/config/logger_py/logger.py",
@@ -137,7 +151,7 @@
     },
     {
       "lines": [
-        173
+        180
       ],
       "name": "get_file_dependencies",
       "from": "codetwine/codetwine/file_analyzer_py/file_analyzer.py",
@@ -147,7 +161,7 @@
     },
     {
       "lines": [
-        209
+        218
       ],
       "name": "LLMClient",
       "from": "codetwine/codetwine/llm/client_py/client.py",
@@ -157,7 +171,7 @@
     },
     {
       "lines": [
-        210
+        219
       ],
       "name": "MAX_WORKERS",
       "from": "codetwine/codetwine/config/settings_py/settings.py",
@@ -167,8 +181,8 @@
     },
     {
       "lines": [
-        255,
-        258
+        264,
+        267
       ],
       "name": "KNOWLEDGE_FORMAT_TUPLE",
       "from": "codetwine/codetwine/config/settings_py/settings.py",
@@ -178,10 +192,10 @@
     },
     {
       "lines": [
-        255,
-        258,
-        320,
-        327
+        264,
+        267,
+        329,
+        336
       ],
       "name": "KNOWLEDGE_FORMAT",
       "from": "codetwine/codetwine/config/settings_py/settings.py",
@@ -191,7 +205,7 @@
     },
     {
       "lines": [
-        261
+        270
       ],
       "name": "check_source_encoding",
       "from": "codetwine/codetwine/utils/file_utils_py/file_utils.py",
@@ -201,28 +215,28 @@
     },
     {
       "lines": [
-        269
+        278
       ],
       "name": "build_project_dependencies",
       "from": "codetwine/codetwine/extractors/dependency_graph_py/dependency_graph.py",
-      "target_context": "def build_project_dependencies(\n    project_dir: str,\n    file_list: list[str] | None = None,\n) -> list[dict]:\n    \"\"\"Analyze inter-file dependencies within the project and build a dependency graph in memory.\n\n    Return value structure (array):\n        [\n          {\n            \"file\":    \"project_name/src/foo.py/foo.py\",\n            \"callers\": [\"project_name/src/bar.py/bar.py\"],\n            \"callees\": [\"project_name/src/baz.py/baz.py\"],\n          },\n          ...\n        ]\n\n    Paths use the \"project_name/copy_path\" format.\n    Every non-empty text file that passes EXCLUDE_PATTERNS is listed. Import analysis\n    runs on the files with a language (has_language); every other file is listed with\n    empty callers and callees. A file without a language that a COBOL COPY statement\n    names is analyzed as a COBOL copybook, and keeps that language until the next call\n    for the project (register_copy_target). An R Markdown or Quarto file without an R\n    code chunk is analyzed without a language, until the next call for the project\n    (set_no_language_file).\n    The indexes built from the files of a project and the references resolved with\n    them are cleared: the Rust module trees (module_tree_cache), the C# namespace\n    indexes (namespace_index_cache, csharp_target_cache), the R name indexes\n    (r_name_index_cache, r_target_cache), the COBOL file indexes (file_index_cache,\n    reference_target_cache) and the names and references resolved through import\n    statements (clear_import_reference_cache, clear_import_binder_cache,\n    clear_import_path_cache), the definitions read for a definition's source\n    (clear_definition_source_cache) and the path settings of the JS/TS config files\n    (path_config_cache, the package and alias caches). The parse results (parse_cache) are kept.\n\n    Args:\n        project_dir: Root directory of the project to analyze.\n        file_list: File paths relative to project_dir. When given, only these files\n            are analyzed instead of walking project_dir.\n\n    Returns:\n        A list of file dependency information dicts.\n    \"\"\"\n    # == Step 1: Collect every non-empty text file ==============================\n    if file_list is None:\n        all_file_list = _collect_text_file_list(project_dir)\n    else:\n        all_file_list = _filter_text_file_list(project_dir, file_list)\n\n    # Forget the indexes and the resolved references of an earlier analysis\n    module_tree_cache.clear()\n    file_index_cache.clear()\n    namespace_index_cache.clear()\n    r_name_index_cache.clear()\n    reference_target_cache.clear()\n    csharp_target_cache.clear()\n    r_target_cache.clear()\n    clear_import_reference_cache()\n    clear_import_binder_cache()\n    clear_import_path_cache()\n    clear_definition_source_cache()\n    path_config_cache.clear()\n    clear_package_path_cache()\n    clear_alias_path_cache()\n\n    # R Markdown and Quarto files without an R code chunk are analyzed without a language,\n    # and files without a language that COBOL COPY statements name are analyzed as COBOL\n    set_no_language_file(project_dir, _no_chunk_document_list(project_dir, all_file_list))\n    register_copy_target(project_dir, [_to_rel(f, project_dir) for f in all_file_list])\n\n    # Only the files with a language take part in import resolution and dependency edges\n    language_file_list = [f for f in all_file_list if has_language(f)]\n\n    # == Step 2: Build the set of relative paths for project files ============\n    # A lookup set used to determine whether a module is within the project during import resolution\n    project_file_set = {_to_rel(file_path, project_dir) for file_path in language_file_list}\n\n    # == Step 3: Collect the files each file imports and refers to (callees) ==\n    file_callee_dict = _collect_callee_dict(language_file_list, project_dir, project_file_set)\n\n    # == Step 4: Build the callers (reverse lookup) index ==================\n    file_caller_dict: dict[str, list[str]] = {os.path.abspath(f): [] for f in language_file_list}\n    for caller_path, callee_set in file_callee_dict.items():\n        for callee_path in callee_set:\n            if callee_path in file_caller_dict:\n                file_caller_dict[callee_path].append(caller_path)\n\n    # == Step 5: Convert to \"project_name/copy_path\" paths ====================\n    return _to_output_entry_list(all_file_list, project_dir, file_caller_dict, file_callee_dict)",
+      "target_context": "def build_project_dependencies(\n    project_dir: str,\n    file_list: list[str] | None = None,\n) -> list[dict]:\n    \"\"\"Analyze inter-file dependencies within the project and build a dependency graph in memory.\n\n    Return value structure (array):\n        [\n          {\n            \"file\":    \"project_name/src/foo.py/foo.py\",\n            \"callers\": [\"project_name/src/bar.py/bar.py\"],\n            \"callees\": [\"project_name/src/baz.py/baz.py\"],\n          },\n          ...\n        ]\n\n    Paths use the \"project_name/copy_path\" format.\n    Every non-empty text file that passes EXCLUDE_PATTERNS is listed. Import analysis\n    runs on the files with a language (has_language); every other file is listed with\n    empty callers and callees. A file without a language that a COBOL COPY statement\n    names is analyzed as a COBOL copybook, and keeps that language until the next call\n    for the project (register_copy_target). An R Markdown or Quarto file without an R\n    code chunk is analyzed without a language, until the next call for the project\n    (set_no_language_file).\n    The indexes built from the files of a project and the references resolved with\n    them are cleared: the Rust module trees (module_tree_cache), the C# namespace\n    indexes (namespace_index_cache, csharp_target_cache), the R name indexes\n    (r_name_index_cache, r_target_cache), the COBOL file indexes (file_index_cache,\n    reference_target_cache) and the names and references resolved through import\n    statements (clear_import_reference_cache, clear_import_binder_cache,\n    clear_import_path_cache), the definitions read for a definition's source\n    (clear_definition_source_cache) and the path settings of the JS/TS config files\n    (path_config_cache, the package and alias caches). The parse results (parse_cache) are kept.\n\n    Args:\n        project_dir: Root directory of the project to analyze.\n        file_list: File paths relative to project_dir. When given, only these files\n            are analyzed instead of walking project_dir.\n\n    Returns:\n        A list of file dependency information dicts.\n    \"\"\"\n    # == Step 1: Collect every non-empty text file ==============================\n    if file_list is None:\n        all_file_list = _collect_text_file_list(project_dir)\n    else:\n        all_file_list = _filter_text_file_list(project_dir, file_list)\n\n    # Forget the syntax trees, the indexes and the resolved references of an earlier analysis\n    parse_cache.clear()\n    class_macro_cache.clear()\n    module_tree_cache.clear()\n    file_index_cache.clear()\n    namespace_index_cache.clear()\n    r_name_index_cache.clear()\n    reference_target_cache.clear()\n    csharp_target_cache.clear()\n    r_target_cache.clear()\n    clear_import_reference_cache()\n    clear_import_binder_cache()\n    clear_import_path_cache()\n    clear_definition_source_cache()\n    path_config_cache.clear()\n    clear_package_path_cache()\n    clear_alias_path_cache()\n\n    # R Markdown and Quarto files without an R code chunk are analyzed without a language,\n    # and files without a language that COBOL COPY statements name are analyzed as COBOL\n    set_no_language_file(project_dir, _no_chunk_document_list(project_dir, all_file_list))\n    register_copy_target(project_dir, [_to_rel(f, project_dir) for f in all_file_list])\n\n    # Only the files with a language take part in import resolution and dependency edges\n    language_file_list = [f for f in all_file_list if has_language(f)]\n\n    # == Step 2: Build the set of relative paths for project files ============\n    # A lookup set used to determine whether a module is within the project during import resolution\n    project_file_set = {_to_rel(file_path, project_dir) for file_path in language_file_list}\n\n    # == Step 3: Collect the files each file imports and refers to (callees) ==\n    file_callee_dict = _collect_callee_dict(language_file_list, project_dir, project_file_set)\n\n    # == Step 4: Build the callers (reverse lookup) index ==================\n    file_caller_dict: dict[str, list[str]] = {os.path.abspath(f): [] for f in language_file_list}\n    for caller_path, callee_set in file_callee_dict.items():\n        for callee_path in callee_set:\n            if callee_path in file_caller_dict:\n                file_caller_dict[callee_path].append(caller_path)\n\n    # == Step 5: Convert to \"project_name/copy_path\" paths ====================\n    return _to_output_entry_list(all_file_list, project_dir, file_caller_dict, file_callee_dict)",
       "target_name": "build_project_dependencies",
       "target_start_line": 312
     },
     {
       "lines": [
-        278
+        287
       ],
       "name": "has_language",
       "from": "codetwine/codetwine/config/settings_py/settings.py",
       "target_context": "def has_language(path: str) -> bool:\n    \"\"\"Return whether a file is analyzed with a language of the registry.\n\n    Only such files get definitions, dependencies and design documents; every other\n    text file is carried through the analysis with those left empty.\n\n    Examples:\n        \"src/app.py\"    -> True\n        \"config.yaml\"   -> False\n        \"Makefile\"      -> False\n\n    Args:\n        path: A file path. A file recorded by set_copy_target_ext() is known by its\n            absolute path.\n\n    Returns:\n        True when language_ext() gives an extension.\n    \"\"\"\n    return language_ext(path) != \"\"",
       "target_name": "has_language",
-      "target_start_line": 1279
+      "target_start_line": 1289
     },
     {
       "lines": [
-        292,
-        348
+        301,
+        357
       ],
       "name": "ENABLE_LLM_DOC",
       "from": "codetwine/codetwine/config/settings_py/settings.py",
@@ -232,7 +246,7 @@
     },
     {
       "lines": [
-        297
+        306
       ],
       "name": "generate_all_docs",
       "from": "codetwine/codetwine/doc_creator_py/doc_creator.py",
@@ -242,7 +256,7 @@
     },
     {
       "lines": [
-        308
+        317
       ],
       "name": "build_symbol_level_deps",
       "from": "codetwine/codetwine/output_py/output.py",
@@ -252,7 +266,7 @@
     },
     {
       "lines": [
-        310
+        319
       ],
       "name": "build_summary_map",
       "from": "codetwine/codetwine/output_py/output.py",
@@ -262,7 +276,7 @@
     },
     {
       "lines": [
-        313
+        322
       ],
       "name": "save_dependency_summary",
       "from": "codetwine/codetwine/output_py/output.py",
@@ -272,7 +286,7 @@
     },
     {
       "lines": [
-        317
+        326
       ],
       "name": "save_dependency_graph_as_mermaid",
       "from": "codetwine/codetwine/output_py/output.py",
@@ -282,7 +296,7 @@
     },
     {
       "lines": [
-        323
+        332
       ],
       "name": "save_consolidated_json",
       "from": "codetwine/codetwine/output_py/output.py",
@@ -292,7 +306,7 @@
     },
     {
       "lines": [
-        330
+        339
       ],
       "name": "save_consolidated_sqlite",
       "from": "codetwine/codetwine/knowledge_db_py/knowledge_db.py",
@@ -302,7 +316,7 @@
     },
     {
       "lines": [
-        337
+        346
       ],
       "name": "parse_cache.clear",
       "from": "codetwine/codetwine/parsers/ts_parser_py/ts_parser.py",
@@ -312,7 +326,7 @@
     },
     {
       "lines": [
-        338
+        347
       ],
       "name": "module_tree_cache.clear",
       "from": "codetwine/codetwine/rust_module_tree_py/rust_module_tree.py",
@@ -322,7 +336,7 @@
     },
     {
       "lines": [
-        339
+        348
       ],
       "name": "file_index_cache.clear",
       "from": "codetwine/codetwine/cobol_file_index_py/cobol_file_index.py",
@@ -332,7 +346,7 @@
     },
     {
       "lines": [
-        340
+        349
       ],
       "name": "reference_target_cache.clear",
       "from": "codetwine/codetwine/cobol_file_index_py/cobol_file_index.py",
@@ -342,7 +356,7 @@
     },
     {
       "lines": [
-        341
+        350
       ],
       "name": "namespace_index_cache.clear",
       "from": "codetwine/codetwine/csharp_namespace_index_py/csharp_namespace_index.py",
@@ -352,7 +366,7 @@
     },
     {
       "lines": [
-        342
+        351
       ],
       "name": "csharp_target_cache.clear",
       "from": "codetwine/codetwine/csharp_namespace_index_py/csharp_namespace_index.py",
@@ -362,7 +376,7 @@
     },
     {
       "lines": [
-        343
+        352
       ],
       "name": "r_name_index_cache.clear",
       "from": "codetwine/codetwine/r_name_index_py/r_name_index.py",
@@ -372,7 +386,7 @@
     },
     {
       "lines": [
-        344
+        353
       ],
       "name": "r_target_cache.clear",
       "from": "codetwine/codetwine/r_name_index_py/r_name_index.py",
@@ -384,32 +398,8 @@
   "same_file_usages": [
     {
       "lines": [
-        159,
-        268,
-        282,
-        294,
-        296,
-        302,
-        305,
-        321,
-        328,
-        346
-      ],
-      "name": "logger",
-      "target_name": "logger",
-      "target_start_line": 40
-    },
-    {
-      "lines": [
-        180
-      ],
-      "name": "_to_output_format",
-      "target_name": "_to_output_format",
-      "target_start_line": 116
-    },
-    {
-      "lines": [
-        190
+        50,
+        199
       ],
       "name": "_DOC_FILE_TUPLE",
       "target_name": "_DOC_FILE_TUPLE",
@@ -417,7 +407,50 @@
     },
     {
       "lines": [
+        50,
+        189,
+        208
+      ],
+      "name": "_DEPENDENCY_FILE_NAME",
+      "target_name": "_DEPENDENCY_FILE_NAME",
+      "target_start_line": 47
+    },
+    {
+      "lines": [
+        166,
+        277,
+        291,
+        303,
+        305,
+        311,
+        314,
+        330,
+        337,
+        355
+      ],
+      "name": "logger",
+      "target_name": "logger",
+      "target_start_line": 40
+    },
+    {
+      "lines": [
+        187
+      ],
+      "name": "_to_output_format",
+      "target_name": "_to_output_format",
+      "target_start_line": 122
+    },
+    {
+      "lines": [
         194
+      ],
+      "name": "_OUTPUT_FILE_NAME_SET",
+      "target_name": "_OUTPUT_FILE_NAME_SET",
+      "target_start_line": 50
+    },
+    {
+      "lines": [
+        203
       ],
       "name": "logger.info",
       "target_name": "logger",
@@ -425,7 +458,7 @@
     },
     {
       "lines": [
-        196
+        205
       ],
       "name": "logger.error",
       "target_name": "logger",
@@ -433,35 +466,35 @@
     },
     {
       "lines": [
-        270
+        279
       ],
       "name": "_to_internal_dep_list",
       "target_name": "_to_internal_dep_list",
-      "target_start_line": 47
+      "target_start_line": 53
     },
     {
       "lines": [
-        282
+        291
       ],
       "name": "_ext_count_line",
       "target_name": "_ext_count_line",
-      "target_start_line": 100
+      "target_start_line": 106
     },
     {
       "lines": [
-        285
+        294
       ],
       "name": "_process_file_dependencies",
       "target_name": "_process_file_dependencies",
-      "target_start_line": 134
+      "target_start_line": 140
     },
     {
       "lines": [
-        293
+        302
       ],
       "name": "_detect_change_file_set",
       "target_name": "_detect_change_file_set",
-      "target_start_line": 71
+      "target_start_line": 77
     }
   ],
   "caller_usages": [

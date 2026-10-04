@@ -1693,8 +1693,8 @@
     },
     {
       "lines": [
-        373,
-        440
+        374,
+        441
       ],
       "name": "CobolSource",
       "file": "codetwine/codetwine/extractors/usages_py/usages.py",

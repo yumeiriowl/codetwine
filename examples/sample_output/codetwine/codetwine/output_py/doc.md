@@ -4,71 +4,79 @@
 
 **Overview**
 
-Consolidate and output the project's analyzed code dependencies and documentation into multiple formats (JSON, Mermaid graph) for knowledge base and visualization purposes.
+Consolidate and output analysis results from individual file processing into project-wide JSON summaries and dependency visualizations.
 
-This file is used when:
-- `save_consolidated_json()` is called to generate a complete project knowledge file combining each file's dependency information and design document into a single JSON.
-- `save_dependency_summary()` is called to output a lightweight JSON with symbol-level dependencies and summaries for each analyzed file.
-- `save_dependency_graph_as_mermaid()` is called to generate a Mermaid flowchart visualization of the file-level dependency graph.
-- `build_symbol_level_deps()` is called to extract actual symbol usage dependencies from each file's analysis results.
-- `build_summary_map()` is called to collect design document summaries across all analyzed files.
+This file is used to:
+- Generate a dependency graph with file summaries by calling `save_dependency_summary()`, which combines symbol-level dependencies with LLM-generated design document summaries for each file.
+- Create a comprehensive consolidated JSON by calling `save_consolidated_json()`, which merges file_dependencies.json and doc.json analysis results into a single queryable project knowledge file.
+- Visualize dependencies as a Mermaid flowchart by calling `save_dependency_graph_as_mermaid()`, which renders the symbol-level dependency graph as a Markdown diagram.
+- Build the symbol-level dependency graph by calling `build_symbol_level_deps()`, which extracts actual symbol usage dependencies from each file's file_dependencies.json.
+- Retrieve file summaries by calling `build_summary_map()`, which reads doc.json files to collect LLM-generated summaries indexed by file relative path.
 
-The file depends on `codetwine/utils/file_utils.py` for path conversion utilities (`rel_to_copy_path()`, `output_path_to_rel()`, `resolve_file_output_dir()`) that transform between project-relative paths and the pipeline's output directory structure. It is used by `codetwine/pipeline.py` to generate the three main output formats (consolidated JSON, dependency summary JSON, and Mermaid graph) and by `codetwine/knowledge_db.py` to build the SQLite knowledge database from consolidated analysis results.
+This file depends on `codetwine/utils/file_utils.py` for path transformations between relative paths and copy-destination format, output directory resolution, and inverse conversion from output paths back to relative paths. It is consumed by `codetwine/pipeline.py` to drive the final output generation stages and by `codetwine/knowledge_db.py` to source consolidated file entries and dependency edges for database population.
 
-The file writes JSON output to a temporary file with a `.tmp` suffix and atomically moves it to the final destination on success, ensuring that existing output files are not left in a corrupted state if writing fails. JSON is streamed to disk incrementally during writing to minimize memory usage, reading and processing one file's analysis results at a time.
+File writes use atomic file replacement: consolidated JSON is written to a temporary file and moved into place only after completion, preventing partial files from overwriting valid outputs when errors occur.
 
 **Definitions**
 
 ## `_to_mermaid_node_id`
 
-Convert a file path string into a valid Mermaid node identifier by replacing slashes and dots with underscores, used when generating the Mermaid flowchart representation of the dependency graph.
+Converts a file path string into a valid Mermaid flowchart node identifier by replacing path separators and extension dots with underscores, enabling safe embedding of file paths in graph syntax.
 
 ## `_load_json`
 
-Load and parse a JSON file from disk, returning the parsed dictionary or None if the file does not exist, used internally to read analysis results (file_dependencies.json and doc.json) for each source file.
+Reads and parses a JSON file from the filesystem, returning the parsed object or None if the file does not exist, used internally to load doc.json and file_dependencies.json results for each analyzed file.
 
 ## `to_output_path`
 
-Transform a file's project-relative path into the standardized "project_name/copy_path" format used throughout output files, where the project name is extracted from the base output directory's final path component.
+Transforms a file's project-relative path into the "project_name/copy_path" output format, where copy_path follows the destination directory structure created during file processing (e.g., "config_py/config.py"), used to normalize all file paths in output JSON files and dependency tracking.
 
 ## `build_summary_map`
 
-Read the "summary" field from each file's doc.json and return a mapping of project-relative paths to summary text (or None), used to attach LLM-generated design document summaries to dependency entries in consolidated output.
+Reads the "summary" field from each file's doc.json and returns a dict mapping relative paths to summary text or None, supporting cases where files lack LLM-generated design documents.
 
 ## `iter_dependency_entries`
 
-Yield one entry per analyzed file containing the file path, summary, callers, and callees in "project_name/copy_path" format, used by both `save_dependency_summary()` and `save_consolidated_json()` to generate the "files" array with dependency information.
+Yields one dependency entry per file in list order, each containing the file path, summary, sorted callers, and sorted callees in output format, supplying the structure for both the project_dependencies array and dependency summary JSON.
 
 ## `build_file_entry`
 
-Read a single file's file_dependencies.json and doc.json into a consolidated entry structure with the "file" field deduplicated at the top level, returning None if neither file exists; used to build rows for the SQLite knowledge database and the consolidated JSON.
+Reads a file's file_dependencies.json and doc.json into a single consolidated dict entry with the file path held at the top level, returning None if neither analysis result exists, used to populate the files array in the consolidated knowledge JSON.
 
 ## `_write_object_start`
 
-Write the opening brace and "project_name" field of the top-level JSON object to an output file.
+Writes the opening of a top-level JSON object and its "project_name" member field, used internally to initialize both project_dependency_summary.json and project_knowledge.json files.
 
 ## `_write_array_item`
 
-Write one JSON array element to an output file with proper indentation and comma separation, used by JSON output functions to incrementally stream entries without holding the entire array in memory.
+Writes one element of a top-level JSON array with proper indentation and comma separation, handling both the first item (no leading comma) and subsequent items, used internally for streaming output of large JSON arrays to avoid holding entire results in memory.
 
 ## `save_consolidated_json`
 
-Generate a complete project knowledge file by combining each file's file_dependencies.json (dependency info) and doc.json (design document) with the symbol-level dependency graph into a single JSON, writing incrementally to a temporary file and atomically moving it to the final destination.
+Consolidates each file's file_dependencies.json (dependency info) and doc.json (design document) into a single project_knowledge.json file, with dependency entries in project_dependencies including summaries and per-file entries including full analysis data, written atomically via temporary file replacement to prevent data loss.
 
 ## `build_symbol_level_deps`
 
-Extract symbol-level (actual usage-based) dependencies from each file's file_dependencies.json by collecting callee files from callee_usages' "from" fields and caller files from caller_usages' "file" fields, returning a mapping of file relative paths to their callers and callees sets.
+Extracts symbol-level dependencies from each file's file_dependencies.json by collecting callee files from callee_usages' from field and caller files from caller_usages' file field, returning a dict mapping relative paths to their actual symbol-usage-based callers and callees, used to build dependency graphs based on real usage rather than import structure.
 
 ## `save_dependency_summary`
 
-Output a lightweight JSON combining symbol-level dependencies and file summaries into a single file, used to provide a quick reference of dependencies and LLM-generated summaries without the full file_dependencies and doc content.
+Outputs a lightweight project_dependency_summary.json combining symbol-level dependencies with doc.json summaries for each file, supporting cases where no LLM analysis was performed by setting summary to null while preserving dependency structure.
 
 ## `save_dependency_graph_as_mermaid`
 
-Generate a Mermaid flowchart diagram of the file-level dependency graph and output it as a Markdown file, with nodes labeled by their project-relative paths and edges representing callee relationships.
+Generates a Mermaid flowchart markdown representation of the symbol-level dependency graph, with one node per file labeled with its relative path and edges representing callee relationships, output to a .md file for visualization in documentation systems.
+
+## `_ARRAY_ITEM_INDENT`
+
+Constant indentation string applied to each top-level JSON array element during streaming output, ensuring consistent formatting across consolidated and summary JSON files.
 
 # Summary
 
 # Summary
 
-Consolidates and outputs analyzed code dependencies and documentation in multiple formats (JSON, Mermaid graphs) for knowledge bases and visualization. Transforms project-relative paths into standardized output formats, reads analysis results incrementally from disk, and writes JSON atomically to prevent corruption. Main definitions include `save_consolidated_json()`, `save_dependency_summary()`, `save_dependency_graph_as_mermaid()`, `build_symbol_level_deps()`, and `build_summary_map()`. Handles symbol-level and file-level dependencies, design document summaries, and Mermaid flowchart generation for dependency visualization.
+This file consolidates and outputs codetwine analysis results into project-wide JSON summaries and dependency visualizations. Its main responsibility is transforming per-file analysis data (dependencies and design documents) into unified project knowledge artifacts.
+
+Main public definitions: `save_consolidated_json()` merges all file analyses into queryable project knowledge; `save_dependency_summary()` creates lightweight dependency summaries with design document snippets; `save_dependency_graph_as_mermaid()` renders dependencies as Mermaid diagrams; `build_symbol_level_deps()` extracts actual symbol-usage dependencies; `build_summary_map()` collects LLM-generated file summaries.
+
+Key terms: dependency graph visualization, symbol-level dependencies, atomic file writes, JSON consolidation, streaming output for large datasets, path normalization between relative and output formats.

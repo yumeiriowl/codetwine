@@ -354,7 +354,7 @@
       "from": "codetwine/codetwine/import_reference_py/import_reference.py",
       "target_context": "@dataclass\nclass ImportReferenceTarget:\n    \"\"\"The definition one reference of a file resolves to.\"\"\"\n\n    name: str               # Name of the usage as the referring file writes it\n    line: int               # Line of the reference (1-based)\n    file_rel: str           # Relative path of the file with the definition\n    definition_name: str    # Name the definition is looked up by in file_rel",
       "target_name": "ImportReferenceTarget",
-      "target_start_line": 44
+      "target_start_line": 46
     },
     {
       "lines": [
@@ -385,9 +385,9 @@
       ],
       "name": "find_definition",
       "from": "codetwine/codetwine/extractors/definition_source_py/definition_source.py",
-      "target_context": "def find_definition(\n    definition_list: list[DefinitionInfo], callee_name: str,\n) -> DefinitionInfo | None:\n    \"\"\"Return the definition of a file that a name written with \".\" or \"::\" names.\n\n    Tried in this order:\n        1. A definition named callee_name as a whole (C++: Shape::area defined outside its class)\n        2. The parts of the name followed from each part in turn (_find_by_path), so\n           the leading parts that are no definitions of the file (modules, namespaces,\n           a variable) are skipped\n\n    Args:\n        definition_list: Definitions of a file, sorted by start_line.\n        callee_name: Name of the definition to find.\n\n    Returns:\n        The definition, or None when no part of the name is a definition of the file.\n    \"\"\"\n    part_list = symbol_part_list(callee_name)\n    if len(part_list) > 1:\n        for definition in definition_list:\n            if definition.name == callee_name:\n                return definition\n    for start in range(len(part_list)):\n        definition = _find_by_path(definition_list, part_list[start:])\n        if definition is not None:\n            return definition\n    return None",
+      "target_context": "def find_definition(\n    definition_list: list[DefinitionInfo], callee_name: str,\n) -> DefinitionInfo | None:\n    \"\"\"Return the definition of a file that a name written with \".\" or \"::\" names.\n\n    Tried in this order:\n        1. A definition named callee_name as a whole (C++: Shape::area defined outside its class)\n        2. The parts of the name followed from each part in turn (_find_by_path), so\n           the leading parts that are no definitions of the file (modules, namespaces,\n           a variable) are skipped\n\n    Args:\n        definition_list: Definitions of a file, sorted by start_line.\n        callee_name: Name of the definition to find.\n\n    Returns:\n        The definition, or None when no part of the name is a definition of the file.\n    \"\"\"\n    part_list = symbol_part_list(callee_name)\n    if len(part_list) > 1:\n        whole_list = _definition_index(definition_list)[0].get(callee_name)\n        if whole_list:\n            return whole_list[0]\n    for start in range(len(part_list)):\n        definition = _find_by_path(definition_list, part_list[start:])\n        if definition is not None:\n            return definition\n    return None",
       "target_name": "find_definition",
-      "target_start_line": 153
+      "target_start_line": 184
     },
     {
       "lines": [
@@ -523,7 +523,7 @@
       "from": "codetwine/codetwine/import_reference_py/import_reference.py",
       "target_context": "definition_name: str",
       "target_name": "definition_name",
-      "target_start_line": 51
+      "target_start_line": 53
     },
     {
       "lines": [
@@ -533,7 +533,7 @@
       "from": "codetwine/codetwine/import_reference_py/import_reference.py",
       "target_context": "file_rel: str",
       "target_name": "file_rel",
-      "target_start_line": 50
+      "target_start_line": 52
     },
     {
       "lines": [
@@ -541,9 +541,9 @@
       ],
       "name": "source_definition",
       "from": "codetwine/codetwine/extractors/definition_source_py/definition_source.py",
-      "target_context": "def source_definition(\n    file_rel: str, name: str, project_dir: str, start_line: int | None = None,\n) -> tuple[DefinitionInfo, str] | None:\n    \"\"\"Return the definition of a file a name names, with its source text.\n\n    With start_line, the parts of the name are tried from the last one and the first\n    definition named like the part whose first line is start_line is taken; when\n    there is none, and without start_line, the name is looked up by find_definition().\n\n    Examples (class Gen<T> on line 7 and class Gen on line 11, each with Size):\n        \"Gen.Size\", 13   -> Size inside class Gen\n        \"Gen\", 11        -> class Gen\n        \"Gen.Count\", 11  -> class Gen (Count is no definition)\n\n    Args:\n        file_rel: Path of the file relative to the project root.\n        name: Name of the definition, its parts joined with \".\" or \"::\".\n        project_dir: Absolute path to the project root.\n        start_line: First line of the definition (1-based), None when it is not known.\n\n    Returns:\n        (definition, source text of the definition). None when the name names no\n        definition of the file, and for a file whose definitions are not read by\n        extract_definitions() from a syntax tree (COBOL, BMS, R, a file without a\n        language).\n    \"\"\"\n    absolute_path = os.path.join(project_dir, file_rel)\n    file_ext = language_ext(absolute_path)\n    definition_dict = EXT_TO_DEFINITION_DICT.get(file_ext)\n    if (\n        not definition_dict\n        or definition_dict is COBOL_DEFINITION_DICT\n        or definition_dict is BMS_DEFINITION_DICT\n        or file_ext in R_EXT_SET\n    ):\n        return None\n    definition_list, content = _file_definition(absolute_path, definition_dict)\n    definition: DefinitionInfo | None = None\n    if start_line is not None:\n        for part in reversed(symbol_part_list(name)):\n            definition = next(\n                (\n                    candidate for candidate in definition_list\n                    if candidate.name == part and candidate.start_line == start_line\n                ),\n                None,\n            )\n            if definition is not None:\n                break\n    if definition is None:\n        definition = find_definition(definition_list, name)\n    if definition is None:\n        return None\n    return definition, content[definition.start_byte:definition.end_byte].decode(\"utf-8\")",
+      "target_context": "def source_definition(\n    file_rel: str, name: str, project_dir: str, start_line: int | None = None,\n) -> tuple[DefinitionInfo, str] | None:\n    \"\"\"Return the definition of a file a name names, with its source text.\n\n    With start_line, the parts of the name are tried from the last one and the first\n    definition named like the part whose first line is start_line is taken; when\n    there is none, and without start_line, the name is looked up by find_definition().\n\n    Examples (class Gen<T> on line 7 and class Gen on line 11, each with Size):\n        \"Gen.Size\", 13   -> Size inside class Gen\n        \"Gen\", 11        -> class Gen\n        \"Gen.Count\", 11  -> class Gen (Count is no definition)\n\n    Args:\n        file_rel: Path of the file relative to the project root.\n        name: Name of the definition, its parts joined with \".\" or \"::\".\n        project_dir: Absolute path to the project root.\n        start_line: First line of the definition (1-based), None when it is not known.\n\n    Returns:\n        (definition, source text of the definition). None when the name names no\n        definition of the file, and for a file whose definitions are not read by\n        extract_definitions() from a syntax tree (COBOL, BMS, R, a file without a\n        language).\n    \"\"\"\n    absolute_path = os.path.join(project_dir, file_rel)\n    file_ext = language_ext(absolute_path)\n    definition_dict = EXT_TO_DEFINITION_DICT.get(file_ext)\n    if (\n        not definition_dict\n        or definition_dict is COBOL_DEFINITION_DICT\n        or definition_dict is BMS_DEFINITION_DICT\n        or file_ext in R_EXT_SET\n    ):\n        return None\n    definition_list, content = _file_definition(absolute_path, definition_dict)\n    definition: DefinitionInfo | None = None\n    if start_line is not None:\n        name_dict = _definition_index(definition_list)[0]\n        for part in reversed(symbol_part_list(name)):\n            definition = next(\n                (\n                    candidate for candidate in name_dict.get(part, ())\n                    if candidate.start_line == start_line\n                ),\n                None,\n            )\n            if definition is not None:\n                break\n    if definition is None:\n        definition = find_definition(definition_list, name)\n    if definition is None:\n        return None\n    return definition, content[definition.start_byte:definition.end_byte].decode(\"utf-8\")",
       "target_name": "source_definition",
-      "target_start_line": 202
+      "target_start_line": 233
     },
     {
       "lines": [

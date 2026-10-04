@@ -1,7 +1,7 @@
 import os
 import fnmatch
 import logging
-from codetwine.parsers.ts_parser import parse_file
+from codetwine.parsers.ts_parser import class_macro_cache, parse_cache, parse_file
 from codetwine.extractors.definition_source import clear_definition_source_cache
 from codetwine.extractors.imports import extract_imports
 from codetwine.cobol_file_index import (
@@ -357,7 +357,9 @@ def build_project_dependencies(
     else:
         all_file_list = _filter_text_file_list(project_dir, file_list)
 
-    # Forget the indexes and the resolved references of an earlier analysis
+    # Forget the syntax trees, the indexes and the resolved references of an earlier analysis
+    parse_cache.clear()
+    class_macro_cache.clear()
     module_tree_cache.clear()
     file_index_cache.clear()
     namespace_index_cache.clear()

@@ -104,7 +104,7 @@
       "from": "codetwine/codetwine/config/settings_py/settings.py",
       "target_context": "SOURCE_ROOT_PATTERN_LIST: list[str] = [\n    \"src/main/java/\",\n    \"src/test/java/\",\n    \"src/main/kotlin/\",\n    \"src/test/kotlin/\",\n    \"src/main/scala/\",\n    \"src/test/scala/\",\n    \"src/\",\n]",
       "target_name": "SOURCE_ROOT_PATTERN_LIST",
-      "target_start_line": 1342
+      "target_start_line": 1352
     },
     {
       "lines": [
@@ -115,7 +115,7 @@
       "from": "codetwine/codetwine/config/settings_py/settings.py",
       "target_context": "def language_ext(path: str) -> str:\n    \"\"\"Return the extension whose language settings a file is analyzed with.\n\n    A file recorded by set_copy_target_ext() gets the extension recorded for it, and a\n    file recorded by set_no_language_file() none. Every other file gets its own\n    extension when it is a key of EXT_TO_DEFINITION_DICT; the extensions of the\n    languages with ignore_ext_case are matched in any case.\n\n    Examples:\n        \"src/app.py\"          -> \"py\"\n        \"src/MAIN.Cbl\"        -> \"cbl\"\n        \"R/utils.R\"           -> \"r\"\n        \"config.yaml\"         -> \"\"\n        \"dcl/DCLCUST.dcl\"     -> \"cpy\" (when a COPY statement names it)\n        \"docs/notes.qmd\"      -> \"\" (when it has no R code chunk)\n\n    Args:\n        path: A file path. A relative path is taken from the current directory when\n            it is looked up among the recorded files.\n\n    Returns:\n        The extension (without the dot, a key of EXT_TO_DEFINITION_DICT), or \"\" for a\n        file without a language.\n    \"\"\"\n    path_abs = os.path.abspath(path)\n    copy_target_ext = _copy_target_ext_dict.get(path_abs)\n    if copy_target_ext:\n        return copy_target_ext\n    if path_abs in _no_language_path_set:\n        return \"\"\n    ext = os.path.splitext(path)[1].lstrip(\".\")\n    if ext in EXT_TO_DEFINITION_DICT:\n        return ext\n    if ext.lower() in _IGNORE_CASE_EXT_SET:\n        return ext.lower()\n    return \"\"",
       "target_name": "language_ext",
-      "target_start_line": 1241
+      "target_start_line": 1251
     },
     {
       "lines": [
@@ -125,7 +125,7 @@
       "from": "codetwine/codetwine/config/settings_py/settings.py",
       "target_context": "EXT_TO_IMPORT_RESOLVE_DICT: dict[str, dict] = _expand_ext_aliases(\n    {ext: lang_config.import_resolve_dict for ext, lang_config in _LANG_REGISTRY.items()\n     if lang_config.import_resolve_dict is not None}\n)",
       "target_name": "EXT_TO_IMPORT_RESOLVE_DICT",
-      "target_start_line": 1323
+      "target_start_line": 1333
     },
     {
       "lines": [
@@ -195,7 +195,7 @@
       "from": "codetwine/codetwine/config/settings_py/settings.py",
       "target_context": "EXT_TO_DEFINITION_DICT: dict[str, dict[str, str]] = _expand_ext_aliases(\n    {ext: lang_config.definition_dict for ext, lang_config in _LANG_REGISTRY.items()}\n)",
       "target_name": "EXT_TO_DEFINITION_DICT",
-      "target_start_line": 1151
+      "target_start_line": 1161
     },
     {
       "lines": [
@@ -205,7 +205,7 @@
       "from": "codetwine/codetwine/extractors/definition_source_py/definition_source.py",
       "target_context": "def file_definition_list(absolute_path: str, definition_dict: dict[str, str]) -> list[DefinitionInfo]:\n    \"\"\"Return the definitions of a file (extract_definitions), read once per file.\n\n    The file is parsed the first time; the definitions are kept without its syntax\n    tree until clear_definition_source_cache() is called.\n\n    Args:\n        absolute_path: Absolute path of the file.\n        definition_dict: Definition node settings of its language.\n\n    Returns:\n        The definitions sorted by start_line. The list is shared: it is not to be modified.\n    \"\"\"\n    definition_list = _definition_list_cache.get(absolute_path)\n    if definition_list is None:\n        definition_list = extract_definitions(parse_file(absolute_path)[0], definition_dict)\n        _definition_list_cache[absolute_path] = definition_list\n    return definition_list",
       "target_name": "file_definition_list",
-      "target_start_line": 37
+      "target_start_line": 69
     },
     {
       "lines": [
@@ -245,7 +245,7 @@
       "from": "codetwine/codetwine/config/settings_py/settings.py",
       "target_context": "EXT_TO_LANGUAGE_DICT: dict[str, Language] = _expand_ext_aliases(\n    {ext: lang_config.language for ext, lang_config in _LANG_REGISTRY.items()}\n)",
       "target_name": "EXT_TO_LANGUAGE_DICT",
-      "target_start_line": 1146
+      "target_start_line": 1156
     },
     {
       "lines": [
@@ -255,7 +255,7 @@
       "from": "codetwine/codetwine/config/settings_py/settings.py",
       "target_context": "EXT_TO_IMPORT_QUERY_DICT: dict[str, str | None] = _expand_ext_aliases(\n    {ext: lang_config.import_query for ext, lang_config in _LANG_REGISTRY.items()}\n)",
       "target_name": "EXT_TO_IMPORT_QUERY_DICT",
-      "target_start_line": 1301
+      "target_start_line": 1311
     }
   ],
   "same_file_usages": [
@@ -353,7 +353,7 @@
     },
     {
       "lines": [
-        370
+        372
       ],
       "name": "clear_import_path_cache",
       "file": "codetwine/codetwine/extractors/dependency_graph_py/dependency_graph.py",
@@ -393,7 +393,7 @@
     },
     {
       "lines": [
-        744
+        747
       ],
       "name": "nearest_first",
       "file": "codetwine/codetwine/import_binding_py/import_binding.py",

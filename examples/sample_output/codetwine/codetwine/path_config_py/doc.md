@@ -4,121 +4,102 @@
 
 **Overview**
 
-Manage tsconfig.json / jsconfig.json configuration files to resolve TypeScript/JavaScript module paths using baseUrl and paths patterns, with caching of parsed configurations and file coverage information.
+Resolve TypeScript/JavaScript configuration files (`tsconfig.json`, `jsconfig.json`) to determine module path settings for import statements, with caching at the project level to avoid redundant file reads.
 
-- Call `path_config()` to retrieve the module path settings (baseUrl and paths patterns) that apply to a specific source file, enabling import path resolution.
-- Call `read_json_file()` to read and parse JSON configuration files that may contain comments and trailing commas, used by external modules like `codetwine/package_path.py` to load package.json files.
-- Call `inside_project()` to validate and normalize relative paths, ensuring they stay within project boundaries when processing extends, references, and baseUrl/paths directives.
-- Call `PathConfig.module_path_list()` to expand a module name into concrete file paths using the matched pattern from the paths dictionary and the baseUrl fallback.
+- Call `path_config()` with a file path and project directory to retrieve the `PathConfig` object that defines how non-relative module names should resolve in that file's context.
+- Call `read_json_file()` to parse a JSON configuration file that may contain comments and trailing commas, returning a dictionary or None if the file cannot be read.
+- Call `inside_project()` to validate and normalize relative paths, ensuring they stay within project boundaries.
+- Call `PathConfig.module_path_list()` with a module name to expand it into concrete file paths using "baseUrl" and "paths" settings.
 
-The file depends on `codetwine/utils/file_utils.py` for encoding-aware file reading via `read_source()`. It is used by `codetwine/import_to_path.py` to resolve non-relative imports, by `codetwine/package_path.py` to read package.json files and expand package export paths, and by `codetwine/alias_path.py` to validate relative path joins within project scope. The `path_config_cache` dictionary is cleared by `codetwine/extractors/dependency_graph.py` when resetting analysis state.
+The file reads configuration metadata (via `read_source` from file_utils) and is used by import resolution logic in `import_to_path.py` and `alias_path.py` to map module names to file paths; `package_path.py` creates `PathConfig` objects and calls `module_path_list()` to resolve exports; `dependency_graph.py` clears the module-level cache. The file implements a hierarchical configuration resolution where a file's settings inherit from extended configurations, and settings are selected based on which config file covers the file according to its "files", "include", and "exclude" patterns.
 
-The module uses aggressive caching via `path_config_cache` (global per-project) and per-file `file_config_dict` (inside `_ProjectCache`) to avoid re-reading and re-parsing configuration files and computing directory hierarchies. Configuration inheritance through "extends" is resolved recursively with cycle detection via visit sets. When a file does not match any config file's coverage rules ("files", "include", "exclude"), it uses the settings from the nearest config file found when walking up the directory tree.
+Configuration inheritance follows TypeScript semantics: "baseUrl" and "paths" settings replace those of extended files rather than merging, and "references" allows a config file to delegate coverage of certain files to other config files in the project. The implementation caches results per project directory and per file to avoid redundant parsing and directory traversal.
 
 **Definitions**
 
 ## `PathConfig`
 
-Dataclass holding the module path resolution settings from a tsconfig.json / jsconfig.json file: the baseUrl directory and the ordered list of (pattern, targets) tuples from the "paths" compiler option. Called by `path_config()` to store and pass resolved settings, and by external modules to expand module names into file paths.
-
-## `PathConfig.base_dir`
-
-The base directory (relative to project root, or empty string for root, or None) from which non-relative imports are resolved when no "paths" pattern matches. Set from the "baseUrl" compiler option.
-
-## `PathConfig.path_list`
-
-Ordered list of (pattern string, list of target paths) tuples from the "paths" compiler option, where patterns may contain a single "*" wildcard and targets are relative to baseUrl (or the config file directory if baseUrl is absent).
+Holds the "baseUrl" and "paths" settings from a TypeScript/JavaScript configuration file that control how non-relative module names resolve to file paths. The `base_dir` is a project-relative directory where unmatched modules are searched; `path_list` is an ordered list of (pattern, target list) tuples where each pattern may contain a single "*" wildcard to match module name segments.
 
 ## `PathConfig.module_path_list`
 
-Given a module name (e.g., "app", "app/store", "react"), return the list of candidate file paths (relative to project root) by matching against the longest-prefix pattern in path_list (substituting the wildcard), then appending the module under base_dir. Returns deduplicated paths; used by external modules to resolve import statements.
+Expands a module name using the configured "baseUrl" and "paths" patterns, returning a deduplicated list of project-relative file paths. It matches the module against patterns (exact match takes precedence, otherwise the pattern with the longest prefix before "*" is used) and substitutes the matched module segment into the pattern's targets; if no pattern matches, the module is resolved relative to `base_dir`. Results include both path-matched targets and the base directory fallback.
 
 ## `_CoverSetting`
 
-Dataclass storing the file coverage rules of a config file: the "files" pattern, "include" pattern, "exclude" pattern (each as a tuple of pattern list and the directory they are relative to), and the list of referenced config file paths from "references". Passed to `_is_cover()` to check whether a file is covered by the config.
+Records which files a configuration file covers via its "files", "include", and "exclude" keys, and lists the configuration files named in its "references" field. Each file-matching setting is stored as a (pattern list, relative directory) tuple to support glob matching; patterns are read relative to the directory containing the configuration file.
 
 ## `_ProjectCache`
 
-Dataclass caching parsed configuration state for one project: `dir_file_dict` maps directory paths to their nearest config file (or None), `config_dict` caches parsed (PathConfig, _CoverSetting) tuples per config file, and `file_config_dict` caches the final resolved PathConfig per source file. Modified in place by `_nearest_config_file()`, `_cover_config()`, and `path_config()`.
-
-## `read_json_file`
-
-Read a JSON file (tsconfig.json, jsconfig.json, or package.json) from the project, stripping C-style comments and trailing commas before parsing, and return the parsed dictionary or None if the file cannot be read or is not a JSON object. Called by `package_path.py` to load package.json and by `_read_config()` to load config files.
-
-## `_strip_json_comment`
-
-Remove // and /* */ comments and trailing commas from JSON text while preserving string contents, returning the cleaned text ready for json.loads(). Used by `read_json_file()` to handle tsconfig.json / jsconfig.json files that include comments.
-
-## `inside_project`
-
-Validate and normalize a relative path (using posixpath), returning the normalized path or None if it leads outside the project (contains "..", starts with "/", or similar). Called by `_extend_file_list()`, `_reference_file_list()`, `_read_config()` to validate "extends" and "references" directives, and by external modules (`alias_path.py`, `package_path.py`) to ensure paths stay within bounds.
-
-## `_extend_file_list`
-
-Parse the "extends" field from a config file and return the list of extended config file paths (relative to project root) in order written, validating that they are relative paths, exist as files, and stay within the project. Called by `_read_config()` to chain configuration inheritance.
-
-## `_glob_regex`
-
-Convert a glob pattern (with "*" for any chars except "/", "?", and "**/") into a compiled regex that matches file paths and any paths under them (e.g., a pattern "src" matches "src/a.ts" and "src/lib/b.ts"). Called by `_is_match()` to test files against "include" and "exclude" patterns.
-
-## `_is_match`
-
-Test whether a file path matches any pattern in a (pattern_list, directory) tuple, using glob semantics. Called by `_is_cover()` to check "files", "include", and "exclude" rules.
-
-## `_is_cover`
-
-Determine whether a config file covers a file based on its "files", "include", and "exclude" patterns: a file is covered if "files" names it, or if it matches "include" and does not match "exclude" (with defaults: "include" = ["**/*"] when neither "files" nor "include" is set, and "exclude" = _DEFAULT_EXCLUDE_LIST when not set). Called by `_cover_config()` to find which config file's settings apply to a source file.
-
-## `_reference_file_list`
-
-Parse the "references" field from a config file and return the list of referenced config file paths in order, resolving directory references to tsconfig.json and adding ".json" when needed. Called by `_read_config()` to populate the reference_list in _CoverSetting.
-
-## `_read_config`
-
-Read a config file (tsconfig.json or jsconfig.json), parse its "extends" chain to inherit baseUrl, paths, files, include, exclude settings, and read "compilerOptions.baseUrl" and "compilerOptions.paths" directly. Return (PathConfig, _CoverSetting) or None if the file cannot be read. Called by `_nearest_config_file()` and `_cover_config()` to load and cache config state.
-
-## `_nearest_config_file`
-
-Walk up the directory tree from a given directory, returning the path to the first readable config file (matching one of the names in config_name_list) found in that directory or any ancestor up to the project root. Cache the result per directory in project_cache.dir_file_dict. Called by `path_config()` to locate the config file nearest to a source file.
-
-## `_cover_config`
-
-Starting from a given config file, check if it covers a file; if not, recursively check files it references (from "references") until one is found that covers the file. Return the PathConfig of the covering config file or None. Called by `path_config()` to find which config's settings apply to a source file.
-
-## `path_config`
-
-Retrieve the module path settings (PathConfig) that apply to a source file by walking up the directory tree from the file's directory, checking each config file and its "references" until one covers the file, falling back to the nearest config file if none covers it. Result is cached per file in project_cache.file_config_dict. Called by `import_to_path.py` to resolve non-relative imports.
+Caches reading results for a single project to avoid redundant file I/O: `dir_file_dict` maps each directory to its nearest ancestor configuration file, `config_dict` maps each configuration file to its parsed settings and file coverage, and `file_config_dict` maps each source file to the configuration that applies to it.
 
 ## `path_config_cache`
 
-Module-level dictionary caching parsed configuration state per project directory (project_dir → _ProjectCache), preventing redundant file reads and config parsing across multiple calls. Cleared by `dependency_graph.py` when resetting analysis state.
+Module-level dictionary mapping project directories to their `_ProjectCache` objects, allowing results to persist across multiple calls within the same process until explicitly cleared.
 
-## `_WILDCARD`
+## `read_json_file`
 
-The wildcard character "*" used in "paths" patterns to match and capture parts of module names (e.g., "app/*" captures "app/store" → "store").
+Reads and parses a JSON file that may contain `//` and `/* */` comments plus trailing commas, returning the parsed dictionary or None if the file cannot be read or does not contain a JSON object. Exceptions are logged as warnings; callers should check for None to determine success.
 
-## `_FILE_KEY`, `_INCLUDE_KEY`, `_EXCLUDE_KEY`
+## `_strip_json_comment`
 
-String constants for the "files", "include", and "exclude" keys in tsconfig.json / jsconfig.json, used to parse file coverage rules.
+Removes `//` and `/* */` comments and trailing commas from JSON source text while preserving string contents (including escaped characters within strings). It performs two passes: one to skip comment regions and string literals, collecting non-comment parts; another to strip trailing commas that precede only whitespace before `}` or `]`.
 
-## `_DEFAULT_INCLUDE_LIST`, `_DEFAULT_EXCLUDE_LIST`
+## `inside_project`
 
-Default patterns for "include" (["**/*"] = all files) and "exclude" (["node_modules", "bower_components", "jspm_packages"]) when a config file does not set them.
+Validates and normalizes a relative path, returning "" for the project root, the normalized path if it stays within the project, or None if it references a parent directory, an absolute path, or is unsafe. This enforces that configuration references do not escape the project boundary.
 
-## `_REFERENCE_FILE_NAME`
+## `_extend_file_list`
 
-The default file name "tsconfig.json" used when a "references" entry names a directory instead of a file.
+Extracts the "extends" field from a configuration object and returns a list of project-relative paths to extended configuration files. It handles both string and array "extends" values, filters out non-relative and non-existent paths, and automatically appends ".json" to paths that lack it if a file with that extension exists.
+
+## `_glob_regex`
+
+Converts a glob pattern (used in "include"/"exclude" configuration fields) into a compiled regular expression that matches file paths. The pattern syntax supports `*` (any characters except `/`), `?` (single non-`/` character), and `**/` (any number of directories); a pattern also matches all files under any directory it matches.
+
+## `_is_match`
+
+Tests whether a file path matches one of the patterns in a configuration setting (either "files", "include", or "exclude"). The pattern list and their base directory are supplied as a tuple; the file path is made relative to that base directory before testing against each pattern's compiled regex.
+
+## `_is_cover`
+
+Determines whether a configuration file covers a specific source file based on its "files", "include", and "exclude" settings. If "files" is set and matches, the file is covered; otherwise the file is covered if it matches "include" (defaulting to all files if neither "files" nor "include" is set) and does not match "exclude" (defaulting to a list of package directories like `node_modules`).
+
+## `_reference_file_list`
+
+Extracts the "references" field from a configuration object and returns a list of project-relative paths to referenced configuration files. Each reference must be a dictionary with a "path" string field; directory paths are expanded to point to `tsconfig.json` within that directory, and non-existent paths are skipped.
+
+## `_read_config`
+
+Parses a configuration file and returns its path settings and file coverage, following the "extends" chain to inherit settings from parent configurations. "baseUrl" and "paths" are read from "compilerOptions" and interpreted relative to the file's directory or the effective "baseUrl"; file coverage patterns are read relative to their declaring file's directory. Circular extends are prevented by tracking visited files; None is returned if the file cannot be parsed as JSON.
+
+## `_nearest_config_file`
+
+Walks up the directory tree from a given directory to find the first configuration file by name, caching results per directory to avoid redundant filesystem checks on subsequent calls. It checks each directory for the first matching filename in the provided list and returns the relative path of the found file or None if no ancestor has a configuration file.
+
+## `_cover_config`
+
+Searches a configuration file and its "references" hierarchy for one that covers a given source file, returning the path settings of the first covering configuration. It visits each configuration only once to prevent infinite loops; if the main configuration does not cover the file, it recursively searches each referenced configuration in order.
+
+## `path_config`
+
+Returns the path settings (`PathConfig` or None) that apply to a source file by walking up the directory tree from the file's directory, checking each ancestor's configuration file and its referenced configurations until one covers the file. Results are cached per file to avoid redundant traversal; if no configuration covers the file, the nearest configuration found is returned as a fallback. The file path is normalized to use forward slashes for consistent caching across platforms.
 
 # Summary
 
-# Summary of codetwine/path_config.py
+# Summary: codetwine/path_config.py
 
-**Single Responsibility**: Manage TypeScript/JavaScript configuration files (tsconfig.json, jsconfig.json) to resolve module import paths using baseUrl and paths patterns, with aggressive caching of parsed configurations and file coverage information.
+**Single Responsibility**
 
-**Main Public Definitions**: 
-- `PathConfig`: Dataclass holding baseUrl and paths patterns for module resolution
-- `path_config()`: Retrieve settings applying to a source file
-- `read_json_file()`: Parse JSON files with comments and trailing commas
-- `inside_project()`: Validate relative paths stay within project boundaries
+Resolves TypeScript/JavaScript configuration files to extract module path settings (baseUrl and paths) that control how non-relative imports map to file paths, with project-level caching to avoid redundant reads.
 
-**Key Concepts**: Configuration inheritance through "extends" chains, file coverage rules (files/include/exclude patterns), project references, glob pattern matching, directory tree traversal, per-project and per-file caching, cycle detection in inheritance chains, fallback to nearest config file.
+**Main Public Definitions**
+
+- `PathConfig`: Holds baseUrl and paths settings, provides `module_path_list()` to expand module names into file paths
+- `path_config()`: Returns the applicable PathConfig for a source file
+- `read_json_file()`: Parses JSON configuration files with comments and trailing commas
+- `inside_project()`: Validates and normalizes relative paths within project boundaries
+
+**Key Terms**
+
+Configuration inheritance via "extends" chains; file coverage determination using "files", "include", "exclude" glob patterns; configuration references via "references" field; hierarchical resolution where baseUrl and paths replace (not merge) inherited settings; module matching by exact pattern or longest prefix before wildcard; per-project caching of parsed configs and file-to-config mappings.

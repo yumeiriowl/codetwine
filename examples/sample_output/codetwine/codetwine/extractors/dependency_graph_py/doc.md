@@ -4,68 +4,75 @@
 
 **Overview**
 
-Analyze inter-file dependencies within a project by extracting import statements and reference definitions, then assemble a dependency graph mapping each file to its callers and callees.
+Build a dependency graph of inter-file dependencies within a project by analyzing import statements and cross-file references, returning a structured representation of which files call which other files.
 
-When analyzing a project, call `build_project_dependencies()` with the project root directory to receive a list of dependency information dicts, each containing the file path, its callers, and its callees in "project_name/copy_path" format. A developer building an analysis pipeline uses this function as the central dependency extraction step. Language-specific analysis code uses helper functions like `_import_callee_rel_set()` and `_reference_callee_rel_list()` to resolve a single file's dependencies through import statements or reference definitions. The module's internal utilities like `_collect_text_file_list()`, `_filter_text_file_list()`, and `_no_chunk_document_list()` support file discovery and filtering within a project.
+- Call `build_project_dependencies()` to analyze a project directory and obtain a list of dependency information dictionaries, each mapping a file to its callers and callees within the project.
+- Use `_collect_text_file_list()` or `_filter_text_file_list()` to gather candidate source files from a project directory, filtering out binary files, symbolic links, and paths matching exclusion patterns.
+- Invoke `_collect_callee_dict()` to map each file to the set of project files it depends on through import statements and cross-file references.
+- Call `_to_output_entry_list()` to convert dependency information from absolute paths to output-format paths using the "project_name/copy_path" structure.
 
-This file depends on nearly every other codetwine module: it uses `parse_file()` to read syntax trees, `extract_imports()` to retrieve import statements, `language_ext()` and `has_language()` to determine which files have languages, `import_binder()` to resolve imports for languages with import-based references, and `reference_target_list()` to resolve definitions for language-specific reference resolution (COBOL, C#, R). It clears caches from `rust_module_tree`, `cobol_file_index`, `csharp_namespace_index`, `r_name_index`, `import_binding`, `import_reference`, `import_to_path`, `definition_source`, `path_config`, `package_path`, and `alias_path` before analysis to ensure fresh results. The file is used by `codetwine/pipeline.py` as the primary dependency graph builder.
+This file is the entry point for dependency graph analysis in the codetwine pipeline. It relies on language-specific modules to extract imports (`extract_imports()`), resolve import module names to project files (`resolve_module_to_project_path()`), resolve references to definitions (`reference_target_list()`), and build language-specific indexes (COBOL file index, C# namespace index, R name index, Rust module tree). It also consults configuration modules to determine which files have a language (`has_language()`, `language_ext()`), which files should be treated specially (COBOL copybooks via `register_copy_target()`, R Markdown without chunks via `set_no_language_file()`), and file encoding settings (`read_source()`, `lone_cr_to_lf()`). The pipeline calls `build_project_dependencies()` to generate the dependency graph, converting its output to the internal representation used by downstream analysis steps.
 
-The module employs two-phase file collection: when no file list is given, it walks the project directory with `_collect_text_file_list()`; when files are provided, it validates and filters them with `_filter_text_file_list()`. Symbolic links and excluded patterns are rejected at both phases. Exception handling is lenient: import and reference resolution exceptions are caught and logged per file without stopping analysis, so a file with a resolution failure still appears in the output with incomplete dependencies. The dependency graph reverses callees into callers by iterating through each file's resolved dependencies.
+The function clears all language-specific caches and indexes at the start of each project analysis to ensure fresh results, preventing stale data from previous analyses from contaminating dependency resolution. Exceptions during import or reference resolution are caught individually and logged as warnings, allowing partial dependency information to be returned even when some files fail to analyze completely.
 
 **Definitions**
 
 ## `_is_own_file`
 
-Check whether a file path is a true project file rather than a symbolic link or path under a linked directory, used to filter out external links during project traversal. Returns False for symbolic links and paths under linked directories, True for regular project files.
+Determine whether a file path is a genuine project file rather than a symbolic link or a file under a linked directory. Used during file collection to exclude symbolic references that would duplicate files or escape the project boundary; returns true only when the real path of the file matches the expected real path computed from the project directory and relative path.
 
 ## `_collect_text_file_list`
 
-Walk the project directory recursively and return absolute paths of non-empty text files while filtering out directories and files matching EXCLUDE_PATTERNS, symbolic links, empty files, binary files, and unreadable files. Logged skipped file count. Called during project analysis when no explicit file list is provided.
+Walk a project directory tree and collect all non-empty text file paths, excluding directories and files matching EXCLUDE_PATTERNS, symbolic links, and binary or unreadable files. This is the primary file collection method when no file list is provided to `build_project_dependencies()`, and returns absolute paths in os.walk order after logging counts of skipped files.
 
 ## `_filter_text_file_list`
 
-Validate and filter an explicit list of file paths relative to the project, applying the same exclusion rules as `_collect_text_file_list()` and additionally rejecting paths outside the project directory. Returns absolute paths in input order without duplicates, and logs skipped file count. Used when `build_project_dependencies()` receives a specific file list instead of walking the entire project.
+Filter a supplied list of file paths relative to the project root, returning only those that are non-empty text files within the project boundary and not matching EXCLUDE_PATTERNS. Used when `build_project_dependencies()` is given an explicit file list; returns absolute paths in input order without duplicates, and logs counts of skipped files.
 
 ## `_to_rel`
 
-Convert an absolute file path to a project-relative path with forward-slash separators, a normalized format used internally for file lookups in sets and dicts.
+Convert an absolute file path to a project-relative path using "/" separators. A utility for normalizing paths to the format expected by project file sets and import resolution functions across different operating systems.
 
 ## `_no_chunk_document_list`
 
-Identify R Markdown and Quarto files (R_MARKDOWN_EXT_SET) that contain no R code chunks by testing each with `has_r_chunk()`, returning their relative paths. Files that cannot be read are skipped. Used to mark files without R code as having no language so they are analyzed without a language context.
+Identify R Markdown and Quarto files that contain no R code chunks, returning their relative paths for later registration as files without a language. These files should be analyzed without language-specific processing since they contain no executable R code.
 
 ## `_import_callee_rel_set`
 
-Resolve the project files that a file's import statements reference by calling `import_binder()` for import-based languages or by parsing the file's syntax tree with tree-sitter and resolving each import module to a project path. Returns a set of relative paths. Empty for files without a language or without import resolution settings (EXT_TO_IMPORT_RESOLVE_DICT). Exceptions are not caught by this function; the caller logs them.
+Resolve the files that a source file's import statements lead to within the project. For files resolved through import statements, this queries the ImportBinder; for COBOL files, it resolves COPY and CALL statements. Returns relative paths of resolved project files, or an empty set if the file has no import statements or belongs to a language without import resolution configuration.
 
 ## `_log_graph_failure`
 
-Log a warning that a file could not be fully analyzed in the dependency graph due to an exception during import or reference resolution, preserving the exception type and message for debugging.
+Log a warning that a file is being added to the dependency graph without its import or reference dependencies due to an exception during analysis. Used to notify users of partial failures while allowing the analysis to continue.
 
 ## `_reference_callee_rel_list`
 
-Resolve the project files whose definitions a file references using language-specific resolution (reference_kind() and reference_target_list()). For R files, also append the scripts loaded via source() and box::use() by calling `r_import_file_list()`. Returns a list of relative paths, possibly including the file itself when it refers to its own definitions. Exceptions are not caught; the caller logs them.
+Resolve the files that a source file's cross-file references lead to, dispatching to language-specific reference resolution (COBOL qualification chains, C# namespaces, R names, or import-based binding). For R files, also includes scripts imported via `source()` and `box::use()`, returning relative paths without duplicates.
 
 ## `_collect_callee_dict`
 
-Build a mapping of each file in language_file_list to the set of project files it depends on by calling both `_import_callee_rel_set()` and `_reference_callee_rel_list()` for each file. Import and reference resolution exceptions are caught and logged per file without stopping analysis; files with exceptions have incomplete callee sets. Returns a dict mapping absolute file paths to sets of absolute callee paths, excluding self-references.
+Build a mapping from each file in the project to the set of files it depends on, by resolving both its import statements and its cross-file references. Exceptions during either resolution step are caught and logged individually, so a file may have partial dependency information if one step fails; the mapping uses absolute paths as keys and values.
 
 ## `_to_output_entry_list`
 
-Convert the raw callee and caller dicts into output entries by building one dict per file with "file", "callers", and "callees" keys, using "project_name/copy_path" format. Files without a language get empty caller and callee lists. Returns entries in the order of all_file_list.
+Convert dependency information into the output format by replacing absolute paths with "project_name/copy_path" paths and building one entry per file with sorted caller and callee lists. Files without a language receive empty caller and callee lists since they do not participate in import or reference resolution.
 
 ## `build_project_dependencies`
 
-Analyze all inter-file dependencies in a project and return a list of dependency information dicts, each containing a file's absolute callers and callees in "project_name/copy_path" format. Collects all non-empty text files passing EXCLUDE_PATTERNS and file_list filtering, sets up language detection by calling `set_no_language_file()` and `register_copy_target()`, resolves imports and references for files with languages, and builds a caller index by reversing the callee mapping. Clears all project-specific caches (module_tree_cache, file_index_cache, namespace_index_cache, r_name_index_cache, reference_target_cache, csharp_target_cache, r_target_cache, and caches from import_reference, import_binding, import_to_path, definition_source, path_config, package_path, alias_path) before analysis to ensure fresh results, while keeping parse_cache. When file_list is None, walks project_dir; otherwise validates and filters the provided list. Returns an empty list for files without a language.
+Orchestrate the complete analysis of inter-file dependencies within a project, returning a list of dependency information dictionaries in the format `[{"file": "...", "callers": [...], "callees": [...]}, ...]`. This is the main entry point: it collects all text files (by walking the project or filtering a supplied list), clears all cached indexes from prior analyses, determines which files have a language and which should be treated specially (COBOL copybooks and R Markdown without chunks), builds the set of files each file imports or references, constructs the reverse caller mapping, and converts paths to output format. The caches cleared include parse results (kept for reuse), syntax trees and indexes (Rust module trees, C# namespace indexes, R name indexes, COBOL file indexes), resolved references through import statements, definitions and their sources, and JavaScript/TypeScript path configuration settings.
 
 # Summary
 
-# Summary: dependency_graph.py
+# Summary: codetwine/extractors/dependency_graph.py
 
-**Single Responsibility:** Extract and map inter-file dependencies within a project by analyzing import statements and reference definitions, producing a dependency graph that identifies which files depend on which others.
+**Single Responsibility**
+Analyzes inter-file dependencies within a project by extracting import statements and cross-file references, producing a structured dependency graph showing which files depend on which others.
 
-**Main Public Definition:** `build_project_dependencies()` — analyzes a project directory and returns dependency information for each file, including callers and callees in normalized format.
+**Main Public Definition**
+`build_project_dependencies()` — orchestrates complete dependency analysis, collecting project files, resolving imports and references, and returning dependency information with callers and callees for each file.
 
-**Key Capabilities:** Collects project files while filtering symbolic links and excluded patterns; resolves import-based dependencies for languages supporting import binding; resolves definition-based dependencies for language-specific reference resolution (COBOL, C#, R); reverses callee relationships to compute callers; handles exceptions per-file without stopping analysis; clears language-specific caches before analysis to ensure fresh results.
+**Key Capabilities**
+Walks project directories to collect text files while filtering binaries and symbolic links; resolves imports to project files using language-specific modules; identifies cross-file references through code analysis; builds caller-callee mappings; clears language-specific caches between analyses to prevent stale data; catches individual exceptions during resolution to return partial results when some files fail.
 
-**Key Terms:** import statements, reference definitions, dependency graph, callers, callees, language-specific resolution, import binding, symbolic links, cache clearing.
+**Key Terms**
+Import resolution, reference resolution, dependency mapping, caller-callee relationships, language-specific analysis, cache clearing, file filtering, path normalization.

@@ -373,7 +373,7 @@
       "from": "codetwine/codetwine/config/settings_py/settings.py",
       "target_context": "COBOL_EXT_SET: set[str] = {\n    ext for ext, definition_dict in EXT_TO_DEFINITION_DICT.items()\n    if definition_dict is COBOL_DEFINITION_DICT\n}",
       "target_name": "COBOL_EXT_SET",
-      "target_start_line": 1157
+      "target_start_line": 1167
     },
     {
       "lines": [
@@ -384,7 +384,7 @@
       "from": "codetwine/codetwine/config/settings_py/settings.py",
       "target_context": "def language_ext(path: str) -> str:\n    \"\"\"Return the extension whose language settings a file is analyzed with.\n\n    A file recorded by set_copy_target_ext() gets the extension recorded for it, and a\n    file recorded by set_no_language_file() none. Every other file gets its own\n    extension when it is a key of EXT_TO_DEFINITION_DICT; the extensions of the\n    languages with ignore_ext_case are matched in any case.\n\n    Examples:\n        \"src/app.py\"          -> \"py\"\n        \"src/MAIN.Cbl\"        -> \"cbl\"\n        \"R/utils.R\"           -> \"r\"\n        \"config.yaml\"         -> \"\"\n        \"dcl/DCLCUST.dcl\"     -> \"cpy\" (when a COPY statement names it)\n        \"docs/notes.qmd\"      -> \"\" (when it has no R code chunk)\n\n    Args:\n        path: A file path. A relative path is taken from the current directory when\n            it is looked up among the recorded files.\n\n    Returns:\n        The extension (without the dot, a key of EXT_TO_DEFINITION_DICT), or \"\" for a\n        file without a language.\n    \"\"\"\n    path_abs = os.path.abspath(path)\n    copy_target_ext = _copy_target_ext_dict.get(path_abs)\n    if copy_target_ext:\n        return copy_target_ext\n    if path_abs in _no_language_path_set:\n        return \"\"\n    ext = os.path.splitext(path)[1].lstrip(\".\")\n    if ext in EXT_TO_DEFINITION_DICT:\n        return ext\n    if ext.lower() in _IGNORE_CASE_EXT_SET:\n        return ext.lower()\n    return \"\"",
       "target_name": "language_ext",
-      "target_start_line": 1241
+      "target_start_line": 1251
     },
     {
       "lines": [
@@ -428,7 +428,7 @@
       "from": "codetwine/codetwine/config/settings_py/settings.py",
       "target_context": "BMS_EXT_SET: set[str] = {\n    ext for ext, definition_dict in EXT_TO_DEFINITION_DICT.items()\n    if definition_dict is BMS_DEFINITION_DICT\n}",
       "target_name": "BMS_EXT_SET",
-      "target_start_line": 1187
+      "target_start_line": 1197
     },
     {
       "lines": [
@@ -535,7 +535,7 @@
       "from": "codetwine/codetwine/config/settings_py/settings.py",
       "target_context": "EXT_TO_LANGUAGE_DICT: dict[str, Language] = _expand_ext_aliases(\n    {ext: lang_config.language for ext, lang_config in _LANG_REGISTRY.items()}\n)",
       "target_name": "EXT_TO_LANGUAGE_DICT",
-      "target_start_line": 1146
+      "target_start_line": 1156
     },
     {
       "lines": [
@@ -566,7 +566,7 @@
       "from": "codetwine/codetwine/config/settings_py/settings.py",
       "target_context": "def set_copy_target_ext(project_dir: str, file_ext_dict: dict[str, str]) -> None:\n    \"\"\"Record the files of a project whose language comes from the files that name them.\n\n    The files recorded before for the same project are forgotten.\n\n    Args:\n        project_dir: Root directory of the project.\n        file_ext_dict: {path relative to project_dir: extension whose language settings\n            the file is analyzed with}.\n    \"\"\"\n    project_prefix = os.path.join(os.path.abspath(project_dir), \"\")\n    for path in [path for path in _copy_target_ext_dict if path.startswith(project_prefix)]:\n        del _copy_target_ext_dict[path]\n    for file_rel, ext in file_ext_dict.items():\n        _copy_target_ext_dict[os.path.abspath(os.path.join(project_dir, file_rel))] = ext",
       "target_name": "set_copy_target_ext",
-      "target_start_line": 1203
+      "target_start_line": 1213
     },
     {
       "lines": [
@@ -576,7 +576,7 @@
       "from": "codetwine/codetwine/config/settings_py/settings.py",
       "target_context": "def has_language(path: str) -> bool:\n    \"\"\"Return whether a file is analyzed with a language of the registry.\n\n    Only such files get definitions, dependencies and design documents; every other\n    text file is carried through the analysis with those left empty.\n\n    Examples:\n        \"src/app.py\"    -> True\n        \"config.yaml\"   -> False\n        \"Makefile\"      -> False\n\n    Args:\n        path: A file path. A file recorded by set_copy_target_ext() is known by its\n            absolute path.\n\n    Returns:\n        True when language_ext() gives an extension.\n    \"\"\"\n    return language_ext(path) != \"\"",
       "target_name": "has_language",
-      "target_start_line": 1279
+      "target_start_line": 1289
     },
     {
       "lines": [
@@ -1170,15 +1170,15 @@
   "caller_usages": [
     {
       "lines": [
-        362
+        364
       ],
       "name": "file_index_cache.clear",
       "file": "codetwine/codetwine/extractors/dependency_graph_py/dependency_graph.py",
-      "usage_context": "\n    # Forget the indexes and the resolved references of an earlier analysis\n    module_tree_cache.clear()\n    file_index_cache.clear()\n    namespace_index_cache.clear()\n    r_name_index_cache.clear()\n    reference_target_cache.clear()"
+      "usage_context": "    parse_cache.clear()\n    class_macro_cache.clear()\n    module_tree_cache.clear()\n    file_index_cache.clear()\n    namespace_index_cache.clear()\n    r_name_index_cache.clear()\n    reference_target_cache.clear()"
     },
     {
       "lines": [
-        365
+        367
       ],
       "name": "reference_target_cache.clear",
       "file": "codetwine/codetwine/extractors/dependency_graph_py/dependency_graph.py",
@@ -1186,7 +1186,7 @@
     },
     {
       "lines": [
-        379
+        381
       ],
       "name": "register_copy_target",
       "file": "codetwine/codetwine/extractors/dependency_graph_py/dependency_graph.py",
@@ -1256,7 +1256,7 @@
     },
     {
       "lines": [
-        339
+        348
       ],
       "name": "file_index_cache.clear",
       "file": "codetwine/codetwine/pipeline_py/pipeline.py",
@@ -1264,7 +1264,7 @@
     },
     {
       "lines": [
-        340
+        349
       ],
       "name": "reference_target_cache.clear",
       "file": "codetwine/codetwine/pipeline_py/pipeline.py",
