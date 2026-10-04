@@ -117,9 +117,16 @@ SUMMARY_MAX_CHARS: int = get_config_value("SUMMARY_MAX_CHARS", default=600, var_
 ENABLE_CODE_SUMMARY = get_config_value("ENABLE_CODE_SUMMARY", default=True, var_type=bool)
 
 # Definitions / dependency symbols longer than this many lines are candidates
-# for LLM summarization during context-overflow fallback.
+# for LLM summarization during context-overflow fallback. A line longer than 80
+# characters counts as one line per 80 characters.
 CODE_SUMMARY_TRIGGER_LINES = get_config_value(
     "CODE_SUMMARY_TRIGGER_LINES", default=40, var_type=int
+)
+
+# Lines of source summarized together when a file is summarized piece by piece
+# during context-overflow fallback.
+CODE_SUMMARY_PIECE_LINES = get_config_value(
+    "CODE_SUMMARY_PIECE_LINES", default=200, var_type=int
 )
 
 # Target character limit for a single code behavior summary.
@@ -180,6 +187,7 @@ JAVA_DEFINITION_DICT = {
     "annotation_type_declaration": "identifier",
     "annotation_type_element_declaration": "identifier",
     "field_declaration": "__variable_declarator__",
+    "constant_declaration": "__variable_declarator__",
 }
 
 CPP_DEFINITION_DICT = {
@@ -219,7 +227,7 @@ KOTLIN_DEFINITION_DICT = {
     "function_declaration": "identifier",
     "object_declaration": "identifier",
     "companion_object": "identifier",
-    "enum_entry": "identifier",
+    "enum_entry": "__enum_entry__",
     "type_alias": "identifier",
     "property_declaration": "__kotlin_property__",
 }
@@ -227,9 +235,9 @@ KOTLIN_DEFINITION_DICT = {
 JS_DEFINITION_DICT = {
     "function_declaration": "identifier",
     "generator_function_declaration": "identifier",
-    "method_definition": "property_identifier",
+    "method_definition": "__property_name__",
     "class_declaration": "identifier",
-    "field_definition": "property_identifier",
+    "field_definition": "__property_name__",
     "lexical_declaration": "__variable_declarator__",
     "variable_declaration": "__variable_declarator__",
     "expression_statement": "__member_assignment__",
@@ -241,14 +249,14 @@ TS_DEFINITION_DICT = {
     "function_declaration": "identifier",
     "generator_function_declaration": "identifier",
     "function_signature": "identifier",
-    "method_definition": "property_identifier",
+    "method_definition": "__property_name__",
     "method_signature": "property_identifier",
     "abstract_method_signature": "property_identifier",
     "property_signature": "property_identifier",
     "class_declaration": "type_identifier",
     "abstract_class_declaration": "type_identifier",
     "interface_declaration": "type_identifier",
-    "public_field_definition": "property_identifier",
+    "public_field_definition": "__property_name__",
     "lexical_declaration": "__variable_declarator__",
     "variable_declaration": "__variable_declarator__",
     "type_alias_declaration": "type_identifier",
@@ -270,6 +278,7 @@ RUST_DEFINITION_DICT = {
     "trait_item": "type_identifier",
     "impl_item": "__impl_type__",
     "type_item": "type_identifier",
+    "associated_type": "type_identifier",
     "const_item": "identifier",
     "static_item": "identifier",
     "mod_item": "__inline_module__",
@@ -581,17 +590,41 @@ _RUST_IMPORT_QUERY = """
 #
 # call_types:     AST node types representing function calls
 # attribute_types: AST node types representing attribute access
+# attribute_skip_parent_types: Parent node types of an attribute access that is not read
+#                 (Java: the name of an import or package declaration)
+# package_path_types: attribute_types node types of a name that can be written with its
+#                 package; a chain that starts from no tracked name is named from its
+#                 first tracked part on (Java: com.acme.model.Circle -> Circle)
 # skip_parent_types: Do not treat an identifier as a usage when its parent is one of these types
 #                    (definition names, import names, parameter names, etc. that are part of syntax)
+# skip_last_child_types: Do not treat an identifier as a usage when it is the last child of
+#                 a parent of one of these types (Java: area in Circle::area)
+# skip_first_name_types: Do not treat an identifier as a usage when it is the first identifier
+#                 child of a parent of one of these types (Kotlin: b in class P(val b: Int = MAX))
 # skip_parent_types_for_type_ref:
 #     Skip only when the parent of a type_identifier / namespace_identifier is one of these types.
 #     Almost all occurrences of type references indicate dependencies.
 #     Only import statements and scope resolution are skipped.
 # identifier_parent_types: When set, treat an identifier as a usage only when its parent is one of these types
 # identifier_types: AST node types read like an identifier (JS/TS: the name in { name })
+# identifier_parent_dict: AST node type -> parent node types under which it is read like an
+#                 identifier (C++: the member or base class a constructor initializes)
+# macro_declarator_types: AST node types of a declarator read as a macro call when its
+#                 declaration has no type (C / C++: MODULE_INIT(setup);); its name is a
+#                 usage of the macro
 # path_types:     AST node types of a path written with "::" (Rust). The outermost path is a usage
 #                 when the whole path or its first segment is a tracked name; a path whose parent
 #                 is in skip_parent_types_for_type_ref is skipped
+# name_path_dict: AST node type of a name whose identifier children are its parts ->
+#                 {parent node type, "" for any: least number of parts the name is a usage
+#                 with} (Python: case Point(x=0), case Color.RED; Kotlin: Shape.Empty
+#                 written as a type)
+# template_name_dict: AST node type of a text of a string template -> the text after which
+#                 the next text starts with a name (Kotlin: "$name")
+# annotation_string_dict: AST node type of a string -> node type of the annotation around
+#                 it; the names written in such a string are usages (Python: e: "Engine")
+# annotation_literal_names: names of the types whose arguments are strings that name
+#                 nothing (Python: Literal["a"])
 # macro_argument_types: AST node types of the arguments of a macro (Rust), whose paths are
 #                 read from loose tokens
 # self_names / self_types: identifier texts / AST node types of the object a member is written on
@@ -600,6 +633,8 @@ _RUST_IMPORT_QUERY = """
 #                 declared with a tracked type is tracked under the type name
 # typed_alias_name_field_dict: typed_alias_parent_types node type -> field holding its
 #                 variable ("" for its first named child); its type is in the field "type"
+# typed_alias_type_field_dict: typed_alias_name_field_dict node type -> field holding its
+#                 type, for a node that does not hold it in the field "type"
 # typed_alias_value_dict: AST node type that gives a variable a value -> (field of the
 #                 variable or of a pattern of variables, field of the value; "" for its
 #                 first named child, None for a node whose value is not read)
@@ -628,9 +663,29 @@ _RUST_IMPORT_QUERY = """
 #                 (Rust: the variants of an enum)
 # module_open_types: definition types every inline module of the file sees without a use
 #                 declaration (Rust: a macro_rules! macro)
+# block_scope_types: AST node types of a block that is a scope of its own for the names
+#                 bound in it (a variable declared in a block does not count outside it);
+#                 an import statement is bound for the function it is written in
+#                 (scope_types), not for a block
+# function_binding_types: local_binding_dict node types whose names count for the whole
+#                 function also when they are written in a block (JS/TS: a function
+#                 declaration)
+# function_binding_token_types: AST node types of a keyword that makes the names of the
+#                 binding it is written in count for the whole function (JS/TS: var)
 # opaque_types:   AST node types inside a scope whose inner nodes bind nothing in it
 # unbind_types:   AST node types naming names that are not local (Python global / nonlocal)
+# member_definition_types: definition types that define a member of another object
+#                 (JS/TS: exports.name = ..., obj.name = function () {}); a name only such
+#                 definitions carry is a usage after self / this, not by itself
 # call_ignores_local: True when the name of a called function is never a local variable (Java)
+# class_head_argument_skip: True when the "()" written in the head of a class hold no
+#                 class it is made from (Kotlin: class Car(val e: Engine) : Vehicle(),
+#                 Java: record Point(Shape s) implements Item)
+# member_by_name: True when a member of a class is written by its name alone inside the
+#                 class (Java, Kotlin, C / C++); else a name the file defines only as a
+#                 member of a class is a usage after self / this, not by itself
+# extension_call: True when a definition declared for values of another type is used as
+#                 value.name (Kotlin: fun Shape.describe() called as circle.describe())
 _PYTHON_USAGE_NODE_TYPE_DICT = {
     "call_types": {"call"},
     "attribute_types": {"attribute"},
@@ -646,6 +701,9 @@ _PYTHON_USAGE_NODE_TYPE_DICT = {
         "default_parameter", "typed_default_parameter", "keyword_argument",
     },
     "skip_parent_types_for_type_ref": set(),
+    "name_path_dict": {"dotted_name": {"class_pattern": 1, "case_pattern": 2}},
+    "annotation_string_dict": {"string": "type"},
+    "annotation_literal_names": {"Literal"},
     "self_names": {"self", "cls"},
     "typed_alias_parent_types": {"typed_parameter", "typed_default_parameter", "assignment"},
     "typed_alias_name_field_dict": {
@@ -689,7 +747,11 @@ _PYTHON_USAGE_NODE_TYPE_DICT = {
 
 _JAVA_USAGE_NODE_TYPE_DICT = {
     "call_types": {"method_invocation"},
-    "attribute_types": {"field_access"},
+    "attribute_types": {
+        "field_access", "scoped_identifier", "scoped_type_identifier", "method_reference",
+    },
+    "attribute_skip_parent_types": {"import_declaration", "package_declaration"},
+    "package_path_types": {"scoped_identifier", "scoped_type_identifier"},
     "skip_parent_types": {
         "method_invocation", "field_access",
         "import_declaration", "scoped_identifier",
@@ -697,26 +759,41 @@ _JAVA_USAGE_NODE_TYPE_DICT = {
         "interface_declaration", "constructor_declaration",
         "formal_parameter", "spread_parameter",
     },
+    "skip_last_child_types": {"method_reference"},
     "skip_parent_types_for_type_ref": {
-        "scoped_identifier", "import_declaration",
+        "scoped_identifier", "scoped_type_identifier", "import_declaration",
     },
     "typed_alias_parent_types": {
-        "field_declaration", "local_variable_declaration", "formal_parameter",
+        "field_declaration", "constant_declaration", "local_variable_declaration",
+        "formal_parameter", "enhanced_for_statement", "resource", "instanceof_expression",
+        "type_pattern",
     },
+    "typed_alias_name_field_dict": {
+        "enhanced_for_statement": "name", "resource": "name", "instanceof_expression": "name",
+    },
+    "typed_alias_type_field_dict": {"instanceof_expression": "right"},
     "self_types": {"this"},
     "call_ignores_local": True,
+    "member_by_name": True,
+    "class_head_argument_skip": True,
     "scope_types": {
         "method_declaration", "constructor_declaration", "compact_constructor_declaration",
         "lambda_expression",
     },
-    "scope_binding_dict": {"lambda_expression": "parameters"},
+    "block_scope_types": {
+        "block", "for_statement", "enhanced_for_statement", "catch_clause",
+        "try_with_resources_statement", "switch_block",
+    },
+    "scope_binding_dict": {"lambda_expression": "parameters", "enhanced_for_statement": "name"},
     "local_binding_dict": {
         "formal_parameter": "name",
         "spread_parameter": "",
         "local_variable_declaration": "declarator",
-        "enhanced_for_statement": "name",
         "catch_formal_parameter": "name",
         "resource": "name",
+        "instanceof_expression": "name",
+        "type_pattern": "",
+        "record_pattern_component": "",
     },
     "pattern_types": {"inferred_parameters"},
     "pattern_field_dict": {"variable_declarator": "name"},
@@ -724,9 +801,9 @@ _JAVA_USAGE_NODE_TYPE_DICT = {
 
 _JS_USAGE_NODE_TYPE_DICT = {
     "call_types": {"call_expression"},
-    "attribute_types": {"member_expression"},
+    "attribute_types": {"member_expression", "nested_type_identifier"},
     "skip_parent_types": {
-        "call_expression", "member_expression",
+        "call_expression", "member_expression", "nested_type_identifier",
         "import_statement", "import_clause", "import_specifier", "namespace_import",
         "namespace_export",
         "function_declaration", "class_declaration", "method_definition",
@@ -734,10 +811,11 @@ _JS_USAGE_NODE_TYPE_DICT = {
     },
     "skip_name_field_types": {"variable_declarator"},
     "skip_parent_types_for_type_ref": {
-        "import_statement", "import_specifier", "namespace_import",
+        "import_statement", "import_specifier", "namespace_import", "nested_type_identifier",
     },
     "identifier_types": {"shorthand_property_identifier"},
     "self_types": {"this"},
+    "member_definition_types": {"expression_statement"},
     "typed_alias_parent_types": {"variable_declarator", "required_parameter", "optional_parameter"},
     "typed_alias_name_field_dict": {
         "variable_declarator": "name", "required_parameter": "pattern",
@@ -754,15 +832,20 @@ _JS_USAGE_NODE_TYPE_DICT = {
         "function_signature", "method_signature", "abstract_method_signature",
         "call_signature", "construct_signature", "function_type", "constructor_type",
     },
-    "scope_binding_dict": {"arrow_function": "parameter"},
+    "block_scope_types": {
+        "statement_block", "for_statement", "for_in_statement", "catch_clause", "switch_body",
+    },
+    "function_binding_types": {"function_declaration", "generator_function_declaration"},
+    "function_binding_token_types": {"var"},
+    "scope_binding_dict": {
+        "arrow_function": "parameter", "catch_clause": "parameter", "for_in_statement": "left",
+    },
     "local_binding_dict": {
         "formal_parameters": "",
         "variable_declarator": "name",
         "function_declaration": "name",
         "generator_function_declaration": "name",
         "class_declaration": "name",
-        "catch_clause": "parameter",
-        "for_in_statement": "left",
     },
     "pattern_types": {"object_pattern", "array_pattern", "rest_pattern"},
     "pattern_field_dict": {
@@ -781,22 +864,30 @@ _C_USAGE_NODE_TYPE_DICT = {
         "call_expression", "field_expression",
         "preproc_include",
         "function_declarator", "function_definition",
-        "struct_specifier", "parameter_declaration",
+        "struct_specifier", "parameter_declaration", "reference_declarator",
         "qualified_identifier",
     },
     "skip_parent_types_for_type_ref": {
         "preproc_include", "qualified_identifier",
     },
     "typed_alias_parent_types": {
-        "declaration", "parameter_declaration",
+        "declaration", "parameter_declaration", "for_range_loop",
     },
+    "typed_alias_name_field_dict": {"for_range_loop": "declarator"},
+    "identifier_parent_dict": {"field_identifier": {"field_initializer", "function_declarator"}},
+    "macro_declarator_types": {"function_declarator"},
     "self_types": {"this"},
+    "member_by_name": True,
     "scope_types": {"function_definition", "lambda_expression"},
+    "block_scope_types": {
+        "compound_statement", "for_statement", "for_range_loop", "if_statement",
+        "while_statement", "switch_statement", "catch_clause",
+    },
+    "scope_binding_dict": {"for_range_loop": "declarator"},
     "local_binding_dict": {
         "parameter_declaration": "declarator",
         "optional_parameter_declaration": "declarator",
         "declaration": "declarator",
-        "for_range_loop": "declarator",
         "condition_declaration": "declarator",
     },
     "pattern_types": {
@@ -824,16 +915,23 @@ _KOTLIN_USAGE_NODE_TYPE_DICT = {
         "import", "qualified_identifier", "package_header",
     },
     "typed_alias_parent_types": {
-        "property_declaration", "parameter",
+        "property_declaration", "parameter", "class_parameter",
     },
+    "skip_first_name_types": {"class_parameter"},
+    "name_path_dict": {"user_type": {"": 2}},
+    "template_name_dict": {"string_content": "$"},
+    "extension_call": True,
     "self_types": {"this_expression"},
+    "member_by_name": True,
+    "class_head_argument_skip": True,
     "scope_types": {
         "function_declaration", "lambda_literal", "anonymous_function", "secondary_constructor",
     },
+    "block_scope_types": {"block", "for_statement", "catch_block"},
+    "scope_binding_dict": {"catch_block": ""},
     "local_binding_dict": {
         "parameter": "",
         "variable_declaration": "",
-        "catch_block": "",
     },
 }
 
@@ -857,15 +955,17 @@ _RUST_USAGE_NODE_TYPE_DICT = {
         "visibility_modifier",
     },
     "self_types": {"self"},
+    "typed_alias_parent_types": {"parameter", "let_declaration"},
+    "typed_alias_name_field_dict": {"parameter": "pattern", "let_declaration": "pattern"},
     "scope_types": {
         "function_item", "closure_expression", "match_arm", "if_expression", "while_expression",
     },
-    "scope_binding_dict": {"match_arm": "pattern"},
+    "block_scope_types": {"block", "for_expression"},
+    "scope_binding_dict": {"match_arm": "pattern", "for_expression": "pattern"},
     "local_binding_dict": {
         "parameter": "pattern",
         "let_declaration": "pattern",
         "let_condition": "pattern",
-        "for_expression": "pattern",
         "closure_parameters": "",
     },
     "pattern_types": {
@@ -1176,6 +1276,12 @@ C_FAMILY_EXT_SET: set[str] = {
 } | {
     alias for alias, canonical in _EXT_ALIAS_DICT.items()
     if (_LANG_REGISTRY[canonical].import_resolve_dict or {}).get("bind") == "include"
+}
+
+# Extensions of the Kotlin files
+KOTLIN_EXT_SET: set[str] = {
+    ext for ext, definition_dict in EXT_TO_DEFINITION_DICT.items()
+    if definition_dict is KOTLIN_DEFINITION_DICT
 }
 
 # Extensions of the C# files

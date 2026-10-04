@@ -19,7 +19,7 @@ from codetwine.output import (
     to_output_path,
     build_summary_map,
 )
-from codetwine.doc_creator import generate_all_docs, load_doc
+from codetwine.doc_creator import check_code_summary_setting, generate_all_docs, load_doc
 from codetwine.knowledge_db import save_consolidated_sqlite
 from codetwine.llm.client import LLMClient
 from codetwine.utils.file_utils import (
@@ -257,8 +257,9 @@ async def process_all_files(
                 invalid bytes replaced.
 
     Raises:
-        ValueError: When KNOWLEDGE_FORMAT is not one of KNOWLEDGE_FORMAT_TUPLE, or
-            SOURCE_ENCODING names an unknown codec.
+        ValueError: When KNOWLEDGE_FORMAT is not one of KNOWLEDGE_FORMAT_TUPLE,
+            SOURCE_ENCODING names an unknown codec, or CODE_SUMMARY_PIECE_LINES is
+            less than 1 while ENABLE_LLM_DOC and ENABLE_CODE_SUMMARY are True.
     """
     # Checked before any analysis runs
     if KNOWLEDGE_FORMAT not in KNOWLEDGE_FORMAT_TUPLE:
@@ -268,6 +269,8 @@ async def process_all_files(
             f"Set it in the .env file or your shell."
         )
     check_source_encoding()
+    if ENABLE_LLM_DOC:
+        check_code_summary_setting()
 
     project_name = os.path.basename(project_dir)
     base_output_dir = os.path.join(output_dir, project_name)

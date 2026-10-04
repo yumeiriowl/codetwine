@@ -9,13 +9,16 @@ from codetwine.extractors.definitions import (
     CONTAINER_DEFINITION_TYPE_SET,
     DEFAULT_EXPORT_NAME,
     DefinitionInfo,
+    select_top_level_definitions,
 )
 from codetwine.extractors.definition_source import file_definition, file_definition_list
 from codetwine.extractors.usages import symbol_part_list
 from codetwine.extractors.imports import (
     ImportInfo,
     extract_imports,
+    has_module_export,
     local_export_dict,
+    member_module_export_dict,
     module_export_list,
     python_all_name_list,
 )
@@ -142,6 +145,9 @@ class _TreeFact:
     all_name_list: list[str] | None = None       # python_all_name_list (Python)
     local_export_dict: dict[str, str] = field(default_factory=dict)   # local_export_dict (JS/TS)
     module_export_list: list[str] = field(default_factory=list)      # module_export_list (JS/TS)
+    # member_module_export_dict (JS/TS)
+    member_module_export_dict: dict[str, str] = field(default_factory=dict)
+    has_module_export: bool = False              # has_module_export (JS/TS)
     # inline_module_scope_list (Rust)
     module_scope_list: list[tuple[int, int, bool]] = field(default_factory=list)
     # _base_class_name_dict (C++)
@@ -272,6 +278,10 @@ class ImportBinder:
         self._tree_fact_dict: dict[str, _TreeFact] = {}
         # File -> names "from file import *" takes from it (Python)
         self._star_name_dict: dict[str, set[str]] = {}
+        # File -> receiver_name_set (Kotlin)
+        self._receiver_name_dict: dict[str, set[str]] = {}
+        # package_member_name_set, built on first use (Java, Kotlin)
+        self._package_member_name_set: set[str] | None = None
 
     # == Names of one file ====================================================
 
@@ -490,6 +500,8 @@ class ImportBinder:
                                             itself, for the files importing this one
         module.exports = require("./m")  -> the default export and every name of m, for
                                             the files importing this one
+        exports.u = require("./m") / module.exports = { u: require("./m") }
+                                         -> "u": the file m, for the files importing this one
         require("./m").run()             -> "run": the name run of m, on the lines of the
                                             access, where it is a usage of the name
         import("./m").then((u) => ...)   -> "u": the file m, on the lines of the callback
@@ -528,6 +540,10 @@ class ImportBinder:
                     DEFAULT_EXPORT_NAME, SymbolBinding(module_file, DEFAULT_EXPORT_NAME),
                 )
                 file_binding.wildcard_list.append(module_file)
+        for export_name, module in tree_fact.member_module_export_dict.items():
+            module_file = self._resolve(module, file_rel)
+            if module_file is not None:
+                file_binding.export_dict[export_name] = SymbolBinding(module_file, None)
 
     def _bind_include(
         self, file_rel: str, import_info_list: list[ImportInfo], tree_fact: _TreeFact,
@@ -987,20 +1003,56 @@ class ImportBinder:
             part_list = part_list[1:]
         return binding, part_list
 
-    def default_binding(self, file_rel: str) -> SymbolBinding | None:
-        """Return the definition the default export of a JS/TS file leads to.
+    def module_value_binding(self, file_rel: str) -> SymbolBinding | None:
+        """Return the definition the value of a CommonJS module leads to.
 
         Args:
             file_rel: Relative path of the file.
 
         Returns:
-            The binding of DEFAULT_EXPORT_NAME among the names of the file (export
-            default, module.exports = ...), None when it has none or is a file of
-            another language.
+            The binding of DEFAULT_EXPORT_NAME among the names of a JS/TS file that
+            assigns to module.exports; None for a file that does not (its default
+            export, if any, is a member of the module), and for a file of another
+            language.
         """
         if self._bind_kind(file_rel) != "export":
             return None
+        try:
+            if not self._tree_fact(file_rel).has_module_export:
+                return None
+        except Exception as e:
+            logger.warning(
+                f"The exports of {file_rel} cannot be read: {type(e).__name__}: {e}"
+            )
+            return None
         return self._export_name_dict(file_rel).get(DEFAULT_EXPORT_NAME)
+
+    def module_member_binding(
+        self, binding: SymbolBinding, part_list: list[str],
+    ) -> tuple[SymbolBinding, list[str]]:
+        """Follow the parts written after a name bound to the value of a CommonJS module.
+
+        import util from "./util" binds util to the default export of the file; when
+        that is the value module.exports is given, util.helper names what the file
+        exports as helper.
+
+        Args:
+            binding: The binding of the first part of a usage name.
+            part_list: The parts after it.
+
+        Returns:
+            (the member the first part names, parts left over) when binding is the
+            module_value_binding() of its file and the first part is a name of the
+            file; else the arguments as they are.
+        """
+        if not part_list or binding != self.module_value_binding(binding.file_rel):
+            return binding, part_list
+        member_binding, rest_part_list = self.member_binding(
+            SymbolBinding(binding.file_rel, None), part_list,
+        )
+        if member_binding.name is None:
+            return binding, part_list
+        return member_binding, rest_part_list
 
     # == Declarations and their definitions (C / C++) =========================
 
@@ -1100,7 +1152,8 @@ class ImportBinder:
             class_path: Path of the class in the file ("Shape", "Outer.Inner").
 
         Returns:
-            {member name: the member as "class_path.member" of the file of its class}.
+            {member name: the member as "class_path.member" of the file of its class},
+            without the constructors (the members named like their class).
             A member of the class itself comes before a member of the same name of a
             base class, and an earlier base class before a later one. A base class is
             looked up among the top-level names of class_file, then among the names it
@@ -1113,10 +1166,12 @@ class ImportBinder:
         # Registered before it is filled: a class that leads back to itself gets it as it is
         member_dict = {}
         self._class_member_dict[class_key] = member_dict
+        class_name = class_path.split(".")[-1]
         try:
             for member_name in self._member_name_list(class_file, class_path):
-                member_dict[member_name] = SymbolBinding(class_file, f"{class_path}.{member_name}")
-            base_name_list = self._base_name_list(class_file, class_path.split(".")[-1])
+                if member_name != class_name:
+                    member_dict[member_name] = SymbolBinding(class_file, f"{class_path}.{member_name}")
+            base_name_list = self._base_name_list(class_file, class_name)
         except Exception as e:
             logger.warning(
                 f"The members of {class_path} of {class_file} cannot be read: "
@@ -1374,6 +1429,62 @@ class ImportBinder:
         self._scope_binding_dict[file_rel] = scope_binding_list
         return scope_binding_list
 
+    def package_member_name_set(self) -> set[str]:
+        """Return the names of the members of the types of every Java and Kotlin file of the project.
+
+        Returns:
+            The names of the definitions that are no top-level definitions of their
+            file, of the files whose "bind" is "package". Built once.
+        """
+        if self._package_member_name_set is None:
+            member_name_set: set[str] = set()
+            for file_list in self._package_index().values():
+                for file_rel in file_list:
+                    try:
+                        definition_list = self._definition_list(file_rel)
+                    except Exception as e:
+                        logger.warning(
+                            f"The definitions of {file_rel} cannot be read: "
+                            f"{type(e).__name__}: {e}"
+                        )
+                        continue
+                    top_level_id_set = {
+                        id(definition)
+                        for definition in select_top_level_definitions(definition_list)
+                    }
+                    member_name_set.update(
+                        definition.name for definition in definition_list
+                        if id(definition) not in top_level_id_set
+                    )
+            self._package_member_name_set = member_name_set
+        return self._package_member_name_set
+
+    def receiver_name_set(self, file_rel: str) -> set[str]:
+        """Return the top-level names of a file that are declared for values of another type.
+
+        Args:
+            file_rel: Relative path of the file.
+
+        Returns:
+            The names of the definitions with has_receiver among the top-level names
+            of the file (Kotlin: extension functions and properties). Read once per file.
+        """
+        name_set = self._receiver_name_dict.get(file_rel)
+        if name_set is None:
+            top_level_name_set = set(self.top_level_name_list(file_rel))
+            try:
+                name_set = {
+                    definition.name for definition in self._definition_list(file_rel)
+                    if definition.has_receiver and definition.name in top_level_name_set
+                }
+            except Exception as e:
+                logger.warning(
+                    f"The definitions of {file_rel} cannot be read: {type(e).__name__}: {e}"
+                )
+                name_set = set()
+            self._receiver_name_dict[file_rel] = name_set
+        return name_set
+
     def module_scope_list(self, file_rel: str) -> list[tuple[int, int, bool]]:
         """Return the inline modules of a file and whether each takes over the names around it.
 
@@ -1434,6 +1545,8 @@ def _export_tree_fact(root_node: Node, tree_fact: _TreeFact) -> None:
     """Read what the bindings of a JS/TS file need from its tree."""
     tree_fact.local_export_dict = local_export_dict(root_node)
     tree_fact.module_export_list = module_export_list(root_node)
+    tree_fact.member_module_export_dict = member_module_export_dict(root_node)
+    tree_fact.has_module_export = has_module_export(root_node)
 
 
 def _include_tree_fact(root_node: Node, tree_fact: _TreeFact) -> None:

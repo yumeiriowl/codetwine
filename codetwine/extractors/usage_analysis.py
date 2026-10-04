@@ -156,7 +156,8 @@ def _name_own_range_function(
 ) -> Callable[[CsharpReferenceTarget | ImportReferenceTarget], list[tuple[int, int]]]:
     """Return the function giving the lines of the definitions the name of a reference names.
 
-    These are the lines of the member a name with several parts names (Cfg.Max -> Max),
+    These are the lines of the definition a reference with a definition_line leads
+    to; else the lines of the member a name with several parts names (Cfg.Max -> Max),
     else the lines of every definition named like the first part of the name as it is
     written, else like the first part of the name of the definition it resolves to
     (Rust: self::parse -> parse).
@@ -168,6 +169,13 @@ def _name_own_range_function(
     ) -> list[tuple[int, int]]:
         """Return the lines of the definitions the name of a reference names."""
         part_list = symbol_part_list(target.definition_name)
+        if isinstance(target, ImportReferenceTarget) and target.definition_line is not None:
+            return [
+                (start_line, end_line)
+                for part in part_list
+                for start_line, end_line in range_dict.get(part, [])
+                if start_line == target.definition_line
+            ]
         if len(part_list) > 1:
             definition = find_definition(definition_list, target.definition_name)
             if definition is not None and definition.name == part_list[-1]:
@@ -296,10 +304,16 @@ def _csharp_definition_function(
 def _import_definition_function(
     project_dir: str,
 ) -> Callable[[ImportReferenceTarget], _TargetDefinition]:
-    """Return the function giving the definition named by the definition_name of a target (source_definition)."""
+    """Return the function giving the definition named by the definition_name of a target.
+
+    A target with a definition_line leads to the definition of that name that starts
+    on that line (source_definition).
+    """
     def named_definition(target: ImportReferenceTarget) -> _TargetDefinition:
         """Return the definition named by the definition_name of a target."""
-        return _source_target_definition(target.file_rel, target.definition_name, project_dir)
+        return _source_target_definition(
+            target.file_rel, target.definition_name, project_dir, target.definition_line,
+        )
 
     return named_definition
 

@@ -1,5 +1,78 @@
 # Changelog
 
+## 0.4.1 - 2026-10-04
+
+### Added
+- Kotlin: a file the grammar does not read as written is parsed again with a constructor written on the lines after its class name (`class Reader` / `internal constructor(`) joined to the class, and with a body written on one line (`class A { val x = 1 }`) closed by `;`; a parse is kept only when it leaves less of the file unread (`parsers/kotlin_form.py`, `parsers/parse_error.py`)
+- Kotlin: a class declaration the grammar reads as part of an ERROR node is a definition, and a class whose body it reads as an ERROR node covers that node, so the members are no top-level names of the file
+- Kotlin: `value.name()` and `value.name` are linked to an extension function or property `name` the file sees, unless a class of the project has a member of that name (`extension_call` of the usage settings, `DefinitionInfo.has_receiver`, `ImportBinder.receiver_name_set()`, `ImportBinder.package_member_name_set()`)
+- Kotlin: `"$name"` in a string is a usage of `name`, a type written with the type it is a member of (`Shape.Empty`) is listed and linked as that member, and a name written through the companion object of a class (`import a.Shape.Companion.unit`) is linked to the member
+- C/C++: a function written with a macro that takes its name (`TEST_IMPL(ping) { ... }`) is the definition `ping`, and a C++ conversion operator the definition `operator bool`
+- C/C++: an upper-case macro name written as a line of its own (`NODE_FIELDS` in a struct body, `BEGIN_DECLS`) or next to the type of a declaration (`EXPORT int f(void);`, `int STDCALL f(int a);`) is read as spaces where the grammar misreads it and that leaves less of the file unread; the name stays a usage of the macro on its line (`parsers/c_macro.py`)
+- C++: the member and the base class a constructor initializes (`Circle::Circle() : Shape(1), r_(0) {}`) are usages (`identifier_parent_dict` of the usage settings)
+- Java: the constants of an interface are definitions (`constant_declaration`)
+- Java: a type written with the type it is a member of (`Circle.Builder`), an annotation written that way (`@Shape.Marker`) and a method reference (`Shape::area`) are listed and linked as that member; a type written with its package (`com.acme.model.Circle`) is listed as `Circle` (`attribute_skip_parent_types`, `package_path_types` of the usage settings)
+- TypeScript: a type written with a namespace import (`T.Options`) is listed and linked as that member
+- JS/TS: class members written with a private name (`#count`, `#check()`) are definitions
+- JS/TS: a module passed on as a member (`exports.util = require("./util")`, `module.exports = { util: require("./util") }`) is followed to that file (`imports.member_module_export_dict()`)
+- JS/TS: a name bound to the default export of a CommonJS module (`import util from "./util"`) is followed through the names the module exports (`ImportBinder.module_member_binding()`)
+- Python: the class a `case` pattern names (`case Point(x=0):`, `case core.Point():`) and a dotted constant in a pattern (`case Color.RED:`) are usages (`name_path_dict` of the usage settings)
+- Python: the names of an annotation written as a string (`e: "Engine"`, `-> "list[core.Config]"`) are usages; the arguments of `Literal[...]` are not (`annotation_string_dict`, `annotation_literal_names` of the usage settings)
+- Python: a `type` alias with type parameters (`type Pair[T] = tuple[T, T]`) is a definition
+- Rust: a parameter or a `let` variable written with its type is named after the type (`c: &Circle; c.area()` is `Circle.area`), also for a type the file defines itself (`typed_alias_parent_types` of the Rust usage settings)
+- A member written after `self` / `this`, and in Java, Kotlin and C/C++ a name written by itself inside a class, is linked to the member of the class it is written in, then of a class of the file named in the head of that class (`class Child(Base)`, `class B extends A`, `impl Runner for Config`), then of a class of the file made from it; `target_start_line` is the line of that member (`UsageInfo.is_member`, `ImportReferenceTarget.definition_line`, `definition_source.member_path_definition()`; `member_by_name` and `class_head_argument_skip` of the usage settings)
+- A variable declared in a block counts for that block: outside it, its name is a usage again (JS/TS `let` / `const` / `catch` / loop variables, Java, Kotlin, C/C++, Rust; `block_scope_types`, `function_binding_types` and `function_binding_token_types` of the usage settings). JS/TS `var` and function declarations count for the whole function
+- A field or a variable of the file declared with a type of the project is listed under its own name as well as under the type (`engine.run()` is `Engine.run` and `engine.run`; `TypedAlias.is_file_level`)
+- A variable of a function declared with a type is named after the type also when an import brings in a name spelled like the variable
+- Java: the variable of a `for (Shape s : shapes)` loop, of a `try (...)` resource, of `x instanceof Shape s` and of `case Shape s` is named after its type (`typed_alias_type_field_dict` of the usage settings)
+- Kotlin: a property declared in a primary constructor with its type (`class Car(val engine: Engine)`) is named after the type (`engine.run()` is `Engine.run`)
+- Kotlin: a file the grammar does not read as written is also parsed with the white space in front of a call of `get` that starts a row read as `;` (`val service by inject<Service>()` followed by `get("/path") { ... }`), and a function declaration with a body that the grammar reads as part of an ERROR node is a definition whose body is not searched
+- C/C++: an upper-case macro written after a declarator (`void Lock() ACQUIRE() { ... }`, `int size_ GUARDED_BY(mu_);`, `void Stop() NOEXCEPT_MACRO;`, `Status Read(int* out)` followed by `REQUIRES(mu_);`) is read as spaces where the grammar misreads it; the macro and the names written in its arguments stay usages on their lines
+- C/C++: a backslash in front of a line break written as `\r\n` continues the line (a string or a macro written over several lines)
+- C/C++: a variable made with arguments inside a function (`Engine e(1);`) and the variable of a range `for` (`for (Shape& s : shapes)`) are named after their type; a variable declared with a `typedef` name of the file (`typedef struct node { ... } node_t;`) is named after it
+- JS/TS: a class written as the value of a declaration or an assignment (`const Shape = class { ... }`, `module.exports = class { ... }`, `exports.Shape = class { ... }`) is a definition of type `class`, and its members are definitions
+- Rust: an associated type declared in a trait (`type Output;`) is a definition (`associated_type`)
+- Design documents: a prompt that exceeds the context window is reduced through more stages, in this order: caller source code, dependency summaries, summaries of large dependency symbols, dependency source code, the usage lists, summaries of the large definitions of the implementation file of a header, that implementation file, summaries of the large definitions of the file, summaries of runs of its lines (`doc_creator._PromptReducer`). A stage that changes nothing is passed over without a call
+- Design documents: `CODE_SUMMARY_PIECE_LINES` (default `200`), the lines summarized together when a file still exceeds the context window after its large definitions are summarized; a run starts where a definition starts, also in a source whose large definitions are summarized already, and the runs are summarized again while the source gets smaller. A value less than 1 stops the run before anything is analysed, unless `ENABLE_CODE_SUMMARY` is `False` (`doc_creator.check_code_summary_setting()`)
+- Design documents: the number of code blocks a reduction stage is about to summarize is printed (`Summarizing definitions (127): shell.c`)
+- Design documents: a code block whose summary prompt exceeds the context window is summarized in halves (`doc_creator._generate_by_half()`), and so is the summary of a document: each section is summarized by itself first
+
+### Changed
+- JS/TS: a name bound by `require()` or `await import()` (`const m = require("./m")`, `const { a, b: c } = require("./m")`, `const run = require("./m").run`) is no longer listed in `definitions`; a file that passes such a name on (`module.exports = { m }`) leads to the file the import brings it from
+- JS/TS: a name the file defines only as a member of another object (`req.accepts = function () {}`, `exports.run = ...`) is a usage after `this`, not when written by itself (`member_definition_types` of the usage settings)
+- C/C++: `typedef struct node { ... } node;` is listed once, as the struct; a typedef name that differs from the name of its struct, union or enum is listed as before
+- JS/TS: a namespace import written by itself or with a member the file does not export (`import * as ns from "./m"; ns`) no longer leads to the default export of the file; only the value of a CommonJS module (`module.exports = ...`) is followed that way (`ImportBinder.module_value_binding()`, in place of `default_binding()`)
+- Python, JS/TS, Rust: a name the file defines only as a member of a class is a usage after `self` / `this` (in Python also where it is written in the body of the class that defines it), not when written by itself: `open("x")` beside a method `open` is no usage of the method. In the arguments of a Rust macro, a method called on a value (`assert!(v.len() > 0)`) is a usage only after `self`
+- A name written by itself that several definitions of the file carry leads to a top-level one first, then to one written inside a module or namespace, and to a member of a class last
+- JS/TS: an export whose value is a name (`exports.run = run`, as before `module.exports = run`) is no definition; the named definition stands for the export
+- C/C++: a macro call written as a statement (`MODULE_INIT(setup);`, `DISALLOW_COPY(Shape);`), which the grammar reads as a declaration without a type, is a usage of the macro and no definition (`definitions.is_macro_call_declarator()`, `macro_declarator_types` of the usage settings)
+- C/C++: the declarations inside a statement the grammar reads outside a function (`if`, `for`, `while`, `switch`, `do`, `try`) and inside a block that is the body of no function are not definitions, unless the block follows the head of a namespace, a type or a linkage specification
+- Kotlin: an `enum_entry` is a definition only in the body of a class declared with `enum`
+- A name written with `::` is not named from a part that is a variable of a function (`log::Writer` beside a variable `log`)
+- Design documents: a definition that holds other definitions (a class) is no longer replaced by one summary; its large methods are, and the lines of the class around them are kept (`doc_creator._large_leaf_definition_list()` in place of `_select_outermost_large_definitions()`). A definition that shares a line with another one (several on one line, one starting on the last line of the one before it) is left to the summaries of runs of lines, and definitions of the same lines are summarized once under all their names. A summary replaces a code block only when it is shorter
+- Design documents: the sections of a file after the first start from the stage the section before them fit at (`doc_creator._generate_section()` in place of `_generate_section_with_fallback()`)
+- Design documents: `CODE_SUMMARY_TRIGGER_LINES` counts a line longer than 80 characters as one line per 80 characters
+- `LLMClient.generate()` returns `None` for a reply without text
+- `ts_parser.class_macro_cache` is `ts_parser.blank_macro_cache`: it holds every macro name read as spaces
+- `extract_usages()` reads each node through a handler looked up by its node type
+
+### Fixed
+- The declarations inside the body of a function that gives no name were listed as definitions of the file (C/C++: a function written with a macro, a conversion operator; JS/TS: a method named by a string or a computed key; Kotlin: a secondary constructor); a definition whose name the grammar reads as missing is no longer listed with an empty name
+- C++: inside a member function defined outside its class and inside a class with a base class, the name of the class or of a base class led to its constructor, so `int Shape::count() { ... }` was linked to the constructor declaration in place of the declaration of `count`
+- C/C++: the line of a macro name read as spaces was counted from the start of the file once per name
+- A member written after `self` / `this` led to the first definition of its name in the file, also when the class it is written in defines the member, and to a definition that is no member (a function of the file named like an attribute)
+- A variable declared in a block hid the usages of its name in the whole function (`for (const path of list) { ... }` followed by `path.join(...)`)
+- A member written after `self` / `this` was named after the type of a parameter or local variable of the same name
+- Java: `Shape::area` listed `area` by itself as well, which led to a method `area` of the file
+- Kotlin: the name of a parameter of a primary constructor (`class P(val b: Int)`) was a usage of a definition `b` the file sees
+- C++: the name of a parameter declared as a reference (`void f(const Key& key);`) was a usage of a definition `key` the file sees
+- Rust: `type Output;` in a trait was a usage of an associated type of the same name
+- Design documents: an LLM call that failed for another reason than the context window (a rate limit past its retries, a connection error) was handled like an overflow, so the section was written from a reduced prompt; such a call now ends the section, and a failed summary call no longer replaces the code by a note
+- Design documents: a prompt stayed too long, and the file got no document, when the implementation file of a header was large, when the file had many small definitions or long lines and no large definition, or when it used many small dependency symbols
+- Design documents: a summary prompt that exceeded the context window left the summary empty, and the document was generated again by every run
+- Design documents: a request the provider refused for its size (HTTP 413, `request_too_large`, a `Request too large` rate limit error) ended the section, the rate limit error after `MAX_RETRIES` waits; it is now handled like a prompt that exceeds the context window (`LLMClient` raises `ContextWindowExceededError`)
+- A reply whose text is missing raised an exception that ended the document of the file
+
 ## 0.4.0 - 2026-10-04
 
 ### Added

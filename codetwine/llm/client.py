@@ -14,6 +14,30 @@ from codetwine.config.settings import (
 
 logger = logging.getLogger(__name__)
 
+# Texts of an error by which a provider refuses a request for its size (lower case)
+_REQUEST_TOO_LARGE_TEXT_TUPLE = (
+    "request_too_large",
+    "request too large",
+    "request entity too large",
+    "payload too large",
+)
+
+
+def _is_request_too_large(error: Exception) -> bool:
+    """Tell whether a provider refused a request for its size.
+
+    Args:
+        error: The exception of a failed call.
+
+    Returns:
+        True for HTTP status 413, and for an error whose text holds one of
+        _REQUEST_TOO_LARGE_TEXT_TUPLE.
+    """
+    if getattr(error, "status_code", None) == 413:
+        return True
+    error_text = str(error).lower()
+    return any(text in error_text for text in _REQUEST_TOO_LARGE_TEXT_TUPLE)
+
 
 class LLMClient:
     """Async LLM API wrapper via litellm.
@@ -56,7 +80,7 @@ class LLMClient:
 
         Makes one call, and on 429 (rate limit exceeded) errors waits RETRY_WAIT
         seconds and retries up to MAX_RETRIES times. Returns None when every attempt
-        fails.
+        fails, and when the reply holds no text.
 
         Args:
             prompt: The prompt string to send to the LLM.
@@ -64,6 +88,11 @@ class LLMClient:
 
         Returns:
             The generated text, or None on failure.
+
+        Raises:
+            ContextWindowExceededError: When the prompt exceeds the context window of
+                the model, and when the provider refuses the request for its size
+                (_is_request_too_large), a rate limit error included.
         """
         for attempt in range(MAX_RETRIES + 1):
             try:
@@ -83,9 +112,15 @@ class LLMClient:
                 # The text is returned as it is when the output was cut at max_tokens
                 if response.choices[0].finish_reason == "length":
                     logger.warning(f"LLM output was cut at {max_tokens} tokens (DOC_MAX_TOKENS)")
-                return response.choices[0].message.content.strip()
+                text = (response.choices[0].message.content or "").strip()
+                if not text:
+                    logger.error("LLM returned no text")
+                    return None
+                return text
 
-            except litellm.RateLimitError:
+            except litellm.RateLimitError as e:
+                if _is_request_too_large(e):
+                    raise self._too_large_error(e) from e
                 # Wait and retry on rate limit exceeded
                 if attempt < MAX_RETRIES:
                     logger.warning(f"Rate limit exceeded. Retrying in {RETRY_WAIT} seconds")
@@ -98,9 +133,26 @@ class LLMClient:
                 raise
 
             except openai.APIError as e:
+                if _is_request_too_large(e):
+                    raise self._too_large_error(e) from e
                 # Do not retry on API errors; fail immediately
                 logger.error(f"LLM call failed: {e}")
                 return None
+
+    def _too_large_error(self, error: Exception) -> ContextWindowExceededError:
+        """Return the ContextWindowExceededError standing for a request refused for its size.
+
+        Args:
+            error: The exception of the failed call.
+
+        Returns:
+            The exception to raise in its place.
+        """
+        return ContextWindowExceededError(
+            message=str(error),
+            model=self.model,
+            llm_provider=getattr(error, "llm_provider", None) or "",
+        )
 
     async def generate(
         self, prompt: str, max_tokens: int = DOC_MAX_TOKENS
@@ -113,6 +165,10 @@ class LLMClient:
 
         Returns:
             The generated text, or None if generation failed.
+
+        Raises:
+            ContextWindowExceededError: When the prompt exceeds the context window of the
+                model, or the provider refuses the request for its size.
         """
         if not prompt:
             return None

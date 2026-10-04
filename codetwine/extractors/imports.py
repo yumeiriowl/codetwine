@@ -518,6 +518,58 @@ def module_export_list(root_node: Node) -> list[str]:
     return module_list
 
 
+def has_module_export(root_node: Node) -> bool:
+    """Return whether a JS/TS file gives its value by an assignment to module.exports.
+
+    Args:
+        root_node: The AST root node of the file.
+
+    Returns:
+        True when a top-level statement assigns to module.exports itself.
+    """
+    for statement in root_node.children:
+        if statement.type != "expression_statement":
+            continue
+        export_assignment = commonjs_export_assignment(statement)
+        if export_assignment is not None and export_assignment[0] == DEFAULT_EXPORT_NAME:
+            return True
+    return False
+
+
+def member_module_export_dict(root_node: Node) -> dict[str, str]:
+    """Return the modules a JS/TS file passes on as members of its own value.
+
+    exports.util = require("./util");                  -> {"util": "./util"}
+    module.exports = { Engine: require("./engine") };  -> {"Engine": "./engine"}
+
+    Args:
+        root_node: The AST root node of the file.
+
+    Returns:
+        {exported name: module string}.
+    """
+    module_dict: dict[str, str] = {}
+    for statement in root_node.children:
+        if statement.type != "expression_statement":
+            continue
+        export_assignment = commonjs_export_assignment(statement)
+        if export_assignment is None:
+            continue
+        export_name, value_node = export_assignment
+        if export_name != DEFAULT_EXPORT_NAME:
+            module = require_module(value_node)
+            if module is not None:
+                module_dict[export_name] = module
+        elif value_node.type == "object":
+            for pair_node in value_node.children:
+                key_node = pair_node.child_by_field_name("key")
+                member_node = pair_node.child_by_field_name("value")
+                module = require_module(member_node) if member_node is not None else None
+                if pair_node.type == "pair" and key_node is not None and module is not None:
+                    module_dict[key_node.text.decode("utf-8")] = module
+    return module_dict
+
+
 def _string_list(node: Node) -> list[str] | None:
     """Return the strings of a list, tuple or single string written as constants (Python).
 

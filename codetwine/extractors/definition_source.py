@@ -3,8 +3,10 @@ from collections import OrderedDict
 from codetwine.parsers.ts_parser import parse_cache, parse_file, read_utf8_content
 from codetwine.extractors.definitions import (
     ATTACHED_DEFINITION_TYPE_SET,
+    COMPANION_NAME,
     DefinitionInfo,
     extract_definitions,
+    member_owner_dict,
     select_top_level_definitions,
 )
 from codetwine.extractors.r_source import r_definition_text
@@ -30,7 +32,7 @@ _definition_list_cache: dict[str, list[DefinitionInfo]] = {}
 # Lookups of the definition lists a definition was looked up in, by the id of the list:
 # (the list, {name: its definitions in line order}, ids of its top-level definitions)
 _definition_index_cache: dict[
-    int, tuple[list[DefinitionInfo], dict[str, list[DefinitionInfo]], set[int]]
+    int, tuple[list[DefinitionInfo], dict[str, list[DefinitionInfo]], set[int], set[int]]
 ] = {}
 
 
@@ -43,7 +45,7 @@ def clear_definition_source_cache() -> None:
 
 def _definition_index(
     definition_list: list[DefinitionInfo],
-) -> tuple[dict[str, list[DefinitionInfo]], set[int]]:
+) -> tuple[dict[str, list[DefinitionInfo]], set[int], set[int]]:
     """Return the lookups of a definition list, built once per list.
 
     Args:
@@ -51,7 +53,8 @@ def _definition_index(
 
     Returns:
         ({name: the definitions of that name in line order}, the ids of the
-        definitions select_top_level_definitions() keeps).
+        definitions select_top_level_definitions() keeps, the ids of the definitions
+        that are members of a class (member_owner_dict)).
     """
     cache_entry = _definition_index_cache.get(id(definition_list))
     if cache_entry is None or cache_entry[0] is not definition_list:
@@ -61,9 +64,10 @@ def _definition_index(
         cache_entry = (
             definition_list, name_dict,
             {id(definition) for definition in select_top_level_definitions(definition_list)},
+            set(member_owner_dict(definition_list)),
         )
         _definition_index_cache[id(definition_list)] = cache_entry
-    return cache_entry[1], cache_entry[2]
+    return cache_entry[1], cache_entry[2], cache_entry[3]
 
 
 def file_definition_list(absolute_path: str, definition_dict: dict[str, str]) -> list[DefinitionInfo]:
@@ -142,12 +146,14 @@ def _find_by_path(
     The first part is looked up among all definitions; each further part among the
     definitions written inside the definitions the part before it named (a class and
     its members; a Rust struct and each of its impl blocks). The walk stops at the
-    first part that names nothing.
+    first part that names nothing; a part COMPANION_NAME that names nothing is passed
+    over (Kotlin: the companion object of a class written without a name).
 
     Examples:
         ["Settings", "new"]   -> fn new inside impl Settings
         ["Mode", "Slow"]      -> enum Mode (Slow is no definition)
         ["Delete", "Handler", "Run"] -> Run inside Handler inside Delete
+        ["Shape", "Companion", "unit"] -> unit inside Shape
 
     Args:
         definition_list: Definitions of a file, sorted by start_line.
@@ -156,10 +162,10 @@ def _find_by_path(
     Returns:
         The definition the last part reached names: of several, one that defines the
         name itself (not in ATTACHED_DEFINITION_TYPE_SET) first, for the first part a
-        top-level one first, then the first in line order. None when the first part
-        names nothing.
+        top-level one first and a member of a class last, then the first in line
+        order. None when the first part names nothing.
     """
-    name_dict, top_level_id_set = _definition_index(definition_list)
+    name_dict, top_level_id_set, member_id_set = _definition_index(definition_list)
     last_definition: DefinitionInfo | None = None
     owner_list: list[DefinitionInfo] | None = None
     for part in part_list:
@@ -168,14 +174,59 @@ def _find_by_path(
             if owner_list is None or _is_inside(definition, owner_list)
         ]
         if not match_list:
+            if part == COMPANION_NAME and owner_list is not None:
+                continue
             break
         own_list = [
             definition for definition in match_list
             if definition.type not in ATTACHED_DEFINITION_TYPE_SET
         ]
         if owner_list is None:
-            # The first part names a top-level definition before a member of the same name
-            own_list.sort(key=lambda definition: id(definition) not in top_level_id_set)
+            # The first part names a top-level definition before one written inside
+            # another definition, and a member of a class last
+            own_list.sort(key=lambda definition: (
+                id(definition) not in top_level_id_set, id(definition) in member_id_set,
+            ))
+        last_definition = (own_list or match_list)[0]
+        owner_list = match_list
+    return last_definition
+
+
+def member_path_definition(
+    definition_list: list[DefinitionInfo], first_definition: DefinitionInfo, part_list: list[str],
+) -> DefinitionInfo:
+    """Follow the parts written after a definition through the definitions inside it.
+
+    Args:
+        definition_list: Definitions of a file, sorted by start_line.
+        first_definition: The definition the first part of a name names.
+        part_list: The parts written after it.
+
+    Returns:
+        The definition the last part reached names: each part is looked up among the
+        definitions written inside the definition the part before it named, and inside
+        the definitions of ATTACHED_DEFINITION_TYPE_SET of its name (Rust: the impl
+        blocks of a struct). The walk stops at the first part that names nothing.
+    """
+    name_dict = _definition_index(definition_list)[0]
+    last_definition = first_definition
+    owner_list = [first_definition, *(
+        definition for definition in name_dict.get(first_definition.name, ())
+        if definition.type in ATTACHED_DEFINITION_TYPE_SET and definition is not first_definition
+    )]
+    for part in part_list:
+        match_list = [
+            definition for definition in name_dict.get(part, ())
+            if _is_inside(definition, owner_list)
+        ]
+        if not match_list:
+            if part == COMPANION_NAME:
+                continue
+            break
+        own_list = [
+            definition for definition in match_list
+            if definition.type not in ATTACHED_DEFINITION_TYPE_SET
+        ]
         last_definition = (own_list or match_list)[0]
         owner_list = match_list
     return last_definition

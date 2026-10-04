@@ -213,8 +213,9 @@ The per-file JSON files are written in every case.
 |--------|------|------------|
 | `ENABLE_LLM_DOC` | Enable/disable LLM design document generation (`True` / `False`) | `True` |
 | `SUMMARY_MAX_CHARS` | Maximum character count for summaries | `600` |
-| `ENABLE_CODE_SUMMARY` | Summarize large code with the LLM when a prompt exceeds the model context window (`True` / `False`). When `False`, such a prompt is only reduced by dropping caller/callee context | `True` |
-| `CODE_SUMMARY_TRIGGER_LINES` | Line span above which a definition or dependency symbol is summarized | `40` |
+| `ENABLE_CODE_SUMMARY` | Summarize large code with the LLM when a prompt exceeds the model context window (`True` / `False`). When `False`, such a prompt is only reduced by dropping context | `True` |
+| `CODE_SUMMARY_TRIGGER_LINES` | Line count above which a definition or dependency symbol is summarized. A line longer than 80 characters counts as one line per 80 characters | `40` |
+| `CODE_SUMMARY_PIECE_LINES` | Lines of source summarized together when a file still exceeds the context window after its large definitions are summarized (1 or more) | `200` |
 | `CODE_SUMMARY_MAX_CHARS` | Character limit for a single code behavior summary | `400` |
 | `EXCLUDE_PATTERNS` | Directory and file name patterns to exclude (comma-separated, fnmatch format). Every text file that is not excluded is collected and copied to the output: add secrets, data files, lock files and an output directory inside the project | `__pycache__,.git,.github,.venv,node_modules` |
 | `SOURCE_ENCODING` | Encodings tried, in order, on a source file that has no BOM and is not valid UTF-8 (comma-separated Python codec names). The first one that decodes the file is used; list `euc_jp` before `cp932` | None |
@@ -232,7 +233,9 @@ The per-file JSON files are written in every case.
    - Processes files in dependency order, from files with no dependencies toward dependent files
    - Generates each document section by section according to the template (`doc_template.json`), from the source code, the dependency information and the summaries of the files it depends on
    - Generates a summary for each file
-   - A prompt that exceeds the model context window is retried with less context (see `ENABLE_CODE_SUMMARY`)
+   - A prompt that exceeds the model context window is retried with less context (see `ENABLE_CODE_SUMMARY`). The sections of such a file are written from summaries of its large definitions, or of runs of its lines
+   - Each summary is one more LLM call: one per large definition, and one per run of `CODE_SUMMARY_PIECE_LINES` lines
+   - A provider that cuts a long prompt without an error gives a document written from the cut prompt
 4. **Save all outputs**
    - Saved to `<output directory>/<project name>`
    - All dependencies and design documents are consolidated into a single JSON (`project_knowledge.json`), a SQLite database (`project_knowledge.sqlite`), or both, as `KNOWLEDGE_FORMAT` selects
@@ -268,7 +271,7 @@ Dependencies are extracted by static analysis of the source text. They may be mi
   - JavaScript/TypeScript: `import(variable)`
   - Java: `Class.forName("com.example.Foo")`
 - **Detected encodings**: A file that has no BOM, is not valid UTF-8 and is not decoded by `SOURCE_ENCODING` is decoded with a detected encoding, which can be wrong: comments and strings may be garbled and definitions may be lost. Such files are listed in `detected_encoding_dict` and carry `detected_encoding` in their `file_dependencies.json`. Set `SOURCE_ENCODING` for them
-- **`self` / `this`**: `self.name`, `cls.name` and `this.name` are linked to the definition `name` of the same file, whatever class it is written in (Python, JavaScript/TypeScript, Java, Kotlin, C++, Rust)
+- **`self` / `this`**: `self.name`, `cls.name` and `this.name` are not linked to a member inherited from a class of another file. Outside a class (`this` in a function assigned to a prototype, in an object literal) they are linked to the definition `name` of the file, whatever class it is written in (Python, JavaScript/TypeScript, Java, Kotlin, C++, Rust)
 
 ### Python
 
@@ -284,33 +287,37 @@ Dependencies are extracted by static analysis of the source text. They may be mi
 - **Bundler aliases**: `resolve.alias` of `vite.config.*` / `webpack.config.*` is read only when an alias is written as a string, `path.resolve(__dirname, ...)`, `path.join(__dirname, ...)` or `fileURLToPath(new URL("...", import.meta.url))`
 - **Imports not bound to a name**: A `require()` or `import()` whose result the statement does not bind to a name adds the dependency on the file only, except `require("./m").run()` and the callback of `import("./m").then((m) => ...)`
 - **Method calls on values**: A method called on a variable is listed under a class (`const s = new Store(); s.get()` is `Store.get`) only when the variable is given the object with `new` inside the same function or is annotated with the class in TypeScript. The class is the one of the nearest assignment above the line, whichever branch it is in. A variable given any other value is not followed
-- **Definitions**: The declarations inside a callback (`describe("...", function () { ... })`) are not listed as definitions. An unnamed default export (`export default { ... }`) is listed as the definition `default`
+- **Constructor parameter properties**: A property declared in the parameters of a TypeScript constructor (`constructor(public r: number)`) is not a definition; `this.r` is not linked
+- **Definitions**: The declarations inside a callback (`describe("...", function () { ... })`) are not listed as definitions. An unnamed default export (`export default { ... }`) is listed as the definition `default`. A function assigned to a member (`Shape.make = function () {}`) is listed as `make`, and `Shape.make()` is linked to `Shape`
 
 ### Java / Kotlin
 
 - **Packages**: A file of a wildcard import or of the same package is a dependency only when one of its names is used. A file without a `package` statement sees only the files of its directory that have none either
 - **Method calls**: A method called on a variable is listed under the type the variable is declared with (`User u; u.getName()` is `User.getName`). A variable whose type is not written (`var`, `val u = ...`) and a chain of calls are not followed
-- **Kotlin class bodies on one line**: A class, object or interface whose body with members is written on one line (`class A { fun f() {} }`) is not parsed by the grammar. Surrounding code is still analyzed
+- **Members written by their name alone**: A member inherited from a class of another file is not linked. A name that neither the class nor a class of the same file it is made from has is linked to the first definition of that name in the file
+- **Constructor properties and record components**: A property declared in a Kotlin primary constructor (`class Car(val engine: Engine)`) and a component of a Java record are not definitions; `car.engine` is linked to `Car`
+- **Kotlin extension functions**: `value.name()` and `value.name` are linked to an extension function or property `name` the file sees, whatever the type of `value` is. A name that a class of the project also has as a member is not linked this way
+- **Unsupported Kotlin syntax**: A keyword used as a name (`final = true`), `$$"..."` strings and `when` guards are not parsed. Definitions around such a place may be missing
 
 ### C / C++
 
 - **Include paths**: `#include` is looked up from the project root and the directory of the file, then as the nearest project file whose path ends with the included path. Include paths added via CMake or Makefile `-I` options are not read
 - **Functions of the same name**: A function a header declares is linked to every file that includes the header and defines it (per-platform sources, a test that defines it again). A variable declared `extern` is linked to the header only
 - **Namespaces**: `using namespace` is not evaluated, and a name is linked without its namespaces (`geo::Shape::count()` is listed as `Shape::count`), so equal names of different namespaces are not told apart
-- **Members**: A member of a base class written through a `typedef` or a template parameter is not linked
-- **Preprocessor**: `#if` / `#ifdef` are not evaluated; every branch is analyzed. Definitions produced by macro expansion are not analyzed. A declaration written with a macro the grammar does not read (`EXPORT int f(void);`, `void f() NOEXCEPT_MACRO { ... }`) may be listed without its type or under the name of the macro. A `/* */` comment inside a `#define` of several lines ends the macro for the grammar, and the lines after it are read as code of the file
+- **Members**: A member of a base class written through a `typedef` or a template parameter is not linked. A member written through a `typedef` of a type declared elsewhere (`typedef struct node node_t;` with `struct node { ... };`) is linked to the `typedef`
+- **Preprocessor**: `#if` / `#ifdef` are not evaluated; every branch is analyzed. Definitions produced by macro expansion are not analyzed. A declaration written with a macro (`TEST(a, b) { ... }`) may be listed under the name of the macro, except an upper-case macro on a line of its own, next to the type of a declaration (`EXPORT int f(void);`) or after a declarator (`void f() LOCKS(mu) { ... }`, `int n GUARDED_BY(mu);`). A macro call written as a statement (`MODULE_INIT(setup);`) is a usage of the macro, not a definition. The declarations of a function whose head is not parsed are not listed as definitions. The lines after a `/* */` comment inside a `#define` of several lines are read as code of the file
 
 ### SQL
 
 - **Object references**: Names are compared as written: a reference that differs in case or quoting from the `CREATE` statement is not detected
-- **Unsupported syntax**: PostgreSQL-style `CREATE PROCEDURE`, `CALL`, `GRANT` and psql `\i` are not parsed by the grammar. Surrounding statements are still analyzed
+- **Unsupported syntax**: PostgreSQL-style `CREATE PROCEDURE`, `CALL`, `GRANT` and psql `\i` are not parsed. Surrounding statements are still analyzed, except after a PL/pgSQL function body that is not parsed: the statements that follow it can be missing from the definitions
 
 ### Rust
 
 - **Module paths**: A path starting with a crate name is resolved only when that crate's `Cargo.toml` is in the project. A `mod` declaration inside an inline module (`mod a { mod b; }`) and `#[cfg_attr(..., path = "...")]` are not resolved. A name a module only re-exports from outside the project (`pub use std::collections::HashMap;`) is not linked
 - **Usage names**: `Self::new()` inside an `impl` block is listed as `Type::new`, and `Self::NAME` inside a `trait` as `Trait::NAME`
-- **Macros**: Code generated by macros (`macro_rules!`, procedural macros, `include!`) is not analyzed. In the arguments of a macro call only the paths written with `::` and the plain names are linked. A macro exported with `#[macro_export]` is not linked to the file that defines it
-- **Method calls on values**: `value.method()` is not linked to the type of `value`. A call written with the type (`Type::method()`) is
+- **Macros**: Code generated by macros (`macro_rules!`, procedural macros, `include!`) is not analyzed. In the arguments of a macro call only the paths written with `::` and the plain names are linked; a method called on a value there (`assert!(v.len() > 0)`) is linked only after `self`. A macro exported with `#[macro_export]` is not linked to the file that defines it
+- **Method calls on values**: A method called on a parameter or a `let` variable is listed under the type it is declared with (`c: &Circle; c.area()` is `Circle.area`). A variable whose type is not written and a field (`self.shape.area()`) are not followed
 - **Patterns**: A name bound by `if let` / `while let` counts as bound in the whole `if` / `while` expression, its `else` branch included
 - **Conditional compilation**: `#[cfg(...)]` is not evaluated. Every alternative module is a dependency
 
@@ -321,8 +328,8 @@ Dependencies are extracted by static analysis of the source text. They may be mi
 - **Extension methods**: `value.Method()` is linked to every extension method of that name and number of arguments the line sees, whatever the type of `value` is
 - **Method calls on values**: Other than extension methods, `value.Method()` is not linked to the type of `value`. A call written with the type (`Type.Method()`) is. A member inherited from a base type is not linked by its name alone
 - **Project files**: `ProjectReference`, `<Using Include="..." />` and `ImplicitUsings` of a `.csproj` file are not read
-- **Conditional compilation**: `#if` is not evaluated; the code of every branch is analyzed. A directive that splits a declaration or statement is not parsed by the grammar; the code around it is still analyzed
-- **Unsupported syntax**: `extension` blocks, `allows ref struct` and null-conditional assignment (`a?.b = c`) are not parsed by the grammar. Surrounding code is still analyzed
+- **Conditional compilation**: `#if` is not evaluated; the code of every branch is analyzed. A directive that splits a declaration or statement is not parsed; the code around it is still analyzed
+- **Unsupported syntax**: `extension` blocks, `allows ref struct` and null-conditional assignment (`a?.b = c`) are not parsed. Surrounding code is still analyzed
 - **Generated code**: Code produced by source generators, and `.razor` / `.cshtml` files, are not analyzed
 
 ### COBOL
@@ -331,8 +338,8 @@ Dependencies are extracted by static analysis of the source text. They may be mi
 - **Names**: A name several copybooks define is linked to the first of them in the order of the `COPY` statements. A name qualified with `OF` / `IN` that matches no definition is linked as an unqualified one. Of an `EXEC` block other than `EXEC SQL`, every word is read as a name
 - **COPY**: The text of a copybook is not expanded into the file that includes it: a copybook is analyzed as a file of its own. A name with a directory part is looked up by its file name. With `REPLACING`, only an operand whose texts are one word each (`==:TAG:== BY ==WS==`, `OLD-NAME BY NEW-NAME`, `LEADING` / `TRAILING`) is applied to the names
 - **CALL**: A `CALL` of a data item leads only to the programs named by the literals the item is given in the same file (`VALUE` clause, `MOVE "name" TO item`); a name built at run time is not resolved
-- **Source format**: Without a `>>SOURCE` / `$SET SOURCEFORMAT` directive, the format of a file and whether its code runs past column 72 are judged from its lines. In free format, an indented line that starts with `*` is read as code only when the line before it ends with an operand
-- **Statements the grammar does not read**: In a statement the grammar does not read, every word that is a name of a definition counts as a usage, and a paragraph that starts in the middle of a sentence (no period before it) is not a definition
+- **Source format**: Without a `>>SOURCE` / `$SET SOURCEFORMAT` directive, the format of a file and whether its code runs past column 72 are inferred. In free format, an indented line that starts with `*` is read as code only when the line before it ends with an operand
+- **Unparsed statements**: In a statement that is not parsed, every word that is a name of a definition counts as a usage, and a paragraph that starts in the middle of a sentence (no period before it) is not a definition
 - **Debug lines and compiler directives**: Lines with `D` in the indicator column, `>>` directives, `REPLACE` statements and conditional compilation are not evaluated
 
 ### R
@@ -508,7 +515,7 @@ Per-file definition and dependency information.
 |-----------|-----|------|
 | `file` | string | Path of the source file copied to the output directory |
 | `language` | string | Extension whose language settings the file is analyzed with, in lower case (`py`, `cbl`, ...; `cpy` for a copybook of another extension or without one that a `COPY` statement names). `""` for a file without a language, and for a `.Rmd` / `.qmd` file without an R code chunk |
-| `detected_encoding` | string\|null | Encoding the file was decoded with when it had no BOM, was not valid UTF-8 and was not decoded by `SOURCE_ENCODING` (the encoding charset-normalizer detects; `""` when it was read as UTF-8 with invalid bytes replaced). `null` otherwise, and for a file without a language |
+| `detected_encoding` | string\|null | Encoding the file was decoded with when it had no BOM, was not valid UTF-8 and was not decoded by `SOURCE_ENCODING` (`""` when it was read as UTF-8 with invalid bytes replaced). `null` otherwise, and for a file without a language |
 | `definitions[].name` | string | Function/class name |
 | `definitions[].type` | string | Definition type (tree-sitter node type, varies by language. Python: `function_definition`, `class_definition` / Java: `class_declaration`, `method_declaration` / JS/TS: `function_declaration`, `class_declaration` / SQL: `create_table`, `create_view` / Rust: `function_item`, `struct_item`, `impl_item` / C#: `class_declaration`, `method_declaration`, `property_declaration` / R: `function_definition`, `binary_operator`, `call`, `argument`, etc.) |
 | `definitions[].start_line` | int | Start line number. Every line number counts from 1, and a line ends at `\n`, `\r\n` or a lone `\r` |
@@ -562,7 +569,7 @@ Per-file design document.
 | `sections[].content` | string | Section body (Markdown format) |
 | `source_hash` | string | SHA256 hash of the source file the document was generated from |
 
-In the `definitions` section, each definition starts with a level-2 heading holding only the definition name in backticks (`` ## `parse_args` ``).
+With the templates of this repository, each definition in a section starts with a level-2 heading holding only the definition name in backticks (`` ## `parse_args` ``).
 
 ## 🎨 Customizing the Design Document Template
 
@@ -602,7 +609,7 @@ You can manually edit the output `doc.md` and have it automatically reflected in
 
 Notes for editing:
 
-- Do not delete or rename `## Section heading` lines
+- Do not delete or rename `# Section heading` lines
 - The body text below section headings can be freely edited
 
 ## ⏭️ Running Without Design Document Generation
@@ -617,9 +624,7 @@ Dependency information (`file_dependencies.json` and file copies) is still gener
 
 ## 💡 Usage Example: RLM QA Agent
 
-`examples/rlm_qa/` contains a sample that performs interactive Q&A against a knowledge file. It uses dspy's RLM and PythonInterpreter to generate answers by manipulating data with Python code.
-
-The agent receives the file graph and one summary per file, and fetches definitions, source code and design documents per file through tools (`get_file_detail`, `search_text`, `read_source_file`, `get_files_using`, `graph_search`).
+`examples/rlm_qa/` contains a sample that performs interactive Q&A against a knowledge file with dspy's RLM.
 
 ### Sample Output
 
