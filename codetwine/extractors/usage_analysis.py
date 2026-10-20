@@ -131,6 +131,17 @@ def _cobol_own_range_function(
     return cobol_range_list
 
 
+def _jcl_own_range_function(
+    definition_list: list[DefinitionInfo], root_node: Node | CobolSource,
+) -> Callable[[CobolReferenceTarget], list[tuple[int, int]]]:
+    """Return the function giving no lines for a JCL reference: each one is kept."""
+    def jcl_range_list(target: CobolReferenceTarget) -> list[tuple[int, int]]:
+        """Return no lines."""
+        return []
+
+    return jcl_range_list
+
+
 def _r_own_range_function(
     definition_list: list[DefinitionInfo], root_node: Node | CobolSource,
 ) -> Callable[[RReferenceTarget], list[tuple[int, int]]]:
@@ -193,6 +204,7 @@ def _name_own_range_function(
 # the definition it names
 _OWN_RANGE_FUNCTION_DICT: dict[str, Callable[..., Callable[..., list[tuple[int, int]]]]] = {
     "cobol":  _cobol_own_range_function,
+    "jcl":    _jcl_own_range_function,
     "r":      _r_own_range_function,
     "csharp": _name_own_range_function,
     "import": _name_own_range_function,
@@ -250,9 +262,9 @@ def _group_same_file_target_list(
 def _cobol_definition_function(
     project_dir: str,
 ) -> Callable[[CobolReferenceTarget], _TargetDefinition]:
-    """Return the function giving the definition a COBOL reference resolved to."""
+    """Return the function giving the definition a COBOL or JCL reference resolved to."""
     def cobol_definition(target: CobolReferenceTarget) -> _TargetDefinition:
-        """Return the definition a COBOL reference resolves to, with its lines as text."""
+        """Return the definition a COBOL or JCL reference resolves to, with its lines as text."""
         if target.definition is None:
             return _NO_DEFINITION
         target_source = parse_file(os.path.join(project_dir, target.file_rel))[0]
@@ -334,6 +346,7 @@ def _source_target_definition(
 # definition or the definition is not found)
 _TARGET_DEFINITION_FUNCTION_DICT: dict[str, Callable[[str], Callable[..., _TargetDefinition]]] = {
     "cobol":  _cobol_definition_function,
+    "jcl":    _cobol_definition_function,
     "r":      _r_definition_function,
     "csharp": _csharp_definition_function,
     "import": _import_definition_function,

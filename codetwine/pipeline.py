@@ -343,7 +343,7 @@ async def process_all_files(
             base_output_dir, all_file_list, knowledge_db_path, symbol_deps, summary_map,
         )
 
-    # Clear parse result cache, Rust module tree cache, COBOL file index and reference
+    # Clear parse result cache, Rust module tree cache, COBOL and JCL file index and reference
     # caches, C# namespace index and reference caches and R name index and reference
     # caches to free memory
     parse_cache.clear()

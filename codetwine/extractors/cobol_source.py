@@ -99,8 +99,8 @@ class CobolReference:
 class CobolImport:
     """One statement of a COBOL file that names another file."""
 
-    kind: str               # COPY_KIND / CALL_KIND
-    name: str               # Name of the copybook or of the program
+    kind: str               # COPY_KIND / CALL_KIND (JCL: also PROC_KIND / INCLUDE_KIND)
+    name: str               # Name of the copybook, program, procedure or member
     line: int               # Line of the statement (1-based)
     library: str = ""       # Library name of COPY ... OF library
     # REPLACING operands of a COPY statement as (position, replaced text, replacement text)

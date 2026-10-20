@@ -194,11 +194,11 @@ class DefinitionInfo:
     type: str                                     # AST node type ("function_definition" / "expression_statement", etc.)
     start_line: int                               # Start line number of the definition (1-based)
     end_line: int                                 # End line number of the definition
-    name_line: int | None = None                  # Line the name is written on (COBOL, BMS)
+    name_line: int | None = None                  # Line the name is written on (COBOL, BMS, JCL)
     level: int | None = None                      # Level number of a data item (COBOL, BMS)
     is_group: bool | None = None                  # Whether a data item is a group item (COBOL, BMS)
     # Byte range of the definition in the UTF-8 text parse_file() returns; None for a
-    # COBOL, BMS or R definition
+    # COBOL, BMS, JCL or R definition
     start_byte: int | None = None
     end_byte: int | None = None
     # Whether the definition is declared for values of another type (Kotlin: an
@@ -214,7 +214,8 @@ def extract_definitions(
 
     For a CobolSource its definitions are returned: programs, ENTRY names, sections,
     paragraphs, data items, index names and descriptions of files, with the line of the
-    name, and the level number and whether it is a group item for a data item.
+    name, and the level number and whether it is a group item for a data item. For the
+    JclSource of a JCL file: jobs, procedures, steps and symbols, with the line of the name.
 
     For an R file (definition_dict is R_DEFINITION_DICT) the definitions
     r_definition_list() reads are returned: top-level assignments, the names setClass

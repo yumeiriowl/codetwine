@@ -104,6 +104,30 @@ def _decode_source(file_content: bytes) -> tuple[str, str, bool]:
     return file_content.decode("utf-8", errors="replace"), "", True
 
 
+def head_codec(head: bytes) -> str | None:
+    """Return the codec the first bytes of a file decode with, in the order read_source tries.
+
+    The codec of the BOM the bytes start with, else the first of UTF-8 and
+    SOURCE_ENCODING that decodes them; a character cut off at their end is allowed.
+
+    Args:
+        head: The first bytes of the file.
+
+    Returns:
+        The codec. None when none of them decodes the bytes.
+    """
+    bom_codec = _bom_codec(head)
+    if bom_codec is not None:
+        return bom_codec
+    for codec in ("utf-8", *SOURCE_ENCODING):
+        try:
+            codecs.getincrementaldecoder(codec)().decode(head, final=False)
+            return codec
+        except UnicodeDecodeError:
+            continue
+    return None
+
+
 def read_source(file_path: str) -> tuple[str, str]:
     """Read a text file and return its contents decoded, with the encoding used.
 
@@ -207,6 +231,27 @@ def read_source_text(file_path: str) -> str:
     """
     text = read_source(file_path)[0]
     return lone_cr_to_lf(text).replace("\r\n", "\n")
+
+
+def add_file_name(
+    name_dict: dict[str, list[str]], file_rel: str, name_list: list[str] | None = None,
+) -> None:
+    """Index a file by its upper-case file name, with and without its extension, and other names.
+
+    Examples:
+        "copy/CustRec.cpy" -> keys "CUSTREC.CPY" and "CUSTREC"
+
+    Args:
+        name_dict: Upper-case name -> relative paths of the files; the file is appended
+            to the list of each name that does not hold it yet.
+        file_rel: Relative path of the file.
+        name_list: Upper-case names the file is indexed by as well.
+    """
+    file_name = os.path.basename(file_rel).upper()
+    for name in dict.fromkeys((file_name, os.path.splitext(file_name)[0], *(name_list or ()))):
+        file_list = name_dict.setdefault(name, [])
+        if file_rel not in file_list:
+            file_list.append(file_rel)
 
 
 def _to_dir_name(filename: str) -> str:

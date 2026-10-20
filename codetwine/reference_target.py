@@ -3,6 +3,7 @@ from collections.abc import Callable
 from codetwine.cobol_file_index import CobolReferenceTarget, cobol_reference_target_list
 from codetwine.csharp_namespace_index import CsharpReferenceTarget, csharp_reference_target_list
 from codetwine.import_reference import ImportReferenceTarget, import_reference_target_list
+from codetwine.jcl_reference import jcl_reference_target_list
 from codetwine.r_name_index import RReferenceTarget, r_reference_target_list
 from codetwine.config.settings import EXT_TO_REFERENCE_KIND_DICT, language_ext
 
@@ -15,6 +16,7 @@ ReferenceTarget = (
 # references of a file: (file_rel, project_file_set, project_dir) -> targets
 _TARGET_LIST_FUNCTION_DICT: dict[str, Callable[[str, set[str], str], list]] = {
     "cobol":  cobol_reference_target_list,
+    "jcl":    jcl_reference_target_list,
     "csharp": csharp_reference_target_list,
     "r":      r_reference_target_list,
     "import": import_reference_target_list,
@@ -28,7 +30,7 @@ def reference_kind(file_abs: str) -> str | None:
         file_abs: Absolute path of the file.
 
     Returns:
-        "cobol", "csharp", "r" or "import" (EXT_TO_REFERENCE_KIND_DICT), None for a
+        "cobol", "jcl", "csharp", "r" or "import" (EXT_TO_REFERENCE_KIND_DICT), None for a
         file without a language.
     """
     return EXT_TO_REFERENCE_KIND_DICT.get(language_ext(file_abs))
@@ -40,10 +42,12 @@ def reference_target_list(
     """Resolve each reference of a file to the definition it names.
 
     The references are resolved the way the language of the file names things: a COBOL
-    file or a BMS source with OF / IN qualification (cobol_reference_target_list), a C#
-    file through its namespaces and using directives (csharp_reference_target_list), an
-    R file through the names it sees (r_reference_target_list), a file of any other
-    language through its import statements (import_reference_target_list).
+    file or a BMS source with OF / IN qualification (cobol_reference_target_list), a JCL
+    file through its programs, procedures, INCLUDE members, steps and symbols
+    (jcl_reference_target_list), a C# file through its namespaces and using directives
+    (csharp_reference_target_list), an R file through the names it sees
+    (r_reference_target_list), a file of any other language through its import
+    statements (import_reference_target_list).
 
     Args:
         file_rel: Relative path of the file.

@@ -10,78 +10,81 @@ The knowledge file can be used as input material for LLM-powered code search and
 
 ## Table of Contents
 
-- [codetwine](#codetwine)
-  - [Table of Contents](#table-of-contents)
-  - [🧬 Supported Languages](#-supported-languages)
-  - [🚀 Quick Start](#-quick-start)
-    - [Prerequisites](#prerequisites)
-    - [1. Installation](#1-installation)
-    - [2. Configuration](#2-configuration)
-    - [3. Usage](#3-usage)
-      - [Basic Execution](#basic-execution)
-      - [Specifying Project and Output Directories](#specifying-project-and-output-directories)
-      - [Calling from Python](#calling-from-python)
-  - [⚙️ Configuration Options](#️-configuration-options)
-    - [LLM Settings](#llm-settings)
-    - [Path Settings](#path-settings)
-    - [Performance Settings](#performance-settings)
-    - [Output Settings](#output-settings)
-    - [Analysis Settings](#analysis-settings)
-  - [🔄 High-Level Processing Flow](#-high-level-processing-flow)
-  - [📁 Output Files](#-output-files)
-  - [⚠️ Dependency Analysis Limitations](#️-dependency-analysis-limitations)
-    - [Common to All Languages](#common-to-all-languages)
-    - [Python](#python)
-    - [JavaScript / TypeScript](#javascript--typescript)
-    - [Java / Kotlin](#java--kotlin)
-    - [C / C++](#c--c)
-    - [SQL](#sql)
-    - [Rust](#rust)
-    - [C#](#c)
-    - [COBOL](#cobol)
-    - [R](#r)
-  - [♻️ Incremental Processing](#️-incremental-processing)
-  - [🗄️ SQLite Output](#️-sqlite-output)
-  - [📋 Output JSON Schema](#-output-json-schema)
-    - [project\_knowledge.json](#project_knowledgejson)
-    - [project\_dependency\_summary.json](#project_dependency_summaryjson)
-    - [file\_dependencies.json](#file_dependenciesjson)
-    - [doc.json](#docjson)
-  - [🎨 Customizing the Design Document Template](#-customizing-the-design-document-template)
-  - [✏️ Manual Editing of Design Documents](#️-manual-editing-of-design-documents)
-  - [⏭️ Running Without Design Document Generation](#️-running-without-design-document-generation)
-  - [💡 Usage Example: RLM QA Agent](#-usage-example-rlm-qa-agent)
-    - [Sample Output](#sample-output)
-    - [Additional Prerequisites](#additional-prerequisites)
-    - [How to Run](#how-to-run)
-  - [🏗️ Project Structure](#️-project-structure)
-  - [🙏 Acknowledgments](#-acknowledgments)
-  - [📄 License](#-license)
+- [🧬 Supported Languages](#-supported-languages)
+- [🚀 Quick Start](#-quick-start)
+  - [Prerequisites](#prerequisites)
+  - [1. Installation](#1-installation)
+  - [2. Configuration](#2-configuration)
+  - [3. Usage](#3-usage)
+    - [Basic Execution](#basic-execution)
+    - [Specifying Project and Output Directories](#specifying-project-and-output-directories)
+    - [Calling from Python](#calling-from-python)
+- [⚙️ Configuration Options](#️-configuration-options)
+  - [LLM Settings](#llm-settings)
+  - [Path Settings](#path-settings)
+  - [Performance Settings](#performance-settings)
+  - [Output Settings](#output-settings)
+  - [Analysis Settings](#analysis-settings)
+- [🔄 High-Level Processing Flow](#-high-level-processing-flow)
+- [📁 Output Files](#-output-files)
+- [📋 Output JSON Schema](#-output-json-schema)
+  - [project\_knowledge.json](#project_knowledgejson)
+  - [project\_dependency\_summary.json](#project_dependency_summaryjson)
+  - [file\_dependencies.json](#file_dependenciesjson)
+  - [doc.json](#docjson)
+- [🗄️ SQLite Output](#️-sqlite-output)
+- [⚠️ Dependency Analysis Limitations](#️-dependency-analysis-limitations)
+  - [Common to All Languages](#common-to-all-languages)
+  - [Python](#python)
+  - [JavaScript / TypeScript](#javascript--typescript)
+  - [Java / Kotlin](#java--kotlin)
+  - [C / C++](#c--c)
+  - [SQL](#sql)
+  - [Rust](#rust)
+  - [C#](#c)
+  - [COBOL](#cobol)
+  - [JCL](#jcl)
+  - [R](#r)
+- [♻️ Incremental Processing](#️-incremental-processing)
+- [🎨 Customizing the Design Document Template](#-customizing-the-design-document-template)
+- [✏️ Manual Editing of Design Documents](#️-manual-editing-of-design-documents)
+- [⏭️ Running Without Design Document Generation](#️-running-without-design-document-generation)
+- [💡 Usage Example: RLM QA Agent](#-usage-example-rlm-qa-agent)
+  - [Sample Output](#sample-output)
+  - [Additional Prerequisites](#additional-prerequisites)
+  - [How to Run](#how-to-run)
+- [🏗️ Project Structure](#️-project-structure)
+- [🙏 Acknowledgments](#-acknowledgments)
+- [📄 License](#-license)
 
 ## 🧬 Supported Languages
 
-Definitions, dependencies and design documents are extracted for the following languages
-(extensions `py`, `java`, `kt`, `kts`, `js`, `jsx`, `mjs`, `cjs`, `ts`, `tsx`, `mts`, `cts`, `c`, `cpp`,
-`cc`, `cxx`, `h`, `hpp`, `hh`, `hxx`, `sql`, `rs`, `cs`, and `cbl`, `cob`, `cpy`, `bms`, `r`, `rmd`, `qmd` in any case):
+Definitions, dependencies and design documents are extracted for the following languages:
 
-- Python
-- Java
-- JavaScript
-- TypeScript 
-- C
-- C++
-- Kotlin
-- SQL
-- Rust
-- C#
-- COBOL (a file with another extension, or none, that a `COPY` statement names is read as a copybook)
-- BMS (CICS map definitions: the names of the symbolic map a COBOL program copies)
-- R (scripts, and the `{r}` code chunks of R Markdown and Quarto files; a `.Rmd` / `.qmd` file without such a chunk is a file without a language)
+| Language | Extensions |
+|----------|------------|
+| Python | `py` |
+| Java | `java` |
+| Kotlin | `kt`, `kts` |
+| JavaScript | `js`, `jsx`, `mjs`, `cjs` |
+| TypeScript | `ts`, `tsx`, `mts`, `cts` |
+| C | `c` |
+| C++ | `cpp`, `cc`, `cxx`, `h`, `hpp`, `hh`, `hxx` |
+| SQL | `sql` |
+| Rust | `rs` |
+| C# | `cs` |
+| COBOL | `cbl`, `cob`, `cpy` (in any case) |
+| BMS (CICS map definitions: the names of the symbolic map a COBOL program copies) | `bms` (in any case) |
+| JCL (jobs, procedures and `INCLUDE` members: the programs the steps run, the procedures they call and the members they include) | `jcl`, `prc`, `proc` (in any case) |
+| R (scripts, and the `{r}` code chunks of R Markdown and Quarto files) | `r`, `rmd`, `qmd` (in any case) |
 
-Every other non-empty text file (`.md`, `.yaml`, `.toml`, `Makefile`, ...) is also listed in the
-outputs and copied to the output directory, with empty `definitions`, `callee_usages`,
-`same_file_usages` and `caller_usages`, a `null` summary and no design document. Empty files, binary files and
-symbolic links are skipped; a linked directory is not entered.
+Some files get their language from their content or from the files that name them:
+
+- **COBOL copybooks**: A file with another extension, or none, that a `COPY` statement or `EXEC SQL INCLUDE` names is read as a copybook when the statement names it with its whole file name, or when its text holds a data item, the description of a file or a statement of the procedure division; unless it is read as JCL
+- **JCL**: A file with another extension, or none, is read as JCL when its first statement is a `JOB` or `JOBGROUP` statement in upper case, or a JCL statement in upper case and an `EXEC` / `INCLUDE` statement names it. A `.jcl` / `.prc` / `.proc` file whose first statement is no JCL statement is a file without a language
+- **R Markdown and Quarto**: A `.Rmd` / `.qmd` file without an `{r}` code chunk is a file without a language
+
+Every other non-empty text file (`.md`, `.yaml`, `.toml`, `Makefile`, ...) is also listed in the outputs and copied to the output directory, with empty `definitions`, `callee_usages`, `same_file_usages` and `caller_usages`, a `null` summary and no design document. Empty files, binary files and symbolic links are skipped; a linked directory is not entered.
 
 ## 🚀 Quick Start
 
@@ -133,7 +136,7 @@ OUTPUT_LANGUAGE=English
 uv run main.py
 ```
 
-Analyzes the project set in `DEFAULT_PROJECT_DIR` in `.env` and outputs results to the `output/` directory.
+Analyzes the project set in `DEFAULT_PROJECT_DIR` in `.env` and outputs results to `DEFAULT_OUTPUT_DIR` (default: `output/`).
 
 #### Specifying Project and Output Directories
 
@@ -150,15 +153,19 @@ uv run main.py --project-dir /path/to/your/project --output-dir /path/to/output
 
 ```python
 import asyncio
+from codetwine.llm.client import LLMClient
 from codetwine.pipeline import process_all_files
 
 run_result = asyncio.run(process_all_files(
-    "/path/to/your/project", "/path/to/output", llm_client=None,
+    "/path/to/your/project", "/path/to/output", llm_client=LLMClient(),
     file_list=["src/main.py", "src/utils.py"],
 ))
 ```
 
-`file_list` (optional) holds file paths relative to the project root. When given, only these files are analyzed instead of walking the project directory; `EXCLUDE_PATTERNS`, the empty / binary file check and the symbolic link check still apply. `llm_client` is an `LLMClient()` when `ENABLE_LLM_DOC=True`.
+| Argument | Description |
+|----------|-------------|
+| `llm_client` | `LLMClient()` (model, API key and base URL from `.env`) when `ENABLE_LLM_DOC=True`; `None` when it is `False` |
+| `file_list` | Optional. File paths relative to the project root; only these files are analyzed instead of walking the project directory. `EXCLUDE_PATTERNS`, the empty / binary file check and the symbolic link check still apply |
 
 | Return key | Type | Description |
 |-----------|-----|------|
@@ -166,7 +173,7 @@ run_result = asyncio.run(process_all_files(
 | `dependency_fail_list` | string[] | Files whose dependency extraction failed. Their `file_dependencies.json` and copy are removed from the output directory, and they have no dependencies in the dependency graph; the other files are analyzed |
 | `doc_count` | int | Files with a complete design document (`0` when `ENABLE_LLM_DOC=False`) |
 | `doc_fail_list` | string[] | Files left without a complete design document |
-| `detected_encoding_dict` | {string: string} | Files of a supported language whose encoding was detected (see **Detected encodings**), with that encoding; `""` for a file read as UTF-8 with invalid bytes replaced |
+| `detected_encoding_dict` | {string: string} | Files of a supported language whose encoding was detected (see **Detected encodings** under [Common to All Languages](#common-to-all-languages)), with that encoding; `""` for a file read as UTF-8 with invalid bytes replaced |
 
 ## ⚙️ Configuration Options
 
@@ -176,8 +183,8 @@ The following options can be configured in the `.env` file.
 
 | Variable | Description | Default |
 |--------|------|------------|
-| `LLM_API_KEY` | API key for the LLM provider | None |
-| `LLM_MODEL` | Model name in litellm format (required when `ENABLE_LLM_DOC=True`) | None |
+| `LLM_API_KEY` | API key for the LLM provider | Not set |
+| `LLM_MODEL` | Model name in litellm format (required when `ENABLE_LLM_DOC=True`) | Not set |
 | `LLM_API_BASE` | API base URL (set when using non-standard endpoints, e.g. Ollama, Azure) | Not set |
 | `OUTPUT_LANGUAGE` | Output language for design documents | `English` |
 | `DOC_MAX_TOKENS` | Token limit for LLM output. Output cut at this limit is saved as it is and a warning is logged | `16384` |
@@ -218,7 +225,7 @@ The per-file JSON files are written in every case.
 | `CODE_SUMMARY_PIECE_LINES` | Lines of source summarized together when a file still exceeds the context window after its large definitions are summarized (1 or more) | `200` |
 | `CODE_SUMMARY_MAX_CHARS` | Character limit for a single code behavior summary | `400` |
 | `EXCLUDE_PATTERNS` | Directory and file name patterns to exclude (comma-separated, fnmatch format). Every text file that is not excluded is collected and copied to the output: add secrets, data files, lock files and an output directory inside the project | `__pycache__,.git,.github,.venv,node_modules` |
-| `SOURCE_ENCODING` | Encodings tried, in order, on a source file that has no BOM and is not valid UTF-8 (comma-separated Python codec names). The first one that decodes the file is used; list `euc_jp` before `cp932` | None |
+| `SOURCE_ENCODING` | Encodings tried, in order, on a source file that has no BOM and is not valid UTF-8 (comma-separated Python codec names). The first one that decodes the file is used; list `euc_jp` before `cp932` | Not set |
 
 ## 🔄 High-Level Processing Flow
 
@@ -226,22 +233,17 @@ The per-file JSON files are written in every case.
    - Collects every non-empty text file from the target directory
    - Resolves the imports and references of each file of a supported language to the project files they lead to
 2. **Extract dependency information for each file**
-   - Extracts definitions (functions, classes, etc.) with tree-sitter
+   - Extracts definitions (functions, classes, etc.)
    - Extracts the usages of other files' definitions (callees) and the usages of this file's definitions by other files (callers), with line numbers and source code
 3. **Generate design documents via LLM** (files of a supported language only)
-   - Regenerates only the files changed since their previous design document, and the files that depend on them
-   - Processes files in dependency order, from files with no dependencies toward dependent files
    - Generates each document section by section according to the template (`doc_template.json`), from the source code, the dependency information and the summaries of the files it depends on
    - Generates a summary for each file
+   - Regenerates only the documents that need it (see [Incremental Processing](#️-incremental-processing))
    - A prompt that exceeds the model context window is retried with less context (see `ENABLE_CODE_SUMMARY`). The sections of such a file are written from summaries of its large definitions, or of runs of its lines
-   - Each summary is one more LLM call: one per large definition, and one per run of `CODE_SUMMARY_PIECE_LINES` lines
-   - A provider that cuts a long prompt without an error gives a document written from the cut prompt
 4. **Save all outputs**
-   - Saved to `<output directory>/<project name>`
-   - All dependencies and design documents are consolidated into a single JSON (`project_knowledge.json`), a SQLite database (`project_knowledge.sqlite`), or both, as `KNOWLEDGE_FORMAT` selects
-   - Dependency graphs and design documents are also output as Markdown
+   - Saved to `<output directory>/<project name>` (see [Output Files](#-output-files))
 
-Note: LLM API calls are only made in step 3. No LLM is used in other steps.
+Note: LLM API calls are only made in step 3. Each code summary is one more call: one per large definition, and one per run of `CODE_SUMMARY_PIECE_LINES` lines. A provider that cuts a long prompt without an error gives a document written from the cut prompt.
 
 ## 📁 Output Files
 
@@ -258,7 +260,216 @@ Running the tool generates the following files in `<output directory>/<project n
 | `<filename>/doc.md` | Per-file design document (Markdown format) |
 | `<filename>/<original filename>` | Copy of the original file, byte for byte in its own encoding. A file named `file_dependencies.json`, `doc.json` or `doc.md` is not copied |
 
+`<filename>` is the path of the file relative to the project root with the last `.` of its name turned into `_` (`codetwine/import_to_path.py` → `codetwine/import_to_path_py/`; a file without an extension, or whose dots are all at the start of its name, keeps its name: `Makefile` → `Makefile/`, `.env` → `.env/`). The `file`, `from`, `callers` and `callees` paths of the JSON outputs are the paths of these copies with the project name in front (`<project name>/codetwine/import_to_path_py/import_to_path.py`).
+
 All JSON output is UTF-8.
+
+## 📋 Output JSON Schema
+
+### project_knowledge.json
+
+Consolidated JSON integrating all file dependencies and design documents.
+
+```json
+{
+  "project_name": "string",
+  "project_dependencies": [
+    {
+      "file": "string",
+      "summary": "string|null",
+      "callers": ["string"],
+      "callees": ["string"]
+    }
+  ],
+  "files": [
+    {
+      "file": "string",
+      "file_dependencies": {},
+      "doc": {}
+    }
+  ]
+}
+```
+
+| Field | Type | Description |
+|-----------|-----|------|
+| `project_name` | string | Project name |
+| `project_dependencies[].file` | string | Path of the source file copied to the output directory |
+| `project_dependencies[].summary` | string\|null | Summary of the file (`null` when the design document is not generated, and always for a file without a supported language) |
+| `project_dependencies[].callers` | string[] | Paths of dependent files copied to the output directory |
+| `project_dependencies[].callees` | string[] | Paths of dependency files copied to the output directory |
+| `files[].file` | string | Path of the source file copied to the output directory |
+| `files[].file_dependencies` | object | Same structure as `file_dependencies.json` (excluding the `file` field) |
+| `files[].doc` | object | Same structure as `doc.json` (excluding the `file` field) |
+
+### project_dependency_summary.json
+
+Consolidated JSON of the dependency graph and per-file summaries.
+
+```json
+{
+  "project_name": "string",
+  "files": [
+    {
+      "file": "string",
+      "summary": "string|null",
+      "callers": ["string"],
+      "callees": ["string"]
+    }
+  ]
+}
+```
+
+| Field | Type | Description |
+|-----------|-----|------|
+| `project_name` | string | Project name |
+| `files[].file` | string | Path of the source file copied to the output directory |
+| `files[].summary` | string\|null | Summary of the file |
+| `files[].callers` | string[] | Paths of dependent files copied to the output directory |
+| `files[].callees` | string[] | Paths of dependency files copied to the output directory |
+
+### file_dependencies.json
+
+Per-file definition and dependency information.
+
+```json
+{
+  "file": "string",
+  "language": "string",
+  "detected_encoding": "string|null",
+  "definitions": [
+    {
+      "name": "string",
+      "type": "string",
+      "start_line": 0,
+      "end_line": 0,
+      "name_line": 0,
+      "level": 0,
+      "is_group": false,
+      "context": "string"
+    }
+  ],
+  "callee_usages": [
+    {
+      "name": "string",
+      "from": "string",
+      "target_context": "string|null",
+      "target_name": "string|null",
+      "target_start_line": 0,
+      "lines": [0]
+    }
+  ],
+  "same_file_usages": [
+    {
+      "name": "string",
+      "target_name": "string|null",
+      "target_start_line": 0,
+      "lines": [0]
+    }
+  ],
+  "caller_usages": [
+    {
+      "name": "string",
+      "file": "string",
+      "usage_context": "string",
+      "lines": [0]
+    }
+  ]
+}
+```
+
+| Field | Type | Description |
+|-----------|-----|------|
+| `file` | string | Path of the source file copied to the output directory |
+| `language` | string | Extension whose language settings the file is analyzed with, in lower case (`py`, `cbl`, ...; `cpy` for a copybook of another extension or without one that a `COPY` statement or `EXEC SQL INCLUDE` names, `jcl` for a JCL file of another extension or without one). `""` for a file without a language, for a `.Rmd` / `.qmd` file without an R code chunk, and for a `.jcl` / `.prc` / `.proc` file whose first statement is no JCL statement |
+| `detected_encoding` | string\|null | Encoding the file was decoded with when it had no BOM, was not valid UTF-8 and was not decoded by `SOURCE_ENCODING` (`""` when it was read as UTF-8 with invalid bytes replaced). `null` otherwise, and for a file without a language |
+| `definitions[].name` | string | Function/class name |
+| `definitions[].type` | string | Definition type (tree-sitter node type, varies by language. Python: `function_definition`, `class_definition` / Java: `class_declaration`, `method_declaration` / JS/TS: `function_declaration`, `class_declaration` / SQL: `create_table`, `create_view` / Rust: `function_item`, `struct_item`, `impl_item` / C#: `class_declaration`, `method_declaration`, `property_declaration` / JCL: `job_statement`, `proc_statement`, `exec_statement`, `symbolic_parameter` / R: `function_definition`, `binary_operator`, `call`, `argument`, etc.) |
+| `definitions[].start_line` | int | Start line number. Every line number counts from 1, and a line ends at `\n`, `\r\n` or a lone `\r` |
+| `definitions[].end_line` | int | End line number |
+| `definitions[].name_line` | int | Line the name is written on (COBOL, BMS and JCL only) |
+| `definitions[].level` | int | Level number of a data item (COBOL and BMS data items only) |
+| `definitions[].is_group` | bool | Whether a data item is a group item (COBOL and BMS data items only) |
+| `definitions[].context` | string | Full source code of the definition |
+| `callee_usages[].name` | string | Name of the used symbol as the file writes it (`helper.process`, `Settings::new`). A member used on a variable declared with a type of the project is named after the type (`User.getName`, `node_t.value`) |
+| `callee_usages[].from` | string | Path of the dependency file copied to the output directory |
+| `callee_usages[].target_context` | string\|null | Full source code of the definition the name leads to. `null` when it leads to no definition of that file (a module used as a value) |
+| `callee_usages[].target_name` | string\|null | `definitions[].name` of that definition in the dependency file (`helper` for a usage written `hp` after `const { helper: hp } = require(...)`). `null` with `target_context` |
+| `callee_usages[].target_start_line` | int\|null | `definitions[].start_line` of that definition. `null` with `target_context` |
+| `callee_usages[].lines` | int[] | Line numbers of usage within this file |
+| `same_file_usages[].name` | string | Name of a symbol defined in this file and used in it |
+| `same_file_usages[].target_name` | string\|null | `definitions[].name` of the definition the name leads to (`new` for `Point::new`). `null` when it leads to no definition |
+| `same_file_usages[].target_start_line` | int\|null | `definitions[].start_line` of that definition |
+| `same_file_usages[].lines` | int[] | Line numbers of usage within this file, outside the definition the name refers to (JCL: every usage) |
+| `caller_usages[].name` | string | Name of the symbol being used |
+| `caller_usages[].file` | string | Path of the dependent file copied to the output directory |
+| `caller_usages[].usage_context` | string | Source code of the usage location in the dependent |
+| `caller_usages[].lines` | int[] | Line numbers of usage in the dependent file |
+
+Members declared inside a class, struct, interface, enum or namespace are listed as their own entries in addition to the enclosing definition, so their line range and `context` are contained in the enclosing entry. Functions defined inside a function body are not listed.
+
+### doc.json
+
+Per-file design document.
+
+```json
+{
+  "file": "string",
+  "summary": "string",
+  "sections": [
+    {
+      "id": "string",
+      "title": "string",
+      "content": "string"
+    }
+  ],
+  "source_hash": "string"
+}
+```
+
+| Field | Type | Description |
+|-----------|-----|------|
+| `file` | string | Path of the source file copied to the output directory |
+| `summary` | string | Summary of the file |
+| `sections[].id` | string | Section identifier (corresponds to `id` in `doc_template.json`) |
+| `sections[].title` | string | Section heading |
+| `sections[].content` | string | Section body (Markdown format) |
+| `source_hash` | string | SHA256 hash of the source file the document was generated from |
+
+With the templates of this repository, each definition in a section starts with a level-2 heading holding only the definition name in backticks (`` ## `parse_args` ``).
+
+## 🗄️ SQLite Output
+
+With `KNOWLEDGE_FORMAT=sqlite` or `both`, the same content as `project_knowledge.json` is written to `project_knowledge.sqlite`.
+
+| Table | Columns | Description |
+|-------|---------|-------------|
+| `meta` | `key`, `value` | `project_name`, `schema_version`, `created_at` |
+| `files` | `file`, `summary`, `file_dependencies`, `doc` | One row per file. `file_dependencies` and `doc` hold the JSON bodies as text; both are `NULL` when the file has none |
+| `file_edges` | `file`, `direction`, `other` | The dependency graph. `direction` is `caller` or `callee` as seen from `file` |
+| `definitions` | `file`, `name`, `type`, `start_line`, `end_line` | Every definition, indexed by name and by file |
+
+`codetwine/knowledge_db.py` provides the read API:
+
+```python
+from codetwine import knowledge_db
+
+conn = knowledge_db.open_knowledge("output/my-project/project_knowledge.sqlite")
+
+# One file entry at a time, in the same structure as project_knowledge.json's "files"
+for entry in knowledge_db.iter_files(conn):
+    print(entry["file"])
+
+# One entry per file, in the structure of project_knowledge.json's "project_dependencies"
+for dep in knowledge_db.iter_dependencies(conn):
+    print(dep["file"], dep["summary"])
+
+entry = knowledge_db.get_file(conn, "my-project/src/main_py/main.py")
+callees = knowledge_db.callees_of(conn, entry["file"])
+callers = knowledge_db.callers_of(conn, entry["file"])
+hits = knowledge_db.find_definitions(conn, "parse_file")
+partial_hits = knowledge_db.find_definitions(conn, "parse", partial=True)
+```
 
 ## ⚠️ Dependency Analysis Limitations
 
@@ -342,6 +553,14 @@ Dependencies are extracted by static analysis of the source text. They may be mi
 - **Unparsed statements**: In a statement that is not parsed, every word that is a name of a definition counts as a usage, and a paragraph that starts in the middle of a sentence (no period before it) is not a definition
 - **Debug lines and compiler directives**: Lines with `D` in the indicator column, `>>` directives, `REPLACE` statements and conditional compilation are not evaluated
 
+### JCL
+
+- **Programs**: Only `PGM=`, `RUN PROGRAM(...)` in the in-stream `SYSTSIN` data of a TSO batch step (`IKJEFT01`, `IKJEFT1A`, `IKJEFT1B`) or of a step that calls a procedure, and the program in the `PARM` of an IMS batch step (`DFSRRC00`) lead to programs. A program a procedure is given for another purpose (the source member of a compile procedure) is not linked
+- **Symbols**: A symbol (`&NAME`) is replaced only with the values written in the same file (`SET`, the defaults of `PROC`, the `EXEC` statements that call an in-stream procedure); the value an `EXEC` statement of another file gives a procedure is not used, and a value with a symbol among other text is not replaced
+- **Procedures and members**: `JCLLIB ORDER` is not read: a procedure or `INCLUDE` member is looked up by its file name in the whole project. The statements of an `INCLUDE` member are not read into the file that includes it: its steps are not found by `COND`, `IF`, referbacks or `DD` overrides
+- **Definitions**: A step or a `PROC` statement without a name is not a definition. A call of a procedure whose file does not start with a named `PROC` statement, and an `INCLUDE` statement, have `target_context` `null`
+- **Not analyzed**: DD names (they are not linked to `SELECT ... ASSIGN` of COBOL), data set names, in-stream data other than `SYSTSIN`, JES statements, and JES2 job group statements (`GJOB`, `AFTER`, `SCHEDULE`, ...)
+
 ### R
 
 - **Names**: Scripts that only share a directory, with no `source()`, `box::use`, package (`DESCRIPTION`), Shiny app or `testthat` helper tying them, do not see each other. A name defined in several files in sight is linked to all of them. A usage is listed under the name of the definition (`pkg::f` and `mod$f` are `f`)
@@ -362,214 +581,6 @@ On subsequent runs, design documents are regenerated only where needed.
 - **Dependency information**: Extracted again for every file on each run
 - **Design documents**: Regenerated for the files whose content changed since their `doc.json` was generated (`source_hash`) and for the files that depend on them; all others are reused
 - **Incomplete documents**: A `doc.json` with missing sections or an empty summary (e.g. after an LLM API failure) is regenerated
-
-## 🗄️ SQLite Output
-
-With `KNOWLEDGE_FORMAT=sqlite` or `both`, the same content as `project_knowledge.json`
-is written to `project_knowledge.sqlite`.
-
-| Table | Columns | Description |
-|-------|---------|-------------|
-| `meta` | `key`, `value` | `project_name`, `schema_version`, `created_at` |
-| `files` | `file`, `summary`, `file_dependencies`, `doc` | One row per file. `file_dependencies` and `doc` hold the JSON bodies as text; both are `NULL` when the file has none |
-| `file_edges` | `file`, `direction`, `other` | The dependency graph. `direction` is `caller` or `callee` as seen from `file` |
-| `definitions` | `file`, `name`, `type`, `start_line`, `end_line` | Every definition, indexed by name and by file |
-
-`codetwine/knowledge_db.py` provides the read API:
-
-```python
-from codetwine import knowledge_db
-
-conn = knowledge_db.open_knowledge("output/my-project/project_knowledge.sqlite")
-
-# One file entry at a time, in the same structure as project_knowledge.json's "files"
-for entry in knowledge_db.iter_files(conn):
-    print(entry["file"])
-
-# One entry per file, in the structure of project_knowledge.json's "project_dependencies"
-for dep in knowledge_db.iter_dependencies(conn):
-    print(dep["file"], dep["summary"])
-
-entry = knowledge_db.get_file(conn, "my-project/src/main_py/main.py")
-callees = knowledge_db.callees_of(conn, entry["file"])
-callers = knowledge_db.callers_of(conn, entry["file"])
-hits = knowledge_db.find_definitions(conn, "parse_file")
-partial_hits = knowledge_db.find_definitions(conn, "parse", partial=True)
-```
-
-## 📋 Output JSON Schema
-
-### project_knowledge.json
-
-Consolidated JSON integrating all file dependencies and design documents.
-
-```json
-{
-  "project_name": "string",
-  "project_dependencies": [
-    {
-      "file": "string",
-      "summary": "string|null",
-      "callers": ["string"],
-      "callees": ["string"]
-    }
-  ],
-  "files": [
-    {
-      "file": "string",
-      "file_dependencies": {},
-      "doc": {}
-    }
-  ]
-}
-```
-
-| Field | Type | Description |
-|-----------|-----|------|
-| `project_name` | string | Project name |
-| `project_dependencies[].file` | string | Path of the source file copied to the output directory |
-| `project_dependencies[].summary` | string\|null | Summary of the file (null when the design document is not generated, and always for a file without a supported language) |
-| `project_dependencies[].callers` | string[] | Paths of dependent files copied to the output directory |
-| `project_dependencies[].callees` | string[] | Paths of dependency files copied to the output directory |
-| `files[].file` | string | Path of the source file copied to the output directory |
-| `files[].file_dependencies` | object | Same structure as file_dependencies.json (excluding `file` field) |
-| `files[].doc` | object | Same structure as doc.json (excluding `file` field) |
-
-### project_dependency_summary.json
-
-Consolidated JSON of the dependency graph and per-file summaries.
-
-```json
-{
-  "project_name": "string",
-  "files": [
-    {
-      "file": "string",
-      "summary": "string|null",
-      "callers": ["string"],
-      "callees": ["string"]
-    }
-  ]
-}
-```
-
-| Field | Type | Description |
-|-----------|-----|------|
-| `project_name` | string | Project name |
-| `files[].file` | string | Path of the source file copied to the output directory |
-| `files[].summary` | string\|null | Summary of the file |
-| `files[].callers` | string[] | Paths of dependent files copied to the output directory |
-| `files[].callees` | string[] | Paths of dependency files copied to the output directory |
-
-### file_dependencies.json
-
-Per-file definition and dependency information.
-
-```json
-{
-  "file": "string",
-  "language": "string",
-  "detected_encoding": "string|null",
-  "definitions": [
-    {
-      "name": "string",
-      "type": "string",
-      "start_line": 0,
-      "end_line": 0,
-      "name_line": 0,
-      "level": 0,
-      "is_group": false,
-      "context": "string"
-    }
-  ],
-  "callee_usages": [
-    {
-      "name": "string",
-      "from": "string",
-      "target_context": "string|null",
-      "target_name": "string|null",
-      "target_start_line": 0,
-      "lines": [0]
-    }
-  ],
-  "same_file_usages": [
-    {
-      "name": "string",
-      "target_name": "string|null",
-      "target_start_line": 0,
-      "lines": [0]
-    }
-  ],
-  "caller_usages": [
-    {
-      "name": "string",
-      "file": "string",
-      "usage_context": "string",
-      "lines": [0]
-    }
-  ]
-}
-```
-
-| Field | Type | Description |
-|-----------|-----|------|
-| `file` | string | Path of the source file copied to the output directory |
-| `language` | string | Extension whose language settings the file is analyzed with, in lower case (`py`, `cbl`, ...; `cpy` for a copybook of another extension or without one that a `COPY` statement names). `""` for a file without a language, and for a `.Rmd` / `.qmd` file without an R code chunk |
-| `detected_encoding` | string\|null | Encoding the file was decoded with when it had no BOM, was not valid UTF-8 and was not decoded by `SOURCE_ENCODING` (`""` when it was read as UTF-8 with invalid bytes replaced). `null` otherwise, and for a file without a language |
-| `definitions[].name` | string | Function/class name |
-| `definitions[].type` | string | Definition type (tree-sitter node type, varies by language. Python: `function_definition`, `class_definition` / Java: `class_declaration`, `method_declaration` / JS/TS: `function_declaration`, `class_declaration` / SQL: `create_table`, `create_view` / Rust: `function_item`, `struct_item`, `impl_item` / C#: `class_declaration`, `method_declaration`, `property_declaration` / R: `function_definition`, `binary_operator`, `call`, `argument`, etc.) |
-| `definitions[].start_line` | int | Start line number. Every line number counts from 1, and a line ends at `\n`, `\r\n` or a lone `\r` |
-| `definitions[].end_line` | int | End line number |
-| `definitions[].name_line` | int | Line the name is written on (COBOL and BMS only) |
-| `definitions[].level` | int | Level number of a data item (COBOL and BMS data items only) |
-| `definitions[].is_group` | bool | Whether a data item is a group item (COBOL and BMS data items only) |
-| `definitions[].context` | string | Full source code of the definition |
-| `callee_usages[].name` | string | Name of the used symbol as the file writes it (`helper.process`, `Settings::new`). A member used on a variable declared with a type of the project is named after the type (`User.getName`, `node_t.value`) |
-| `callee_usages[].from` | string | Path of the dependency file copied to the output directory |
-| `callee_usages[].target_context` | string\|null | Full source code of the definition the name leads to. `null` when it leads to no definition of that file (a module used as a value) |
-| `callee_usages[].target_name` | string\|null | `definitions[].name` of that definition in the dependency file (`helper` for a usage written `hp` after `const { helper: hp } = require(...)`). `null` with `target_context` |
-| `callee_usages[].target_start_line` | int\|null | `definitions[].start_line` of that definition. `null` with `target_context` |
-| `callee_usages[].lines` | int[] | Line numbers of usage within this file |
-| `same_file_usages[].name` | string | Name of a symbol defined in this file and used in it |
-| `same_file_usages[].target_name` | string\|null | `definitions[].name` of the definition the name leads to (`new` for `Point::new`). `null` when it leads to no definition |
-| `same_file_usages[].target_start_line` | int\|null | `definitions[].start_line` of that definition |
-| `same_file_usages[].lines` | int[] | Line numbers of usage within this file, outside the definition the name refers to |
-| `caller_usages[].name` | string | Name of the symbol being used |
-| `caller_usages[].file` | string | Path of the dependent file copied to the output directory |
-| `caller_usages[].usage_context` | string | Source code of the usage location in the dependent |
-| `caller_usages[].lines` | int[] | Line numbers of usage in the dependent file |
-
-Members declared inside a class, struct, interface, enum or namespace are listed as their own entries in addition to the enclosing definition, so their line range and `context` are contained in the enclosing entry. Functions defined inside a function body are not listed.
-
-### doc.json
-
-Per-file design document.
-
-```json
-{
-  "file": "string",
-  "summary": "string",
-  "sections": [
-    {
-      "id": "string",
-      "title": "string",
-      "content": "string"
-    }
-  ],
-  "source_hash": "string"
-}
-```
-
-| Field | Type | Description |
-|-----------|-----|------|
-| `file` | string | Path of the source file copied to the output directory |
-| `summary` | string | Summary of the file |
-| `sections[].id` | string | Section identifier (corresponds to id in doc_template.json) |
-| `sections[].title` | string | Section heading |
-| `sections[].content` | string | Section body (Markdown format) |
-| `source_hash` | string | SHA256 hash of the source file the document was generated from |
-
-With the templates of this repository, each definition in a section starts with a level-2 heading holding only the definition name in backticks (`` ## `parse_args` ``).
 
 ## 🎨 Customizing the Design Document Template
 
@@ -630,7 +641,7 @@ Dependency information (`file_dependencies.json` and file copies) is still gener
 
 `examples/sample_output/` contains sample output produced by analyzing the codetwine repository itself with the template `examples/doc_template_search.json`. It is a snapshot and does not reflect the current source. `rlm_qa_agent.py` references it by default, so you can try out RLM QA without running any analysis.
 
-> **Note:** The `file` field paths in `project_knowledge.json` refer to sources copied into the output directory and differ from the original source tree paths (e.g. `codetwine/import_to_path.py` → `codetwine/import_to_path_py/import_to_path.py`).
+> **Note:** The `file` field paths in `project_knowledge.json` refer to sources copied into the output directory (see [Output Files](#-output-files)).
 
 ### Additional Prerequisites
 
@@ -654,11 +665,12 @@ codetwine/
 ├── .env.example            # Environment variable template
 ├── codetwine/              # Pipeline, module and reference resolution per language, output
 │   ├── config/             # Environment variables, per-language settings, logging
-│   ├── extractors/         # Definitions, imports, usages and the dependency graph
-│   ├── parsers/            # tree-sitter parser, COBOL and R Markdown readers
+│   ├── extractors/         # Definitions, imports, usages, the dependency graph, and the COBOL, BMS, JCL, C# and R readers
+│   ├── parsers/            # tree-sitter parser and source-format readers (COBOL format, R Markdown, C macros, Kotlin, statement operands)
 │   ├── llm/                # LLM API client via litellm
 │   └── utils/              # File and cache utilities
 └── examples/
+    ├── doc_template_*.json # Other design document templates
     ├── rlm_qa/             # RLM QA agent sample
     └── sample_output/      # Sample output (codetwine analyzed against itself)
 ```
@@ -670,6 +682,7 @@ This project uses the following libraries:
 - [tree-sitter](https://tree-sitter.github.io/tree-sitter/) - Source code syntax analysis
 - [tree-sitter-language-pack](https://github.com/xberg-io/tree-sitter-language-pack) - COBOL grammar ([tree-sitter-cobol](https://github.com/yutaro-sakamoto/tree-sitter-cobol)) and R grammar ([tree-sitter-r](https://github.com/r-lib/tree-sitter-r))
 - [litellm](https://github.com/BerriAI/litellm) - Unified interface for multiple LLM providers
+- [charset-normalizer](https://github.com/jawah/charset_normalizer) - Encoding detection of source files that are not UTF-8
 
 ## 📄 License
 

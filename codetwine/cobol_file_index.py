@@ -12,18 +12,22 @@ from codetwine.extractors.cobol_source import (
     has_statement,
 )
 from codetwine.extractors.imports import cobol_module, cobol_module_part
+from codetwine.extractors.jcl_source import INCLUDE_KIND, PROC_KIND
+from codetwine.jcl_member import is_job_file, member_path, register_jcl_target
 from codetwine.parsers.cobol_format import (
     FILE_UNIT,
     ITEM_UNIT,
     PROCEDURE_UNIT,
     split_cobol_source,
 )
-from codetwine.utils.file_utils import read_source
+from codetwine.utils.file_utils import add_file_name, read_source
 from codetwine.utils.project_cache import project_cache_value
 from codetwine.config.settings import (
     BMS_EXT_SET,
     COBOL_EXT_SET,
     EXT_TO_LANGUAGE_DICT,
+    JCL_EXT_SET,
+    add_copy_target_ext,
     has_language,
     language_ext,
     set_copy_target_ext,
@@ -37,14 +41,14 @@ _COPYBOOK_EXT = "cpy"
 # Cache of file indexes: project_dir -> (project file set the index was built from, index)
 file_index_cache: dict[str, tuple[set[str], "CobolFileIndex"]] = {}
 
-# Cache of the resolved references of COBOL files: absolute path -> (project file set
-# they were resolved with, targets)
+# Cache of the resolved references of COBOL files and JCL files: absolute path ->
+# (project file set they were resolved with, targets)
 reference_target_cache: dict[str, tuple[set[str], list["CobolReferenceTarget"]]] = {}
 
 
 @dataclass
 class CobolFileIndex:
-    """The names the COBOL files and BMS sources of a project are found by."""
+    """The names the COBOL files, BMS sources and JCL files of a project are found by."""
 
     # Upper-case file name, with and without its extension, and the names in the file's
     # copy_name_list (BMS: mapset names) -> files in path order
@@ -53,6 +57,11 @@ class CobolFileIndex:
     program_dict: dict[str, list[str]] = field(default_factory=dict)
     # Files that define a program
     program_file_set: set[str] = field(default_factory=set)
+    # Upper-case file name of a JCL file, with and without its extension -> JCL files in
+    # path order
+    jcl_name_dict: dict[str, list[str]] = field(default_factory=dict)
+    # JCL files whose first statement is a JOB or JOBGROUP statement
+    jcl_job_file_set: set[str] = field(default_factory=set)
 
 
 def _cobol_source(file_rel: str, project_dir: str) -> CobolSource | None:
@@ -69,15 +78,6 @@ def _cobol_source(file_rel: str, project_dir: str) -> CobolSource | None:
         return None
 
 
-def _add_file_name(file_index: CobolFileIndex, file_rel: str, name_list: list[str]) -> None:
-    """Index a file by its file name, with and without its extension, and by other names."""
-    file_name = os.path.basename(file_rel).upper()
-    for name in dict.fromkeys((file_name, os.path.splitext(file_name)[0], *name_list)):
-        file_list = file_index.file_name_dict.setdefault(name, [])
-        if file_rel not in file_list:
-            file_list.append(file_rel)
-
-
 def _is_cobol_file(file_rel: str, project_dir: str) -> bool:
     """Return whether a project file is analyzed as COBOL."""
     return language_ext(os.path.join(project_dir, file_rel)) in COBOL_EXT_SET
@@ -85,7 +85,7 @@ def _is_cobol_file(file_rel: str, project_dir: str) -> bool:
 
 def _add_source(file_index: CobolFileIndex, file_rel: str, cobol_source: CobolSource) -> None:
     """Index a COBOL file or BMS source by its file name, its copy_name_list and its programs."""
-    _add_file_name(file_index, file_rel, cobol_source.copy_name_list)
+    add_file_name(file_index.file_name_dict, file_rel, cobol_source.copy_name_list)
     for definition in cobol_source.definition_list:
         if definition.type in CALL_TARGET_TYPE_TUPLE:
             file_list = file_index.program_dict.setdefault(definition.name.upper(), [])
@@ -100,6 +100,17 @@ def _sort_file_index(file_index: CobolFileIndex) -> None:
         file_list.sort()
 
 
+def _add_jcl_name(file_index: CobolFileIndex, project_dir: str, file_rel_set: set[str]) -> None:
+    """Index the JCL files among project files by their file names, and record which are jobs."""
+    for file_rel in sorted(file_rel_set):
+        file_abs = os.path.join(project_dir, file_rel)
+        if language_ext(file_abs) not in JCL_EXT_SET:
+            continue
+        add_file_name(file_index.jcl_name_dict, file_rel)
+        if is_job_file(file_abs, is_strict=False):
+            file_index.jcl_job_file_set.add(file_rel)
+
+
 def _source_file_list(project_dir: str, project_file_set: set[str]) -> list[str]:
     """Return the COBOL files and BMS sources among project files, in path order."""
     return sorted(
@@ -111,13 +122,16 @@ def _source_file_list(project_dir: str, project_file_set: set[str]) -> list[str]
 def _build_file_index(project_dir: str, project_file_set: set[str]) -> CobolFileIndex:
     """Parse the COBOL files and BMS sources of a project and build their index.
 
+    The JCL files are indexed by their file names without being parsed.
+
     Args:
         project_dir: Absolute path to the project root.
         project_file_set: Relative paths of the project files that have a language.
 
     Returns:
-        The CobolFileIndex of the COBOL files and BMS sources in project_file_set. A file
-        that cannot be read or parsed is not in it.
+        The CobolFileIndex of the COBOL files, BMS sources and JCL files in
+        project_file_set. A COBOL file or BMS source that cannot be read or parsed is
+        not in it.
     """
     file_index = CobolFileIndex()
     for file_rel in _source_file_list(project_dir, project_file_set):
@@ -125,6 +139,7 @@ def _build_file_index(project_dir: str, project_file_set: set[str]) -> CobolFile
         if cobol_source is not None:
             _add_source(file_index, file_rel, cobol_source)
     _sort_file_index(file_index)
+    _add_jcl_name(file_index, project_dir, project_file_set)
     return file_index
 
 
@@ -139,7 +154,7 @@ def _get_file_index(project_dir: str, project_file_set: set[str]) -> CobolFileIn
         project_file_set: Relative paths of the project files that have a language.
 
     Returns:
-        The CobolFileIndex of the COBOL files in project_file_set.
+        The CobolFileIndex of the COBOL files, BMS sources and JCL files in project_file_set.
     """
     file_index = project_cache_value(file_index_cache, project_dir, project_file_set)
     if file_index is not None:
@@ -255,22 +270,25 @@ def resolve_cobol_module_path(
     project_file_set: set[str],
     project_dir: str,
 ) -> str | None:
-    """Resolve the module string of a COBOL COPY or CALL statement to a project file.
+    """Resolve the module string of a COBOL COPY or CALL statement or a JCL statement to a file.
 
     Examples:
         "COPY CUSTREC"             -> "copy/CUSTREC.cpy"
         "COPY CUSTREC OF COPYLIB"  -> "COPYLIB/CUSTREC.cpy"
         "CALL TAXCALC"             -> "src/TAXCALC.cbl" (the file with PROGRAM-ID. TAXCALC)
+        "PROC REPROC"              -> "proc/REPROC.prc" (member_path)
+        "INCLUDE DBSTEPS"          -> "jcl/DBSTEPS.jcl" (member_path)
 
     Args:
-        module: A module string of an ImportInfo of a COBOL file.
+        module: A module string of an ImportInfo of a COBOL file or a JCL file.
         current_file_rel: Relative path of the file the statement is written in.
         project_file_set: Set of file paths within the project.
         project_dir: Absolute path to the project root.
 
     Returns:
-        Relative path of the file. None when no project file has the name, or when
-        the statement names the current file itself.
+        Relative path of the file. None when no project file has the name (for a JCL
+        procedure or member, no file that is not a job), or when the statement names the
+        current file itself.
     """
     kind, name, library = cobol_module_part(module)
     file_index = _get_file_index(project_dir, project_file_set)
@@ -279,6 +297,10 @@ def resolve_cobol_module_path(
         resolved = _copybook_path(name, library, current_file_rel, file_index)
     elif kind == CALL_KIND:
         resolved = _program_path(name, current_file_rel, file_index)
+    elif kind in (PROC_KIND, INCLUDE_KIND):
+        resolved = member_path(
+            name, kind, current_file_rel, file_index.jcl_name_dict, file_index.jcl_job_file_set,
+        )
     return resolved if resolved != current_file_rel else None
 
 
@@ -359,31 +381,33 @@ def _is_cobol_text(file_rel: str, project_dir: str) -> bool:
 
 
 def register_copy_target(project_dir: str, file_rel_list: list[str]) -> dict[str, str]:
-    """Find the files without a language that COPY statements name, and record them as COBOL.
+    """Find the files without a language that are JCL or COBOL copybooks, and record them.
 
-    A COPY statement or EXEC SQL INCLUDE of a COBOL file that resolves to a file without
-    a language (_copybook_path, with those files as candidates too) makes that file a
-    COBOL copybook, whatever its extension, when the statement names it with its whole
-    file name, or when its text read as COBOL holds a data item, the description of a
-    file or a statement of the procedure division (_is_cobol_text); otherwise the
-    statement is resolved again without that file. The COPY statements of such a file
-    are followed as well. The files are recorded with set_copy_target_ext(), replacing
-    the ones recorded before for the project.
+    The JCL files among them are found first (register_jcl_target). A COPY statement or
+    EXEC SQL INCLUDE of a COBOL file that resolves to a file without a language
+    (_copybook_path, with those files as candidates too) makes that file a COBOL
+    copybook, whatever its extension, when the statement names it with its whole file
+    name, or when its text read as COBOL holds a data item, the description of a file
+    or a statement of the procedure division (_is_cobol_text); otherwise the statement
+    is resolved again without that file. The COPY statements of such a file are
+    followed as well. The files are recorded with set_copy_target_ext() and
+    add_copy_target_ext(), replacing the ones recorded before for the project.
 
     Processing flow:
-    1. Parse the COBOL files and BMS sources once: index them and keep the COPY
+    1. Record the JCL files among the files without a language
+    2. Parse the COBOL files and BMS sources once: index them and keep the COPY
        statements of the COBOL files
-    2. Index the files without a language by their file name as well
-    3. Follow the COPY statements, recording and parsing each file without a language
+    3. Index the files without a language by their file name as well
+    4. Follow the COPY statements, recording and parsing each file without a language
        they lead to
-    4. Keep the index of the files with a language in file_index_cache
+    5. Keep the index of the files with a language in file_index_cache
 
     Args:
         project_dir: Absolute path to the project root.
         file_rel_list: Relative paths of the project files.
 
     Returns:
-        {relative path: "cpy"} of the files recorded.
+        {relative path: "jcl" for a JCL file, "cpy" for a copybook} of the files recorded.
     """
     set_copy_target_ext(project_dir, {})
     other_file_set = {
@@ -394,7 +418,12 @@ def register_copy_target(project_dir: str, file_rel_list: list[str]) -> dict[str
         return {}
     language_file_set = set(file_rel_list) - other_file_set
 
-    # == Step 1: COBOL files and BMS sources ==================================
+    # == Step 1: JCL files ====================================================
+    copy_target_ext_dict = register_jcl_target(project_dir, other_file_set, language_file_set)
+    other_file_set -= set(copy_target_ext_dict)
+    language_file_set |= set(copy_target_ext_dict)
+
+    # == Step 2: COBOL files and BMS sources ==================================
     file_index = CobolFileIndex()
     # Relative path of a COBOL file -> (copybook name, library name) of its COPY statements
     copy_name_dict: dict[str, list[tuple[str, str]]] = {}
@@ -406,7 +435,7 @@ def register_copy_target(project_dir: str, file_rel_list: list[str]) -> dict[str
         if _is_cobol_file(file_rel, project_dir):
             copy_name_dict[file_rel] = _copy_name_list(cobol_source)
 
-    # == Step 2: Files without a language =====================================
+    # == Step 3: Files without a language =====================================
     lookup_index = CobolFileIndex(
         file_name_dict={
             name: list(file_list) for name, file_list in file_index.file_name_dict.items()
@@ -415,11 +444,10 @@ def register_copy_target(project_dir: str, file_rel_list: list[str]) -> dict[str
         program_file_set=file_index.program_file_set,
     )
     for file_rel in other_file_set:
-        _add_file_name(lookup_index, file_rel, [])
+        add_file_name(lookup_index.file_name_dict, file_rel)
     _sort_file_index(lookup_index)
 
-    # == Step 3: COPY statements ==============================================
-    copy_target_ext_dict: dict[str, str] = {}
+    # == Step 4: COPY statements ==============================================
     # Relative path of a file without a language -> whether its text is read as COBOL
     is_cobol_text_dict: dict[str, bool] = {}
 
@@ -445,29 +473,32 @@ def register_copy_target(project_dir: str, file_rel_list: list[str]) -> dict[str
             if resolved not in other_file_set or resolved in copy_target_ext_dict:
                 continue
             copy_target_ext_dict[resolved] = _COPYBOOK_EXT
-            set_copy_target_ext(project_dir, copy_target_ext_dict)
+            add_copy_target_ext(project_dir, resolved, _COPYBOOK_EXT)
             cobol_source = _cobol_source(resolved, project_dir)
             if cobol_source is not None:
                 _add_source(file_index, resolved, cobol_source)
                 copy_name_dict[resolved] = _copy_name_list(cobol_source)
                 queue.append(resolved)
 
-    # == Step 4: Index of the files with a language ===========================
+    # == Step 5: Index of the files with a language ===========================
     _sort_file_index(file_index)
+    _add_jcl_name(file_index, project_dir, language_file_set)
     file_index_cache[project_dir] = (language_file_set | set(copy_target_ext_dict), file_index)
     return copy_target_ext_dict
 
 
 @dataclass
 class CobolReferenceTarget:
-    """The definition one reference of a COBOL file resolves to."""
+    """The definition one reference of a COBOL file or a JCL file resolves to."""
 
     # Name of the definition: a data name or procedure name as the referring file writes
-    # it (after REPLACING), a program or ENTRY name as its definition writes it
+    # it (after REPLACING), a program, ENTRY, procedure, step or symbol name as its
+    # definition writes it; the name as referred to without a definition
     name: str
     line: int        # Line of the reference (1-based)
     file_rel: str    # Relative path of the file with the definition
-    # The definition; None when the program file of a CALL is not read
+    # The definition; None when the program file of a CALL is not read, and for the
+    # procedure of a JCL file that does not start with a PROC statement
     definition: CobolDefinition | None
 
 
@@ -665,6 +696,25 @@ def _first_program_definition(cobol_source: CobolSource | None) -> CobolDefiniti
             if definition.type in CALL_TARGET_TYPE_TUPLE
         ),
         None,
+    )
+
+
+def program_definition(file_rel: str, name: str, project_dir: str) -> CobolDefinition | None:
+    """Return the program or ENTRY of a program file a program name leads to.
+
+    Args:
+        file_rel: Relative path of the program file.
+        name: The program name.
+        project_dir: Absolute path to the project root.
+
+    Returns:
+        The program or ENTRY of that name, else the first program or ENTRY of the file.
+        None when the file has neither or cannot be read.
+    """
+    cobol_source = _cobol_source(file_rel, project_dir)
+    return (
+        _program_definition(cobol_source, name.upper())
+        or _first_program_definition(cobol_source)
     )
 
 

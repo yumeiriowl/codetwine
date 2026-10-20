@@ -12,8 +12,7 @@ from codetwine.extractors.definitions import (
 from codetwine.extractors.r_source import r_definition_text
 from codetwine.extractors.usages import symbol_part_list
 from codetwine.config.settings import (
-    BMS_DEFINITION_DICT,
-    COBOL_DEFINITION_DICT,
+    COBOL_SOURCE_EXT_SET,
     EXT_TO_DEFINITION_DICT,
     PARSE_CACHE_MAX_FILES,
     R_EXT_SET,
@@ -275,7 +274,7 @@ def file_definition(
     Returns:
         The definition. None when the name names no definition of the file, and for a
         file whose definitions are not read by extract_definitions() from a syntax
-        tree (COBOL, BMS, R, a file without a language).
+        tree (COBOL, BMS, JCL, R, a file without a language).
     """
     definition_tuple = source_definition(file_rel, name, project_dir)
     return definition_tuple[0] if definition_tuple is not None else None
@@ -304,18 +303,13 @@ def source_definition(
     Returns:
         (definition, source text of the definition). None when the name names no
         definition of the file, and for a file whose definitions are not read by
-        extract_definitions() from a syntax tree (COBOL, BMS, R, a file without a
-        language).
+        extract_definitions() from a syntax tree (COBOL, BMS, JCL, R, a file without
+        a language).
     """
     absolute_path = os.path.join(project_dir, file_rel)
     file_ext = language_ext(absolute_path)
     definition_dict = EXT_TO_DEFINITION_DICT.get(file_ext)
-    if (
-        not definition_dict
-        or definition_dict is COBOL_DEFINITION_DICT
-        or definition_dict is BMS_DEFINITION_DICT
-        or file_ext in R_EXT_SET
-    ):
+    if not definition_dict or file_ext in COBOL_SOURCE_EXT_SET or file_ext in R_EXT_SET:
         return None
     definition_list, content = _file_definition(absolute_path, definition_dict)
     definition: DefinitionInfo | None = None
@@ -352,8 +346,8 @@ def extract_callee_source(
     is no definition, the definition of the part before it is returned (the owner of
     an enum variant, the variable a method is called on). See find_definition.
 
-    For a COBOL file the lines of the first definition with the name are returned;
-    names are compared without regard to upper and lower case.
+    For a COBOL file, a BMS source or a JCL file the lines of the first definition with
+    the name are returned; names are compared without regard to upper and lower case.
     For an R file the lines of the definition named callee_name as a whole are returned
     (r_source.r_definition_text); the name is not split into parts.
 
@@ -372,7 +366,7 @@ def extract_callee_source(
     if not definition_dict:
         return None
 
-    if definition_dict is COBOL_DEFINITION_DICT or definition_dict is BMS_DEFINITION_DICT:
+    if file_ext in COBOL_SOURCE_EXT_SET:
         return parse_file(absolute_path)[0].definition_source(callee_name)
     if file_ext in R_EXT_SET:
         callee_root, callee_content = parse_file(absolute_path)

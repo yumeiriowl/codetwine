@@ -52,7 +52,7 @@ class ImportInfo:
 
 
 def cobol_module(kind: str, name: str, library: str = "") -> str:
-    """Return the module string of a COBOL COPY or CALL statement.
+    """Return the module string of a COBOL COPY or CALL statement, or of a JCL statement.
 
     Inverse of cobol_module_part.
 
@@ -60,12 +60,13 @@ def cobol_module(kind: str, name: str, library: str = "") -> str:
         ("COPY", "CUSTREC")             -> "COPY CUSTREC"
         ("COPY", "CUSTREC", "COPYLIB")  -> "COPY CUSTREC OF COPYLIB"
         ("CALL", "TAXCALC")             -> "CALL TAXCALC"
+        ("PROC", "REPROC")              -> "PROC REPROC"
     """
     return f"{kind} {name} OF {library}" if library else f"{kind} {name}"
 
 
 def cobol_module_part(module: str) -> tuple[str, str, str]:
-    """Split the module string of a COBOL statement into (kind, name, library).
+    """Split the module string of a COBOL or JCL statement into (kind, name, library).
 
     Inverse of cobol_module.
 
@@ -73,6 +74,7 @@ def cobol_module_part(module: str) -> tuple[str, str, str]:
         "COPY CUSTREC OF COPYLIB"  -> ("COPY", "CUSTREC", "COPYLIB")
         "CALL TAXCALC"             -> ("CALL", "TAXCALC", "")
         "CALL LIST OF ITEMS"       -> ("CALL", "LIST OF ITEMS", "")
+        "INCLUDE DBSTEPS"          -> ("INCLUDE", "DBSTEPS", "")
     """
     kind, _, operand = module.partition(" ")
     if kind != COPY_KIND:
@@ -82,10 +84,12 @@ def cobol_module_part(module: str) -> tuple[str, str, str]:
 
 
 def _cobol_import_list(cobol_source: CobolSource) -> list[ImportInfo]:
-    """Return the COPY and CALL statements of a COBOL file as ImportInfo.
+    """Return the COPY and CALL statements of a COBOL file, or the statements of a JCL file, as ImportInfo.
 
     COPY name        -> module "COPY name", names ["*"]
     CALL name        -> module "CALL name", names [name]
+    PROC name        -> module "PROC name", names ["*"] (JCL)
+    INCLUDE name     -> module "INCLUDE name", names ["*"] (JCL)
     The same statement on the same line is returned once.
 
     Args:
@@ -228,10 +232,12 @@ def extract_imports(
     When the same import statement has multiple @name captures (from X import Y, Z),
     they are consolidated into a single ImportInfo.
 
-    For a CobolSource its COPY and CALL statements are returned, without a query.
+    For a CobolSource its COPY and CALL statements are returned, without a query (for a
+    JCL file: its programs, procedures and INCLUDE members).
 
     Args:
-        root_node: The AST root node covering the entire file, or the CobolSource of a COBOL file.
+        root_node: The AST root node covering the entire file, or the CobolSource of a
+            COBOL file, a BMS source or a JCL file.
         language: tree-sitter Language object (required for Query creation).
         import_query_str: tree-sitter query string (obtained from EXT_TO_IMPORT_QUERY_DICT in config.py).
                           Returns an empty list when None (for languages with no import query defined).

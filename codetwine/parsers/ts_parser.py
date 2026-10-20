@@ -6,6 +6,7 @@ from codetwine.config.settings import (
     C_FAMILY_EXT_SET,
     COBOL_EXT_SET,
     EXT_TO_LANGUAGE_DICT,
+    JCL_EXT_SET,
     KOTLIN_EXT_SET,
     PARSE_CACHE_MAX_FILES,
     R_MARKDOWN_EXT_SET,
@@ -13,6 +14,7 @@ from codetwine.config.settings import (
 )
 from codetwine.extractors.bms_source import read_bms_source
 from codetwine.extractors.cobol_source import CobolSource, read_cobol_source
+from codetwine.extractors.jcl_source import read_jcl_source
 from codetwine.parsers.c_macro import parse_c_family
 from codetwine.parsers.kotlin_form import parse_kotlin
 from codetwine.parsers.r_markdown import r_chunk_code
@@ -26,7 +28,7 @@ _END_NAME = b"codetwine_end_of_code"
 
 # Module-level cache for parse results, ordered from least to most recently used.
 # One entry holds one file's whole syntax tree: a tree-sitter Node keeps its tree alive.
-# The entry of a COBOL file or a BMS source holds its CobolSource.
+# The entry of a COBOL file, a BMS source or a JCL file holds its CobolSource.
 # The number of entries is capped by PARSE_CACHE_MAX_FILES.
 parse_cache: OrderedDict[str, tuple[Node | CobolSource, bytes]] = OrderedDict()
 
@@ -88,8 +90,9 @@ def parse_file(file_path: str) -> tuple[Node | CobolSource, bytes]:
     as UTF-8. Line numbers are those of line_list_of() over the file.
 
     For a COBOL file the first element is a CobolSource (read_cobol_source) in place of
-    the root node, and for a BMS source the CobolSource of its symbolic maps
-    (read_bms_source); extract_definitions(), extract_imports() and extract_usages()
+    the root node, for a BMS source the CobolSource of its symbolic maps
+    (read_bms_source), and for a JCL file its JclSource (read_jcl_source);
+    extract_definitions(), extract_imports() and extract_usages()
     take it as they take a root node. The language is the one language_ext() gives.
 
     For an R Markdown or Quarto file the root node is the tree of its R code chunks
@@ -138,6 +141,9 @@ def parse_file(file_path: str) -> tuple[Node | CobolSource, bytes]:
     elif ext in BMS_EXT_SET:
         # Read the maps of the BMS macros
         parse_result = (read_bms_source(content.decode("utf-8")), content)
+    elif ext in JCL_EXT_SET:
+        # Read the jobs, procedures, steps and symbols of the JCL statements
+        parse_result = (read_jcl_source(content.decode("utf-8")), content)
     elif ext in R_MARKDOWN_EXT_SET:
         # Parse the R code chunks of the document, everything else blanked; a chunk
         # whose code runs on past its end is blanked as well

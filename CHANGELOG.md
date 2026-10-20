@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.2 - 2026-10-21
+
+### Added
+- JCL: jobs, procedures and `INCLUDE` members (`jcl`, `prc`, `proc` in any case) are analyzed without a grammar (`jcl_source.read_jcl_source()`): jobs, procedures, named steps and the symbols `PROC` and `SET` statements give a value are definitions (`job_statement`, `proc_statement`, `exec_statement`, `symbolic_parameter`, with `name_line`)
+- JCL: a step depends on the program it runs (`PGM=`, `RUN PROGRAM(...)` in the in-stream `SYSTSIN` data of a TSO batch step or of a step that calls a procedure, the program in the `PARM` of an IMS batch step), an `EXEC` statement on the procedure it calls (an in-stream procedure of its job, else the file named like it that is no job, a `prc` / `proc` file first; the PROC statement that starts the file whatever its name) and an `INCLUDE` statement on its member; a symbol in those names stands for the values the file gives it (`SET` statements of the same procedure or job before it, in-stream procedures of the same job, `PROC` defaults, the `EXEC` statements that call an in-stream procedure)
+- JCL: the `INCLUDE` members (with no `target_context`), the steps named in `COND` parameters, `IF` statements and referbacks (`*.STEP.DD`), the steps and symbolic parameters of a called procedure named on its `EXEC` and `DD` statements (`PARM.STEP=`, `//STEP.DD DD`, `MEM=value`) and the symbols of the operands (`&HLQ`) are usages, resolved by `jcl_reference.jcl_reference_target_list()`
+- JCL: a file without a language whose first statement is a `JOB` or `JOBGROUP` statement in upper case, or that an `EXEC` or `INCLUDE` statement of a JCL file names and whose first statement is a JCL statement in upper case, is analyzed as JCL (`language` `jcl`, `jcl_member.register_jcl_target()`); a `jcl` / `prc` / `proc` file whose first statement is no JCL statement is analyzed without a language (`jcl_member.no_jcl_file_list()`)
+- The operands of BMS macros and JCL statements are split by `parsers/operand.py`, and the file names of COBOL and JCL files are indexed by `file_utils.add_file_name()`
+
 ## 0.4.1 - 2026-10-04
 
 ### Added

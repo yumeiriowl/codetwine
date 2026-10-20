@@ -1,6 +1,7 @@
 import re
 from dataclasses import dataclass, field
 from codetwine.extractors.cobol_source import DATA_ITEM_TYPE, CobolDefinition, CobolSource
+from codetwine.parsers.operand import operand_dict
 from codetwine.utils.file_utils import line_list_of
 
 # Column (0-based) whose character marks an assembler statement as continued on the next line
@@ -127,41 +128,6 @@ def _statement_list(line_list: list[str]) -> list[_Statement]:
     return statement_list
 
 
-def _operand_dict(operand_text: str) -> dict[str, str]:
-    """Split operands "KEY=value,..." at the commas outside quotes and parentheses.
-
-    Examples:
-        "TYPE=MAP,DSATTS=(COLOR,HILIGHT)" -> {"TYPE": "MAP", "DSATTS": "(COLOR,HILIGHT)"}
-
-    Returns:
-        {upper-case key: value as written}; a key without "=" has the value "".
-    """
-    part_list: list[str] = []
-    part = ""
-    depth = 0
-    is_in_quote = False
-    for char in operand_text:
-        if char == "'":
-            is_in_quote = not is_in_quote
-        elif not is_in_quote and char == "(":
-            depth += 1
-        elif not is_in_quote and char == ")":
-            depth -= 1
-        elif not is_in_quote and depth == 0 and char == ",":
-            part_list.append(part)
-            part = ""
-            continue
-        part += char
-    part_list.append(part)
-
-    operand_dict: dict[str, str] = {}
-    for part in part_list:
-        key, _, value = part.partition("=")
-        if key.strip():
-            operand_dict[key.strip().upper()] = value.strip()
-    return operand_dict
-
-
 def _value_list(value: str) -> list[str]:
     """Return the upper-case items of an operand value such as "(COLOR,HILIGHT)" or "YES"."""
     return [item.strip().upper() for item in value.strip("()").split(",") if item.strip()]
@@ -199,11 +165,11 @@ def _read_map_list(statement_list: list[_Statement]) -> tuple[list[_Map], list[s
     current_map: _Map | None = None
     group_dict: dict[str, _Field] = {}
     for statement in statement_list:
-        operand_dict = _operand_dict(statement.operand_text)
+        statement_operand_dict = operand_dict(statement.operand_text)
         if statement.operation == "DFHMSD":
             current_map = None
-            if operand_dict.get("TYPE", "").upper() != "FINAL":
-                mapset_option_dict = operand_dict
+            if statement_operand_dict.get("TYPE", "").upper() != "FINAL":
+                mapset_option_dict = statement_operand_dict
                 if _NAME_RE.fullmatch(statement.label):
                     mapset_name_list.append(statement.label.upper())
             continue
@@ -212,7 +178,7 @@ def _read_map_list(statement_list: list[_Statement]) -> tuple[list[_Map], list[s
             if _NAME_RE.fullmatch(statement.label):
                 current_map = _Map(
                     statement.label.upper(),
-                    _attribute_list({**mapset_option_dict, **operand_dict}),
+                    _attribute_list({**mapset_option_dict, **statement_operand_dict}),
                     statement.start_line,
                     statement.end_line,
                 )
@@ -225,12 +191,12 @@ def _read_map_list(statement_list: list[_Statement]) -> tuple[list[_Map], list[s
         if statement.operation != "DFHMDF" or not _NAME_RE.fullmatch(statement.label):
             continue
 
-        occurs = operand_dict.get("OCCURS", "")
+        occurs = statement_operand_dict.get("OCCURS", "")
         bms_field = _Field(
             statement.label.upper(), int(occurs) if occurs.isdigit() else 0,
             statement.start_line, statement.end_line,
         )
-        group_name = operand_dict.get("GRPNAME", "").upper()
+        group_name = statement_operand_dict.get("GRPNAME", "").upper()
         if not group_name:
             current_map.field_list.append(bms_field)
             continue
