@@ -12,7 +12,7 @@ from codetwine.cobol_file_index import (
 from codetwine.csharp_namespace_index import csharp_target_cache, namespace_index_cache
 from codetwine.import_binding import clear_import_binder_cache, import_binder
 from codetwine.import_reference import clear_import_reference_cache
-from codetwine.jcl_member import no_jcl_file_list
+from codetwine.jcl_member import no_csd_file_list, no_jcl_file_list
 from codetwine.rust_module_tree import module_tree_cache
 from codetwine.parsers.r_markdown import has_r_chunk
 from codetwine.path_config import path_config_cache
@@ -161,8 +161,10 @@ def _import_callee_rel_set(
 
     For a file whose references are resolved through its import statements these are
     the files its ImportBinder gives; for a COBOL file, the files its COPY and CALL
-    statements resolve to; for a JCL file, the files of the programs its steps run, the
-    procedures its EXEC statements call and its INCLUDE members.
+    statements and EXEC CICS TRANSID options resolve to; for a JCL file, the files of
+    the programs its steps run, the procedures its EXEC statements call and its INCLUDE
+    members; for a CSD file (and the CSD commands of a JCL file), the files of the
+    programs and mapsets it names.
 
     Args:
         file_path: Absolute path of the file.
@@ -335,13 +337,15 @@ def build_project_dependencies(
     JCL file names and whose first statement is a JCL statement in upper case, is
     analyzed as JCL (register_jcl_target), and one that a COBOL COPY statement names as a
     COBOL copybook; each keeps that language until the next call for the project
-    (register_copy_target). An R Markdown or Quarto file without an R code chunk, and a
-    file with a JCL extension whose first statement is no JCL statement, is analyzed
-    without a language, until the next call for the project (set_no_language_file).
+    (register_copy_target). An R Markdown or Quarto file without an R code chunk, a file
+    with a JCL extension whose first statement is no JCL statement, and a file with a
+    CSD extension whose first line that is no blank or comment is no DFHCSDUP command,
+    is analyzed without a language, until the next call for the project
+    (set_no_language_file).
     The indexes built from the files of a project and the references resolved with
     them are cleared: the Rust module trees (module_tree_cache), the C# namespace
     indexes (namespace_index_cache, csharp_target_cache), the R name indexes
-    (r_name_index_cache, r_target_cache), the COBOL and JCL file indexes
+    (r_name_index_cache, r_target_cache), the COBOL, JCL and CSD file indexes
     (file_index_cache, reference_target_cache) and the names and references resolved
     through import statements (clear_import_reference_cache, clear_import_binder_cache,
     clear_import_path_cache), the definitions read for a definition's source
@@ -381,13 +385,15 @@ def build_project_dependencies(
     clear_package_path_cache()
     clear_alias_path_cache()
 
-    # R Markdown and Quarto files without an R code chunk and files with a JCL extension
-    # that hold no JCL are analyzed without a language, and files without a language
-    # that are JCL or that COBOL COPY statements name are analyzed as JCL or COBOL
+    # R Markdown and Quarto files without an R code chunk and files with a JCL or CSD
+    # extension that hold no JCL or CSD commands are analyzed without a language, and
+    # files without a language that are JCL or that COBOL COPY statements name are
+    # analyzed as JCL or COBOL
     all_file_rel_list = [_to_rel(f, project_dir) for f in all_file_list]
     set_no_language_file(project_dir, [
         *_no_chunk_document_list(project_dir, all_file_list),
         *no_jcl_file_list(project_dir, all_file_rel_list),
+        *no_csd_file_list(project_dir, all_file_rel_list),
     ])
     register_copy_target(project_dir, all_file_rel_list)
 

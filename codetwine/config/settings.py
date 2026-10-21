@@ -332,6 +332,16 @@ JCL_DEFINITION_DICT = {
     "symbolic_parameter": "name",
 }
 
+# Definition types of a CSD file (the resources DEFINE and USERDEFINE commands define:
+# define_ + the lower-case resource type) -> the node that holds the name. The
+# definitions are read by csd_source.read_csd_source(), with every other resource type
+# as well (define_file, define_profile, ...); the values are not read
+CSD_DEFINITION_DICT = {
+    "define_transaction": "name",
+    "define_program": "name",
+    "define_mapset": "name",
+}
+
 # Definition types of R -> the node that holds the name.
 # The definitions are read by r_source.r_definition_list(); the values are not read
 R_DEFINITION_DICT = {
@@ -1078,7 +1088,7 @@ class LangConfig:
                                          the end of the project file paths; absent: never
                         module_tree    - Whether to resolve paths through the tree of mod declarations (Rust)
                         name_index     - Whether to resolve names through the file names and
-                                         program names of the project (COBOL, JCL)
+                                         program names of the project (COBOL, JCL, CSD)
     implicit_visibility: Which files' definitions can be referenced without an import statement:
                         "package" - files that declare the same package; for a file without
                                     a package statement, the files of its directory that
@@ -1086,12 +1096,12 @@ class LangConfig:
                         "project" - every file of the same extension (SQL)
                         None      - none
     ignore_ext_case:  Whether the extension is matched without regard to upper and lower
-                      case (COBOL, BMS, JCL, R)
+                      case (COBOL, BMS, JCL, CSD, R)
     reference_kind:   How the references of a file are resolved to definitions:
                         "import" - through its import statements and implicit_visibility
                         "cobol"  - COBOL names with OF / IN qualification (COBOL, BMS)
-                        "jcl"    - programs, procedures, INCLUDE members, steps and
-                                   symbols (JCL)
+                        "jcl"    - programs, procedures, INCLUDE members, mapsets,
+                                   steps, symbols and CICS resources (JCL, CSD)
                         "csharp" - through namespaces and using directives (C#)
                         "r"      - through the names an R file sees (R)
     """
@@ -1126,6 +1136,16 @@ _BMS_LANG_CONFIG = LangConfig(
 _JCL_LANG_CONFIG = LangConfig(
     language=tspack.get_language("cobol"),
     definition_dict=JCL_DEFINITION_DICT,
+    import_resolve_dict={"separator": " ", "name_index": True},
+    ignore_ext_case=True,
+    reference_kind="jcl",
+)
+
+# CICS CSD files (DFHCSDUP input) are read without a grammar; the COBOL grammar only fills
+# the field
+_CSD_LANG_CONFIG = LangConfig(
+    language=tspack.get_language("cobol"),
+    definition_dict=CSD_DEFINITION_DICT,
     import_resolve_dict={"separator": " ", "name_index": True},
     ignore_ext_case=True,
     reference_kind="jcl",
@@ -1230,6 +1250,7 @@ _LANG_REGISTRY: dict[str, LangConfig] = {
     "jcl": _JCL_LANG_CONFIG,
     "prc": _JCL_LANG_CONFIG,
     "proc": _JCL_LANG_CONFIG,
+    "csd": _CSD_LANG_CONFIG,
     "r": _R_LANG_CONFIG,
     "rmd": _R_LANG_CONFIG,
     "qmd": _R_LANG_CONFIG,
@@ -1335,8 +1356,15 @@ JCL_EXT_SET: set[str] = {
     if definition_dict is JCL_DEFINITION_DICT
 }
 
-# Extensions of the files read into a CobolSource: COBOL files, BMS sources and JCL files
-COBOL_SOURCE_EXT_SET: set[str] = COBOL_EXT_SET | BMS_EXT_SET | JCL_EXT_SET
+# Extensions of the CSD files (lower case)
+CSD_EXT_SET: set[str] = {
+    ext for ext, definition_dict in EXT_TO_DEFINITION_DICT.items()
+    if definition_dict is CSD_DEFINITION_DICT
+}
+
+# Extensions of the files read into a CobolSource: COBOL files, BMS sources, JCL files and
+# CSD files
+COBOL_SOURCE_EXT_SET: set[str] = COBOL_EXT_SET | BMS_EXT_SET | JCL_EXT_SET | CSD_EXT_SET
 
 # Extensions matched without regard to upper and lower case (lower case)
 _IGNORE_CASE_EXT_SET: set[str] = {
@@ -1380,7 +1408,8 @@ def add_copy_target_ext(project_dir: str, file_rel: str, ext: str) -> None:
 
 # Absolute path of a file whose extension has a language but which is analyzed without
 # one. Filled by set_no_language_file() (R Markdown / Quarto: a file without an R code chunk;
-# JCL: a file whose first statement is no JCL statement)
+# JCL: a file whose first statement is no JCL statement; CSD: a file whose first line that
+# is no blank or comment is no DFHCSDUP command)
 _no_language_path_set: set[str] = set()
 
 
@@ -1417,6 +1446,8 @@ def language_ext(path: str) -> str:
         "docs/notes.qmd"      -> "" (when it has no R code chunk)
         "jcl/NIGHTLY"         -> "jcl" (when its first statement is a JOB or JOBGROUP statement)
         "plsql/add_cust.prc"  -> "" (when its first statement is no JCL statement)
+        "sound/tone.csd"      -> "" (when its first line that is no blank or comment is no
+                                 DFHCSDUP command)
 
     Args:
         path: A file path. A relative path is taken from the current directory when

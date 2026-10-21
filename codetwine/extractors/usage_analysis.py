@@ -134,7 +134,7 @@ def _cobol_own_range_function(
 def _jcl_own_range_function(
     definition_list: list[DefinitionInfo], root_node: Node | CobolSource,
 ) -> Callable[[CobolReferenceTarget], list[tuple[int, int]]]:
-    """Return the function giving no lines for a JCL reference: each one is kept."""
+    """Return the function giving no lines for a JCL or CSD reference: each one is kept."""
     def jcl_range_list(target: CobolReferenceTarget) -> list[tuple[int, int]]:
         """Return no lines."""
         return []
@@ -262,9 +262,9 @@ def _group_same_file_target_list(
 def _cobol_definition_function(
     project_dir: str,
 ) -> Callable[[CobolReferenceTarget], _TargetDefinition]:
-    """Return the function giving the definition a COBOL or JCL reference resolved to."""
+    """Return the function giving the definition a COBOL, JCL or CSD reference resolved to."""
     def cobol_definition(target: CobolReferenceTarget) -> _TargetDefinition:
-        """Return the definition a COBOL or JCL reference resolves to, with its lines as text."""
+        """Return the definition a COBOL, JCL or CSD reference resolves to, with its lines."""
         if target.definition is None:
             return _NO_DEFINITION
         target_source = parse_file(os.path.join(project_dir, target.file_rel))[0]

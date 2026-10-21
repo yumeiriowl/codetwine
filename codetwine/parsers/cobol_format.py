@@ -93,6 +93,9 @@ _FILE_ENTRY_WORD_SET = {"FD", "SD"}
 _OPERATOR_CHAR_SET = set("=<>")
 # Texts of the tokens that separate the clauses of a statement
 _SEPARATOR_TEXT_SET = {",", ";"}
+# Options of an EXEC CICS command that name a program and a transaction
+_CICS_PROGRAM_OPTION = "PROGRAM"
+_CICS_TRANSID_OPTION = "TRANSID"
 
 # == Divisions ================================================================
 IDENTIFICATION_DIVISION = "IDENTIFICATION"
@@ -224,6 +227,8 @@ class CobolText:
     # (name, whether it is a literal, source line) of each CALL statement and of each
     # EXEC CICS command with PROGRAM(name); a name that is not a literal is a data item
     call_list: list[tuple[str, bool, int]] = field(default_factory=list)
+    # The same of each EXEC CICS command with TRANSID(name)
+    transid_list: list[tuple[str, bool, int]] = field(default_factory=list)
     # (word, source line, names that qualify it) of the words of the statements that are
     # in no unit; X OF Y IN Z gives X the names (Y, Z), and :Y.X in an EXEC block gives X (Y,)
     word_list: list[tuple[str, int, tuple[str, ...]]] = field(default_factory=list)
@@ -1304,6 +1309,7 @@ class _Split:
 
         EXEC SQL INCLUDE name         -> recorded in cobol_text.copy_list
         EXEC CICS ... PROGRAM(name)   -> recorded in cobol_text.call_list
+        EXEC CICS ... TRANSID(name)   -> recorded in cobol_text.transid_list
         The words of the block are recorded in cobol_text.word_list, a word with ":"
         as the words between them; a host variable written :STRUCT.NAME is qualified by
         STRUCT. Of an EXEC SQL block only the host variables (the words after a ":")
@@ -1341,14 +1347,19 @@ class _Split:
                     token_list[index].position,
                 ))
         elif kind == "CICS":
+            option_list_dict = {
+                _CICS_PROGRAM_OPTION: self.cobol_text.call_list,
+                _CICS_TRANSID_OPTION: self.cobol_text.transid_list,
+            }
             for position in range(len(block_token_list) - 2):
                 name_token = block_token_list[position + 2]
+                option_list = option_list_dict.get(_word(block_token_list, position))
                 if (
-                    _word(block_token_list, position) == "PROGRAM"
+                    option_list is not None
                     and block_token_list[position + 1].text == "("
                     and name_token.kind in ("word", "literal")
                 ):
-                    self.cobol_text.call_list.append(
+                    option_list.append(
                         (literal_value(name_token.text), name_token.kind == "literal", line)
                     )
 

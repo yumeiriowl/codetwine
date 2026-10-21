@@ -274,7 +274,7 @@ def file_definition(
     Returns:
         The definition. None when the name names no definition of the file, and for a
         file whose definitions are not read by extract_definitions() from a syntax
-        tree (COBOL, BMS, JCL, R, a file without a language).
+        tree (COBOL, BMS, JCL, CSD, R, a file without a language).
     """
     definition_tuple = source_definition(file_rel, name, project_dir)
     return definition_tuple[0] if definition_tuple is not None else None
@@ -303,8 +303,8 @@ def source_definition(
     Returns:
         (definition, source text of the definition). None when the name names no
         definition of the file, and for a file whose definitions are not read by
-        extract_definitions() from a syntax tree (COBOL, BMS, JCL, R, a file without
-        a language).
+        extract_definitions() from a syntax tree (COBOL, BMS, JCL, CSD, R, a file
+        without a language).
     """
     absolute_path = os.path.join(project_dir, file_rel)
     file_ext = language_ext(absolute_path)
@@ -346,8 +346,9 @@ def extract_callee_source(
     is no definition, the definition of the part before it is returned (the owner of
     an enum variant, the variable a method is called on). See find_definition.
 
-    For a COBOL file, a BMS source or a JCL file the lines of the first definition with
-    the name are returned; names are compared without regard to upper and lower case.
+    For a COBOL file, a BMS source, a JCL file or a CSD file the lines of the first
+    definition with the name are returned; names are compared without regard to upper
+    and lower case.
     For an R file the lines of the definition named callee_name as a whole are returned
     (r_source.r_definition_text); the name is not split into parts.
 

@@ -43,10 +43,10 @@ def reference_target_list(
 
     The references are resolved the way the language of the file names things: a COBOL
     file or a BMS source with OF / IN qualification (cobol_reference_target_list), a JCL
-    file through its programs, procedures, INCLUDE members, steps and symbols
-    (jcl_reference_target_list), a C# file through its namespaces and using directives
-    (csharp_reference_target_list), an R file through the names it sees
-    (r_reference_target_list), a file of any other language through its import
+    or CSD file through its programs, procedures, members, mapsets, steps, symbols and
+    CICS resources (jcl_reference_target_list), a C# file through its namespaces and
+    using directives (csharp_reference_target_list), an R file through the names it
+    sees (r_reference_target_list), a file of any other language through its import
     statements (import_reference_target_list).
 
     Args:

@@ -44,6 +44,7 @@ The knowledge file can be used as input material for LLM-powered code search and
   - [C#](#c)
   - [COBOL](#cobol)
   - [JCL](#jcl)
+  - [CSD](#csd)
   - [R](#r)
 - [♻️ Incremental Processing](#️-incremental-processing)
 - [🎨 Customizing the Design Document Template](#-customizing-the-design-document-template)
@@ -75,14 +76,18 @@ Definitions, dependencies and design documents are extracted for the following l
 | C# | `cs` |
 | COBOL | `cbl`, `cob`, `cpy` (in any case) |
 | BMS (CICS map definitions: the names of the symbolic map a COBOL program copies) | `bms` (in any case) |
-| JCL (jobs, procedures and `INCLUDE` members: the programs the steps run, the procedures they call and the members they include) | `jcl`, `prc`, `proc` (in any case) |
+| JCL (jobs, procedures and `INCLUDE` members: the programs the steps run, the procedures they call, the members they include, and the CSD commands of a `PGM=DFHCSDUP` step) | `jcl`, `prc`, `proc` (in any case) |
+| CSD (CICS resource definitions, DFHCSDUP input: the programs, transactions and mapsets it defines) | `csd` (in any case) |
 | R (scripts, and the `{r}` code chunks of R Markdown and Quarto files) | `r`, `rmd`, `qmd` (in any case) |
 
 Some files get their language from their content or from the files that name them:
 
 - **COBOL copybooks**: A file with another extension, or none, that a `COPY` statement or `EXEC SQL INCLUDE` names is read as a copybook when the statement names it with its whole file name, or when its text holds a data item, the description of a file or a statement of the procedure division; unless it is read as JCL
 - **JCL**: A file with another extension, or none, is read as JCL when its first statement is a `JOB` or `JOBGROUP` statement in upper case, or a JCL statement in upper case and an `EXEC` / `INCLUDE` statement names it. A `.jcl` / `.prc` / `.proc` file whose first statement is no JCL statement is a file without a language
+- **CSD**: A `.csd` file whose first line, apart from blank and comment lines, is no DFHCSDUP command is a file without a language
 - **R Markdown and Quarto**: A `.Rmd` / `.qmd` file without an `{r}` code chunk is a file without a language
+
+A file these rules leave without a language can still be read as a copybook by the first bullet, and a `.csd`, `.Rmd` or `.qmd` file as JCL by the second.
 
 Every other non-empty text file (`.md`, `.yaml`, `.toml`, `Makefile`, ...) is also listed in the outputs and copied to the output directory, with empty `definitions`, `callee_usages`, `same_file_usages` and `caller_usages`, a `null` summary and no design document. Empty files, binary files and symbolic links are skipped; a linked directory is not entered.
 
@@ -237,6 +242,7 @@ The per-file JSON files are written in every case.
    - Extracts the usages of other files' definitions (callees) and the usages of this file's definitions by other files (callers), with line numbers and source code
 3. **Generate design documents via LLM** (files of a supported language only)
    - Generates each document section by section according to the template (`doc_template.json`), from the source code, the dependency information and the summaries of the files it depends on
+   - Documents the files of a dependency cycle one after another, those that depend on the fewest other files of the cycle first; a file gets the summaries of the files of the cycle documented before it
    - Generates a summary for each file
    - Regenerates only the documents that need it (see [Incremental Processing](#️-incremental-processing))
    - A prompt that exceeds the model context window is retried with less context (see `ENABLE_CODE_SUMMARY`). The sections of such a file are written from summaries of its large definitions, or of runs of its lines
@@ -381,13 +387,13 @@ Per-file definition and dependency information.
 | Field | Type | Description |
 |-----------|-----|------|
 | `file` | string | Path of the source file copied to the output directory |
-| `language` | string | Extension whose language settings the file is analyzed with, in lower case (`py`, `cbl`, ...; `cpy` for a copybook of another extension or without one that a `COPY` statement or `EXEC SQL INCLUDE` names, `jcl` for a JCL file of another extension or without one). `""` for a file without a language, for a `.Rmd` / `.qmd` file without an R code chunk, and for a `.jcl` / `.prc` / `.proc` file whose first statement is no JCL statement |
+| `language` | string | Extension whose language settings the file is analyzed with, in lower case (`py`, `cbl`, ...; `cpy` for a copybook of another extension or without one that a `COPY` statement or `EXEC SQL INCLUDE` names, `jcl` for a JCL file of another extension or without one). `""` for a file without a language, including the `.jcl`, `.prc`, `.proc`, `.csd`, `.Rmd` and `.qmd` files the rules of [Supported Languages](#-supported-languages) leave without one |
 | `detected_encoding` | string\|null | Encoding the file was decoded with when it had no BOM, was not valid UTF-8 and was not decoded by `SOURCE_ENCODING` (`""` when it was read as UTF-8 with invalid bytes replaced). `null` otherwise, and for a file without a language |
 | `definitions[].name` | string | Function/class name |
-| `definitions[].type` | string | Definition type (tree-sitter node type, varies by language. Python: `function_definition`, `class_definition` / Java: `class_declaration`, `method_declaration` / JS/TS: `function_declaration`, `class_declaration` / SQL: `create_table`, `create_view` / Rust: `function_item`, `struct_item`, `impl_item` / C#: `class_declaration`, `method_declaration`, `property_declaration` / JCL: `job_statement`, `proc_statement`, `exec_statement`, `symbolic_parameter` / R: `function_definition`, `binary_operator`, `call`, `argument`, etc.) |
+| `definitions[].type` | string | Definition type (tree-sitter node type, varies by language. Python: `function_definition`, `class_definition` / Java: `class_declaration`, `method_declaration` / JS/TS: `function_declaration`, `class_declaration` / SQL: `create_table`, `create_view` / Rust: `function_item`, `struct_item`, `impl_item` / C#: `class_declaration`, `method_declaration`, `property_declaration` / JCL: `job_statement`, `proc_statement`, `exec_statement`, `symbolic_parameter` / CSD: `define_` + the resource type (`define_transaction`, `define_program`, `define_mapset`, ...) / R: `function_definition`, `binary_operator`, `call`, `argument`, etc.) |
 | `definitions[].start_line` | int | Start line number. Every line number counts from 1, and a line ends at `\n`, `\r\n` or a lone `\r` |
 | `definitions[].end_line` | int | End line number |
-| `definitions[].name_line` | int | Line the name is written on (COBOL, BMS and JCL only) |
+| `definitions[].name_line` | int | Line the name is written on (COBOL, BMS, JCL and CSD only) |
 | `definitions[].level` | int | Level number of a data item (COBOL and BMS data items only) |
 | `definitions[].is_group` | bool | Whether a data item is a group item (COBOL and BMS data items only) |
 | `definitions[].context` | string | Full source code of the definition |
@@ -400,7 +406,7 @@ Per-file definition and dependency information.
 | `same_file_usages[].name` | string | Name of a symbol defined in this file and used in it |
 | `same_file_usages[].target_name` | string\|null | `definitions[].name` of the definition the name leads to (`new` for `Point::new`). `null` when it leads to no definition |
 | `same_file_usages[].target_start_line` | int\|null | `definitions[].start_line` of that definition |
-| `same_file_usages[].lines` | int[] | Line numbers of usage within this file, outside the definition the name refers to (JCL: every usage) |
+| `same_file_usages[].lines` | int[] | Line numbers of usage within this file, outside the definition the name refers to (JCL and CSD: every usage) |
 | `caller_usages[].name` | string | Name of the symbol being used |
 | `caller_usages[].file` | string | Path of the dependent file copied to the output directory |
 | `caller_usages[].usage_context` | string | Source code of the usage location in the dependent |
@@ -549,17 +555,27 @@ Dependencies are extracted by static analysis of the source text. They may be mi
 - **Names**: A name several copybooks define is linked to the first of them in the order of the `COPY` statements. A name qualified with `OF` / `IN` that matches no definition is linked as an unqualified one. Of an `EXEC` block other than `EXEC SQL`, every word is read as a name
 - **COPY**: The text of a copybook is not expanded into the file that includes it: a copybook is analyzed as a file of its own. A name with a directory part is looked up by its file name. With `REPLACING`, only an operand whose texts are one word each (`==:TAG:== BY ==WS==`, `OLD-NAME BY NEW-NAME`, `LEADING` / `TRAILING`) is applied to the names
 - **CALL**: A `CALL` of a data item leads only to the programs named by the literals the item is given in the same file (`VALUE` clause, `MOVE "name" TO item`); a name built at run time is not resolved
+- **CICS**: Of the options of an `EXEC CICS` command, only `PROGRAM(...)` and `TRANSID(...)` are linked. `PROGRAM(...)` leads to the program as a `CALL` does. `TRANSID(...)` leads to the `DEFINE TRANSACTION` of a CSD file, or to a JCL file whose `PGM=DFHCSDUP` step defines the transaction (`target_context` `null`). A data item leads only to the literals it is given in the same file, as for `CALL`
+- **Several definitions**: When several CSD or JCL files define a transaction, `TRANSID(...)` leads to the one nearest to the COBOL file: the one whose directory has the most leading directories in common with that of the COBOL file, then the one with the fewest other directories
 - **Source format**: Without a `>>SOURCE` / `$SET SOURCEFORMAT` directive, the format of a file and whether its code runs past column 72 are inferred. In free format, an indented line that starts with `*` is read as code only when the line before it ends with an operand
 - **Unparsed statements**: In a statement that is not parsed, every word that is a name of a definition counts as a usage, and a paragraph that starts in the middle of a sentence (no period before it) is not a definition
 - **Debug lines and compiler directives**: Lines with `D` in the indicator column, `>>` directives, `REPLACE` statements and conditional compilation are not evaluated
 
 ### JCL
 
-- **Programs**: Only `PGM=`, `RUN PROGRAM(...)` in the in-stream `SYSTSIN` data of a TSO batch step (`IKJEFT01`, `IKJEFT1A`, `IKJEFT1B`) or of a step that calls a procedure, and the program in the `PARM` of an IMS batch step (`DFSRRC00`) lead to programs. A program a procedure is given for another purpose (the source member of a compile procedure) is not linked
+- **Programs**: Only `PGM=`, `RUN PROGRAM(...)` in the in-stream `SYSTSIN` data of a TSO batch step (`IKJEFT01`, `IKJEFT1A`, `IKJEFT1B`) or of a step that calls a procedure, the program in the `PARM` of an IMS batch step (`DFSRRC00`), and the CSD commands in the in-stream `SYSIN` data of a `PGM=DFHCSDUP` step lead to programs. A program a procedure is given for another purpose (the source member of a compile procedure) is not linked
 - **Symbols**: A symbol (`&NAME`) is replaced only with the values written in the same file (`SET`, the defaults of `PROC`, the `EXEC` statements that call an in-stream procedure); the value an `EXEC` statement of another file gives a procedure is not used, and a value with a symbol among other text is not replaced
 - **Procedures and members**: `JCLLIB ORDER` is not read: a procedure or `INCLUDE` member is looked up by its file name in the whole project. The statements of an `INCLUDE` member are not read into the file that includes it: its steps are not found by `COND`, `IF`, referbacks or `DD` overrides
-- **Definitions**: A step or a `PROC` statement without a name is not a definition. A call of a procedure whose file does not start with a named `PROC` statement, and an `INCLUDE` statement, have `target_context` `null`
-- **Not analyzed**: DD names (they are not linked to `SELECT ... ASSIGN` of COBOL), data set names, in-stream data other than `SYSTSIN`, JES statements, and JES2 job group statements (`GJOB`, `AFTER`, `SCHEDULE`, ...)
+- **Definitions**: A step or a `PROC` statement without a name is not a definition. A call of a procedure whose file does not start with a named `PROC` statement, an `INCLUDE` statement, and a mapset of the CSD commands of a `PGM=DFHCSDUP` step have `target_context` `null`
+- **Not analyzed**: DD names (they are not linked to `SELECT ... ASSIGN` of COBOL), data set names, in-stream data other than `SYSTSIN` and the `SYSIN` of a `PGM=DFHCSDUP` step, JES statements, and JES2 job group statements (`GJOB`, `AFTER`, `SCHEDULE`, ...)
+
+### CSD
+
+- **Dependencies**: Only `DEFINE PROGRAM` and the `PROGRAM` of `DEFINE TRANSACTION` (to COBOL programs), and `DEFINE MAPSET` (to the BMS source that defines the mapset, else the one named like it) lead to other files. A mapset has `target_context` `null`; of several BMS sources, the nearest is taken as for a transaction (see [COBOL](#cobol))
+- **Commands**: Only `DEFINE` and `USERDEFINE` are read, written out or shortened to at least three letters (`DEF`); `LIST`, `ADD`, `ALTER`, `DELETE` and the other commands are not. A command whose first keyword besides `GROUP` is no resource type or its abbreviation (`TRANS`, `PROG`, `TD`, ...) defines nothing
+- **Resources**: An attribute named like a resource type or its abbreviation (`PROGRAM`, `PROF`, ...; not `TYPE`, `JOURNAL`, `PARTITIONS` and `JVM`), `TRANSID`, `REMOTESYSTEM`, `TRPROF`, `PRINTER`, `ALTPRINTER`, `CONVERTER`, `URM`, `EXITPGM`, the `ENTRY` of `DB2TRAN` and the `INDIRECTNAME` of `TDQUEUE` are linked to a resource only when the same file defines it: the one of the same `GROUP`, else the first one. Other attributes are not linked
+- **Files**: CSD commands are read from `.csd` files and from the in-stream `SYSIN` data of a `PGM=DFHCSDUP` step of a JCL file, not from a step that calls a procedure running DFHCSDUP. The resources of that `SYSIN` data are no definitions of the JCL file, and their attributes are not linked
+- **COBOL**: Of the names of a COBOL program, only `EXEC CICS ... TRANSID(...)` is linked to a resource of a CSD file or of the CSD commands of a JCL file (see [COBOL](#cobol))
 
 ### R
 
@@ -579,8 +595,9 @@ Dependencies are extracted by static analysis of the source text. They may be mi
 On subsequent runs, design documents are regenerated only where needed.
 
 - **Dependency information**: Extracted again for every file on each run
-- **Design documents**: Regenerated for the files whose content changed since their `doc.json` was generated (`source_hash`) and for the files that depend on them; all others are reused
+- **Design documents**: Regenerated for the files whose content changed since their `doc.json` was generated (`source_hash`) and for the files that depend on them, directly or through other files; all others are reused
 - **Incomplete documents**: A `doc.json` with missing sections or an empty summary (e.g. after an LLM API failure) is regenerated
+- **Removed or moved dependencies**: A file whose content did not change keeps its document when a file it depended on is removed, or when a name of it now resolves to another file that did not change
 
 ## 🎨 Customizing the Design Document Template
 
@@ -665,8 +682,8 @@ codetwine/
 ├── .env.example            # Environment variable template
 ├── codetwine/              # Pipeline, module and reference resolution per language, output
 │   ├── config/             # Environment variables, per-language settings, logging
-│   ├── extractors/         # Definitions, imports, usages, the dependency graph, and the COBOL, BMS, JCL, C# and R readers
-│   ├── parsers/            # tree-sitter parser and source-format readers (COBOL format, R Markdown, C macros, Kotlin, statement operands)
+│   ├── extractors/         # Definitions, imports, usages, the dependency graph, and the COBOL, BMS, JCL, CSD, C# and R readers
+│   ├── parsers/            # tree-sitter parser and source-format readers (COBOL format, R Markdown, C macros, Kotlin, statement operands, CSD commands)
 │   ├── llm/                # LLM API client via litellm
 │   └── utils/              # File and cache utilities
 └── examples/

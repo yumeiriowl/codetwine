@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from tree_sitter import Language, Query, QueryCursor, Node
-from codetwine.extractors.cobol_source import CALL_KIND, COPY_KIND, CobolSource
+from codetwine.extractors.cobol_source import COPY_KIND, NAME_KIND_TUPLE, CobolSource
 from codetwine.extractors.definitions import (
     DEFAULT_EXPORT_NAME,
     commonjs_export_assignment,
@@ -52,7 +52,7 @@ class ImportInfo:
 
 
 def cobol_module(kind: str, name: str, library: str = "") -> str:
-    """Return the module string of a COBOL COPY or CALL statement, or of a JCL statement.
+    """Return the module string of a statement of a COBOL, JCL or CSD file that names a file.
 
     Inverse of cobol_module_part.
 
@@ -60,13 +60,14 @@ def cobol_module(kind: str, name: str, library: str = "") -> str:
         ("COPY", "CUSTREC")             -> "COPY CUSTREC"
         ("COPY", "CUSTREC", "COPYLIB")  -> "COPY CUSTREC OF COPYLIB"
         ("CALL", "TAXCALC")             -> "CALL TAXCALC"
+        ("TRANSID", "TX01")             -> "TRANSID TX01"
         ("PROC", "REPROC")              -> "PROC REPROC"
     """
     return f"{kind} {name} OF {library}" if library else f"{kind} {name}"
 
 
 def cobol_module_part(module: str) -> tuple[str, str, str]:
-    """Split the module string of a COBOL or JCL statement into (kind, name, library).
+    """Split the module string of a COBOL, JCL or CSD statement into (kind, name, library).
 
     Inverse of cobol_module.
 
@@ -84,12 +85,14 @@ def cobol_module_part(module: str) -> tuple[str, str, str]:
 
 
 def _cobol_import_list(cobol_source: CobolSource) -> list[ImportInfo]:
-    """Return the COPY and CALL statements of a COBOL file, or the statements of a JCL file, as ImportInfo.
+    """Return the statements of a COBOL, JCL or CSD file that name another file, as ImportInfo.
 
     COPY name        -> module "COPY name", names ["*"]
     CALL name        -> module "CALL name", names [name]
+    TRANSID name     -> module "TRANSID name", names [name] (EXEC CICS TRANSID)
     PROC name        -> module "PROC name", names ["*"] (JCL)
     INCLUDE name     -> module "INCLUDE name", names ["*"] (JCL)
+    MAPSET name      -> module "MAPSET name", names ["*"] (CSD, and CSD commands of JCL)
     The same statement on the same line is returned once.
 
     Args:
@@ -101,10 +104,9 @@ def _cobol_import_list(cobol_source: CobolSource) -> list[ImportInfo]:
     import_by_key_dict: dict[tuple[str, int], ImportInfo] = {}
     for cobol_import in cobol_source.import_list:
         module = cobol_module(cobol_import.kind, cobol_import.name, cobol_import.library)
-        is_call = cobol_import.kind == CALL_KIND
         import_by_key_dict.setdefault((module, cobol_import.line), ImportInfo(
             module=module,
-            names=[cobol_import.name] if is_call else ["*"],
+            names=[cobol_import.name] if cobol_import.kind in NAME_KIND_TUPLE else ["*"],
             line=cobol_import.line,
         ))
     return list(import_by_key_dict.values())
@@ -232,12 +234,13 @@ def extract_imports(
     When the same import statement has multiple @name captures (from X import Y, Z),
     they are consolidated into a single ImportInfo.
 
-    For a CobolSource its COPY and CALL statements are returned, without a query (for a
-    JCL file: its programs, procedures and INCLUDE members).
+    For a CobolSource its COPY and CALL statements and EXEC CICS TRANSID options are
+    returned, without a query (for a JCL file: its programs, procedures and INCLUDE
+    members; for a CSD file: its programs and mapsets).
 
     Args:
         root_node: The AST root node covering the entire file, or the CobolSource of a
-            COBOL file, a BMS source or a JCL file.
+            COBOL file, a BMS source, a JCL file or a CSD file.
         language: tree-sitter Language object (required for Query creation).
         import_query_str: tree-sitter query string (obtained from EXT_TO_IMPORT_QUERY_DICT in config.py).
                           Returns an empty list when None (for languages with no import query defined).

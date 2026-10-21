@@ -6,13 +6,22 @@ from codetwine.extractors.cobol_source import (
     CALL_KIND,
     CALL_TARGET_TYPE_TUPLE,
     COPY_KIND,
+    NAME_KIND_TUPLE,
+    TRANSID_KIND,
     CobolDefinition,
     CobolReference,
     CobolSource,
     has_statement,
 )
+from codetwine.extractors.csd_source import TRANSACTION_TYPE
 from codetwine.extractors.imports import cobol_module, cobol_module_part
-from codetwine.extractors.jcl_source import INCLUDE_KIND, PROC_KIND
+from codetwine.extractors.jcl_source import (
+    CSD_PROGRAM,
+    INCLUDE_KIND,
+    MAPSET_KIND,
+    PROC_KIND,
+    JclSource,
+)
 from codetwine.jcl_member import is_job_file, member_path, register_jcl_target
 from codetwine.parsers.cobol_format import (
     FILE_UNIT,
@@ -20,11 +29,13 @@ from codetwine.parsers.cobol_format import (
     PROCEDURE_UNIT,
     split_cobol_source,
 )
+from codetwine.parsers.csd_command import TRANSACTION_RESOURCE
 from codetwine.utils.file_utils import add_file_name, read_source
 from codetwine.utils.project_cache import project_cache_value
 from codetwine.config.settings import (
     BMS_EXT_SET,
     COBOL_EXT_SET,
+    CSD_EXT_SET,
     EXT_TO_LANGUAGE_DICT,
     JCL_EXT_SET,
     add_copy_target_ext,
@@ -37,18 +48,20 @@ logger = logging.getLogger(__name__)
 
 # Extension of a copybook (lower case, without ".")
 _COPYBOOK_EXT = "cpy"
+# Extensions of the files whose CSD commands can define a transaction
+_CSD_SOURCE_EXT_SET = CSD_EXT_SET | JCL_EXT_SET
 
 # Cache of file indexes: project_dir -> (project file set the index was built from, index)
 file_index_cache: dict[str, tuple[set[str], "CobolFileIndex"]] = {}
 
-# Cache of the resolved references of COBOL files and JCL files: absolute path ->
+# Cache of the resolved references of COBOL, JCL and CSD files: absolute path ->
 # (project file set they were resolved with, targets)
 reference_target_cache: dict[str, tuple[set[str], list["CobolReferenceTarget"]]] = {}
 
 
 @dataclass
 class CobolFileIndex:
-    """The names the COBOL files, BMS sources and JCL files of a project are found by."""
+    """The names the COBOL files, BMS sources, JCL files and CSD files of a project are found by."""
 
     # Upper-case file name, with and without its extension, and the names in the file's
     # copy_name_list (BMS: mapset names) -> files in path order
@@ -62,19 +75,26 @@ class CobolFileIndex:
     jcl_name_dict: dict[str, list[str]] = field(default_factory=dict)
     # JCL files whose first statement is a JOB or JOBGROUP statement
     jcl_job_file_set: set[str] = field(default_factory=set)
+    # Upper-case mapset name of a BMS source (DFHMSD) -> BMS sources in path order
+    mapset_file_dict: dict[str, list[str]] = field(default_factory=dict)
+    # CSD files and JCL files in path order, read for transaction_dict
+    csd_source_file_list: list[str] = field(default_factory=list)
+    # Upper-case name of a transaction the CSD commands of a CSD file or JCL file define
+    # -> those files in path order; built on first use (_transaction_dict)
+    transaction_dict: dict[str, list[str]] | None = None
 
 
 def _cobol_source(file_rel: str, project_dir: str) -> CobolSource | None:
-    """Parse a COBOL file or BMS source of the project and return its CobolSource.
+    """Parse a COBOL file, BMS source, JCL file or CSD file of the project.
 
     Returns:
-        The CobolSource. None when reading or parsing the file raises an exception;
-        the exception is logged.
+        Its CobolSource (a JclSource for a JCL or CSD file). None when reading or
+        parsing the file raises an exception; the exception is logged.
     """
     try:
         return parse_file(os.path.join(project_dir, file_rel))[0]
     except Exception as e:
-        logger.warning(f"{file_rel} is not read as COBOL: {type(e).__name__}: {e}")
+        logger.warning(f"{file_rel} is not read: {type(e).__name__}: {e}")
         return None
 
 
@@ -86,6 +106,8 @@ def _is_cobol_file(file_rel: str, project_dir: str) -> bool:
 def _add_source(file_index: CobolFileIndex, file_rel: str, cobol_source: CobolSource) -> None:
     """Index a COBOL file or BMS source by its file name, its copy_name_list and its programs."""
     add_file_name(file_index.file_name_dict, file_rel, cobol_source.copy_name_list)
+    for mapset_name in cobol_source.copy_name_list:
+        file_index.mapset_file_dict.setdefault(mapset_name, []).append(file_rel)
     for definition in cobol_source.definition_list:
         if definition.type in CALL_TARGET_TYPE_TUPLE:
             file_list = file_index.program_dict.setdefault(definition.name.upper(), [])
@@ -96,7 +118,11 @@ def _add_source(file_index: CobolFileIndex, file_rel: str, cobol_source: CobolSo
 
 def _sort_file_index(file_index: CobolFileIndex) -> None:
     """Put the files of each name of a file index in path order."""
-    for file_list in (*file_index.file_name_dict.values(), *file_index.program_dict.values()):
+    for file_list in (
+        *file_index.file_name_dict.values(),
+        *file_index.program_dict.values(),
+        *file_index.mapset_file_dict.values(),
+    ):
         file_list.sort()
 
 
@@ -111,6 +137,60 @@ def _add_jcl_name(file_index: CobolFileIndex, project_dir: str, file_rel_set: se
             file_index.jcl_job_file_set.add(file_rel)
 
 
+def _finish_file_index(
+    file_index: CobolFileIndex, project_dir: str, file_rel_set: set[str],
+) -> None:
+    """Sort a file index, index the JCL files and list the CSD files and JCL files.
+
+    Args:
+        file_index: The index of the COBOL files and BMS sources.
+        project_dir: Absolute path to the project root.
+        file_rel_set: Relative paths of the project files that have a language.
+    """
+    _sort_file_index(file_index)
+    _add_jcl_name(file_index, project_dir, file_rel_set)
+    file_index.csd_source_file_list = [
+        file_rel for file_rel in sorted(file_rel_set)
+        if language_ext(os.path.join(project_dir, file_rel)) in _CSD_SOURCE_EXT_SET
+    ]
+
+
+def _transaction_dict(file_index: CobolFileIndex, project_dir: str) -> dict[str, list[str]]:
+    """Return the transactions of the CSD commands of a file index's files, building them once.
+
+    A JCL file is read only when its text holds DFHCSDUP (in any case).
+
+    Returns:
+        file_index.transaction_dict.
+    """
+    if file_index.transaction_dict is not None:
+        return file_index.transaction_dict
+    file_index.transaction_dict = {}
+    for file_rel in file_index.csd_source_file_list:
+        file_abs = os.path.join(project_dir, file_rel)
+        if language_ext(file_abs) in JCL_EXT_SET and not _has_csd_program(file_abs):
+            continue
+        jcl_source = _cobol_source(file_rel, project_dir)
+        if not isinstance(jcl_source, JclSource):
+            continue
+        for resource in jcl_source.csd_resource_list:
+            if resource.type != TRANSACTION_RESOURCE:
+                continue
+            file_list = file_index.transaction_dict.setdefault(resource.name.upper(), [])
+            if file_rel not in file_list:
+                file_list.append(file_rel)
+    return file_index.transaction_dict
+
+
+def _has_csd_program(file_abs: str) -> bool:
+    """Return whether a file's text holds DFHCSDUP in any case; False when it cannot be read."""
+    try:
+        return CSD_PROGRAM in read_source(file_abs)[0].upper()
+    except OSError as e:
+        logger.warning(f"{file_abs} is not read: {type(e).__name__}: {e}")
+        return False
+
+
 def _source_file_list(project_dir: str, project_file_set: set[str]) -> list[str]:
     """Return the COBOL files and BMS sources among project files, in path order."""
     return sorted(
@@ -122,14 +202,15 @@ def _source_file_list(project_dir: str, project_file_set: set[str]) -> list[str]
 def _build_file_index(project_dir: str, project_file_set: set[str]) -> CobolFileIndex:
     """Parse the COBOL files and BMS sources of a project and build their index.
 
-    The JCL files are indexed by their file names without being parsed.
+    The JCL files are indexed by their file names without being parsed; the CSD files
+    and JCL files are read for their transactions on first use (_transaction_dict).
 
     Args:
         project_dir: Absolute path to the project root.
         project_file_set: Relative paths of the project files that have a language.
 
     Returns:
-        The CobolFileIndex of the COBOL files, BMS sources and JCL files in
+        The CobolFileIndex of the COBOL files, BMS sources, JCL files and CSD files in
         project_file_set. A COBOL file or BMS source that cannot be read or parsed is
         not in it.
     """
@@ -138,8 +219,7 @@ def _build_file_index(project_dir: str, project_file_set: set[str]) -> CobolFile
         cobol_source = _cobol_source(file_rel, project_dir)
         if cobol_source is not None:
             _add_source(file_index, file_rel, cobol_source)
-    _sort_file_index(file_index)
-    _add_jcl_name(file_index, project_dir, project_file_set)
+    _finish_file_index(file_index, project_dir, project_file_set)
     return file_index
 
 
@@ -154,7 +234,8 @@ def _get_file_index(project_dir: str, project_file_set: set[str]) -> CobolFileIn
         project_file_set: Relative paths of the project files that have a language.
 
     Returns:
-        The CobolFileIndex of the COBOL files, BMS sources and JCL files in project_file_set.
+        The CobolFileIndex of the COBOL files, BMS sources, JCL files and CSD files in
+        project_file_set.
     """
     file_index = project_cache_value(file_index_cache, project_dir, project_file_set)
     if file_index is not None:
@@ -264,23 +345,103 @@ def _program_path(name: str, current_file_rel: str, file_index: CobolFileIndex) 
     )
 
 
+def _directory_part_tuple(file_rel: str) -> tuple[str, ...]:
+    """Return the directories of a relative path, outermost first ("a/b/F.cbl" -> ("a", "b"))."""
+    return tuple(part for part in os.path.dirname(file_rel).split("/") if part)
+
+
+def _nearest_file(candidate_list: list[str], current_file_rel: str) -> str | None:
+    """Return the candidate nearest to the current file in the directory tree.
+
+    The candidates whose directory shares the most leading directories with that of the
+    current file come first; among them, the one with the fewest directories after
+    those (a file in the directory of the current file first), then the first in path
+    order. None for no candidate.
+
+    Examples:
+        (["other/csd/A.csd", "app/csd/B.csd"], "app/cbl/P.cbl") -> "app/csd/B.csd"
+        (["csd/a/M.bms", "csd/M.bms"], "csd/APP.csd")            -> "csd/M.bms"
+    """
+    current_part_tuple = _directory_part_tuple(current_file_rel)
+
+    def order(file_rel: str) -> tuple[int, int, str]:
+        """Return the sort key of a candidate: the first in this order is taken."""
+        part_tuple = _directory_part_tuple(file_rel)
+        depth = 0
+        while (
+            depth < min(len(part_tuple), len(current_part_tuple))
+            and part_tuple[depth] == current_part_tuple[depth]
+        ):
+            depth += 1
+        return -depth, len(part_tuple) - depth, file_rel
+
+    return min(candidate_list, key=order, default=None)
+
+
+def _mapset_path(name: str, current_file_rel: str, file_index: CobolFileIndex) -> str | None:
+    """Return the BMS source of the mapset a CSD command defines.
+
+    The BMS sources that define a mapset of the name (DFHMSD) are the candidates; without
+    one, the BMS sources whose file name, with or without its extension, is the name.
+    Upper and lower case are not told apart. Among several the nearest to the current
+    file is taken (_nearest_file).
+
+    Args:
+        name: The mapset name.
+        current_file_rel: Relative path of the file the command is written in.
+        file_index: The file index of the project.
+
+    Returns:
+        Relative path of the BMS source. None when no BMS source has the name.
+    """
+    candidate_list = file_index.mapset_file_dict.get(name.upper()) or [
+        file_rel for file_rel in file_index.file_name_dict.get(name.upper(), [])
+        if os.path.splitext(file_rel)[1].lstrip(".").lower() in BMS_EXT_SET
+    ]
+    return _nearest_file(candidate_list, current_file_rel)
+
+
+def _transid_path(
+    name: str, current_file_rel: str, file_index: CobolFileIndex, project_dir: str,
+) -> str | None:
+    """Return the CSD file or JCL file that defines the transaction of an EXEC CICS TRANSID.
+
+    The files whose CSD commands define a transaction of the name are the candidates;
+    upper and lower case are not told apart. Among several the nearest to the current
+    file is taken (_nearest_file).
+
+    Args:
+        name: The transaction name.
+        current_file_rel: Relative path of the file the command is written in.
+        file_index: The file index of the project.
+        project_dir: Absolute path to the project root.
+
+    Returns:
+        Relative path of the file. None when no file defines the transaction.
+    """
+    candidate_list = _transaction_dict(file_index, project_dir).get(name.upper(), [])
+    return _nearest_file(candidate_list, current_file_rel)
+
+
 def resolve_cobol_module_path(
     module: str,
     current_file_rel: str,
     project_file_set: set[str],
     project_dir: str,
 ) -> str | None:
-    """Resolve the module string of a COBOL COPY or CALL statement or a JCL statement to a file.
+    """Resolve the module string of a statement of a COBOL, JCL or CSD file to a file.
 
     Examples:
         "COPY CUSTREC"             -> "copy/CUSTREC.cpy"
         "COPY CUSTREC OF COPYLIB"  -> "COPYLIB/CUSTREC.cpy"
         "CALL TAXCALC"             -> "src/TAXCALC.cbl" (the file with PROGRAM-ID. TAXCALC)
+        "TRANSID TX01"             -> "csd/APP.csd" (_transid_path)
         "PROC REPROC"              -> "proc/REPROC.prc" (member_path)
         "INCLUDE DBSTEPS"          -> "jcl/DBSTEPS.jcl" (member_path)
+        "MAPSET CUSTMAP"           -> "bms/CUSTMAP.bms" (_mapset_path)
 
     Args:
-        module: A module string of an ImportInfo of a COBOL file or a JCL file.
+        module: A module string of an ImportInfo of a COBOL, JCL or CSD file.
         current_file_rel: Relative path of the file the statement is written in.
         project_file_set: Set of file paths within the project.
         project_dir: Absolute path to the project root.
@@ -301,6 +462,10 @@ def resolve_cobol_module_path(
         resolved = member_path(
             name, kind, current_file_rel, file_index.jcl_name_dict, file_index.jcl_job_file_set,
         )
+    elif kind == MAPSET_KIND:
+        resolved = _mapset_path(name, current_file_rel, file_index)
+    elif kind == TRANSID_KIND:
+        resolved = _transid_path(name, current_file_rel, file_index, project_dir)
     return resolved if resolved != current_file_rel else None
 
 
@@ -481,24 +646,25 @@ def register_copy_target(project_dir: str, file_rel_list: list[str]) -> dict[str
                 queue.append(resolved)
 
     # == Step 5: Index of the files with a language ===========================
-    _sort_file_index(file_index)
-    _add_jcl_name(file_index, project_dir, language_file_set)
+    _finish_file_index(file_index, project_dir, language_file_set)
     file_index_cache[project_dir] = (language_file_set | set(copy_target_ext_dict), file_index)
     return copy_target_ext_dict
 
 
 @dataclass
 class CobolReferenceTarget:
-    """The definition one reference of a COBOL file or a JCL file resolves to."""
+    """The definition one reference of a COBOL, JCL or CSD file resolves to."""
 
     # Name of the definition: a data name or procedure name as the referring file writes
-    # it (after REPLACING), a program, ENTRY, procedure, step or symbol name as its
-    # definition writes it; the name as referred to without a definition
+    # it (after REPLACING), a program, ENTRY, transaction, procedure, step, symbol or
+    # resource name as its definition writes it; the name as referred to without a
+    # definition
     name: str
     line: int        # Line of the reference (1-based)
     file_rel: str    # Relative path of the file with the definition
-    # The definition; None when the program file of a CALL is not read, and for the
-    # procedure of a JCL file that does not start with a PROC statement
+    # The definition; None when the program file of a CALL is not read, for the
+    # procedure of a JCL file that does not start with a PROC statement, for an INCLUDE
+    # member and a mapset, and for a transaction a JCL file defines
     definition: CobolDefinition | None
 
 
@@ -651,26 +817,27 @@ def _target_under_qualifier(
     return None
 
 
-def _program_target_dict(
+def _import_target_dict(
     cobol_source: CobolSource, file_rel: str, project_file_set: set[str], project_dir: str,
-) -> dict[tuple[str, int], tuple[str, str]]:
-    """Return the program file each CALL statement of a COBOL file leads to.
+) -> dict[tuple[str, str, int], tuple[str, str]]:
+    """Return the file each CALL statement and EXEC CICS TRANSID of a COBOL file leads to.
 
     Returns:
-        {(upper-case program name, line of the statement): (program name as written,
-        relative path of the file)} of each CALL that resolves to another file.
+        {(CALL_KIND or TRANSID_KIND, upper-case name, line of the statement): (name as
+        written, relative path of the file)} of each one that resolves to another file.
     """
-    program_target_dict: dict[tuple[str, int], tuple[str, str]] = {}
+    import_target_dict: dict[tuple[str, str, int], tuple[str, str]] = {}
     for cobol_import in cobol_source.import_list:
-        if cobol_import.kind != CALL_KIND:
+        if cobol_import.kind not in NAME_KIND_TUPLE:
             continue
-        module = cobol_module(CALL_KIND, cobol_import.name)
+        module = cobol_module(cobol_import.kind, cobol_import.name)
         resolved = resolve_cobol_module_path(module, file_rel, project_file_set, project_dir)
         if resolved:
-            program_target_dict.setdefault(
-                (cobol_import.name.upper(), cobol_import.line), (cobol_import.name, resolved),
+            import_target_dict.setdefault(
+                (cobol_import.kind, cobol_import.name.upper(), cobol_import.line),
+                (cobol_import.name, resolved),
             )
-    return program_target_dict
+    return import_target_dict
 
 
 def _program_definition(cobol_source: CobolSource | None, name: str) -> CobolDefinition | None:
@@ -721,15 +888,15 @@ def program_definition(file_rel: str, name: str, project_dir: str) -> CobolDefin
 def _call_target(
     reference: CobolReference,
     file_rel: str,
-    program_target_dict: dict[tuple[str, int], tuple[str, str]],
+    import_target_dict: dict[tuple[str, str, int], tuple[str, str]],
     project_dir: str,
 ) -> CobolReferenceTarget | None:
     """Resolve the program name of a CALL statement.
 
     Args:
-        reference: A reference with is_call.
+        reference: A reference of CALL_KIND.
         file_rel: Relative path of the referring file.
-        program_target_dict: Return value of _program_target_dict for the file.
+        import_target_dict: Return value of _import_target_dict for the file.
         project_dir: Absolute path to the project root.
 
     Returns:
@@ -739,8 +906,8 @@ def _call_target(
         The target has the name of its definition, and the program name as written
         when the program file has no definition.
     """
-    program_name, program_file_rel = program_target_dict.get(
-        (reference.name, reference.line), ("", file_rel),
+    program_name, program_file_rel = import_target_dict.get(
+        (CALL_KIND, reference.name, reference.line), ("", file_rel),
     )
     program_source = _cobol_source(program_file_rel, project_dir)
     definition = _program_definition(program_source, reference.name)
@@ -754,13 +921,49 @@ def _call_target(
     )
 
 
+def _transid_target(
+    reference: CobolReference,
+    import_target_dict: dict[tuple[str, str, int], tuple[str, str]],
+    project_dir: str,
+) -> CobolReferenceTarget | None:
+    """Resolve the transaction of an EXEC CICS TRANSID option.
+
+    Args:
+        reference: A reference of TRANSID_KIND.
+        import_target_dict: Return value of _import_target_dict for the referring file.
+        project_dir: Absolute path to the project root.
+
+    Returns:
+        The target in the file that defines the transaction: the first DEFINE
+        TRANSACTION of that name of a CSD file, no definition for a JCL file. None
+        when no file defines the transaction.
+    """
+    transaction_name, definition_file_rel = import_target_dict.get(
+        (TRANSID_KIND, reference.name, reference.line), ("", ""),
+    )
+    if not definition_file_rel:
+        return None
+    csd_source = _cobol_source(definition_file_rel, project_dir)
+    definition = next(
+        (
+            definition for definition in (csd_source.definition_list if csd_source else [])
+            if definition.type == TRANSACTION_TYPE and definition.name.upper() == reference.name
+        ),
+        None,
+    )
+    return CobolReferenceTarget(
+        definition.name if definition is not None else transaction_name,
+        reference.line, definition_file_rel, definition,
+    )
+
+
 def _name_target(
     reference: CobolReference, candidate_list: list[_Candidate],
 ) -> CobolReferenceTarget | None:
     """Resolve a data name or procedure name.
 
     Args:
-        reference: A reference without is_call.
+        reference: A reference of a data name or procedure name.
         candidate_list: Return value of _candidate_list for the referring file.
 
     Returns:
@@ -797,18 +1000,21 @@ def cobol_reference_target_list(
 
     The program name of a CALL statement goes to the program or ENTRY of the program
     file the statement leads to, or to the one of that name in the file itself
-    (_call_target). A
-    data name or procedure name qualified with OF / IN goes to the definition under the
-    named groups in the file itself or in a copybook it includes; any other name, and a
-    qualified one no definition matches, goes to the first definition of that name in
-    the file itself, else in the copybooks in the order of the COPY statements, each
-    followed by the copybooks it includes (_name_target). The names of a copybook are
-    those a COPY ... REPLACING statement writes. Names are compared without regard to upper and lower case.
+    (_call_target). The transaction of an EXEC CICS TRANSID option goes to the DEFINE
+    TRANSACTION of the CSD file, or to the JCL file, that defines it (_transid_target).
+    A data name or procedure name qualified with OF / IN goes to the definition under
+    the named groups in the file itself or in a copybook it includes; any other name,
+    and a qualified one no definition matches, goes to the first definition of that
+    name in the file itself, else in the copybooks in the order of the COPY statements,
+    each followed by the copybooks it includes (_name_target). The names of a copybook
+    are those a COPY ... REPLACING statement writes. Names are compared without regard
+    to upper and lower case.
 
     Processing flow:
     1. Return the targets of reference_target_cache when they were resolved with the
        same project file set
-    2. Resolve the copybooks and the CALL statements of the file
+    2. Resolve the copybooks, the CALL statements and the EXEC CICS TRANSID options of
+       the file
     3. Resolve each reference
 
     Args:
@@ -827,10 +1033,10 @@ def cobol_reference_target_list(
     if target_list is not None:
         return target_list
 
-    # == Step 2: Copybooks and CALL statements ================================
+    # == Step 2: Copybooks, CALL statements and TRANSID options ===============
     cobol_source = parse_file(os.path.join(project_dir, file_rel))[0]
     candidate_list = _candidate_list(cobol_source, file_rel, project_file_set, project_dir)
-    program_target_dict = _program_target_dict(
+    import_target_dict = _import_target_dict(
         cobol_source, file_rel, project_file_set, project_dir,
     )
 
@@ -839,8 +1045,10 @@ def cobol_reference_target_list(
     # they qualify it differently (FLD OF A, FLD OF B)
     target_dict: dict[tuple[str, int, str, int | None], CobolReferenceTarget] = {}
     for reference in cobol_source.reference_list:
-        if reference.is_call:
-            target = _call_target(reference, file_rel, program_target_dict, project_dir)
+        if reference.kind == CALL_KIND:
+            target = _call_target(reference, file_rel, import_target_dict, project_dir)
+        elif reference.kind == TRANSID_KIND:
+            target = _transid_target(reference, import_target_dict, project_dir)
         else:
             target = _name_target(reference, candidate_list)
         if target is not None:

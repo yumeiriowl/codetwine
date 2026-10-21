@@ -313,7 +313,7 @@ def resolve_module_to_project_path(
 
     A language whose resolve config has module_tree (Rust) is resolved by
     resolve_rust_module_path instead, which reads the project files under project_dir.
-    A language whose resolve config has name_index (COBOL, JCL) is resolved by
+    A language whose resolve config has name_index (COBOL, JCL, CSD) is resolved by
     resolve_cobol_module_path, which reads them as well.
 
     Args:

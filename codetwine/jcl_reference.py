@@ -13,11 +13,14 @@ from codetwine.extractors.imports import cobol_module
 from codetwine.extractors.jcl_source import (
     INCLUDE_KIND,
     INCLUDE_REFERENCE,
+    MAPSET_KIND,
+    MAPSET_REFERENCE,
     PARAMETER_REFERENCE,
     PROC_KIND,
     PROC_REFERENCE,
     PROC_TYPE,
     PROGRAM_REFERENCE,
+    RESOURCE_REFERENCE,
     STEP_REFERENCE,
     STEP_TYPE,
     SYMBOL_REFERENCE,
@@ -27,6 +30,12 @@ from codetwine.extractors.jcl_source import (
 )
 from codetwine.jcl_member import parse_jcl_file
 from codetwine.utils.project_cache import project_cache_value
+
+# Kind of a reference to a file without a definition -> the statement kind it is resolved as
+_FILE_REFERENCE_KIND_DICT = {
+    INCLUDE_REFERENCE: INCLUDE_KIND,
+    MAPSET_REFERENCE:  MAPSET_KIND,
+}
 
 # Kind of a reference to a step or a symbol -> type of the definitions it can name
 _REFERENCE_TYPE_DICT = {
@@ -43,10 +52,13 @@ class _DefinitionIndex:
         """Index the definitions of a JclSource."""
         # (definition type, upper-case name) -> definitions in line order
         self.definition_dict: dict[tuple[str, str], list[CobolDefinition]] = {}
+        # (upper-case name, first line) -> the first definition of that name starting there
+        self.line_dict: dict[tuple[str, int], CobolDefinition] = {}
         for definition in jcl_source.definition_list:
             self.definition_dict.setdefault(
                 (definition.type, definition.name.upper()), [],
             ).append(definition)
+            self.line_dict.setdefault((definition.name.upper(), definition.start_line), definition)
 
     def first(
         self, name: str, definition_type: str, start_line: int, end_line: int,
@@ -59,6 +71,10 @@ class _DefinitionIndex:
         if index < len(candidate_list) and candidate_list[index].start_line <= end_line:
             return candidate_list[index]
         return None
+
+    def at_line(self, name: str, start_line: int) -> CobolDefinition | None:
+        """Return the first definition with an upper-case name that starts on a line, or None."""
+        return self.line_dict.get((name, start_line))
 
 
 @dataclass
@@ -136,7 +152,7 @@ def _proc_target(
 def _program_target(
     reference: JclReference, file_rel: str, project_file_set: set[str], project_dir: str,
 ) -> CobolReferenceTarget | None:
-    """Resolve a program a step runs to the program or ENTRY of its file (program_definition).
+    """Resolve a program a step or CSD command names to the program or ENTRY of its file.
 
     Returns:
         The target. None when no file defines the program.
@@ -160,7 +176,7 @@ def _reference_target_list(
     project_file_set: set[str],
     project_dir: str,
 ) -> list[CobolReferenceTarget]:
-    """Resolve one reference of a JCL file.
+    """Resolve one reference of a JCL or CSD file.
 
     Args:
         reference: The reference.
@@ -172,21 +188,27 @@ def _reference_target_list(
 
     Returns:
         The targets: the program a step runs (_program_target), the file of an INCLUDE
-        member (without a definition), the procedure of that name an EXEC statement
-        calls, the definition of the file the reader resolved the name to, or the first
-        step or symbolic parameter of that name in each of the procedures the EXEC
-        statement of exec_line calls. Empty when the name resolves to no definition and,
-        for a procedure or a member, to no file.
+        member or a mapset (without a definition), the CICS resource of the file a CSD
+        command names, the procedure of that name an EXEC statement calls, the
+        definition of the file the reader resolved the name to, or the first step or
+        symbolic parameter of that name in each of the procedures the EXEC statement of
+        exec_line calls. Empty when the name resolves to no definition and, for a
+        procedure, a member or a mapset, to no file.
     """
     if reference.kind == PROGRAM_REFERENCE:
         program_target = _program_target(reference, file_rel, project_file_set, project_dir)
         return [program_target] if program_target is not None else []
-    if reference.kind == INCLUDE_REFERENCE:
-        module = cobol_module(INCLUDE_KIND, reference.name)
+    if reference.kind in _FILE_REFERENCE_KIND_DICT:
+        module = cobol_module(_FILE_REFERENCE_KIND_DICT[reference.kind], reference.name)
         member_rel = resolve_cobol_module_path(module, file_rel, project_file_set, project_dir)
         if member_rel is None:
             return []
         return [CobolReferenceTarget(reference.name, reference.line, member_rel, None)]
+    if reference.kind == RESOURCE_REFERENCE:
+        definition = definition_index.at_line(reference.name, reference.definition_line)
+        if definition is None:
+            return []
+        return [CobolReferenceTarget(definition.name, reference.line, file_rel, definition)]
 
     proc_target_list = proc_target_dict.get(reference.exec_line, [])
     if reference.kind == PROC_REFERENCE:
@@ -226,13 +248,15 @@ def jcl_reference_target_list(
     project_file_set: set[str],
     project_dir: str,
 ) -> list[CobolReferenceTarget]:
-    """Resolve each reference of a JCL file to the definition it refers to.
+    """Resolve each reference of a JCL or CSD file to the definition it refers to.
 
-    A program goes to the program or ENTRY of its program file, an INCLUDE member to its
-    file (without a definition), a procedure to the PROC statement of the in-stream
-    procedure of the file or of the file the procedure is in (the file when it does not
-    start with one), and a step or symbolic parameter of a called procedure to the one
-    of that name inside each procedure the EXEC statement calls.
+    A program goes to the program or ENTRY of its program file, an INCLUDE member and a
+    mapset to its file (without a definition), a resource of a CSD command to the
+    definition of the file that starts on the line the reader gave it, a procedure to
+    the PROC statement of the in-stream procedure of the file or of the file the
+    procedure is in (the file when it does not start with one), and a step or symbolic
+    parameter of a called procedure to the one of that name inside each procedure the
+    EXEC statement calls.
     The other steps and symbols go to the definitions of the file the reader resolved
     them to. Names are compared without regard to upper and lower case.
 

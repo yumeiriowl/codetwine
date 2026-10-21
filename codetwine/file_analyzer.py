@@ -60,9 +60,9 @@ def get_file_dependencies(
     "detected_encoding" is the encoding read_source() had to detect for the file
     (detected_encoding), "" when it reads the file as UTF-8 with replacement, and None
     when a BOM, UTF-8 or SOURCE_ENCODING decodes it or the file has no language.
-    A definition of a COBOL file, a BMS source or a JCL file also has "name_line", and a
-    data item "level" and "is_group". The references of the file, and of the files
-    depending on it, are resolved by reference_target_list().
+    A definition of a COBOL file, a BMS source, a JCL file or a CSD file also has
+    "name_line", and a data item "level" and "is_group". The references of the file, and
+    of the files depending on it, are resolved by reference_target_list().
 
     Args:
         target_file: Absolute path of the target file to analyze.

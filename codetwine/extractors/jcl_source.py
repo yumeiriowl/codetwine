@@ -2,6 +2,13 @@ import re
 from bisect import bisect_left
 from dataclasses import dataclass, field
 from codetwine.extractors.cobol_source import CALL_KIND, CobolDefinition, CobolImport, CobolSource
+from codetwine.parsers.csd_command import (
+    MAPSET_RESOURCE,
+    PROGRAM_RESOURCE,
+    CsdName,
+    csd_command_list,
+    csd_definition,
+)
 from codetwine.parsers.operand import Operand, operand_list
 from codetwine.utils.file_utils import line_list_of
 
@@ -12,9 +19,11 @@ STEP_TYPE = "exec_statement"
 SYMBOL_TYPE = "symbolic_parameter"
 
 # Statements that name another file besides a program (CALL_KIND): the procedure an
-# EXEC statement calls and the member an INCLUDE statement includes
+# EXEC statement calls, the member an INCLUDE statement includes, and the mapset a CSD
+# command names
 PROC_KIND = "PROC"
 INCLUDE_KIND = "INCLUDE"
+MAPSET_KIND = "MAPSET"
 
 # == Kinds of the names a reference names =====================================
 PROGRAM_REFERENCE = "program"      # A program a step runs
@@ -24,9 +33,12 @@ SYMBOL_REFERENCE = "symbol"        # A symbol written &NAME
 # A symbolic parameter an EXEC statement gives the procedure it calls
 PARAMETER_REFERENCE = "parameter"
 INCLUDE_REFERENCE = "include"      # The member an INCLUDE statement includes
+MAPSET_REFERENCE = "mapset"        # The mapset a CSD command names
+# A CICS resource a CSD command names, defined in the same file
+RESOURCE_REFERENCE = "resource"
 
 # Column (0-based) after the last column of the text of a statement
-_TEXT_END_COLUMN = 71
+TEXT_END_COLUMN = 71
 # Column (0-based) the rest of a quoted string continued on the next line starts at
 _QUOTE_CONTINUE_COLUMN = 15
 # Column (0-based) after the last column of a line of in-stream data
@@ -44,6 +56,14 @@ _STAR_DATA_OPERAND = "*"
 # Programs that run the TSO commands of their SYSTSIN data, and that DD name
 _TSO_PROGRAM_SET = {"IKJEFT01", "IKJEFT1A", "IKJEFT1B"}
 _TSO_INPUT_DD = "SYSTSIN"
+# Program that reads the CSD commands of its SYSIN data, and that DD name
+CSD_PROGRAM = "DFHCSDUP"
+_CSD_INPUT_DD = "SYSIN"
+# Resource type of a program or mapset a CSD command names -> (reference kind, import kind)
+_CSD_FILE_KIND_DICT = {
+    PROGRAM_RESOURCE: (PROGRAM_REFERENCE, CALL_KIND),
+    MAPSET_RESOURCE: (MAPSET_REFERENCE, MAPSET_KIND),
+}
 # Program that runs the IMS batch program its PARM names second, after one of these
 # region types
 _IMS_PROGRAM = "DFSRRC00"
@@ -123,7 +143,7 @@ _TSO_RUN_RE = re.compile(
 
 @dataclass
 class JclReference:
-    """One place a JCL file names a program, a procedure, an INCLUDE member, a step or a symbol."""
+    """One place a JCL or CSD file names a program, procedure, member, step, symbol or resource."""
 
     name: str    # Upper-case name
     line: int    # Line of the reference (1-based)
@@ -139,10 +159,13 @@ class JclReference:
 
 @dataclass
 class JclSource(CobolSource):
-    """What one JCL file defines, runs, calls and refers to."""
+    """What one JCL or CSD file defines, runs, calls and refers to."""
 
     # Each place a name is referred to
     reference_list: list[JclReference] = field(default_factory=list)
+    # The resources the CSD commands of the file define (DEFINE / USERDEFINE), in line
+    # order; for a JCL file, those of the SYSIN data of its PGM=DFHCSDUP steps
+    csd_resource_list: list[CsdName] = field(default_factory=list)
 
 
 @dataclass
@@ -249,7 +272,7 @@ class _Statement:
 
 def _code_text(line: str) -> str:
     """Return the text of a line a statement is read from: columns 1 to 71, right-stripped."""
-    return line.expandtabs(_TAB_SIZE)[:_TEXT_END_COLUMN].rstrip()
+    return line.expandtabs(_TAB_SIZE)[:TEXT_END_COLUMN].rstrip()
 
 
 def _is_statement_text(text: str) -> bool:
@@ -501,6 +524,18 @@ def _tso_program_list(data_line_list: list[tuple[int, str]]) -> list[tuple[str, 
         add_command()
     add_command()
     return program_list
+
+
+def add_csd_file_name(source: JclSource, name: CsdName) -> None:
+    """Add a program or mapset a CSD command names: a reference and an import.
+
+    Args:
+        source: The JclSource the reference and the import are added to.
+        name: A PROGRAM_RESOURCE or MAPSET_RESOURCE name of CsdDefinition.file_name_list.
+    """
+    reference_kind, import_kind = _CSD_FILE_KIND_DICT[name.type]
+    source.reference_list.append(JclReference(name.name.upper(), name.line, reference_kind))
+    source.import_list.append(CobolImport(import_kind, name.name, name.line))
 
 
 class _JclReader:
@@ -1066,10 +1101,11 @@ class _JclReader:
             self.source.import_list.append(CobolImport(PROC_KIND, name, line))
 
     def _read_dd(self, statement: _Statement, step: _Step) -> None:
-        """Read the procedure step a DD statement overrides and the programs of TSO commands.
+        """Read the procedure step a DD statement overrides, and the names of TSO and CSD commands.
 
         The TSO commands are the SYSTSIN data of a step that runs a TSO program or calls
-        a procedure; a DD statement without a name is concatenated to the one before it.
+        a procedure, the CSD commands the SYSIN data of a step with PGM=DFHCSDUP; a DD
+        statement without a name is concatenated to the one before it.
         """
         procstep_name, _, dd_name = statement.label.rpartition(".")
         if procstep_name and step.proc_text and _NAME_RE.fullmatch(procstep_name):
@@ -1081,6 +1117,14 @@ class _JclReader:
         ):
             for program, line in _tso_program_list(statement.data_line_list):
                 self._add_program(program, line, step)
+        if step.dd_name == _CSD_INPUT_DD and CSD_PROGRAM in step.program_list:
+            for command in csd_command_list(statement.data_line_list):
+                definition = csd_definition(command)
+                if definition is None:
+                    continue
+                self.source.csd_resource_list.append(definition.resource)
+                for name in definition.file_name_list:
+                    add_csd_file_name(self.source, name)
 
     def _read_include(self, statement: _Statement) -> None:
         """Add the members an INCLUDE statement includes: a reference and an INCLUDE_KIND import."""
@@ -1103,13 +1147,15 @@ def read_jcl_source(source: str) -> JclSource:
     give a value. Statements naming another file: the program a step runs (PGM=, a TSO
     RUN PROGRAM command of SYSTSIN data, the PARM of an IMS batch step) as CALL_KIND,
     the procedure an EXEC statement calls that is not in-stream in its job as
-    PROC_KIND, and the member of an INCLUDE statement as INCLUDE_KIND. A symbol in their
-    names stands for the values the file gives it. References: the programs,
-    procedures and INCLUDE members, the steps of COND parameters, IF statements and
-    referbacks, the steps and symbolic parameters of a called procedure named on its
-    EXEC and DD statements, and the symbols of the operands, each to the SET statements
-    and symbolic parameters its values come from. In-stream procedures and steps count within their
-    job, SET statements within the procedure or job they are written in.
+    PROC_KIND, the member of an INCLUDE statement as INCLUDE_KIND, and the programs
+    (CALL_KIND) and mapsets (MAPSET_KIND) the CSD commands of the SYSIN data of a
+    PGM=DFHCSDUP step name. A symbol in their names stands for the values the file gives
+    it. References: the programs, procedures, INCLUDE members and mapsets, the steps of
+    COND parameters, IF statements and referbacks, the steps and symbolic parameters of
+    a called procedure named on its EXEC and DD statements, and the symbols of the
+    operands, each to the SET statements and symbolic parameters its values come from.
+    In-stream procedures and steps count within their job, SET statements within the
+    procedure or job they are written in.
 
     Args:
         source: The text of the file.

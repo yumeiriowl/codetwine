@@ -3,9 +3,10 @@ import json
 import re
 import hashlib
 import asyncio
+import heapq
 import logging
 from bisect import bisect_left, bisect_right
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterator
 from dataclasses import dataclass, replace
 from codetwine.llm import ContextWindowExceededError
 from codetwine.llm.client import LLMClient
@@ -161,15 +162,119 @@ def check_code_summary_setting() -> None:
         )
 
 
+def _component_list(callee_dict: dict[str, set[str]]) -> list[list[str]]:
+    """Return the groups of files that reach each other through their dependencies.
+
+    Each group is a strongly connected component: a file by itself, or the files of a
+    cycle. The groups come in the order that puts a group after the groups it depends on.
+
+    Args:
+        callee_dict: file -> files it depends on; every file is a key.
+
+    Returns:
+        The groups, each in path order.
+    """
+    index_dict: dict[str, int] = {}
+    low_dict: dict[str, int] = {}
+    stack_list: list[str] = []
+    on_stack_set: set[str] = set()
+    group_list: list[list[str]] = []
+    # (file, its dependencies not followed yet) of the files being followed
+    work_list: list[tuple[str, Iterator[str]]] = []
+
+    def visit(file_path: str) -> None:
+        """Number a file, put it on the stack and start following its dependencies."""
+        index_dict[file_path] = low_dict[file_path] = len(index_dict)
+        stack_list.append(file_path)
+        on_stack_set.add(file_path)
+        work_list.append((file_path, iter(sorted(callee_dict[file_path]))))
+
+    for root in sorted(callee_dict):
+        if root in index_dict:
+            continue
+        visit(root)
+        while work_list:
+            file_path, callee_iter = work_list[-1]
+            callee = next(callee_iter, None)
+            if callee is not None:
+                if callee not in index_dict:
+                    visit(callee)
+                elif callee in on_stack_set:
+                    low_dict[file_path] = min(low_dict[file_path], index_dict[callee])
+                continue
+            work_list.pop()
+            if work_list:
+                parent = work_list[-1][0]
+                low_dict[parent] = min(low_dict[parent], low_dict[file_path])
+            if low_dict[file_path] == index_dict[file_path]:
+                member_list: list[str] = []
+                while not member_list or member_list[-1] != file_path:
+                    member = stack_list.pop()
+                    on_stack_set.discard(member)
+                    member_list.append(member)
+                group_list.append(sorted(member_list))
+    return group_list
+
+
+def _cycle_step_list(member_list: list[str], callee_dict: dict[str, set[str]]) -> list[list[str]]:
+    """Split the files of a cycle into the steps they are documented in, one after another.
+
+    Each step takes the files in no step yet that depend on the fewest files of the cycle
+    in no step yet.
+
+    Examples:
+        a, b and c depend on d, d on a, b and c -> [["a", "b", "c"], ["d"]]
+
+    Args:
+        member_list: The files of the cycle.
+        callee_dict: file -> files it depends on.
+
+    Returns:
+        The steps, each in path order.
+    """
+    member_set = set(member_list)
+    dependent_dict: dict[str, list[str]] = {member: [] for member in member_list}
+    count_dict: dict[str, int] = {}
+    for member in member_list:
+        callee_set = (callee_dict[member] & member_set) - {member}
+        count_dict[member] = len(callee_set)
+        for callee in callee_set:
+            dependent_dict[callee].append(member)
+
+    # (number of files of the cycle in no step yet it depends on, file); an entry whose
+    # number is no longer the file's is skipped
+    heap_list = [(count, member) for member, count in count_dict.items()]
+    heapq.heapify(heap_list)
+    step_member_set: set[str] = set()
+    step_list: list[list[str]] = []
+    while heap_list:
+        count, member = heap_list[0]
+        if member in step_member_set or count != count_dict[member]:
+            heapq.heappop(heap_list)
+            continue
+        step_member_list: list[str] = []
+        while heap_list and heap_list[0][0] == count:
+            entry_count, entry_member = heapq.heappop(heap_list)
+            if entry_member not in step_member_set and entry_count == count_dict[entry_member]:
+                step_member_list.append(entry_member)
+        step_member_set.update(step_member_list)
+        for step_member in step_member_list:
+            for dependent in dependent_dict[step_member]:
+                if dependent not in step_member_set:
+                    count_dict[dependent] -= 1
+                    heapq.heappush(heap_list, (count_dict[dependent], dependent))
+        step_list.append(sorted(step_member_list))
+    return step_list
+
+
 def _topological_sort_by_level(project_dep_list: list[dict]) -> list[list[str]]:
     """Topologically sort the files of a dependency list and return them
     as a list grouped by level (dependency depth).
 
-    Level 0 = files with no dependencies (processed first).
-    Level N = files that depend only on files at level N-1 or below.
-
-    If circular dependencies exist, files remaining from Kahn's algorithm
-    are included in the last level, and a warning is logged.
+    A file is placed at the level after the last level of the files it depends on.
+    The files of a cycle (_component_list) start at the level after the last level of
+    the files outside the cycle they depend on, and take one level per step of
+    _cycle_step_list. The files of each cycle are logged with a warning.
 
     Args:
         project_dep_list: Dependency list whose paths are relative to the project root.
@@ -181,57 +286,41 @@ def _topological_sort_by_level(project_dep_list: list[dict]) -> list[list[str]]:
     """
     # file -> files it depends on
     callee_dict: dict[str, set[str]] = {}
-    all_file_set: set[str] = set()
-
     for dep_info in project_dep_list:
         file_path = dep_info["file"]
-        all_file_set.add(file_path)
         callee_dict.setdefault(file_path, set())
-
-        # Add callees (dependencies) to the adjacency list
         for callee in dep_info.get("callees", []):
-            all_file_set.add(callee)
             callee_dict.setdefault(callee, set())
             callee_dict[file_path].add(callee)
 
-    # file -> files depending on it, and the number of callees not yet placed in a level
-    dependent_dict: dict[str, set[str]] = {f: set() for f in all_file_set}
-    callee_count_dict: dict[str, int] = {f: 0 for f in all_file_set}
+    group_list = _component_list(callee_dict)
+    cycle_group_list = [member_list for member_list in group_list if len(member_list) > 1]
+    if cycle_group_list:
+        logger.warning(f"Circular dependencies detected: {cycle_group_list}")
 
-    for file_path, callee_set in callee_dict.items():
-        for callee in callee_set:
-            dependent_dict[callee].add(file_path)
-            callee_count_dict[file_path] += 1
-
-    # Execute BFS level by level
-    level_list: list[list[str]] = []
-    # First level: files without callees
-    level_file_list = [f for f in all_file_set if callee_count_dict[f] == 0]
-    level_file_set: set[str] = set()
-
-    while level_file_list:
-        level_file_list.sort()
-        level_list.append(level_file_list)
-        level_file_set.update(level_file_list)
-
-        next_file_list: list[str] = []
-        for file_path in level_file_list:
-            for dependent in dependent_dict[file_path]:
-                callee_count_dict[dependent] -= 1
-                if callee_count_dict[dependent] == 0:
-                    next_file_list.append(dependent)
-
-        level_file_list = next_file_list
-
-    # Add files not processed due to circular dependencies to the last level
-    cycle_file_set = all_file_set - level_file_set
-    if cycle_file_set:
-        logger.warning(
-            f"Circular dependencies detected. The following files will be processed at the last level: "
-            f"{sorted(cycle_file_set)}"
+    # Level of each file, group by group in the order of group_list
+    level_dict: dict[str, int] = {}
+    for member_list in group_list:
+        member_set = set(member_list)
+        base_level = max(
+            (
+                level_dict[callee] + 1
+                for member in member_list for callee in callee_dict[member]
+                if callee not in member_set
+            ),
+            default=0,
         )
-        level_list.append(sorted(cycle_file_set))
+        step_list = (
+            _cycle_step_list(member_list, callee_dict) if len(member_list) > 1
+            else [member_list]
+        )
+        for offset, step_member_list in enumerate(step_list):
+            for member in step_member_list:
+                level_dict[member] = base_level + offset
 
+    level_list: list[list[str]] = [[] for _ in range(max(level_dict.values(), default=-1) + 1)]
+    for file_path in sorted(level_dict):
+        level_list[level_dict[file_path]].append(file_path)
     return level_list
 
 
@@ -1533,37 +1622,58 @@ def _is_doc_complete(doc: dict, template: dict) -> bool:
     return True
 
 
+def _dependent_closure_set(
+    change_file_set: set[str], callee_set_dict: dict[str, set[str]],
+) -> set[str]:
+    """Return the changed files and every file that depends on one, directly or through others.
+
+    Args:
+        change_file_set: Relative paths of the changed files.
+        callee_set_dict: File relative path -> relative paths of its callees.
+
+    Returns:
+        The relative paths.
+    """
+    dependent_dict: dict[str, set[str]] = {}
+    for file_rel, callee_set in callee_set_dict.items():
+        for callee in callee_set:
+            dependent_dict.setdefault(callee, set()).add(file_rel)
+    closure_set = set(change_file_set)
+    queue_list = list(change_file_set)
+    while queue_list:
+        for dependent in dependent_dict.get(queue_list.pop(), ()):
+            if dependent not in closure_set:
+                closure_set.add(dependent)
+                queue_list.append(dependent)
+    return closure_set
+
+
 def _needs_regeneration(
     file_rel: str,
-    changed_files: set[str] | None,
+    regeneration_set: set[str] | None,
     callee_set_dict: dict[str, set[str]],
-    new_doc_file_set: set[str],
+    earlier_doc_file_set: set[str],
 ) -> bool:
     """Determine whether the design document needs regeneration.
 
     Regeneration is needed if any of the following conditions are met:
-    - changed_files is not specified (full regeneration mode).
-    - The file itself is in changed_files.
-    - Any of the file's callees (dependencies) is in changed_files or new_doc_file_set.
+    - regeneration_set is not specified (full regeneration mode).
+    - The file is in regeneration_set (_dependent_closure_set of the changed files).
+    - Any of the file's callees (dependencies) is in earlier_doc_file_set.
 
     Args:
         file_rel: Relative path of the file.
-        changed_files: Set of relative paths of changed files, or None.
+        regeneration_set: The changed files and the files depending on them, or None.
         callee_set_dict: File relative path -> relative paths of its callees.
-        new_doc_file_set: Files whose documents were regenerated so far in this run.
+        earlier_doc_file_set: Files whose documents were regenerated at the earlier levels
+            of this run.
 
     Returns:
         True if regeneration is needed.
     """
-    if changed_files is None:
+    if regeneration_set is None or file_rel in regeneration_set:
         return True
-    if file_rel in changed_files:
-        return True
-    # Regenerate if any callee was changed or regenerated
-    for callee in callee_set_dict.get(file_rel, set()):
-        if callee in changed_files or callee in new_doc_file_set:
-            return True
-    return False
+    return not callee_set_dict.get(file_rel, set()).isdisjoint(earlier_doc_file_set)
 
 
 async def generate_all_docs(
@@ -1578,13 +1688,14 @@ async def generate_all_docs(
     Processing flow:
     1. Load the template.
     2. Topologically sort project_dependencies and arrange by level.
-    3. Starting from level 0 (no dependencies), generate documents for each level in parallel.
+    3. Starting from level 0, generate documents for each level in parallel.
     4. Hold generated document summaries in doc_summary_map for use as context in subsequent levels.
     5. Save each file's document in JSON + Markdown format.
 
-    When changed_files is specified, if a file's existing document was generated from
-    the current source and none of its callees (dependencies) are in changed_files
-    either, the existing doc.json is reused and the LLM call is skipped.
+    When changed_files is specified, the existing doc.json of a file is reused and the
+    LLM call is skipped when it is complete, the file is not among the changed files and
+    the files depending on them (_dependent_closure_set), and none of its callees was
+    regenerated at an earlier level of this run.
 
     Args:
         base_output_dir: Base output directory for file_dependencies.
@@ -1627,9 +1738,17 @@ async def generate_all_docs(
     for info in project_dep_list:
         callee_set_dict[info["file"]] = set(info.get("callees", []))
 
-    # Track files whose documents were regenerated in this run.
-    # Caller-side files that reference a regenerated file as a callee also become regeneration targets.
+    # The changed files and the files depending on them, directly or through others
+    regeneration_set = (
+        None if changed_files is None
+        else _dependent_closure_set(changed_files, callee_set_dict)
+    )
+
+    # Track files whose documents were regenerated in this run, and those of them
+    # regenerated at the levels before the current one. Caller-side files that reference
+    # a file regenerated at an earlier level as a callee also become regeneration targets.
     new_doc_file_set: set[str] = set()
+    earlier_doc_file_set: set[str] = set()
 
     # Files left without a complete design document in this run
     doc_fail_list: list[str] = []
@@ -1649,7 +1768,9 @@ async def generate_all_docs(
             return file_rel, None
 
         # Reuse existing doc.json if no changes
-        if not _needs_regeneration(file_rel, changed_files, callee_set_dict, new_doc_file_set):
+        if not _needs_regeneration(
+            file_rel, regeneration_set, callee_set_dict, earlier_doc_file_set,
+        ):
             # Sync manual edits from doc.md to JSON if user edited it
             _sync_md_to_json(output_dir)
             existing_doc = load_doc(output_dir)
@@ -1679,6 +1800,7 @@ async def generate_all_docs(
             f"{level_index + 1}/{level_count}: "
             f"Generating documents for {len(file_list)} files"
         )
+        earlier_doc_file_set.update(new_doc_file_set)
 
         # Process files in the level in batches of max_workers
         for batch_start in range(0, len(file_list), max_workers):

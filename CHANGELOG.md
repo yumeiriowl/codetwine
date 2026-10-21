@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.4.3 - 2026-10-21
+
+### Added
+- CSD: CICS resource definitions (DFHCSDUP input, `csd` in any case, whose first line that is no blank or comment is a DFHCSDUP command; another `.csd` file is analyzed without a language unless it is read as a COBOL copybook or as JCL, `jcl_member.no_csd_file_list()`) are analyzed without a grammar (`csd_source.read_csd_source()`, `parsers/csd_command.py`): each resource a `DEFINE` or `USERDEFINE` command defines is a definition (`define_` + the resource type: `define_transaction`, `define_program`, `define_mapset`, ...; with `name_line`); commands and resource types may be shortened (`DEF`, `TRANS`, `PROG`, `TD`) and written in any case, and a value may go on with the next line after `*`
+- CSD: `DEFINE PROGRAM` and the `PROGRAM` of `DEFINE TRANSACTION` depend on the COBOL program, `DEFINE MAPSET` on the BMS source that defines the mapset (no `target_context`), and an attribute that names a resource of the same file (`PROGRAM(P)`, `TRANSID(T)`, `REMOTESYSTEM(C)`, ...) is a usage of it, of the same `GROUP` first
+- JCL: the CSD commands of the in-stream `SYSIN` data of a `PGM=DFHCSDUP` step give the same dependencies on programs and mapsets
+- COBOL: `EXEC CICS ... TRANSID(...)` (a literal, or the literals a data item is given in the same file) depends on the CSD file whose `DEFINE TRANSACTION` defines the transaction (`target_context` the command), or on the JCL file whose `PGM=DFHCSDUP` step defines it (no `target_context`); of several such files, the one whose directory shares the most leading directories with that of the COBOL file, then the one with the fewest other directories (`cobol_file_index._transid_path()`); a mapset of a CSD command goes to the nearest BMS source in the same way
+
+### Changed
+- Design documents: the files of a dependency cycle start at the level after the files outside the cycle they depend on, those that depend on the fewest other files of the cycle first, and the files that depend on them come after them; a change regenerates the documents of the files that depend on the changed file through a cycle as well
+
+### Fixed
+- JCL: whether a file is JCL is decided from columns 1 to 71 of its first statement, the columns its statements are read from; a line with text only in columns 72 to 80 is skipped
+
 ## 0.4.2 - 2026-10-21
 
 ### Added

@@ -28,9 +28,13 @@ INDEX_TYPE = "occurs_indexed"
 # Definition types of the names a CALL statement can name
 CALL_TARGET_TYPE_TUPLE = (PROGRAM_TYPE, ENTRY_TYPE)
 
-# Statements that name another file
+# Statements that name another file: COPY, CALL (and EXEC CICS PROGRAM), and the
+# transaction of EXEC CICS TRANSID
 COPY_KIND = "COPY"
 CALL_KIND = "CALL"
+TRANSID_KIND = "TRANSID"
+# Statements whose name is the definition they lead to in the other file
+NAME_KIND_TUPLE = (CALL_KIND, TRANSID_KIND)
 
 # Node types of the headers of the procedure division
 _HEADER_NODE_TYPE_SET = {SECTION_TYPE, PARAGRAPH_TYPE}
@@ -91,16 +95,20 @@ class CobolReference:
     line: int    # Line of the reference (1-based)
     # Upper-case names that qualify it (X OF Y IN Z -> ("Y", "Z")), innermost first
     qualifier_tuple: tuple[str, ...] = ()
-    # Whether it is the program name a CALL statement names
-    is_call: bool = False
+    # CALL_KIND for the program a CALL statement names, TRANSID_KIND for the transaction
+    # of an EXEC CICS TRANSID option; "" for a data name or procedure name
+    kind: str = ""
 
 
 @dataclass
 class CobolImport:
     """One statement of a COBOL file that names another file."""
 
-    kind: str               # COPY_KIND / CALL_KIND (JCL: also PROC_KIND / INCLUDE_KIND)
-    name: str               # Name of the copybook, program, procedure or member
+    # COPY_KIND / CALL_KIND / TRANSID_KIND; for a JCL or CSD file also PROC_KIND /
+    # INCLUDE_KIND / MAPSET_KIND
+    kind: str
+    # Name of the copybook, program, transaction, procedure, member or mapset
+    name: str
     line: int               # Line of the statement (1-based)
     library: str = ""       # Library name of COPY ... OF library
     # REPLACING operands of a COPY statement as (position, replaced text, replacement text)
@@ -115,7 +123,7 @@ class CobolSource:
     line_list: list[str]
     # Definitions in line order
     definition_list: list[CobolDefinition] = field(default_factory=list)
-    # COPY and CALL statements in line order
+    # COPY and CALL statements and EXEC CICS TRANSID options in line order
     import_list: list[CobolImport] = field(default_factory=list)
     # Each place a name is referred to
     reference_list: list[CobolReference] = field(default_factory=list)
@@ -274,7 +282,7 @@ class _UnitReader:
            files and references
         2. Add the references of the statements that are in no unit
         3. Build the definitions with their line ranges
-        4. Build the COPY and CALL statements
+        4. Build the COPY and CALL statements and EXEC CICS TRANSID options
         """
         # == Step 1: Units ====================================================
         for unit in self.cobol_text.unit_list:
@@ -300,7 +308,7 @@ class _UnitReader:
             definition_list, key=lambda definition: (definition.start_line, -definition.end_line),
         )
 
-        # == Step 4: COPY and CALL statements =================================
+        # == Step 4: COPY, CALL and TRANSID ===================================
         self._add_import()
         return self.source
 
@@ -544,26 +552,31 @@ class _UnitReader:
                     self.item_literal_dict.setdefault(item_name, []).append(literal)
 
     def _add_import(self) -> None:
-        """Build the COPY and CALL statements of the file, in line order.
+        """Build the COPY and CALL statements and EXEC CICS TRANSID options, in line order.
 
-        A CALL of a data item becomes one CALL for each literal the item is given.
-        Each CALL adds a reference to the program name on its line.
+        A CALL or TRANSID of a data item becomes one for each literal the item is given.
+        Each CALL adds a reference to the program name on its line, each TRANSID one to
+        the transaction.
         """
         import_list = [
             CobolImport(COPY_KIND, copy.name, copy.line, copy.library, copy.replacing_list)
             for copy in self.cobol_text.copy_list
         ]
-        for name, is_literal, line in self.cobol_text.call_list:
-            if is_literal:
-                name_list = [name]
-            else:
-                name_list = list(dict.fromkeys(self.item_literal_dict.get(name.upper(), [])))
-            for program_name in name_list:
-                if program_name:
-                    import_list.append(CobolImport(CALL_KIND, program_name, line))
-                    self.source.reference_list.append(
-                        CobolReference(program_name.upper(), line, is_call=True)
-                    )
+        for kind, option_list in (
+            (CALL_KIND, self.cobol_text.call_list),
+            (TRANSID_KIND, self.cobol_text.transid_list),
+        ):
+            for name, is_literal, line in option_list:
+                if is_literal:
+                    value_list = [name]
+                else:
+                    value_list = list(dict.fromkeys(self.item_literal_dict.get(name.upper(), [])))
+                for value in value_list:
+                    if value:
+                        import_list.append(CobolImport(kind, value, line))
+                        self.source.reference_list.append(
+                            CobolReference(value.upper(), line, kind=kind)
+                        )
         self.source.import_list = sorted(import_list, key=lambda cobol_import: cobol_import.line)
 
     def _last_code_line(self, line: int) -> int:

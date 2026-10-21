@@ -2,8 +2,19 @@ import os
 import re
 import logging
 from codetwine.parsers.ts_parser import parse_file
-from codetwine.extractors.jcl_source import INCLUDE_KIND, PROC_KIND, JclSource
+from codetwine.extractors.jcl_source import (
+    INCLUDE_KIND,
+    PROC_KIND,
+    TEXT_END_COLUMN as JCL_TEXT_END_COLUMN,
+    JclSource,
+)
+from codetwine.parsers.csd_command import (
+    COMMENT_PREFIX as CSD_COMMENT_PREFIX,
+    TEXT_END_COLUMN as CSD_TEXT_END_COLUMN,
+    is_command_line,
+)
 from codetwine.config.settings import (
+    CSD_EXT_SET,
     JCL_EXT_SET,
     add_copy_target_ext,
     language_ext,
@@ -52,12 +63,23 @@ _JOB_LINE_RE = re.compile(r"//\S* +JOB(GROUP)?( |$)", re.IGNORECASE)
 _JCL_LINE_RE = re.compile(rf"//\S* +{_OPERATION_PATTERN}( |$)", re.IGNORECASE)
 
 
-def _first_statement_line(file_abs: str) -> str:
-    """Return the first line of a file that is no blank, JCL comment or JES statement.
+def _first_statement_line(
+    file_abs: str,
+    end_column: int = JCL_TEXT_END_COLUMN,
+    skip_prefix_tuple: tuple[str, ...] = _SKIP_LINE_PREFIX_TUPLE,
+) -> str:
+    """Return the first line of a file that is no blank and does not start with a prefix.
 
     The file is decoded with the codec its first bytes decode with (head_codec), else
-    byte by byte. Only the first _LINE_HEAD_SIZE characters of a line are read, with
-    their tabs expanded.
+    byte by byte. Of each line, the columns before end_column are read, with its tabs
+    expanded.
+
+    Args:
+        file_abs: Absolute path of the file.
+        end_column: Column (0-based) after the last column read; that of the text of a
+            JCL statement unless another is given.
+        skip_prefix_tuple: Starts of the lines that are skipped; those of a JCL comment
+            and a JES statement unless others are given.
 
     Returns:
         The line without trailing blanks; "" without one, and when the file cannot be
@@ -68,14 +90,14 @@ def _first_statement_line(file_abs: str) -> str:
             codec = head_codec(file.read(_HEAD_SIZE)) or _BYTE_CODEC
         with open(file_abs, encoding=codec, errors="replace", newline="") as file:
             while line_head := file.readline(_LINE_HEAD_SIZE):
-                line = line_head.expandtabs(_TAB_SIZE).rstrip()
-                if line and not line.startswith(_SKIP_LINE_PREFIX_TUPLE):
+                line = line_head.expandtabs(_TAB_SIZE)[:end_column].rstrip()
+                if line and not line.startswith(skip_prefix_tuple):
                     return line
                 rest = line_head
                 while rest and not rest.endswith(_LINE_END_TUPLE):
                     rest = file.readline(_LINE_HEAD_SIZE)
     except OSError as e:
-        logger.warning(f"{file_abs} is not read as JCL: {type(e).__name__}: {e}")
+        logger.warning(f"{file_abs} is not read: {type(e).__name__}: {e}")
     return ""
 
 
@@ -305,4 +327,26 @@ def no_jcl_file_list(project_dir: str, file_rel_list: list[str]) -> list[str]:
         file_rel for file_rel in file_rel_list
         if os.path.splitext(file_rel)[1].lstrip(".").lower() in JCL_EXT_SET
         and not _is_jcl_file(os.path.join(project_dir, file_rel), is_strict=False)
+    ]
+
+
+def no_csd_file_list(project_dir: str, file_rel_list: list[str]) -> list[str]:
+    """Return the files with a CSD extension that do not start with a DFHCSDUP command.
+
+    Blank lines and comment lines are skipped; a command is read as is_command_line()
+    reads it.
+
+    Args:
+        project_dir: Absolute path to the project root.
+        file_rel_list: Relative paths of the project files.
+
+    Returns:
+        Relative paths, in the order of file_rel_list.
+    """
+    return [
+        file_rel for file_rel in file_rel_list
+        if os.path.splitext(file_rel)[1].lstrip(".").lower() in CSD_EXT_SET
+        and not is_command_line(_first_statement_line(
+            os.path.join(project_dir, file_rel), CSD_TEXT_END_COLUMN, (CSD_COMMENT_PREFIX,),
+        ))
     ]
