@@ -3,6 +3,7 @@ import logging
 import openai
 import litellm
 from litellm import ContextWindowExceededError
+from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from codetwine.config.settings import (
     LLM_MODEL,
     LLM_API_KEY,
@@ -10,6 +11,8 @@ from codetwine.config.settings import (
     MAX_RETRIES,
     RETRY_WAIT,
     DOC_MAX_TOKENS,
+    DOC_EFFORT,
+    DOC_EFFORT_TUPLE,
 )
 
 logger = logging.getLogger(__name__)
@@ -21,6 +24,78 @@ _REQUEST_TOO_LARGE_TEXT_TUPLE = (
     "request entity too large",
     "payload too large",
 )
+
+# Words in a refusal that say it was the parameters of the effort it refused (lower case)
+_EFFORT_REFUSAL_WORD_TUPLE = ("thinking", "effort", "output_config")
+
+
+def _is_always_think_model(model: str) -> bool:
+    """Tell whether a model thinks whatever it is asked.
+
+    Args:
+        model: Model name in litellm format.
+
+    Returns:
+        What AnthropicModelInfo._is_always_on_thinking_model says of the model under
+        its litellm provider; False for a model of a provider litellm does not know.
+    """
+    try:
+        bare_model, provider, _, _ = litellm.get_llm_provider(model)
+        return AnthropicModelInfo._is_always_on_thinking_model(bare_model, provider)
+    except litellm.BadRequestError:
+        return False
+
+
+def _adaptive_param_dict(effort: str) -> dict:
+    """Return the litellm kwargs that ask for adaptive thinking at an effort.
+
+    Examples:
+        "low" -> {"thinking": {"type": "adaptive"}, "output_config": {"effort": "low"}}
+
+    Args:
+        effort: "low", "medium" or "high".
+
+    Returns:
+        The kwargs to add to the call.
+    """
+    return {"thinking": {"type": "adaptive"}, "output_config": {"effort": effort}}
+
+
+def _effort_param_list(effort: str, model: str) -> list[dict]:
+    """Return the litellm kwargs that ask a model for an effort, in the order tried.
+
+    Examples:
+        ("off", a model that can stop thinking) -> [{"thinking": {"type": "disabled"}},
+                                                    _adaptive_param_dict("low")]
+        ("off", a model that always thinks)     -> [_adaptive_param_dict("low")]
+        ("high", any model)                     -> [_adaptive_param_dict("high")]
+
+    Args:
+        effort: A value of DOC_EFFORT_TUPLE.
+        model: Model name in litellm format.
+
+    Returns:
+        The forms to try, each the kwargs to add to the call. Past the last one the call
+        is made without any.
+    """
+    if effort != "off":
+        return [_adaptive_param_dict(effort)]
+    if _is_always_think_model(model):
+        return [_adaptive_param_dict("low")]
+    return [{"thinking": {"type": "disabled"}}, _adaptive_param_dict("low")]
+
+
+def _is_effort_refusal(error: Exception) -> bool:
+    """Tell whether a refused request was refused for the parameters of the effort.
+
+    Args:
+        error: The BadRequestError of a failed call.
+
+    Returns:
+        True when the error's text holds one of _EFFORT_REFUSAL_WORD_TUPLE.
+    """
+    error_text = str(error).lower()
+    return any(word in error_text for word in _EFFORT_REFUSAL_WORD_TUPLE)
 
 
 def _is_request_too_large(error: Exception) -> bool:
@@ -50,16 +125,19 @@ class LLMClient:
         model: str = LLM_MODEL,
         api_key: str = LLM_API_KEY,
         api_base: str = LLM_API_BASE,
+        effort: str = DOC_EFFORT,
     ) -> None:
-        """Initialize the LLM client with a model name, API key, and endpoint URL.
+        """Initialize the LLM client with a model name, API key, endpoint URL, and effort.
 
         Args:
             model: Model name in litellm format.
             api_key: Provider's API key.
             api_base: Base URL of the API (for custom endpoints).
+            effort: A value of DOC_EFFORT_TUPLE, the effort every call asks for.
 
         Raises:
-            ValueError: When model is empty, or MAX_RETRIES is negative.
+            ValueError: When model is empty, MAX_RETRIES is negative, or effort is not
+                one of DOC_EFFORT_TUPLE.
         """
         if not model:
             raise ValueError(
@@ -71,16 +149,53 @@ class LLMClient:
                 f"MAX_RETRIES must be 0 or more, but got {MAX_RETRIES}. "
                 "Set it in the .env file or your shell."
             )
+        if effort not in DOC_EFFORT_TUPLE:
+            raise ValueError(
+                f"DOC_EFFORT must be one of {' / '.join(DOC_EFFORT_TUPLE)}, but got "
+                f"'{effort}'. Set it in the .env file or your shell."
+            )
         self.model = model
         self.api_key = api_key
         self.api_base = api_base
+        # The first form is sent; a form the model refuses is taken off
+        self.effort_param_list = _effort_param_list(effort, model)
+
+    async def _complete(self, request_dict: dict) -> litellm.ModelResponse:
+        """Call litellm with the first form of self.effort_param_list, the next once refused.
+
+        A refusal of the form sent takes it off self.effort_param_list, with a warning
+        logged by the first call refused, and makes the same call once more with the
+        next form, or without any when none is left.
+
+        Args:
+            request_dict: The kwargs of litellm.acompletion() but the effort's.
+
+        Returns:
+            The litellm response.
+        """
+        effort_param_list = self.effort_param_list
+        effort_param_dict = effort_param_list[0] if effort_param_list else {}
+        try:
+            return await litellm.acompletion(**request_dict, **effort_param_dict)
+        except litellm.BadRequestError as e:
+            if (not effort_param_dict or isinstance(e, ContextWindowExceededError)
+                    or not _is_effort_refusal(e)):
+                raise
+            if self.effort_param_list is effort_param_list:
+                self.effort_param_list = effort_param_list[1:]
+                next_text = (f"with {self.effort_param_list[0]}" if self.effort_param_list
+                             else "without them")
+                logger.warning(f"{self.model} refused the effort parameters "
+                               f"{effort_param_dict}; it is called {next_text}: {e}")
+            return await self._complete(request_dict)
 
     async def _call_with_retry(self, prompt: str, max_tokens: int) -> str | None:
         """Call the LLM API with retry logic and return the generated text.
 
         Makes one call, and on 429 (rate limit exceeded) errors waits RETRY_WAIT
-        seconds and retries up to MAX_RETRIES times. Returns None when every attempt
-        fails, and when the reply holds no text.
+        seconds and retries up to MAX_RETRIES times. A call whose effort parameters
+        are refused is made again with the next form, or without them (_complete).
+        Returns None when every attempt fails, and when the reply holds no text.
 
         Args:
             prompt: The prompt string to send to the LLM.
@@ -108,7 +223,7 @@ class LLMClient:
                 if self.api_base:
                     request_dict["api_base"] = self.api_base
 
-                response = await litellm.acompletion(**request_dict)
+                response = await self._complete(request_dict)
                 # The text is returned as it is when the output was cut at max_tokens
                 if response.choices[0].finish_reason == "length":
                     logger.warning(f"LLM output was cut at {max_tokens} tokens (DOC_MAX_TOKENS)")

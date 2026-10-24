@@ -169,7 +169,7 @@ run_result = asyncio.run(process_all_files(
 
 | Argument | Description |
 |----------|-------------|
-| `llm_client` | `LLMClient()` (model, API key and base URL from `.env`) when `ENABLE_LLM_DOC=True`; `None` when it is `False` |
+| `llm_client` | `LLMClient()` (model, API key, base URL and effort from `.env`) when `ENABLE_LLM_DOC=True`; `None` when it is `False` |
 | `file_list` | Optional. File paths relative to the project root; only these files are analyzed instead of walking the project directory. `EXCLUDE_PATTERNS`, the empty / binary file check and the symbolic link check still apply |
 
 | Return key | Type | Description |
@@ -192,7 +192,8 @@ The following options can be configured in the `.env` file.
 | `LLM_MODEL` | Model name in litellm format (required when `ENABLE_LLM_DOC=True`) | Not set |
 | `LLM_API_BASE` | API base URL (set when using non-standard endpoints, e.g. Ollama, Azure) | Not set |
 | `OUTPUT_LANGUAGE` | Output language for design documents | `English` |
-| `DOC_MAX_TOKENS` | Token limit for LLM output. Output cut at this limit is saved as it is and a warning is logged | `16384` |
+| `DOC_MAX_TOKENS` | Token limit for LLM output, the model's thinking included. Output cut at this limit is saved as it is and a warning is logged; a reply cut before any text counts as a failed call | `16384` |
+| `DOC_EFFORT` | How much the model thinks while writing the design documents: `off` (thinking off; `low` on a model that always thinks or refuses it), `low` / `medium` / `high` (adaptive thinking at that effort). A model that refuses these parameters is called without them from then on and a warning is logged. On a provider whose litellm translation drops or rewrites these parameters (e.g. Gemini, Magistral), the value may not reach the model and no warning is logged | `low` |
 
 ### Path Settings
 
@@ -207,7 +208,7 @@ The following options can be configured in the `.env` file.
 | Variable | Description | Default |
 |--------|------|------------|
 | `MAX_WORKERS` | Number of parallel workers for document generation | `4` |
-| `MAX_RETRIES` | Number of retries of an LLM API call after a rate limit error (`0`: one call, no retry) | `3` |
+| `MAX_RETRIES` | Number of retries of an LLM API call after a rate limit error (`0`: no retry) | `3` |
 | `RETRY_WAIT` | Wait time in seconds between retries | `2` |
 | `PARSE_CACHE_MAX_FILES` | Number of files whose parse results are kept in memory at once (`0`: no limit) | `200` |
 

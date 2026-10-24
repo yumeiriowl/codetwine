@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.4 - 2026-10-24
+
+### Added
+- Design documents: `DOC_EFFORT` (`off`, `low`, `medium`, `high`; default `low`) sets how much the model thinks: `off` sends `thinking` disabled (the `low` form to a model litellm's `AnthropicModelInfo._is_always_on_thinking_model` says always thinks, and after a refusal of it), the others adaptive thinking with `output_config.effort`; `LLMClient(effort=...)` takes it per client and stops with a `ValueError` on any other value. A model that refuses these parameters (a `BadRequestError` naming `thinking`, `effort` or `output_config`, `UnsupportedParamsError` included) is called again with the next form or without them, and the client sends the refused form no more
+
+### Changed
+- litellm 1.101.0 or later is required
+- Design documents: every call asks for adaptive thinking at effort `low` unless `DOC_EFFORT` says otherwise, and the thinking counts toward `DOC_MAX_TOKENS`
+
 ## 0.4.3 - 2026-10-21
 
 ### Added

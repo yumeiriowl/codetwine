@@ -67,6 +67,17 @@ LLM_API_BASE = get_config_value("LLM_API_BASE", default="")
 OUTPUT_LANGUAGE = get_config_value("OUTPUT_LANGUAGE", default="English")
 DOC_MAX_TOKENS = get_config_value("DOC_MAX_TOKENS", default=16384, var_type=int)
 
+# The accepted values of DOC_EFFORT. LLMClient() checks the setting against this
+DOC_EFFORT_TUPLE = ("off", "low", "medium", "high")
+
+# How much the model thinks while it writes the design documents. The thinking counts
+# toward DOC_MAX_TOKENS.
+#   off ............... thinking turned off; low on a model that always thinks or
+#                       refuses it
+#   low/medium/high ... adaptive thinking at that effort
+# A model that refuses these parameters is called without them from then on.
+DOC_EFFORT = get_config_value("DOC_EFFORT", default="low").strip().lower()
+
 # == Path settings =============================================
 REPO_ROOT = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", ".."))
 DEFAULT_PROJECT_DIR = get_config_value("DEFAULT_PROJECT_DIR", default=REPO_ROOT)
