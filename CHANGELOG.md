@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.5 - 2026-10-26
+
+### Added
+- `uv.toml`: when uv resolves the versions `uv.lock` records, it picks no version published less than a day ago, and uv older than 0.11.8 refuses to run in the project
+
+### Changed
+- `uv.lock` records the latest versions of the dependencies published a day ago or earlier, with litellm 1.105.4 and tree-sitter 0.25.2
+
+### Fixed
+- tree-sitter 0.26.0 is not installed (`tree-sitter>=0.25.2,!=0.26.0`): with it, the analysis of a project could end with a segmentation fault
+
 ## 0.4.4 - 2026-10-24
 
 ### Added

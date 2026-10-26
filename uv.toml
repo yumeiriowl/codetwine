@@ -1,0 +1,7 @@
+# When uv resolves versions from PyPI in this directory, or below it in a project with
+# no uv settings of its own, it picks no version published less than a day ago (uvx
+# and uv tool excepted)
+exclude-newer = "1 day"
+
+# uv older than this stops on this file
+required-version = ">=0.11.8"

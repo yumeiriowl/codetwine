@@ -96,7 +96,7 @@ Every other non-empty text file (`.md`, `.yaml`, `.toml`, `Makefile`, ...) is al
 ### Prerequisites
 
 - Python 3.11 or higher
-- [uv](https://github.com/astral-sh/uv) package manager
+- [uv](https://github.com/astral-sh/uv) package manager, 0.11.8 or later
 - API key for an LLM provider (Anthropic / OpenAI / Google, etc. Not required when using local LLMs like Ollama)
 
 ### 1. Installation
