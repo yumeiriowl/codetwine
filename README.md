@@ -54,6 +54,7 @@ The knowledge file can be used as input material for LLM-powered code search and
   - [Sample Output](#sample-output)
   - [Additional Prerequisites](#additional-prerequisites)
   - [How to Run](#how-to-run)
+- [🧪 Running the Tests](#-running-the-tests)
 - [🏗️ Project Structure](#️-project-structure)
 - [🙏 Acknowledgments](#-acknowledgments)
 - [📄 License](#-license)
@@ -698,6 +699,15 @@ To use your own project's output, edit `TARGET_KNOWLEDGE_PATH` in `rlm_qa_agent.
 
 The agent calls the models set in the `LLM_MODEL` and `SUB_LLM_MODEL` constants at the top of `rlm_qa_agent.py` (with `LLM_API_BASE`), not the `LLM_MODEL` of `.env`. It reads the API key from the `LLM_API_KEY` environment variable: set the constants to models of the provider of that key.
 
+## 🧪 Running the Tests
+
+```bash
+uv sync --extra dev
+uv run pytest
+```
+
+The tests make no LLM calls and need no API key.
+
 ## 🏗️ Project Structure
 
 ```
@@ -711,6 +721,7 @@ codetwine/
 │   ├── parsers/            # tree-sitter parser and node helpers, and source-format readers (COBOL format, R Markdown, C macros, Kotlin, statement operands, CSD commands)
 │   ├── llm/                # LLM API client via litellm
 │   └── utils/              # File and cache utilities
+├── tests/                  # Tests (pytest)
 └── examples/
     ├── doc_template_*.json # Other design document templates
     ├── rlm_qa/             # RLM QA agent sample
