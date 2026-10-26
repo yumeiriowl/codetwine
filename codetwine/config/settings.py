@@ -1,4 +1,6 @@
 import os
+import sys
+from collections.abc import Iterable
 from dataclasses import dataclass
 from dotenv import load_dotenv
 from tree_sitter import Language
@@ -19,6 +21,13 @@ load_dotenv()
 
 _REQUIRED = object()
 
+# Values of a True / False setting, in lower case
+_TRUE_WORD_TUPLE = ("true", "1", "yes", "on")
+_FALSE_WORD_TUPLE = ("false", "0", "no", "off")
+
+# Number type of a setting -> how its error message names the type
+_NUMBER_TYPE_NAME_DICT: dict[type, str] = {int: "an integer", float: "a number"}
+
 
 def get_config_value(
     key: str, default: object = _REQUIRED, var_type: type = str,
@@ -35,7 +44,9 @@ def get_config_value(
         The converted configuration value.
 
     Raises:
-        ValueError: If a required environment variable is not set.
+        ValueError: If a required environment variable is not set, or its value is not
+            of var_type (a bool is one of _TRUE_WORD_TUPLE or _FALSE_WORD_TUPLE in any
+            case, with blanks around it allowed).
     """
     value = os.getenv(key)
 
@@ -52,19 +63,35 @@ def get_config_value(
 
     # Type conversion
     if var_type == bool:
-        return value.lower() in ("true", "1", "yes", "on")
-    if var_type == int:
-        return int(value)
-    if var_type == float:
-        return float(value)
+        word = value.strip().lower()
+        if word in _TRUE_WORD_TUPLE:
+            return True
+        if word in _FALSE_WORD_TUPLE:
+            return False
+        raise ValueError(
+            f"Environment variable '{key}' must be True or False (or yes / no, on / off, "
+            f"1 / 0), but got '{value}'. Set it in the .env file or your shell."
+        )
+    if var_type in _NUMBER_TYPE_NAME_DICT:
+        try:
+            return var_type(value)
+        except ValueError:
+            raise ValueError(
+                f"Environment variable '{key}' must be {_NUMBER_TYPE_NAME_DICT[var_type]}, "
+                f"but got '{value}'. Set it in the .env file or your shell."
+            ) from None
     return value
 
 
 # == LLM settings =============================================
+# API key of the LLM provider, model name in litellm format and API base URL
+# (empty: the provider's standard endpoint)
 LLM_API_KEY = get_config_value("LLM_API_KEY", default="")
 LLM_MODEL = get_config_value("LLM_MODEL", default="")
 LLM_API_BASE = get_config_value("LLM_API_BASE", default="")
+# Language the design documents are written in
 OUTPUT_LANGUAGE = get_config_value("OUTPUT_LANGUAGE", default="English")
+# Token limit of one LLM reply, the model's thinking included
 DOC_MAX_TOKENS = get_config_value("DOC_MAX_TOKENS", default=16384, var_type=int)
 
 # The accepted values of DOC_EFFORT. LLMClient() checks the setting against this
@@ -79,6 +106,8 @@ DOC_EFFORT_TUPLE = ("off", "low", "medium", "high")
 DOC_EFFORT = get_config_value("DOC_EFFORT", default="low").strip().lower()
 
 # == Path settings =============================================
+# Root directory of this repository; the default project directory, and the directory
+# holding the default output directory and design document template
 REPO_ROOT = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", ".."))
 DEFAULT_PROJECT_DIR = get_config_value("DEFAULT_PROJECT_DIR", default=REPO_ROOT)
 DEFAULT_OUTPUT_DIR = get_config_value(
@@ -91,10 +120,12 @@ DOC_TEMPLATE_PATH = get_config_value(
 )
 
 # == Performance settings ===================================
+# Number of design documents generated in parallel
 MAX_WORKERS = get_config_value("MAX_WORKERS", default=4, var_type=int)
 # Retries of an LLM call after a rate limit error (0: call once, no retry)
 MAX_RETRIES = get_config_value("MAX_RETRIES", default=3, var_type=int)
-RETRY_WAIT = get_config_value("RETRY_WAIT", default=2, var_type=int)
+# Wait before each retry (seconds, a fraction allowed)
+RETRY_WAIT = get_config_value("RETRY_WAIT", default=2, var_type=float)
 
 # Maximum number of files whose parse results are kept in memory at once.
 # The least recently used entry is discarded once the count exceeds this value.
@@ -119,7 +150,9 @@ KNOWLEDGE_FORMAT = get_config_value(
 ).strip().lower()
 
 # == Analysis settings =============================================
+# Generate the design documents with the LLM (True/False)
 ENABLE_LLM_DOC = get_config_value("ENABLE_LLM_DOC", default=True, var_type=bool)
+# Character count the LLM is asked to keep a file summary within (the reply is not cut)
 SUMMARY_MAX_CHARS: int = get_config_value("SUMMARY_MAX_CHARS", default=600, var_type=int)
 
 # Enable LLM summarization of large code as a fallback when the design-document
@@ -140,34 +173,38 @@ CODE_SUMMARY_PIECE_LINES = get_config_value(
     "CODE_SUMMARY_PIECE_LINES", default=200, var_type=int
 )
 
-# Target character limit for a single code behavior summary.
+# Character count the LLM is asked to keep a single code behavior summary within
+# (the reply is not cut)
 CODE_SUMMARY_MAX_CHARS = get_config_value(
     "CODE_SUMMARY_MAX_CHARS", default=400, var_type=int
 )
 
-# Encodings tried, in order, on a source file that has no BOM and is not valid UTF-8
-# (comma-separated Python codec names, e.g. "euc_jp,cp932"). Empty: none. A file that
-# none of them decodes is decoded with the encoding charset-normalizer detects.
+# Encodings tried, in order, on a source file without a BOM or with a UTF-8 BOM that is
+# not valid UTF-8, without the BOM (comma-separated Python codec names, e.g.
+# "euc_jp,cp932").
+# Empty: none. A file that none of them decodes is decoded with the encoding
+# charset-normalizer detects.
 # process_all_files() checks each name before it analyses anything.
 _SOURCE_ENCODING_ENV = get_config_value("SOURCE_ENCODING", default="", var_type=str)
 SOURCE_ENCODING: list[str] = [
-    e.strip() for e in _SOURCE_ENCODING_ENV.split(",") if e.strip()
+    encoding.strip() for encoding in _SOURCE_ENCODING_ENV.split(",") if encoding.strip()
 ]
 
-_EXCLUDE_PATTERNS_ENV = get_config_value("EXCLUDE_PATTERNS", default="", var_type=str)
-EXCLUDE_PATTERNS: list[str] = (
-    [p.strip() for p in _EXCLUDE_PATTERNS_ENV.split(",") if p.strip()]
-    if _EXCLUDE_PATTERNS_ENV
-    else [
-        "__pycache__",
-        ".git",
-        ".github",
-        ".venv",
-        "node_modules",
-    ]
-)
+# Width of a tab (columns) in the sources read by their columns (COBOL, BMS, JCL, CSD)
+TAB_SIZE = 8
 
-# Per-language definition node settings
+# Directory and file name patterns always left out of the analysis (fnmatch format)
+_DEFAULT_EXCLUDE_PATTERN_TUPLE = ("__pycache__", ".git", ".github", ".venv", "node_modules")
+
+# Directory and file name patterns left out of the analysis: the default patterns above,
+# then those of the setting (comma-separated, fnmatch format) that are not among them
+_EXCLUDE_PATTERNS_ENV = get_config_value("EXCLUDE_PATTERNS", default="", var_type=str)
+EXCLUDE_PATTERNS: list[str] = list(dict.fromkeys([
+    *_DEFAULT_EXCLUDE_PATTERN_TUPLE,
+    *(pattern.strip() for pattern in _EXCLUDE_PATTERNS_ENV.split(",") if pattern.strip()),
+]))
+
+# == Per-language definition node settings ===================
 #
 # Mapping of "AST node type -> child node type that holds the name"
 #
@@ -272,9 +309,11 @@ TS_DEFINITION_DICT = {
     "variable_declaration": "__variable_declarator__",
     "type_alias_declaration": "type_identifier",
     "enum_declaration": "identifier",
-    "enum_assignment": "property_identifier",
+    "enum_assignment": "__enum_member__",
     "property_identifier": "__enum_member__",
-    "internal_module": "identifier",
+    "string": "__enum_member__",
+    "internal_module": "__module_name__",
+    "module": "__module_name__",
     "expression_statement": "__member_assignment__",
     "export_statement": "__default_export__",
     "pair": "__export_member__",
@@ -376,7 +415,7 @@ SQL_DEFINITION_DICT = {
 }
 
 
-# Per-language import extraction queries (for tree-sitter Query)
+# == Per-language import extraction queries (for tree-sitter Query) ====
 #
 # tree-sitter queries describe AST patterns using S-expressions.
 # Capture names: @module  -> the import source module/path
@@ -415,7 +454,8 @@ _PYTHON_IMPORT_QUERY = """
 # - export { X } from 'module': @module and @name (re-export)
 # - export * from 'module': @module only (re-export); the statement holds a "*"
 # - export * as X from 'module': @module and @namespace_name (re-export)
-# - require('module') / import('module'): @module only (CommonJS, dynamic import)
+# - require('module') / import('module'): @module only (CommonJS, dynamic import); the
+#   module of a require() or import() is a string or a template string
 # - const X = require('module'): @module and @namespace_name (CommonJS)
 # - const { X, Y: Z, V = 1, W: U = 2 } = require('module'): @module and @name (CommonJS
 #   destructuring, with or without a default value)
@@ -462,23 +502,23 @@ _JS_IMPORT_QUERY = """
 
 (call_expression
   function: (identifier) @_require_func
-  arguments: (arguments (string) @module)) @import_node
+  arguments: (arguments [(string) (template_string)] @module)) @import_node
 
 (call_expression
   function: (import)
-  arguments: (arguments (string) @module)) @import_node
+  arguments: (arguments [(string) (template_string)] @module)) @import_node
 
 (member_expression
   object: (call_expression
     function: (identifier) @_require_func
-    arguments: (arguments (string) @module))
+    arguments: (arguments [(string) (template_string)] @module))
   property: (property_identifier) @member_use) @import_node
 
 (call_expression
   function: (member_expression
     object: (call_expression
       function: (import)
-      arguments: (arguments (string) @module))
+      arguments: (arguments [(string) (template_string)] @module))
     property: (property_identifier) @_then_func)
   arguments: (arguments . [(arrow_function) (function_expression)] @callback))
 
@@ -486,14 +526,14 @@ _JS_IMPORT_QUERY = """
   name: (identifier) @namespace_name
   value: (call_expression
     function: (identifier) @_require_func
-    arguments: (arguments (string) @module))) @import_node
+    arguments: (arguments [(string) (template_string)] @module))) @import_node
 
 (variable_declarator
   name: (object_pattern
     (shorthand_property_identifier_pattern) @name)
   value: (call_expression
     function: (identifier) @_require_func
-    arguments: (arguments (string) @module))) @import_node
+    arguments: (arguments [(string) (template_string)] @module))) @import_node
 
 (variable_declarator
   name: (object_pattern
@@ -501,7 +541,7 @@ _JS_IMPORT_QUERY = """
       value: (identifier) @name))
   value: (call_expression
     function: (identifier) @_require_func
-    arguments: (arguments (string) @module))) @import_node
+    arguments: (arguments [(string) (template_string)] @module))) @import_node
 
 (variable_declarator
   name: (object_pattern
@@ -509,7 +549,7 @@ _JS_IMPORT_QUERY = """
       left: (shorthand_property_identifier_pattern) @name))
   value: (call_expression
     function: (identifier) @_require_func
-    arguments: (arguments (string) @module))) @import_node
+    arguments: (arguments [(string) (template_string)] @module))) @import_node
 
 (variable_declarator
   name: (object_pattern
@@ -518,14 +558,14 @@ _JS_IMPORT_QUERY = """
         left: (identifier) @name)))
   value: (call_expression
     function: (identifier) @_require_func
-    arguments: (arguments (string) @module))) @import_node
+    arguments: (arguments [(string) (template_string)] @module))) @import_node
 
 (variable_declarator
   name: (identifier) @name
   value: (member_expression
     object: (call_expression
       function: (identifier) @_require_func
-      arguments: (arguments (string) @module))
+      arguments: (arguments [(string) (template_string)] @module))
     property: (property_identifier) @member_name)) @import_node
 
 (variable_declarator
@@ -533,7 +573,7 @@ _JS_IMPORT_QUERY = """
   value: (await_expression
     (call_expression
       function: (import)
-      arguments: (arguments (string) @module)))) @import_node
+      arguments: (arguments [(string) (template_string)] @module)))) @import_node
 
 (variable_declarator
   name: (object_pattern
@@ -541,7 +581,7 @@ _JS_IMPORT_QUERY = """
   value: (await_expression
     (call_expression
       function: (import)
-      arguments: (arguments (string) @module)))) @import_node
+      arguments: (arguments [(string) (template_string)] @module)))) @import_node
 
 (variable_declarator
   name: (object_pattern
@@ -550,7 +590,7 @@ _JS_IMPORT_QUERY = """
   value: (await_expression
     (call_expression
       function: (import)
-      arguments: (arguments (string) @module)))) @import_node
+      arguments: (arguments [(string) (template_string)] @module)))) @import_node
 
 (variable_declarator
   name: (object_pattern
@@ -559,7 +599,7 @@ _JS_IMPORT_QUERY = """
   value: (await_expression
     (call_expression
       function: (import)
-      arguments: (arguments (string) @module)))) @import_node
+      arguments: (arguments [(string) (template_string)] @module)))) @import_node
 
 (variable_declarator
   name: (object_pattern
@@ -569,7 +609,16 @@ _JS_IMPORT_QUERY = """
   value: (await_expression
     (call_expression
       function: (import)
-      arguments: (arguments (string) @module)))) @import_node
+      arguments: (arguments [(string) (template_string)] @module)))) @import_node
+"""
+
+# TypeScript import queries: those of JavaScript, and
+# - import X = require('module'): @module and @namespace_name
+_TS_IMPORT_QUERY = _JS_IMPORT_QUERY + """
+(import_statement
+  (import_require_clause
+    (identifier) @namespace_name
+    source: (string) @module)) @import_node
 """
 
 # Java import queries
@@ -616,7 +665,7 @@ _RUST_IMPORT_QUERY = """
 """
 
 
-# Per-language usage tracking settings (for extract_usages)
+# == Per-language usage tracking settings (for extract_usages) ====
 #
 # call_types:     AST node types representing function calls
 # attribute_types: AST node types representing attribute access
@@ -630,11 +679,16 @@ _RUST_IMPORT_QUERY = """
 # skip_last_child_types: Do not treat an identifier as a usage when it is the last child of
 #                 a parent of one of these types (Java: area in Circle::area)
 # skip_first_name_types: Do not treat an identifier as a usage when it is the first identifier
-#                 child of a parent of one of these types (Kotlin: b in class P(val b: Int = MAX))
+#                 child of a parent of one of these types (Kotlin: b in class P(val b: Int = MAX),
+#                 x in val x = 1)
+# skip_name_field_types: Do not treat an identifier as a usage when it is the "name"-field
+#                 child of a parent of one of these types; the value side is read
+#                 (Python: x in def f(x=y))
 # skip_parent_types_for_type_ref:
 #     Skip only when the parent of a type_identifier / namespace_identifier is one of these types.
-#     Almost all occurrences of type references indicate dependencies.
 #     Only import statements and scope resolution are skipped.
+# type_declarator_types: AST node types whose "declarator" field names the type they
+#                 define; that name is no usage (C / C++: name_t in typedef struct x name_t;)
 # identifier_parent_types: When set, treat an identifier as a usage only when its parent is one of these types
 # identifier_types: AST node types read like an identifier (JS/TS: the name in { name })
 # identifier_parent_dict: AST node type -> parent node types under which it is read like an
@@ -671,8 +725,11 @@ _RUST_IMPORT_QUERY = """
 # typed_alias_new_dict: AST node type of a value that makes an object -> field naming its
 #                 type; a variable given such a value of a tracked type inside a function
 #                 is tracked under the type name from that line on
-# typed_alias_class_only: True when typed_alias_new_dict also matches a plain call, so the
-#                 type has to be a definition in CLASS_DEFINITION_TYPE_SET (Python)
+# typed_alias_class_only: True when the type a typed_alias_new_dict value names has to be a
+#                 definition in CLASS_DEFINITION_TYPE_SET; typed_alias_new_dict also
+#                 matches a plain call there (Python)
+# typed_alias_last_part: True when a type written with "::" whose leading part is no
+#                 tracked name is tracked by its last part (C / C++: geo::Shape is Shape)
 #
 # Names bound inside a function are not usages of a name written outside it; a name an
 # import statement binds there (const m = require("./m")) stays a name of the import:
@@ -702,6 +759,9 @@ _RUST_IMPORT_QUERY = """
 #                 declaration)
 # function_binding_token_types: AST node types of a keyword that makes the names of the
 #                 binding it is written in count for the whole function (JS/TS: var)
+# outer_binding_types: local_binding_dict node types whose names, written outside every
+#                 function (scope_types), are no usages (Python: a variable of a class or
+#                 of the module, x = 1)
 # opaque_types:   AST node types inside a scope whose inner nodes bind nothing in it
 # unbind_types:   AST node types naming names that are not local (Python global / nonlocal)
 # member_definition_types: definition types that define a member of another object
@@ -714,6 +774,12 @@ _RUST_IMPORT_QUERY = """
 # member_by_name: True when a member of a class is written by its name alone inside the
 #                 class (Java, Kotlin, C / C++); else a name the file defines only as a
 #                 member of a class is a usage after self / this, not by itself
+# member_function_types: definition types of the members a call written by its name alone
+#                 names before an imported name (Java, Kotlin); a name not called names a
+#                 member of another type before an imported name. Unset: a member of any
+#                 type comes before an imported name
+# class_call:     True when an object is made by calling the name of its class (Kotlin:
+#                 Entry("a")); such a call names a member class as well
 # extension_call: True when a definition declared for values of another type is used as
 #                 value.name (Kotlin: fun Shape.describe() called as circle.describe())
 _PYTHON_USAGE_NODE_TYPE_DICT = {
@@ -771,6 +837,7 @@ _PYTHON_USAGE_NODE_TYPE_DICT = {
         "default_parameter": "name",
         "typed_default_parameter": "name",
     },
+    "outer_binding_types": {"assignment", "named_expression", "for_statement", "as_pattern"},
     "opaque_types": {"class_definition"},
     "unbind_types": {"global_statement", "nonlocal_statement"},
 }
@@ -805,6 +872,7 @@ _JAVA_USAGE_NODE_TYPE_DICT = {
     "self_types": {"this"},
     "call_ignores_local": True,
     "member_by_name": True,
+    "member_function_types": {"method_declaration"},
     "class_head_argument_skip": True,
     "scope_types": {
         "method_declaration", "constructor_declaration", "compact_constructor_declaration",
@@ -835,8 +903,10 @@ _JS_USAGE_NODE_TYPE_DICT = {
     "skip_parent_types": {
         "call_expression", "member_expression", "nested_type_identifier",
         "import_statement", "import_clause", "import_specifier", "namespace_import",
-        "namespace_export",
+        "namespace_export", "import_require_clause",
         "function_declaration", "class_declaration", "method_definition",
+        "generator_function_declaration", "function_expression", "generator_function",
+        "function_signature",
         "formal_parameters", "pair_pattern",
     },
     "skip_name_field_types": {"variable_declarator"},
@@ -897,13 +967,16 @@ _C_USAGE_NODE_TYPE_DICT = {
         "struct_specifier", "parameter_declaration", "reference_declarator",
         "qualified_identifier",
     },
+    "skip_name_field_types": {"preproc_def", "preproc_function_def"},
     "skip_parent_types_for_type_ref": {
         "preproc_include", "qualified_identifier",
     },
+    "type_declarator_types": {"type_definition"},
     "typed_alias_parent_types": {
         "declaration", "parameter_declaration", "for_range_loop",
     },
     "typed_alias_name_field_dict": {"for_range_loop": "declarator"},
+    "typed_alias_last_part": True,
     "identifier_parent_dict": {"field_identifier": {"field_initializer", "function_declarator"}},
     "macro_declarator_types": {"function_declarator"},
     "self_types": {"this"},
@@ -947,12 +1020,14 @@ _KOTLIN_USAGE_NODE_TYPE_DICT = {
     "typed_alias_parent_types": {
         "property_declaration", "parameter", "class_parameter",
     },
-    "skip_first_name_types": {"class_parameter"},
+    "skip_first_name_types": {"class_parameter", "variable_declaration"},
     "name_path_dict": {"user_type": {"": 2}},
     "template_name_dict": {"string_content": "$"},
     "extension_call": True,
     "self_types": {"this_expression"},
     "member_by_name": True,
+    "member_function_types": {"function_declaration"},
+    "class_call": True,
     "class_head_argument_skip": True,
     "scope_types": {
         "function_declaration", "lambda_literal", "anonymous_function", "secondary_constructor",
@@ -1017,24 +1092,33 @@ _SQL_USAGE_NODE_TYPE_DICT = {
 }
 
 
-# Language registry
+# == Language registry =======================================
 #
 # LangConfig bundles all settings needed for a single language (extension),
-# and _LANG_REGISTRY manages them centrally.
-# To add a new language, simply add one entry to _LANG_REGISTRY.
+# and _EXT_TO_LANG_CONFIG_DICT holds one for each extension.
+# A new language is one more entry of _EXT_TO_LANG_CONFIG_DICT.
 #
 # Public mapping dictionaries (EXT_TO_LANGUAGE_DICT, EXT_TO_DEFINITION_DICT, EXT_TO_IMPORT_QUERY_DICT,
 # EXT_TO_USAGE_NODE_TYPE_DICT, EXT_TO_IMPORT_RESOLVE_DICT, EXT_TO_IMPLICIT_VISIBILITY_DICT,
 # EXT_TO_REFERENCE_KIND_DICT) are auto-generated from the registry.
-_JS_TS_EXT_LIST = [".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs"]
+# Extensions of the declaration files of TypeScript
+_JS_DECLARATION_EXT_TUPLE = (".d.ts", ".d.mts", ".d.cts")
+_JS_TS_EXT_LIST = [
+    ".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs", *_JS_DECLARATION_EXT_TUPLE,
+]
 _C_CPP_EXT_LIST = [".h", ".c", ".cpp", ".cc", ".cxx", ".hpp", ".hh", ".hxx"]
+
+# C/C++ header extensions, and the extensions of the implementation file of a header,
+# in the order the implementation file is looked for
+C_HEADER_EXT_TUPLE = (".h", ".hpp", ".hh", ".hxx")
+C_IMPL_EXT_TUPLE = (".cpp", ".c", ".cc", ".cxx")
 
 # Extension written in a JS/TS import -> extensions of the source files it can stand for
 _JS_SOURCE_EXT_DICT = {
-    ".js":  [".ts", ".tsx", ".jsx"],
+    ".js":  [".ts", ".tsx", ".jsx", ".d.ts"],
     ".jsx": [".tsx"],
-    ".mjs": [".mts"],
-    ".cjs": [".cts"],
+    ".mjs": [".mts", ".d.mts"],
+    ".cjs": [".cts", ".d.cts"],
 }
 
 _JS_TS_RESOLVE_DICT = {
@@ -1051,6 +1135,18 @@ _JS_TS_RESOLVE_DICT = {
         "webpack.config.ts",
     ],
 }
+
+# Top-level names of the standard library of Python 3.11 to 3.14: those of the running
+# Python and those only some of these versions have
+_PYTHON_STANDARD_MODULE_SET = frozenset(sys.stdlib_module_names) | {
+    "aifc", "annotationlib", "asynchat", "asyncore", "audioop", "cgi", "cgitb", "chunk",
+    "compression", "crypt", "distutils", "imghdr", "imp", "lib2to3", "mailcap", "msilib",
+    "nis", "nntplib", "ossaudiodev", "pipes", "smtpd", "sndhdr", "spwd", "sunau", "telnetlib",
+    "uu", "xdrlib",
+}
+
+# A JavaScript file tries the declaration files after every other file
+_JS_RESOLVE_DICT = {**_JS_TS_RESOLVE_DICT, "last_ext_tuple": _JS_DECLARATION_EXT_TUPLE}
 
 _C_CPP_RESOLVE_DICT = {
     "separator": "/",
@@ -1083,8 +1179,12 @@ class LangConfig:
                         alt_ext_list   - List of alternative extensions
                         source_ext_dict - Extension written in an import -> extensions of the
                                          files it can stand for (JS/TS: ".js" -> ".ts", ".tsx")
+                        last_ext_tuple - Extensions of the files tried after every other
+                                         candidate (JavaScript: the declaration files)
                         try_bare_path  - Whether to try paths without extensions (C/C++)
-                        try_current_dir - Whether to also try relative paths from the current directory (C/C++)
+                        try_current_dir - Whether to try the paths from the directory of the
+                                         current file before those from the project root
+                                         (C/C++, Python)
                         package_file   - File name that makes a directory a package; a file in
                                          such a directory does not get try_current_dir (Python)
                         path_config_name_list - File names of the config files whose "baseUrl"
@@ -1097,9 +1197,18 @@ class LangConfig:
                                          aliases such a module is resolved through (JS/TS)
                         min_path_end_part - Number of parts a module needs to be matched against
                                          the end of the project file paths; absent: never
+                        standard_module_set - Top-level names of the standard library; a module
+                                         that starts with one is looked up under a source
+                                         root or by the end of the paths only in a directory
+                                         above the current file that is no package (Python)
                         module_tree    - Whether to resolve paths through the tree of mod declarations (Rust)
                         name_index     - Whether to resolve names through the file names and
                                          program names of the project (COBOL, JCL, CSD)
+                        file_class_suffix - Suffix of the name of the class the top-level
+                                         functions and properties of a file are members of
+                                         ("Strings.kt" -> "StringsKt") unless @file:JvmName
+                                         names it; a file of a language without it sees such
+                                         a file as that class and its top-level types (Kotlin)
     implicit_visibility: Which files' definitions can be referenced without an import statement:
                         "package" - files that declare the same package; for a file without
                                     a package statement, the files of its directory that
@@ -1170,7 +1279,7 @@ _R_LANG_CONFIG = LangConfig(
     reference_kind="r",
 )
 
-_LANG_REGISTRY: dict[str, LangConfig] = {
+_EXT_TO_LANG_CONFIG_DICT: dict[str, LangConfig] = {
     "py": LangConfig(
         language=Language(tspython.language()),
         definition_dict=PYTHON_DEFINITION_DICT,
@@ -1183,6 +1292,7 @@ _LANG_REGISTRY: dict[str, LangConfig] = {
             "try_current_dir": True,
             "package_file": "__init__.py",
             "min_path_end_part": 2,
+            "standard_module_set": _PYTHON_STANDARD_MODULE_SET,
         },
     ),
     "java": LangConfig(
@@ -1212,7 +1322,7 @@ _LANG_REGISTRY: dict[str, LangConfig] = {
         definition_dict=KOTLIN_DEFINITION_DICT,
         import_query=_KOTLIN_IMPORT_QUERY,
         usage_node_type_dict=_KOTLIN_USAGE_NODE_TYPE_DICT,
-        import_resolve_dict={"separator": ".", "bind": "package"},
+        import_resolve_dict={"separator": ".", "bind": "package", "file_class_suffix": "Kt"},
         implicit_visibility="package",
     ),
     "js": LangConfig(
@@ -1220,19 +1330,19 @@ _LANG_REGISTRY: dict[str, LangConfig] = {
         definition_dict=JS_DEFINITION_DICT,
         import_query=_JS_IMPORT_QUERY,
         usage_node_type_dict=_JS_USAGE_NODE_TYPE_DICT,
-        import_resolve_dict=_JS_TS_RESOLVE_DICT,
+        import_resolve_dict=_JS_RESOLVE_DICT,
     ),
     "ts": LangConfig(
         language=Language(tstypescript.language_typescript()),
         definition_dict=TS_DEFINITION_DICT,
-        import_query=_JS_IMPORT_QUERY,
+        import_query=_TS_IMPORT_QUERY,
         usage_node_type_dict=_JS_USAGE_NODE_TYPE_DICT,
         import_resolve_dict=_JS_TS_RESOLVE_DICT,
     ),
     "tsx": LangConfig(
         language=Language(tstypescript.language_tsx()),
         definition_dict=TS_DEFINITION_DICT,
-        import_query=_JS_IMPORT_QUERY,
+        import_query=_TS_IMPORT_QUERY,
         usage_node_type_dict=_JS_USAGE_NODE_TYPE_DICT,
         import_resolve_dict=_JS_TS_RESOLVE_DICT,
     ),
@@ -1268,10 +1378,10 @@ _LANG_REGISTRY: dict[str, LangConfig] = {
 }
 
 
-# Extension aliases and auto-generation of public mapping dictionaries
+# == Extension aliases and auto-generation of public mapping dictionaries ====
 #
 # _EXT_ALIAS_DICT defines a mapping of extensions that share the same language settings.
-# When generating public dictionaries from _LANG_REGISTRY, _expand_ext_aliases()
+# When generating public dictionaries from _EXT_TO_LANG_CONFIG_DICT, _add_ext_alias()
 # automatically adds alias extensions (h, cc, kts, jsx, mts, ...).
 _EXT_ALIAS_DICT: dict[str, str] = {
     "h":   "cpp",
@@ -1289,7 +1399,7 @@ _EXT_ALIAS_DICT: dict[str, str] = {
 }
 
 
-def _expand_ext_aliases(base_dict: dict) -> dict:
+def _add_ext_alias(base_dict: dict) -> dict:
     """Return a new dictionary with alias extension entries added based on _EXT_ALIAS_DICT.
 
     For example, if _EXT_ALIAS_DICT = {"h": "cpp"} and base_dict contains "cpp",
@@ -1301,77 +1411,62 @@ def _expand_ext_aliases(base_dict: dict) -> dict:
     Returns:
         A new dictionary with alias extensions added.
     """
-    expanded_dict = dict(base_dict)
+    full_dict = dict(base_dict)
     for alias, canonical in _EXT_ALIAS_DICT.items():
-        if alias not in expanded_dict and canonical in expanded_dict:
-            expanded_dict[alias] = expanded_dict[canonical]
-    return expanded_dict
+        if alias not in full_dict and canonical in full_dict:
+            full_dict[alias] = full_dict[canonical]
+    return full_dict
 
 
 # Extension -> tree-sitter Language object
-EXT_TO_LANGUAGE_DICT: dict[str, Language] = _expand_ext_aliases(
-    {ext: lang_config.language for ext, lang_config in _LANG_REGISTRY.items()}
+EXT_TO_LANGUAGE_DICT: dict[str, Language] = _add_ext_alias(
+    {ext: lang_config.language for ext, lang_config in _EXT_TO_LANG_CONFIG_DICT.items()}
 )
 
 # Extension -> definition node mapping dictionary
-EXT_TO_DEFINITION_DICT: dict[str, dict[str, str]] = _expand_ext_aliases(
-    {ext: lang_config.definition_dict for ext, lang_config in _LANG_REGISTRY.items()}
+EXT_TO_DEFINITION_DICT: dict[str, dict[str, str]] = _add_ext_alias(
+    {ext: lang_config.definition_dict for ext, lang_config in _EXT_TO_LANG_CONFIG_DICT.items()}
 )
 
 
-# Extensions of the COBOL files (lower case)
-COBOL_EXT_SET: set[str] = {
-    ext for ext, definition_dict in EXT_TO_DEFINITION_DICT.items()
-    if definition_dict is COBOL_DEFINITION_DICT
-}
+def _ext_set_of(definition_dict: dict[str, str]) -> set[str]:
+    """Return the extensions whose EXT_TO_DEFINITION_DICT value is definition_dict itself.
 
-# Extensions of the C and C++ files
-C_FAMILY_EXT_SET: set[str] = {
-    ext for ext, lang_config in _LANG_REGISTRY.items()
-    if (lang_config.import_resolve_dict or {}).get("bind") == "include"
-} | {
-    alias for alias, canonical in _EXT_ALIAS_DICT.items()
-    if (_LANG_REGISTRY[canonical].import_resolve_dict or {}).get("bind") == "include"
-}
+    Args:
+        definition_dict: One of the per-language definition dictionaries (the object itself).
+
+    Returns:
+        The extensions (without the dot) mapped to that very dictionary.
+    """
+    return {
+        ext for ext, ext_definition_dict in EXT_TO_DEFINITION_DICT.items()
+        if ext_definition_dict is definition_dict
+    }
+
+
+# Extensions of the COBOL files (lower case)
+COBOL_EXT_SET: set[str] = _ext_set_of(COBOL_DEFINITION_DICT)
 
 # Extensions of the Kotlin files
-KOTLIN_EXT_SET: set[str] = {
-    ext for ext, definition_dict in EXT_TO_DEFINITION_DICT.items()
-    if definition_dict is KOTLIN_DEFINITION_DICT
-}
+KOTLIN_EXT_SET: set[str] = _ext_set_of(KOTLIN_DEFINITION_DICT)
 
 # Extensions of the C# files
-CSHARP_EXT_SET: set[str] = {
-    ext for ext, definition_dict in EXT_TO_DEFINITION_DICT.items()
-    if definition_dict is CSHARP_DEFINITION_DICT
-}
+CSHARP_EXT_SET: set[str] = _ext_set_of(CSHARP_DEFINITION_DICT)
 
 # Extensions of the R files: scripts, R Markdown and Quarto (lower case)
-R_EXT_SET: set[str] = {
-    ext for ext, definition_dict in EXT_TO_DEFINITION_DICT.items()
-    if definition_dict is R_DEFINITION_DICT
-}
+R_EXT_SET: set[str] = _ext_set_of(R_DEFINITION_DICT)
 
 # Extensions of the R files whose code is in the R chunks of a document (lower case)
 R_MARKDOWN_EXT_SET: set[str] = {"rmd", "qmd"}
 
 # Extensions of the BMS sources (lower case)
-BMS_EXT_SET: set[str] = {
-    ext for ext, definition_dict in EXT_TO_DEFINITION_DICT.items()
-    if definition_dict is BMS_DEFINITION_DICT
-}
+BMS_EXT_SET: set[str] = _ext_set_of(BMS_DEFINITION_DICT)
 
 # Extensions of the JCL files (lower case)
-JCL_EXT_SET: set[str] = {
-    ext for ext, definition_dict in EXT_TO_DEFINITION_DICT.items()
-    if definition_dict is JCL_DEFINITION_DICT
-}
+JCL_EXT_SET: set[str] = _ext_set_of(JCL_DEFINITION_DICT)
 
 # Extensions of the CSD files (lower case)
-CSD_EXT_SET: set[str] = {
-    ext for ext, definition_dict in EXT_TO_DEFINITION_DICT.items()
-    if definition_dict is CSD_DEFINITION_DICT
-}
+CSD_EXT_SET: set[str] = _ext_set_of(CSD_DEFINITION_DICT)
 
 # Extensions of the files read into a CobolSource: COBOL files, BMS sources, JCL files and
 # CSD files
@@ -1379,7 +1474,7 @@ COBOL_SOURCE_EXT_SET: set[str] = COBOL_EXT_SET | BMS_EXT_SET | JCL_EXT_SET | CSD
 
 # Extensions matched without regard to upper and lower case (lower case)
 _IGNORE_CASE_EXT_SET: set[str] = {
-    ext for ext, lang_config in _LANG_REGISTRY.items() if lang_config.ignore_ext_case
+    ext for ext, lang_config in _EXT_TO_LANG_CONFIG_DICT.items() if lang_config.ignore_ext_case
 }
 
 # Absolute path of a file whose language is not given by its extension -> the extension
@@ -1387,6 +1482,20 @@ _IGNORE_CASE_EXT_SET: set[str] = {
 # Filled by set_copy_target_ext() and add_copy_target_ext() (COBOL: a copybook named by a
 # COPY statement; JCL: a job, or a procedure or member named by an EXEC or INCLUDE statement)
 _copy_target_ext_dict: dict[str, str] = {}
+
+
+def _project_path_list(path_iter: Iterable[str], project_dir: str) -> list[str]:
+    """Return the absolute paths of path_iter that are under a project directory.
+
+    Args:
+        path_iter: Absolute file paths.
+        project_dir: Root directory of the project.
+
+    Returns:
+        The paths of path_iter under project_dir, in the order of path_iter.
+    """
+    project_prefix = os.path.join(os.path.abspath(project_dir), "")
+    return [path for path in path_iter if path.startswith(project_prefix)]
 
 
 def set_copy_target_ext(project_dir: str, file_ext_dict: dict[str, str]) -> None:
@@ -1399,8 +1508,7 @@ def set_copy_target_ext(project_dir: str, file_ext_dict: dict[str, str]) -> None
         file_ext_dict: {path relative to project_dir: extension whose language settings
             the file is analyzed with}.
     """
-    project_prefix = os.path.join(os.path.abspath(project_dir), "")
-    for path in [path for path in _copy_target_ext_dict if path.startswith(project_prefix)]:
+    for path in _project_path_list(_copy_target_ext_dict, project_dir):
         del _copy_target_ext_dict[path]
     for file_rel, ext in file_ext_dict.items():
         add_copy_target_ext(project_dir, file_rel, ext)
@@ -1433,8 +1541,7 @@ def set_no_language_file(project_dir: str, file_rel_list: list[str]) -> None:
         project_dir: Root directory of the project.
         file_rel_list: Paths relative to project_dir.
     """
-    project_prefix = os.path.join(os.path.abspath(project_dir), "")
-    for path in [path for path in _no_language_path_set if path.startswith(project_prefix)]:
+    for path in _project_path_list(_no_language_path_set, project_dir):
         _no_language_path_set.discard(path)
     for file_rel in file_rel_list:
         _no_language_path_set.add(os.path.abspath(os.path.join(project_dir, file_rel)))
@@ -1504,46 +1611,53 @@ def has_language(path: str) -> bool:
 
 
 # Extension -> import extraction query
-EXT_TO_IMPORT_QUERY_DICT: dict[str, str | None] = _expand_ext_aliases(
-    {ext: lang_config.import_query for ext, lang_config in _LANG_REGISTRY.items()}
+EXT_TO_IMPORT_QUERY_DICT: dict[str, str | None] = _add_ext_alias(
+    {ext: lang_config.import_query for ext, lang_config in _EXT_TO_LANG_CONFIG_DICT.items()}
 )
 
 # Extension -> AST node type settings for usage tracking
-EXT_TO_USAGE_NODE_TYPE_DICT: dict[str, dict | None] = _expand_ext_aliases(
-    {ext: lang_config.usage_node_type_dict for ext, lang_config in _LANG_REGISTRY.items()}
+EXT_TO_USAGE_NODE_TYPE_DICT: dict[str, dict | None] = _add_ext_alias(
+    {ext: lang_config.usage_node_type_dict for ext, lang_config in _EXT_TO_LANG_CONFIG_DICT.items()}
 )
 
 # Pattern node types of every language together (pattern_types, pattern_field_dict):
 # what the names a declaration defines are read with
 PATTERN_TYPE_SET: set[str] = set().union(*(
     lang_config.usage_node_type_dict.get("pattern_types", set())
-    for lang_config in _LANG_REGISTRY.values() if lang_config.usage_node_type_dict
+    for lang_config in _EXT_TO_LANG_CONFIG_DICT.values() if lang_config.usage_node_type_dict
 ))
 PATTERN_FIELD_DICT: dict[str, str] = {
     node_type: field_name
-    for lang_config in _LANG_REGISTRY.values() if lang_config.usage_node_type_dict
+    for lang_config in _EXT_TO_LANG_CONFIG_DICT.values() if lang_config.usage_node_type_dict
     for node_type, field_name in lang_config.usage_node_type_dict.get("pattern_field_dict", {}).items()
 }
 
 # Extension -> import path resolution settings
-EXT_TO_IMPORT_RESOLVE_DICT: dict[str, dict] = _expand_ext_aliases(
-    {ext: lang_config.import_resolve_dict for ext, lang_config in _LANG_REGISTRY.items()
+EXT_TO_IMPORT_RESOLVE_DICT: dict[str, dict] = _add_ext_alias(
+    {ext: lang_config.import_resolve_dict for ext, lang_config in _EXT_TO_LANG_CONFIG_DICT.items()
      if lang_config.import_resolve_dict is not None}
 )
 
+# Extensions of the C and C++ files: those whose imports are #include statements
+C_FAMILY_EXT_SET: set[str] = {
+    ext for ext, import_resolve_dict in EXT_TO_IMPORT_RESOLVE_DICT.items()
+    if import_resolve_dict.get("bind") == "include"
+}
+
 # Extension -> how the references of a file are resolved ("import" / "cobol" / "jcl" /
 # "csharp" / "r")
-EXT_TO_REFERENCE_KIND_DICT: dict[str, str] = _expand_ext_aliases(
-    {ext: lang_config.reference_kind for ext, lang_config in _LANG_REGISTRY.items()}
+EXT_TO_REFERENCE_KIND_DICT: dict[str, str] = _add_ext_alias(
+    {ext: lang_config.reference_kind for ext, lang_config in _EXT_TO_LANG_CONFIG_DICT.items()}
 )
 
 # Extension -> scope of the files whose definitions can be referenced without an import ("package" / "project")
-EXT_TO_IMPLICIT_VISIBILITY_DICT: dict[str, str] = _expand_ext_aliases(
-    {ext: lang_config.implicit_visibility for ext, lang_config in _LANG_REGISTRY.items()
+EXT_TO_IMPLICIT_VISIBILITY_DICT: dict[str, str] = _add_ext_alias(
+    {ext: lang_config.implicit_visibility for ext, lang_config in _EXT_TO_LANG_CONFIG_DICT.items()
      if lang_config.implicit_visibility}
 )
 
 
+# == Source roots ============================================
 # Source root prefixes for Maven/Gradle standard layouts and Python src-layout.
 # Used to resolve import statements when source files are nested under these directories.
 SOURCE_ROOT_PATTERN_LIST: list[str] = [

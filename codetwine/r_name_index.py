@@ -56,11 +56,11 @@ _Entry = tuple[str, RDefinition]
 _NameTable = dict[str, list[_Entry]]
 
 # Cache of name indexes: project_dir -> (project file set the index was built from, index)
-r_name_index_cache: dict[str, tuple[set[str], "RNameIndex"]] = {}
+r_name_index_cache_dict: dict[str, tuple[set[str], "RNameIndex"]] = {}
 
 # Cache of the resolved references of R files: absolute path -> (project file set they
 # were resolved with, targets)
-r_target_cache: dict[str, tuple[set[str], list["RReferenceTarget"]]] = {}
+r_target_cache_dict: dict[str, tuple[set[str], list["RReferenceTarget"]]] = {}
 
 
 @dataclass
@@ -125,6 +125,10 @@ class RNameIndex:
     reader_file_dict: dict[str, list[str]] = field(default_factory=dict)
     # Relative path -> what the box::use calls of the file bind (kept by _box_scope)
     box_scope_dict: dict[str, _BoxScope] = field(default_factory=dict)
+    # Relative path of a module script -> the names it gives (kept by _module_table)
+    module_table_dict: dict[str, _NameTable] = field(default_factory=dict)
+    # Directories of several packages of one name -> their names (kept by _package_table)
+    package_merge_table_dict: dict[tuple[str, ...], _NameTable] = field(default_factory=dict)
 
 
 def _file_table(file_rel: str, r_source: RSource) -> _NameTable:
@@ -174,9 +178,11 @@ def _package_name(project_dir: str, directory: str) -> str | None:
 
     Returns:
         The value of the "Package:" field. None when the directory has no DESCRIPTION
-        file, or the file has no such field.
+        file that is a regular file, or the file has no such field.
     """
     description_path = os.path.join(project_dir, directory, _PACKAGE_FILE)
+    if not os.path.isfile(description_path):
+        return None
     try:
         with open(description_path, encoding="utf-8-sig", errors="replace") as description_file:
             for line in description_file:
@@ -188,8 +194,11 @@ def _package_name(project_dir: str, directory: str) -> str | None:
 
 
 def _add_package(name_index: RNameIndex, project_dir: str, file_rel_list: list[str]) -> None:
-    """Index the packages of the project: the directory of each file's package, the
-    package names, and the names of the scripts in each package's R directory."""
+    """Index the packages of the project.
+
+    The directory of each file's package, the package names, and the names of the
+    scripts in each package's R directory are added to name_index.
+    """
     name_by_dir_dict: dict[str, str | None] = {}
     for file_rel in file_rel_list:
         package_dir: str | None = None
@@ -355,13 +364,21 @@ def _package_dir_list(name_index: RNameIndex, package_name: str, file_rel: str) 
 
 
 def _package_table(name_index: RNameIndex, package_name: str, file_rel: str) -> _NameTable:
-    """Return the names of the packages a file names with a package name (_package_dir_list)."""
-    package_dir_list = _package_dir_list(name_index, package_name, file_rel)
-    if len(package_dir_list) == 1:
-        return name_index.package_table_dict[package_dir_list[0]]
-    return _merge_table(
-        [name_index.package_table_dict[package_dir] for package_dir in package_dir_list]
-    )
+    """Return the names of the packages a file names with a package name (_package_dir_list).
+
+    The names of several packages are merged once for each set of packages and kept in
+    name_index.package_merge_table_dict.
+    """
+    package_dir_tuple = tuple(_package_dir_list(name_index, package_name, file_rel))
+    if len(package_dir_tuple) == 1:
+        return name_index.package_table_dict[package_dir_tuple[0]]
+    merge_table = name_index.package_merge_table_dict.get(package_dir_tuple)
+    if merge_table is None:
+        merge_table = _merge_table(
+            [name_index.package_table_dict[package_dir] for package_dir in package_dir_tuple]
+        )
+        name_index.package_merge_table_dict[package_dir_tuple] = merge_table
+    return merge_table
 
 
 def _box_module(name_index: RNameIndex, file_rel: str, r_import: RImport) -> _BoxModule | None:
@@ -392,7 +409,8 @@ def _module_table(
 
     A module script gives its own top-level names, then the names its own box::use
     calls attach; a module in visit_set gives its own names only. A package gives the
-    names of the packages of that name (_package_table).
+    names of the packages of that name (_package_table). The names of a module script
+    are kept in name_index.module_table_dict once its _BoxScope is kept.
 
     Args:
         name_index: The name index of the project.
@@ -401,6 +419,9 @@ def _module_table(
         visit_set: The files whose box::use calls are read at this moment.
         hit_set: Given the modules of visit_set the read comes back to; modified in
             place.
+
+    Returns:
+        The name table of the module.
     """
     if module.file_rel is None:
         return _package_table(name_index, module.package_name, file_rel)
@@ -409,8 +430,14 @@ def _module_table(
         if hit_set is not None:
             hit_set.add(module.file_rel)
         return own_table
+    module_table = name_index.module_table_dict.get(module.file_rel)
+    if module_table is not None:
+        return module_table
     box_scope = _box_scope(name_index, module.file_rel, visit_set, hit_set)
-    return _merge_table([own_table, box_scope.attach_table, box_scope.attach_all_table])
+    module_table = _merge_table([own_table, box_scope.attach_table, box_scope.attach_all_table])
+    if name_index.box_scope_dict.get(module.file_rel) is box_scope:
+        name_index.module_table_dict[module.file_rel] = module_table
+    return module_table
 
 
 def _box_scope(
@@ -511,8 +538,8 @@ def _build_name_index(project_dir: str, project_file_set: set[str]) -> RNameInde
 def _get_name_index(project_dir: str, project_file_set: set[str]) -> RNameIndex:
     """Return the name index of the project, building it on the first call.
 
-    The index is kept in r_name_index_cache until the project file set changes or the
-    cache is cleared.
+    The index is kept in r_name_index_cache_dict until the project file set changes or
+    the cache is cleared.
 
     Args:
         project_dir: Absolute path to the project root.
@@ -521,12 +548,12 @@ def _get_name_index(project_dir: str, project_file_set: set[str]) -> RNameIndex:
     Returns:
         The RNameIndex of the R files in project_file_set.
     """
-    name_index = project_cache_value(r_name_index_cache, project_dir, project_file_set)
+    name_index = project_cache_value(r_name_index_cache_dict, project_dir, project_file_set)
     if name_index is not None:
         return name_index
 
     name_index = _build_name_index(project_dir, project_file_set)
-    r_name_index_cache[project_dir] = (project_file_set, name_index)
+    r_name_index_cache_dict[project_dir] = (project_file_set, name_index)
     return name_index
 
 
@@ -544,10 +571,9 @@ class _ReferenceResolver:
         self._file_rel = file_rel
         self._r_source = name_index.source_dict[file_rel]
         self._box_scope = _box_scope(name_index, file_rel)
-        # Package name -> the names of the packages the file names with it
-        self._package_table_dict: dict[str, _NameTable] = {}
-        # Name -> definitions of it the file sees, kept once looked up
-        self._lookup_dict: dict[str, list[_Entry]] = {}
+        # (name, whether the definitions of the file itself are seen) -> definitions of
+        # the name the file sees, kept once looked up
+        self._lookup_dict: dict[tuple[str, bool], list[_Entry]] = {}
         self._file_set_list = self._lookup_file_set_list()
 
     def _with_source(self, file_rel_list: list[str], skip_set: set[str]) -> list[str]:
@@ -562,12 +588,6 @@ class _ReferenceResolver:
         """
         reach_list = _reach_list(self._name_index.source_file_dict, file_rel_list)
         return [file_rel for file_rel in reach_list if file_rel not in skip_set]
-
-    def _reader_file_list(self, skip_set: set[str]) -> list[str]:
-        """Return the scripts that read the file with source(), followed up through the
-        scripts that read those, and every script they read."""
-        reader_list = _reach_list(self._name_index.reader_file_dict, [self._file_rel])
-        return self._with_source(reader_list, skip_set)
 
     def _is_app_dir(self, directory: str) -> bool:
         """Return whether a directory holds app.R or server.R."""
@@ -610,9 +630,14 @@ class _ReferenceResolver:
         ]
 
     def _library_file_set_list(self, file_rel_list: list[str]) -> list[set[str]]:
-        """Return the scripts of the project packages the given files attach with
-        library() / require(): one set for each package name, the package attached
-        last first, without the package the file itself is in."""
+        """Return the scripts of the project packages the given files attach.
+
+        The packages are the ones attached with library() / require().
+
+        Returns:
+            One set for each package name, the package attached last first, without
+            the package the file itself is in.
+        """
         name_index = self._name_index
         own_package_dir = name_index.package_dir_dict.get(self._file_rel)
         file_set_dict: dict[str, set[str]] = {}
@@ -650,8 +675,8 @@ class _ReferenceResolver:
         name_index = self._name_index
         skip_set = {self._file_rel}
         source_list = self._with_source([self._file_rel], skip_set)
-        reader_list = self._reader_file_list(skip_set | set(source_list))
         chain_list = _reach_list(name_index.reader_file_dict, [self._file_rel])
+        reader_list = self._with_source(chain_list, skip_set | set(source_list))
         app_list = self._with_source(
             [app_rel for chain_rel in chain_list for app_rel in self._app_file_list(chain_rel)],
             skip_set,
@@ -681,24 +706,42 @@ class _ReferenceResolver:
         ))
         return [file_set for file_set in file_set_list if file_set]
 
-    def _lookup(self, name: str) -> list[_Entry]:
+    def _lookup(self, name: str, read_position: int = -1) -> list[_Entry]:
         """Return the definitions of a name the file sees.
 
         The definitions of the file itself, else the ones box::use attaches under the
         name (one by one, then whole modules), else the ones in the first set of
-        _lookup_file_set_list with a script that defines the name. A name is looked up
-        once per file.
+        _lookup_file_set_list with a script that defines the name. A reference read
+        outside every function sees the definitions of the file only when one of them
+        binds the name before the place it is read (data <- subset(data, x > 0) reads
+        data from outside the file). A name is looked up once per file and for each of
+        these two cases.
+
+        Args:
+            name: The name.
+            read_position: RReference.read_position of the reference; -1 for one that
+                sees every definition of the file.
         """
-        entry_list = self._lookup_dict.get(name)
+        is_own = any(
+            read_position < 0 or definition.bind_position <= read_position
+            for _, definition in self._name_index.table_dict[self._file_rel].get(name, [])
+        )
+        lookup_key = (name, is_own)
+        entry_list = self._lookup_dict.get(lookup_key)
         if entry_list is None:
-            entry_list = self._find_entry_list(name)
-            self._lookup_dict[name] = entry_list
+            entry_list = self._find_entry_list(name, is_own)
+            self._lookup_dict[lookup_key] = entry_list
         return entry_list
 
-    def _find_entry_list(self, name: str) -> list[_Entry]:
-        """Look up the definitions of a name the file sees (see _lookup)."""
+    def _find_entry_list(self, name: str, is_own: bool) -> list[_Entry]:
+        """Look up the definitions of a name the file sees (see _lookup).
+
+        Args:
+            name: The name.
+            is_own: Whether the definitions of the file itself are looked in.
+        """
         own_table_list = [
-            self._name_index.table_dict[self._file_rel],
+            self._name_index.table_dict[self._file_rel] if is_own else {},
             self._box_scope.attach_table,
             self._box_scope.attach_all_table,
         ]
@@ -714,15 +757,6 @@ class _ReferenceResolver:
             if entry_list:
                 return entry_list
         return []
-
-    def _package_table(self, package_name: str) -> _NameTable:
-        """Return the names of the packages of the project the file names with a package
-        name, read once for each name."""
-        if package_name not in self._package_table_dict:
-            self._package_table_dict[package_name] = _package_table(
-                self._name_index, package_name, self._file_rel,
-            )
-        return self._package_table_dict[package_name]
 
     def _member_entry_list(self, module: _BoxModule, name_list: list[str]) -> list[_Entry]:
         """Return the definitions a chain of names after a box module refers to.
@@ -757,13 +791,15 @@ class _ReferenceResolver:
         tables of the file.
         """
         if reference.kind == NAMESPACE_REFERENCE:
-            return self._package_table(reference.owner).get(reference.name, [])
+            return _package_table(
+                self._name_index, reference.owner, self._file_rel,
+            ).get(reference.name, [])
         if reference.kind == MEMBER_REFERENCE:
             module = self._box_scope.module_dict.get(reference.owner)
             if module is not None:
                 return self._member_entry_list(module, [reference.name, *reference.member_tuple])
-            return self._lookup(reference.owner)
-        return self._lookup(reference.name)
+            return self._lookup(reference.owner, reference.read_position)
+        return self._lookup(reference.name, reference.read_position)
 
     def _method_target_list(self) -> list[RReferenceTarget]:
         """Return the generic each S3 method of the file is written for.
@@ -821,14 +857,16 @@ def r_reference_target_list(
 
     A name no function around it binds is looked up, in this order, among the top-level
     names of: the file itself; the box modules whose names box::use attaches; the
-    scripts the file reads with source() / sys.source(), followed through; the scripts
-    that read the file with source(), followed up, and the scripts those read; global.R
-    and the R directory of the Shiny app the file belongs to; the helper and setup
-    scripts of the testthat directory the file is in; the scripts in the R directory of
-    the package the file is in (the nearest directory above it whose DESCRIPTION file
-    has a "Package:" field); the packages of the project that the file, or one of the
-    scripts above, attaches with library() / require(). The scripts global.R, the R
-    directory of an app and the helper scripts read with source() count with them.
+    scripts in the R directory of the package the file is in (the nearest directory
+    above it whose DESCRIPTION file has a "Package:" field), here when the file is one
+    of them; the scripts the file reads with source() / sys.source(), followed through;
+    the scripts that read the file with source(), followed up, and the scripts those
+    read; global.R and the R directory of the Shiny app the file belongs to, or that a
+    file reading it belongs to; the helper and setup scripts of the testthat directory
+    the file, or a file reading it, is in; the scripts of the package the file is in,
+    when the file is not one of them; the packages of the project that the file, or one
+    of the scripts above, attaches with library() / require(). The scripts global.R, the
+    R directory of an app and the helper scripts read with source() count with them.
     pkg::name and pkg:::name are looked up in the package of the project named pkg, and
     owner$name in the box module bound to owner, through the modules that module binds
     (owner$inner$name) and the names it attaches. A top-level function named
@@ -836,8 +874,8 @@ def r_reference_target_list(
     A name defined in several files of the table it is found in leads to all of them.
 
     Processing flow:
-    1. Return the targets of r_target_cache when they were resolved with the same
-       project file set
+    1. Return the targets of r_target_cache_dict when they were resolved with the
+       same project file set
     2. Resolve the references of the file through the name index of the project
 
     Args:
@@ -846,15 +884,15 @@ def r_reference_target_list(
         project_dir: Absolute path to the project root.
 
     Returns:
-        One target per reference and file a definition is in, in line order, without
+        One target per reference and definition it leads to, in line order, without
         duplicates; the usage is named after the definition. A target whose file_rel
         is the file itself is a reference to a definition of the file. The targets are
-        kept in r_target_cache until the project file set changes or the cache is
-        cleared. Empty for a file that could not be read.
+        kept in r_target_cache_dict until the project file set changes or the cache
+        is cleared. Empty for a file that could not be read.
     """
     # == Step 1: Cache ========================================================
     cache_key = os.path.abspath(os.path.join(project_dir, file_rel))
-    target_list = project_cache_value(r_target_cache, cache_key, project_file_set)
+    target_list = project_cache_value(r_target_cache_dict, cache_key, project_file_set)
     if target_list is not None:
         return target_list
 
@@ -871,7 +909,7 @@ def r_reference_target_list(
     target_list = sorted(
         target_dict.values(), key=lambda target: (target.line, target.name, target.file_rel),
     )
-    r_target_cache[cache_key] = (project_file_set, target_list)
+    r_target_cache_dict[cache_key] = (project_file_set, target_list)
     return target_list
 
 

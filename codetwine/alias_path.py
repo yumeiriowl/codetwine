@@ -2,6 +2,7 @@ import os
 import logging
 import posixpath
 from tree_sitter import Node
+from codetwine.parsers.ts_node import iter_node, node_text
 from codetwine.parsers.ts_parser import parse_file
 from codetwine.path_config import inside_project
 
@@ -9,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 # Cache of the aliases of the bundler config files of a project:
 # project_dir -> {directory relative path: aliases that count for it}
-alias_cache: dict[str, dict[str, list[tuple[str, str]]]] = {}
+_alias_cache_dict: dict[str, dict[str, list[tuple[str, str]]]] = {}
 
 # Key of the aliases in a bundler config, and the keys of an alias written as an object
 _ALIAS_KEY = "alias"
@@ -21,6 +22,11 @@ _REPLACEMENT_KEY = "replacement"
 _JOIN_FUNCTION_NAME_SET = {"resolve", "join"}
 _CONFIG_DIR_NAME_SET = {"__dirname", "import.meta.dirname"}
 
+# Start of the file names of the bundler config files that read an alias path starting
+# with "/" from the directory of the config file (Vite), and that first character
+_ROOT_PATH_CONFIG_PREFIX = "vite.config."
+_ROOT_PATH_START = "/"
+
 # Function that turns a URL into a path, the type it is given, and the name that stands
 # for the URL of the config file
 _URL_PATH_FUNCTION_NAME = "fileURLToPath"
@@ -30,19 +36,16 @@ _CONFIG_URL_NAME = "import.meta.url"
 
 def clear_alias_path_cache() -> None:
     """Forget the aliases of every project."""
-    alias_cache.clear()
-
-
-def _text(node: Node) -> str:
-    """Return the source text of a node."""
-    return node.text.decode("utf-8")
+    _alias_cache_dict.clear()
 
 
 def _string_value(node: Node | None) -> str | None:
     """Return the text of a string constant without its quotes, None for any other node."""
     if node is None or node.type != "string":
         return None
-    return "".join(_text(child) for child in node.named_children if child.type == "string_fragment")
+    return "".join(
+        node_text(child) for child in node.named_children if child.type == "string_fragment"
+    )
 
 
 def _argument_list(node: Node) -> list[Node]:
@@ -51,11 +54,12 @@ def _argument_list(node: Node) -> list[Node]:
     return list(argument_node.named_children) if argument_node is not None else []
 
 
-def _alias_target(node: Node, config_dir: str) -> str | None:
+def _alias_target(node: Node, config_dir: str, is_root_path: bool) -> str | None:
     """Return the directory or file an alias stands for, relative to the project root.
 
     Examples (config file in "web"):
         "./src"                                          -> "web/src"
+        "/src" (is_root_path)                            -> "web/src"
         path.resolve(__dirname, "src", "app")            -> "web/src/app"
         join(__dirname, "./src")                         -> "web/src"
         fileURLToPath(new URL("./src", import.meta.url)) -> "web/src"
@@ -63,6 +67,7 @@ def _alias_target(node: Node, config_dir: str) -> str | None:
     Args:
         node: The value node of an alias.
         config_dir: Directory of the config file, relative to the project root.
+        is_root_path: Whether a string starting with "/" is a path from config_dir.
 
     Returns:
         The path. None for a value written any other way, and for a path that leads
@@ -70,6 +75,8 @@ def _alias_target(node: Node, config_dir: str) -> str | None:
     """
     text = _string_value(node)
     if text is not None:
+        if is_root_path and text.startswith(_ROOT_PATH_START):
+            return inside_project(posixpath.join(config_dir, text.lstrip(_ROOT_PATH_START)))
         return inside_project(posixpath.join(config_dir, text)) if text.startswith(".") else None
     if node.type != "call_expression":
         return None
@@ -77,11 +84,11 @@ def _alias_target(node: Node, config_dir: str) -> str | None:
     argument_list = _argument_list(node)
     if function_node is None or not argument_list:
         return None
-    function_name = _text(function_node).rsplit(".", 1)[-1]
+    function_name = node_text(function_node).rsplit(".", 1)[-1]
 
     if function_name in _JOIN_FUNCTION_NAME_SET:
         part_list = [_string_value(argument) for argument in argument_list[1:]]
-        if _text(argument_list[0]) not in _CONFIG_DIR_NAME_SET or None in part_list:
+        if node_text(argument_list[0]) not in _CONFIG_DIR_NAME_SET or None in part_list:
             return None
         return inside_project(posixpath.join(config_dir, *part_list))
 
@@ -90,8 +97,8 @@ def _alias_target(node: Node, config_dir: str) -> str | None:
         constructor_node = url_node.child_by_field_name("constructor")
         url_argument_list = _argument_list(url_node)
         if (
-            constructor_node is None or _text(constructor_node) != _URL_TYPE_NAME
-            or len(url_argument_list) != 2 or _text(url_argument_list[1]) != _CONFIG_URL_NAME
+            constructor_node is None or node_text(constructor_node) != _URL_TYPE_NAME
+            or len(url_argument_list) != 2 or node_text(url_argument_list[1]) != _CONFIG_URL_NAME
         ):
             return None
         text = _string_value(url_argument_list[0])
@@ -107,7 +114,7 @@ def _pair_dict(object_node: Node) -> dict[str, Node]:
         value_node = pair_node.child_by_field_name("value")
         if pair_node.type != "pair" or key_node is None or value_node is None:
             continue
-        key = _string_value(key_node) if key_node.type == "string" else _text(key_node)
+        key = _string_value(key_node) if key_node.type == "string" else node_text(key_node)
         if key is not None:
             pair_dict[key] = value_node
     return pair_dict
@@ -118,7 +125,8 @@ def _read_alias_list(config_rel: str, project_dir: str) -> list[tuple[str, str]]
 
     alias: { "@": path.resolve(__dirname, "src") }
     alias: [{ find: "@", replacement: path.resolve(__dirname, "src") }]
-    Every "alias" key of the file whose value is an object or an array is read. An
+    Every "alias" key of the file whose value is an object or an array is read. A
+    string starting with "/" is a path from the directory of a vite.config.* file. An
     alias whose name is not a string (a regular expression) or whose value is not
     written as _alias_target reads it is left out.
 
@@ -137,18 +145,16 @@ def _read_alias_list(config_rel: str, project_dir: str) -> list[tuple[str, str]]
         logger.warning(f"The aliases of {config_rel} cannot be read: {type(e).__name__}: {e}")
         return []
     config_dir = posixpath.dirname(config_rel)
+    is_root_path = posixpath.basename(config_rel).startswith(_ROOT_PATH_CONFIG_PREFIX)
     alias_dict: dict[str, str] = {}
-    node_stack = [root_node]
-    while node_stack:
-        node = node_stack.pop()
-        node_stack.extend(reversed(node.children))
+    for node in iter_node(root_node):
         key_node = node.child_by_field_name("key") if node.type == "pair" else None
         value_node = node.child_by_field_name("value") if key_node is not None else None
-        if key_node is None or value_node is None or _text(key_node).strip("'\"") != _ALIAS_KEY:
+        if key_node is None or value_node is None or node_text(key_node).strip("'\"") != _ALIAS_KEY:
             continue
         if value_node.type == "object":
             for name, target_node in _pair_dict(value_node).items():
-                target = _alias_target(target_node, config_dir)
+                target = _alias_target(target_node, config_dir, is_root_path)
                 if target is not None:
                     alias_dict.setdefault(name, target)
         elif value_node.type == "array":
@@ -156,7 +162,10 @@ def _read_alias_list(config_rel: str, project_dir: str) -> list[tuple[str, str]]
                 entry_dict = _pair_dict(entry_node) if entry_node.type == "object" else {}
                 name = _string_value(entry_dict.get(_FIND_KEY))
                 target_node = entry_dict.get(_REPLACEMENT_KEY)
-                target = _alias_target(target_node, config_dir) if target_node is not None else None
+                target = (
+                    _alias_target(target_node, config_dir, is_root_path)
+                    if target_node is not None else None
+                )
                 if name is not None and target is not None:
                     alias_dict.setdefault(name, target)
     return sorted(alias_dict.items(), key=lambda alias: -len(alias[0]))
@@ -179,7 +188,7 @@ def _alias_list(
     Returns:
         The result of _read_alias_list for that file; empty without one.
     """
-    dir_dict = alias_cache.setdefault(project_dir, {})
+    dir_dict = _alias_cache_dict.setdefault(project_dir, {})
     walk_dir_list: list[str] = []
     alias_list: list[tuple[str, str]] = []
     while True:

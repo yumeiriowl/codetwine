@@ -33,7 +33,7 @@ def r_chunk_code(content: bytes, is_chunk_kept: Callable[[bytes], bool] | None =
     them, alone. Every byte outside the chunks, and the fence lines themselves, becomes
     a space; line breaks stay. In a chunk whose fence line starts with blockquote marks
     (> ```{r}), the marks before the code of each line become spaces as well. The
-    result has the length and the lines of content, so a position in it is the same
+    result has the length and the lines of content; a position in it is the same
     position in the file.
 
     Examples:

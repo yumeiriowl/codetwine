@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import openai
 import litellm
 from litellm import ContextWindowExceededError
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
@@ -27,6 +26,9 @@ _REQUEST_TOO_LARGE_TEXT_TUPLE = (
 
 # Words in a refusal that say it was the parameters of the effort it refused (lower case)
 _EFFORT_REFUSAL_WORD_TUPLE = ("thinking", "effort", "output_config")
+
+# Exceptions litellm raises for a failed call
+_LLM_ERROR_TUPLE = tuple(litellm.LITELLM_EXCEPTION_TYPES)
 
 
 def _is_always_think_model(model: str) -> bool:
@@ -211,8 +213,7 @@ class LLMClient:
         """
         for attempt in range(MAX_RETRIES + 1):
             try:
-                # litellm.acompletion: OpenAI-compatible async API
-                # The model name prefix is used to auto-detect the provider
+                # The kwargs of litellm.acompletion() but the effort's
                 request_dict = {
                     "model": self.model,
                     "max_tokens": max_tokens,
@@ -224,6 +225,9 @@ class LLMClient:
                     request_dict["api_base"] = self.api_base
 
                 response = await self._complete(request_dict)
+                if not response.choices:
+                    logger.error("LLM returned no text")
+                    return None
                 # The text is returned as it is when the output was cut at max_tokens
                 if response.choices[0].finish_reason == "length":
                     logger.warning(f"LLM output was cut at {max_tokens} tokens (DOC_MAX_TOKENS)")
@@ -247,7 +251,7 @@ class LLMClient:
             except ContextWindowExceededError:
                 raise
 
-            except openai.APIError as e:
+            except _LLM_ERROR_TUPLE as e:
                 if _is_request_too_large(e):
                     raise self._too_large_error(e) from e
                 # Do not retry on API errors; fail immediately

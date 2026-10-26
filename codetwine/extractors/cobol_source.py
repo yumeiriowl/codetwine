@@ -2,12 +2,14 @@ import sys
 from bisect import bisect_right
 from dataclasses import dataclass, field
 from tree_sitter import Language, Node, Parser
+from codetwine.parsers.ts_node import iter_node, node_text
 from codetwine.utils.file_utils import line_list_of
 from codetwine.parsers.cobol_format import (
     FILE_UNIT,
     GRAMMAR_NAME_RE,
     ITEM_UNIT,
     PROCEDURE_UNIT,
+    RECORD_LEVEL_RANGE,
     CobolText,
     CobolUnit,
     item_unit,
@@ -57,8 +59,6 @@ _CONDITION_RANK = 100
 _FILE_RANK = 0
 # A position after every token of a file
 _NO_POSITION = sys.maxsize
-# Level numbers of the items that can be a group item
-_GROUP_LEVEL_RANGE = range(1, 50)
 # Words of a data item's statement that make it an elementary item when no item belongs
 # to it: the PICTURE clause, the VALUE clause and the usages that take no PICTURE clause
 _ELEMENTARY_WORD_SET = {
@@ -225,22 +225,37 @@ def _is_elementary_word_list(word_list: list[tuple[str, int]]) -> bool:
     return any(word.upper() in _ELEMENTARY_WORD_SET for word, _ in word_list[1:])
 
 
-def _node_list(root_node: Node) -> list[Node]:
-    """Return every node of a tree in source order."""
-    node_list: list[Node] = []
-    node_stack = [root_node]
-    while node_stack:
-        node = node_stack.pop()
-        node_list.append(node)
-        node_stack.extend(reversed(node.children))
-    return node_list
+def _unit_root_node(parser: Parser, unit: CobolUnit) -> Node:
+    """Parse the text of a unit and return the root node of its tree."""
+    return parser.parse(unit.text.encode("utf-8")).root_node
+
+
+def _source_line(unit: CobolUnit, node: Node) -> int:
+    """Return the source line a node of the tree of a unit starts on; 0 for an added line."""
+    return unit.origin_line_list[node.start_point[0]]
+
+
+def _is_source_node(unit: CobolUnit, node: Node) -> bool:
+    """Return whether a node of the tree of a unit starts on a source line, not on an added line."""
+    return (
+        node.start_point[0] < len(unit.origin_line_list)
+        and bool(unit.origin_line_list[node.start_point[0]])
+    )
+
+
+def _word_reference(word: str, line: int, qualifier_name_tuple: tuple[str, ...]) -> CobolReference:
+    """Return the reference of a word with the names that qualify it, all in upper case."""
+    return CobolReference(
+        word.upper(), line, tuple(qualifier.upper() for qualifier in qualifier_name_tuple),
+    )
 
 
 class _UnitReader:
     """Reads the units of one COBOL file into a CobolSource."""
 
     def __init__(self, cobol_text: CobolText, line_list: list[str], language: Language) -> None:
-        """
+        """Set up the reading of the units of one file.
+
         Args:
             cobol_text: The units of the file and what is read without the grammar.
             line_list: Lines of the source text.
@@ -264,15 +279,15 @@ class _UnitReader:
         # Upper-case word -> whether the grammar reads it as the name of a data item
         self.is_item_name_dict: dict[str, bool] = {}
 
-    def name(self, text: str) -> str:
+    def _source_name(self, text: str) -> str:
         """Return the name written in the source for a name written in a unit."""
         return self.cobol_text.name_dict.get(text.upper(), text)
 
-    def node_name(self, node: Node) -> str:
+    def _node_name(self, node: Node) -> str:
         """Return the name or the literal content a node holds."""
-        text = node.text.decode("utf-8")
+        text = node_text(node)
         value = literal_value(text)
-        return value if value != text else self.name(text)
+        return value if value != text else self._source_name(text)
 
     def read(self) -> CobolSource:
         """Read the file and return the CobolSource.
@@ -289,10 +304,8 @@ class _UnitReader:
             self._read_unit(unit)
 
         # == Step 2: Words outside the units ==================================
-        for word, line, qualifier_list in self.cobol_text.word_list:
-            self.source.reference_list.append(CobolReference(
-                word.upper(), line, tuple(qualifier.upper() for qualifier in qualifier_list),
-            ))
+        for word, line, qualifier_name_tuple in self.cobol_text.word_list:
+            self.source.reference_list.append(_word_reference(word, line, qualifier_name_tuple))
 
         # == Step 3: Definitions ==============================================
         definition_list = [
@@ -319,16 +332,12 @@ class _UnitReader:
         of the tree; for a unit the grammar does not read without error they are
         every word of the statement except the name it defines.
         """
-        root_node = self.parser.parse(unit.text.encode("utf-8")).root_node
+        root_node = _unit_root_node(self.parser, unit)
         source_line_list = [line for line in unit.origin_line_list if line]
         self.unit_index += 1
         if not source_line_list:
             return
-        node_list = [
-            node for node in _node_list(root_node)
-            if node.start_point[0] < len(unit.origin_line_list)
-            and unit.origin_line_list[node.start_point[0]]
-        ]
+        node_list = [node for node in iter_node(root_node) if _is_source_node(unit, node)]
 
         define_name = self._read_definition(
             unit, node_list, source_line_list[0], source_line_list[-1],
@@ -389,10 +398,9 @@ class _UnitReader:
             if is_define_due and word.upper() == define_name.upper():
                 is_define_due = False
                 continue
-            qualifier_list = qualifier_tuple(text_list, index)
-            self.source.reference_list.append(CobolReference(
-                word.upper(), line, tuple(qualifier.upper() for qualifier in qualifier_list),
-            ))
+            self.source.reference_list.append(
+                _word_reference(word, line, qualifier_tuple(text_list, index))
+            )
 
     def _add_node_reference(self, unit: CobolUnit, node_list: list[Node]) -> None:
         """Add each WORD node of a unit that is not the name of a definition as a reference.
@@ -401,9 +409,9 @@ class _UnitReader:
         """
         for node in node_list:
             if node.type == "WORD" and not self._is_definition_name(node):
-                line = unit.origin_line_list[node.start_point[0]]
+                line = _source_line(unit, node)
                 self.source.reference_list.append(CobolReference(
-                    self.node_name(node).upper(), line, self._node_qualifier_tuple(node),
+                    self._node_name(node).upper(), line, self._node_qualifier_tuple(node),
                 ))
 
     def _node_qualifier_tuple(self, node: Node) -> tuple[str, ...]:
@@ -421,7 +429,7 @@ class _UnitReader:
         )
         if index is None:
             return ()
-        return tuple(self.node_name(child).upper() for child in word_node_list[index + 1:])
+        return tuple(self._node_name(child).upper() for child in word_node_list[index + 1:])
 
     @staticmethod
     def _is_definition_name(node: Node) -> bool:
@@ -456,10 +464,10 @@ class _UnitReader:
                 node.type == "WORD" and self._is_definition_name(node)
                 and node.parent.type == "constant_entry"
             ):
-                text = node.text.decode("utf-8")
+                text = node_text(node)
                 if text.upper() == "FILLER":
                     return None, 0
-                return self.name(text), unit.origin_line_list[node.start_point[0]]
+                return self._source_name(text), _source_line(unit, node)
 
         if len(unit.word_list) > 1 and unit.word_list[1][1] == unit.word_list[0][1]:
             word, line = unit.word_list[1]
@@ -481,18 +489,17 @@ class _UnitReader:
         for node in node_list:
             if node.type == "WORD" and node.parent is not None and node.parent.type == INDEX_TYPE:
                 self.index_definition_list.append(CobolDefinition(
-                    self.node_name(node), INDEX_TYPE, start_line, end_line,
-                    unit.origin_line_list[node.start_point[0]],
+                    self._node_name(node), INDEX_TYPE, start_line, end_line,
+                    _source_line(unit, node),
                 ))
 
     def _is_item_name(self, word: str) -> bool:
         """Return whether the grammar reads a word as the name of a data item."""
         if word.upper() not in self.is_item_name_dict:
-            unit = item_unit(word)
-            root_node = self.parser.parse(unit.text.encode("utf-8")).root_node
+            root_node = _unit_root_node(self.parser, item_unit(word))
             self.is_item_name_dict[word.upper()] = not root_node.has_error and any(
-                node.type == "entry_name" and node.text.decode("utf-8") == word
-                for node in _node_list(root_node)
+                node.type == "entry_name" and node_text(node) == word
+                for node in iter_node(root_node)
             )
         return self.is_item_name_dict[word.upper()]
 
@@ -504,7 +511,7 @@ class _UnitReader:
         """
         for node in node_list:
             if node.type == "WORD" and self._is_definition_name(node):
-                return self.node_name(node), unit.origin_line_list[node.start_point[0]]
+                return self._node_name(node), _source_line(unit, node)
         return None, 0
 
     def _header_name(self, unit: CobolUnit, node_list: list[Node], line: int) -> str | None:
@@ -522,8 +529,8 @@ class _UnitReader:
         for node in node_list:
             if node.type not in _HEADER_NODE_TYPE_SET:
                 continue
-            text = node.text.decode("utf-8").split()[0].rstrip(".")
-            if self.name(text).upper() == first_word.upper():
+            text = node_text(node).split()[0].rstrip(".")
+            if self._source_name(text).upper() == first_word.upper():
                 self.header_list.append((first_word, node.type, line))
                 return first_word
         return None
@@ -533,7 +540,7 @@ class _UnitReader:
         for node in node_list:
             if node.type == "string" and node.parent is not None and node.parent.type == "value_item":
                 self.item_literal_dict.setdefault(item_name.upper(), []).append(
-                    self.node_name(node)
+                    self._node_name(node)
                 )
 
     def _read_move(self, node_list: list[Node]) -> None:
@@ -542,13 +549,14 @@ class _UnitReader:
             child_list = node.named_children if node.type == "move_statement" else []
             if len(child_list) < 2 or child_list[0].type != "string":
                 continue
-            literal = self.node_name(child_list[0])
+            literal = self._node_name(child_list[0])
             for target_node in child_list[1:]:
                 word_node = next(
-                    (item for item in _node_list(target_node) if item.type == "WORD"), None,
+                    (sub_node for sub_node in iter_node(target_node) if sub_node.type == "WORD"),
+                    None,
                 )
                 if word_node is not None:
-                    item_name = self.node_name(word_node).upper()
+                    item_name = self._node_name(word_node).upper()
                     self.item_literal_dict.setdefault(item_name, []).append(literal)
 
     def _add_import(self) -> None:
@@ -614,11 +622,12 @@ class _UnitReader:
 
         A paragraph ends on the last line with code before the next header, a section
         before the next section header; both end before the line that starts or ends
-        a program.
+        a program and before END DECLARATIVES.
         """
         limit_line_list = sorted(
             [start_line for _, start_line, _ in self.cobol_text.program_list]
             + [line for _, line in self.cobol_text.program_end_list]
+            + self.cobol_text.declaratives_end_line_list
             + [len(self.source.line_list) + 1]
         )
         definition_list: list[CobolDefinition] = []
@@ -653,7 +662,7 @@ class _UnitReader:
         # == Step 2: Items whose items come from a COPY statement ===============
         item_by_unit_dict = {item.unit_index: item for item in self.item_list}
         for index, item in enumerate(self.item_list):
-            if is_group_list[index] or item.is_elementary or item.level not in _GROUP_LEVEL_RANGE:
+            if is_group_list[index] or item.is_elementary or item.level not in RECORD_LEVEL_RANGE:
                 continue
             copy_end_line = self._copy_end_line(item, item_by_unit_dict)
             if copy_end_line is not None:
@@ -760,8 +769,8 @@ class _UnitReader:
             else _NO_POSITION
         )
         for next_index in range(unit_index + 1, len(unit_list)):
-            other = item_by_unit_dict.get(next_index)
-            if other is None or _item_rank(other.level) <= rank:
+            other_item = item_by_unit_dict.get(next_index)
+            if other_item is None or _item_rank(other_item.level) <= rank:
                 return min(end_position, unit_list[next_index].start_position)
         return end_position
 
@@ -804,14 +813,12 @@ def has_statement(unit: CobolUnit, language: Language) -> bool:
         True when the tree of the unit has no error and holds a statement node that
         starts on a source line.
     """
-    root_node = Parser(language).parse(unit.text.encode("utf-8")).root_node
+    root_node = _unit_root_node(Parser(language), unit)
     if root_node.has_error:
         return False
     return any(
-        node.type.endswith(_STATEMENT_NODE_SUFFIX)
-        and node.start_point[0] < len(unit.origin_line_list)
-        and unit.origin_line_list[node.start_point[0]]
-        for node in _node_list(root_node)
+        node.type.endswith(_STATEMENT_NODE_SUFFIX) and _is_source_node(unit, node)
+        for node in iter_node(root_node)
     )
 
 

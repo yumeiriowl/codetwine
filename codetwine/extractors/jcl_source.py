@@ -1,5 +1,6 @@
 import re
 from bisect import bisect_left
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from codetwine.extractors.cobol_source import CALL_KIND, CobolDefinition, CobolImport, CobolSource
 from codetwine.parsers.csd_command import (
@@ -8,9 +9,11 @@ from codetwine.parsers.csd_command import (
     CsdName,
     csd_command_list,
     csd_definition,
+    non_blank_index,
 )
 from codetwine.parsers.operand import Operand, operand_list
 from codetwine.utils.file_utils import line_list_of
+from codetwine.config.settings import TAB_SIZE
 
 # == Definition types (the "type" of a definition in the outputs) ============
 JOB_TYPE = "job_statement"
@@ -37,17 +40,21 @@ MAPSET_REFERENCE = "mapset"        # The mapset a CSD command names
 # A CICS resource a CSD command names, defined in the same file
 RESOURCE_REFERENCE = "resource"
 
+# Start of a JCL statement, of a JCL comment statement and of a JES statement
+_STATEMENT_PREFIX = "//"
+COMMENT_PREFIX = "//*"
+JES_PREFIX = "/*"
+# Column (0-based) the name field of a statement starts at
+_NAME_COLUMN = len(_STATEMENT_PREFIX)
 # Column (0-based) after the last column of the text of a statement
 TEXT_END_COLUMN = 71
 # Column (0-based) the rest of a quoted string continued on the next line starts at
 _QUOTE_CONTINUE_COLUMN = 15
 # Column (0-based) after the last column of a line of in-stream data
 _DATA_END_COLUMN = 72
-# Width of a tab
-_TAB_SIZE = 8
 
 # Delimiter that ends in-stream data
-_DATA_DELIMITER = "/*"
+_DATA_DELIMITER = JES_PREFIX
 # First operands of a DD statement whose in-stream data follows it; "*" data also ends
 # at the next statement
 _DATA_OPERAND_SET = {"*", "DATA"}
@@ -272,33 +279,38 @@ class _Statement:
 
 def _code_text(line: str) -> str:
     """Return the text of a line a statement is read from: columns 1 to 71, right-stripped."""
-    return line.expandtabs(_TAB_SIZE)[:TEXT_END_COLUMN].rstrip()
+    return line.expandtabs(TAB_SIZE)[:TEXT_END_COLUMN].rstrip()
 
 
 def _is_statement_text(text: str) -> bool:
     """Return whether a line is a JCL statement other than a comment statement."""
-    return text.startswith("//") and not text.startswith("//*")
+    return text.startswith(_STATEMENT_PREFIX) and not text.startswith(COMMENT_PREFIX)
 
 
 def _is_continuation_text(text: str) -> bool:
     """Return whether a line can continue a statement: "//" followed by a blank."""
-    return _is_statement_text(text) and text[2:3] == " "
+    return _is_statement_text(text) and text[_NAME_COLUMN:_NAME_COLUMN + 1] == " "
 
 
 def _next_statement_index(line_list: list[str], index: int) -> int | None:
     """Return the index of the first line at or after an index that is no comment statement."""
     while index < len(line_list):
-        if not _code_text(line_list[index]).startswith("//*"):
+        if not _code_text(line_list[index]).startswith(COMMENT_PREFIX):
             return index
         index += 1
     return None
 
 
-def _first_column(text: str, column: int) -> int:
-    """Return the column of the first character at or after a column that is not a blank."""
-    while column < len(text) and text[column] == " ":
-        column += 1
-    return column
+def _continuation_index(line_list: list[str], index: int) -> int | None:
+    """Return the index of the line that continues the statement on a line; None without one.
+
+    It is the first line after it that is no comment statement, when that line starts
+    with "//" followed by a blank.
+    """
+    next_index = _next_statement_index(line_list, index + 1)
+    if next_index is None or not _is_continuation_text(_code_text(line_list[next_index])):
+        return None
+    return next_index
 
 
 def _read_operand(line_list: list[str], index: int, column: int, statement: _Statement) -> int:
@@ -330,12 +342,12 @@ def _read_operand(line_list: list[str], index: int, column: int, statement: _Sta
         statement.end_line = index + 1
         if not is_in_quote and statement.char_list[-1:] != [","]:
             return index + 1
-        next_index = _next_statement_index(line_list, index + 1)
-        if next_index is None or not _is_continuation_text(_code_text(line_list[next_index])):
+        next_index = _continuation_index(line_list, index)
+        if next_index is None:
             return index + 1
         index = next_index
         text = _code_text(line_list[index])
-        column = _QUOTE_CONTINUE_COLUMN if is_in_quote else _first_column(text, 2)
+        column = _QUOTE_CONTINUE_COLUMN if is_in_quote else non_blank_index(text, _NAME_COLUMN)
 
 
 def _read_condition(line_list: list[str], index: int, column: int, statement: _Statement) -> int:
@@ -361,12 +373,12 @@ def _read_condition(line_list: list[str], index: int, column: int, statement: _S
         statement.end_line = index + 1
         if then_match:
             return index + 1
-        next_index = _next_statement_index(line_list, index + 1)
-        if next_index is None or not _is_continuation_text(_code_text(line_list[next_index])):
+        next_index = _continuation_index(line_list, index)
+        if next_index is None:
             return index + 1
         index = next_index
         text = _code_text(line_list[index])
-        column = 2
+        column = _NAME_COLUMN
 
 
 def _read_statement(line_list: list[str], index: int) -> tuple[_Statement, int]:
@@ -378,8 +390,11 @@ def _read_statement(line_list: list[str], index: int) -> tuple[_Statement, int]:
         (statement, index of the line after its last line).
     """
     text = _code_text(line_list[index])
-    label = "" if text[2:3] in ("", " ") else text[2:].split(" ", 1)[0]
-    operation_match = _OPERATION_RE.match(text, 2 + len(label))
+    label = (
+        "" if text[_NAME_COLUMN:_NAME_COLUMN + 1] in ("", " ")
+        else text[_NAME_COLUMN:].split(" ", 1)[0]
+    )
+    operation_match = _OPERATION_RE.match(text, _NAME_COLUMN + len(label))
     if operation_match is not None:
         operation = operation_match.group(1).upper()
     else:
@@ -398,7 +413,7 @@ def _read_statement(line_list: list[str], index: int) -> tuple[_Statement, int]:
         next_index = _read_condition(line_list, index, operation_match.end(), statement)
     else:
         next_index = _read_operand(
-            line_list, index, _first_column(text, operation_match.end()), statement,
+            line_list, index, non_blank_index(text, operation_match.end()), statement,
         )
     statement.finish()
     return statement, next_index
@@ -449,7 +464,7 @@ def _read_data(line_list: list[str], index: int, statement: _Statement) -> int:
         line = line_list[index]
         if line.startswith(delimiter):
             return index + 1
-        if is_star_data and line.startswith("//"):
+        if is_star_data and line.startswith(_STATEMENT_PREFIX):
             return index
         statement.data_line_list.append((index + 1, line))
         index += 1
@@ -511,7 +526,7 @@ def _tso_program_list(data_line_list: list[tuple[int, str]]) -> list[tuple[str, 
         part_list.clear()
 
     for line, text in data_line_list:
-        code = text.expandtabs(_TAB_SIZE)[:_DATA_END_COLUMN].rstrip()
+        code = text.expandtabs(TAB_SIZE)[:_DATA_END_COLUMN].rstrip()
         if not part_list:
             command_line = line
         if continue_char == _TSO_STRIP_CONTINUE_CHAR:
@@ -526,16 +541,38 @@ def _tso_program_list(data_line_list: list[tuple[int, str]]) -> list[tuple[str, 
     return program_list
 
 
-def add_csd_file_name(source: JclSource, name: CsdName) -> None:
+def _add_file_reference(
+    source: JclSource, name: str, line: int, reference_kind: str, import_kind: str,
+) -> None:
+    """Add a name of another file: a reference with the upper-case name and an import."""
+    source.reference_list.append(JclReference(name.upper(), line, reference_kind))
+    source.import_list.append(CobolImport(import_kind, name, line))
+
+
+def add_csd_file_name(source: JclSource, csd_name: CsdName) -> None:
     """Add a program or mapset a CSD command names: a reference and an import.
 
     Args:
         source: The JclSource the reference and the import are added to.
-        name: A PROGRAM_RESOURCE or MAPSET_RESOURCE name of CsdDefinition.file_name_list.
+        csd_name: A PROGRAM_RESOURCE or MAPSET_RESOURCE name of
+            CsdDefinition.file_name_list.
     """
-    reference_kind, import_kind = _CSD_FILE_KIND_DICT[name.type]
-    source.reference_list.append(JclReference(name.name.upper(), name.line, reference_kind))
-    source.import_list.append(CobolImport(import_kind, name.name, name.line))
+    reference_kind, import_kind = _CSD_FILE_KIND_DICT[csd_name.type]
+    _add_file_reference(source, csd_name.name, csd_name.line, reference_kind, import_kind)
+
+
+def _iter_new_source(todo_source_list: list[_ValueSource]) -> Iterator[_ValueSource]:
+    """Take the values of a list from its end and yield each whose key was not taken before.
+
+    The values the caller adds to the list between two values yielded are taken in turn.
+    """
+    visit_set: set[tuple[str, int, int, int]] = set()
+    while todo_source_list:
+        source = todo_source_list.pop()
+        if source.key() in visit_set:
+            continue
+        visit_set.add(source.key())
+        yield source
 
 
 class _JclReader:
@@ -826,15 +863,10 @@ class _JclReader:
             if all(definition is not other for other in definition_list):
                 definition_list.append(definition)
 
-        visit_set: set[tuple[str, int, int, int]] = set()
         todo_source_list = [
             _ValueSource("&" + name, statement.start_line, statement.proc, statement.job_index),
         ]
-        while todo_source_list:
-            source = todo_source_list.pop()
-            if source.key() in visit_set:
-                continue
-            visit_set.add(source.key())
+        for source in _iter_new_source(todo_source_list):
             if source.definition is not None:
                 add_definition(source.definition)
                 continue
@@ -906,13 +938,8 @@ class _JclReader:
         if lookup_key in self.lookup_value_dict:
             return self.lookup_value_dict[lookup_key]
         value_list: list[str] = []
-        visit_set: set[tuple[str, int, int, int]] = set()
         todo_source_list = [_ValueSource(value, line, proc, job_index)]
-        while todo_source_list:
-            source = todo_source_list.pop()
-            if source.key() in visit_set:
-                continue
-            visit_set.add(source.key())
+        for source in _iter_new_source(todo_source_list):
             symbol_name = _symbol_name(source.value)
             if not symbol_name:
                 text = _unquote(source.value.strip())
@@ -990,8 +1017,7 @@ class _JclReader:
         """Add a program a step runs: a reference and the CALL statement of its file."""
         if not _NAME_RE.fullmatch(name):
             return
-        self.source.reference_list.append(JclReference(name.upper(), line, PROGRAM_REFERENCE))
-        self.source.import_list.append(CobolImport(CALL_KIND, name, line))
+        _add_file_reference(self.source, name, line, PROGRAM_REFERENCE, CALL_KIND)
         if name.upper() not in step.program_list:
             step.program_list.append(name.upper())
 
@@ -1123,8 +1149,8 @@ class _JclReader:
                 if definition is None:
                     continue
                 self.source.csd_resource_list.append(definition.resource)
-                for name in definition.file_name_list:
-                    add_csd_file_name(self.source, name)
+                for csd_name in definition.file_name_list:
+                    add_csd_file_name(self.source, csd_name)
 
     def _read_include(self, statement: _Statement) -> None:
         """Add the members an INCLUDE statement includes: a reference and an INCLUDE_KIND import."""
@@ -1134,10 +1160,7 @@ class _JclReader:
             line = statement.line_of(operand.offset)
             for member in self._statement_value_list(statement, operand.value):
                 if _NAME_RE.fullmatch(member):
-                    self.source.reference_list.append(
-                        JclReference(member.upper(), line, INCLUDE_REFERENCE),
-                    )
-                    self.source.import_list.append(CobolImport(INCLUDE_KIND, member, line))
+                    _add_file_reference(self.source, member, line, INCLUDE_REFERENCE, INCLUDE_KIND)
 
 
 def read_jcl_source(source: str) -> JclSource:

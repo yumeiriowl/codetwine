@@ -5,8 +5,12 @@ import textwrap
 from collections.abc import Iterator
 from typing import TextIO
 from codetwine.utils.file_utils import (
+    DOC_JSON_NAME,
+    load_doc,
+    load_file_dependencies,
     rel_to_copy_path,
     output_path_to_rel,
+    replace_on_success,
     resolve_file_output_dir,
 )
 
@@ -16,34 +20,19 @@ logger = logging.getLogger(__name__)
 _ARRAY_ITEM_INDENT = "    "
 
 
-def _to_mermaid_node_id(path: str) -> str:
-    """Convert a path string into a string usable as a Mermaid node ID.
+def _to_mermaid_label(text: str) -> str:
+    """Return a text written inside the double quotes of a Mermaid node label.
 
     Examples:
-        "proj/src/app_py/app.py" -> "proj_src_app_py_app_py"
+        'say "hi".py' -> "say #quot;hi#quot;.py"
 
     Args:
-        path: The source path string.
+        text: The label text.
 
     Returns:
-        A string with slashes and dots replaced by "_".
+        The text with each double quote written as the entity code #quot;.
     """
-    return path.replace("/", "_").replace(".", "_")
-
-
-def _load_json(path: str) -> dict | None:
-    """Read a JSON file when it exists.
-
-    Args:
-        path: Path of the JSON file.
-
-    Returns:
-        The parsed JSON, or None when the file does not exist.
-    """
-    if not os.path.exists(path):
-        return None
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
+    return text.replace('"', "#quot;")
 
 
 def to_output_path(base_output_dir: str, rel_path: str) -> str:
@@ -60,32 +49,50 @@ def to_output_path(base_output_dir: str, rel_path: str) -> str:
     return f"{project_name}/{rel_to_copy_path(rel_path)}"
 
 
-def build_summary_map(
+def build_summary_dict(
     base_output_dir: str,
     all_file_list: list[str],
+    source_hash_dict: dict[str, str],
 ) -> dict[str, str | None]:
-    """Read the summary from each file's doc.json and return it as a dict.
+    """Read the summary from the doc.json of each file whose doc.json is current.
+
+    A doc.json is current when its source_hash is the hash of the file's source in
+    source_hash_dict. A doc.json that exists but cannot be read is logged with a warning.
+    The consolidated outputs take the design document of a file only when the file is a
+    key of the returned dict.
 
     Args:
         base_output_dir: Base output directory for file_dependencies.
-        all_file_list: List of relative paths of files to analyze.
+        all_file_list: Relative paths of the files the consolidated outputs list.
+        source_hash_dict: {file relative path: SHA256 hash of its source}
+            (compute_file_hash); a file without an entry has no current doc.json.
 
     Returns:
-        A {file relative path: summary text or None} dict.
+        A {file relative path: summary text or None} dict with one entry per file whose
+        doc.json is current; the value is None when that doc.json has no summary.
     """
-    summary_map: dict[str, str | None] = {}
+    summary_dict: dict[str, str | None] = {}
     for file_rel in all_file_list:
+        source_hash = source_hash_dict.get(file_rel)
+        if source_hash is None:
+            continue
         output_file_dir = resolve_file_output_dir(base_output_dir, file_rel)
-        doc = _load_json(os.path.join(output_file_dir, "doc.json"))
-        summary_map[file_rel] = doc.get("summary") if doc is not None else None
-    return summary_map
+        doc = load_doc(output_file_dir)
+        if doc is None:
+            if os.path.exists(os.path.join(output_file_dir, DOC_JSON_NAME)):
+                logger.warning(f"{file_rel}: {DOC_JSON_NAME} cannot be read; its design "
+                               f"document is left out of the consolidated outputs")
+            continue
+        if doc.get("source_hash") == source_hash:
+            summary_dict[file_rel] = doc.get("summary")
+    return summary_dict
 
 
-def iter_dependency_entries(
+def _iter_dependency_entry(
     base_output_dir: str,
     all_file_list: list[str],
-    symbol_deps: dict[str, dict[str, set[str]]],
-    summary_map: dict[str, str | None],
+    symbol_dep_dict: dict[str, dict[str, set[str]]],
+    summary_dict: dict[str, str | None],
 ) -> Iterator[dict]:
     """Yield one {file, summary, callers, callees} entry per file, in list order.
 
@@ -95,24 +102,26 @@ def iter_dependency_entries(
 
     Args:
         base_output_dir: Base output directory for file_dependencies.
-        all_file_list: List of relative paths of files to analyze.
-        symbol_deps: Return value of build_symbol_level_deps (symbol-level dependency info).
-        summary_map: Return value of build_summary_map (file relative path -> summary text or None).
+        all_file_list: Relative paths of the files the consolidated outputs list.
+        symbol_dep_dict: Return value of build_symbol_level_dep_dict (symbol-level dependency
+            info).
+        summary_dict: Return value of build_summary_dict (file relative path -> summary text
+            or None).
 
     Yields:
         A dict with {"file", "summary", "callers", "callees"} keys.
     """
     for file_rel in all_file_list:
-        dep = symbol_deps[file_rel]
+        dep = symbol_dep_dict[file_rel]
         yield {
             "file": to_output_path(base_output_dir, file_rel),
-            "summary": summary_map.get(file_rel),
+            "summary": summary_dict.get(file_rel),
             "callers": sorted(to_output_path(base_output_dir, other) for other in dep["callers"]),
             "callees": sorted(to_output_path(base_output_dir, other) for other in dep["callees"]),
         }
 
 
-def build_file_entry(base_output_dir: str, file_rel: str) -> dict | None:
+def build_file_entry(base_output_dir: str, file_rel: str, with_doc: bool) -> dict | None:
     """Read one file's file_dependencies.json and doc.json into a single consolidated entry.
 
     This is the element structure of the consolidated JSON's "files", and the source of
@@ -124,18 +133,21 @@ def build_file_entry(base_output_dir: str, file_rel: str) -> dict | None:
     Args:
         base_output_dir: Base output directory for file_dependencies.
         file_rel: Relative path of the file from the project root.
+        with_doc: True to read doc.json as well (a file whose doc.json is current,
+            build_summary_dict), False to leave it out.
 
     Returns:
         A dict with a "file" key plus "file_dependencies" and "doc" where those JSON
-        files exist. None when neither exists.
+        files exist and are read. None when neither is there.
     """
     output_file_dir = resolve_file_output_dir(base_output_dir, file_rel)
 
     entry: dict = {"file": to_output_path(base_output_dir, file_rel)}
 
     # file_dependencies.json already holds paths in output format
-    for key, file_name in (("file_dependencies", "file_dependencies.json"), ("doc", "doc.json")):
-        content = _load_json(os.path.join(output_file_dir, file_name))
+    file_dep_dict = load_file_dependencies(output_file_dir)
+    doc = load_doc(output_file_dir) if with_doc else None
+    for key, content in (("file_dependencies", file_dep_dict), ("doc", doc)):
         if content is not None:
             content.pop("file", None)
             entry[key] = content
@@ -176,8 +188,8 @@ def save_consolidated_json(
     base_output_dir: str,
     all_file_list: list[str],
     output_path: str,
-    symbol_deps: dict[str, dict[str, set[str]]],
-    summary_map: dict[str, str | None],
+    symbol_dep_dict: dict[str, dict[str, set[str]]],
+    summary_dict: dict[str, str | None],
 ) -> None:
     """Consolidate the entire project's analysis results into a single JSON file.
 
@@ -185,34 +197,37 @@ def save_consolidated_json(
     along with the dependency graph, into one file.
 
     Attach the doc.json summary to each entry in project_dependencies.
-    Files without a doc.json will have a null summary.
+    Files that are not keys of summary_dict (no current doc.json) have a null summary
+    and no doc.
 
     All file paths in the consolidated JSON use the "project_name/copy_path" format.
 
-    Each entry is written to the output file as soon as it is read, so only one file's
+    Each entry is written to the output file as soon as it is read; only one file's
     analysis results are held in memory at a time.
 
-    The JSON is written to output_path + ".tmp" and moved to output_path once it is
-    complete. When writing fails, the existing file at output_path is left as it was.
+    The JSON is written to a temporary path and moved to output_path once it is
+    complete (replace_on_success). When writing fails, the existing file at output_path
+    is left as it was.
 
     Args:
         base_output_dir: Base output directory for file_dependencies.
-        all_file_list: List of relative paths of files to analyze.
+        all_file_list: Relative paths of the files the consolidated outputs list.
         output_path: Output file path for the consolidated JSON.
-        symbol_deps: Return value of build_symbol_level_deps (symbol-level dependency info).
-        summary_map: Return value of build_summary_map (file relative path -> summary text or None).
+        symbol_dep_dict: Return value of build_symbol_level_dep_dict (symbol-level dependency
+            info).
+        summary_dict: Return value of build_summary_dict (file relative path -> summary text
+            or None, for the files whose doc.json is current).
     """
     project_name = os.path.basename(base_output_dir)
-    written_count = 0
+    write_count = 0
 
-    tmp_path = output_path + ".tmp"
-    with open(tmp_path, "w", encoding="utf-8") as f:
+    with replace_on_success(output_path) as tmp_path, open(tmp_path, "w", encoding="utf-8") as f:
         _write_object_start(f, project_name)
 
         # project_dependencies: the dependency graph with each file's summary
         f.write('  "project_dependencies": [\n')
-        dep_entry_iter = iter_dependency_entries(
-            base_output_dir, all_file_list, symbol_deps, summary_map
+        dep_entry_iter = _iter_dependency_entry(
+            base_output_dir, all_file_list, symbol_dep_dict, summary_dict
         )
         for index, dep_entry in enumerate(dep_entry_iter):
             _write_array_item(f, dep_entry, index == 0)
@@ -220,23 +235,21 @@ def save_consolidated_json(
         # files: each file's dependency info and design document
         f.write('\n  ],\n  "files": [\n')
         for file_rel in all_file_list:
-            entry = build_file_entry(base_output_dir, file_rel)
+            entry = build_file_entry(base_output_dir, file_rel, file_rel in summary_dict)
             if entry is None:
                 continue
-            _write_array_item(f, entry, written_count == 0)
-            written_count += 1
+            _write_array_item(f, entry, write_count == 0)
+            write_count += 1
 
         f.write("\n  ]\n}")
 
-    os.replace(tmp_path, output_path)
-
     logger.info(
         f"Consolidated JSON output: {output_path} "
-        f"(files: {written_count}/{len(all_file_list)})"
+        f"(files: {write_count}/{len(all_file_list)})"
     )
 
 
-def build_symbol_level_deps(
+def build_symbol_level_dep_dict(
     base_output_dir: str,
     all_file_list: list[str],
 ) -> dict[str, dict[str, set[str]]]:
@@ -245,37 +258,39 @@ def build_symbol_level_deps(
     Calculate callees from callee_usages' from field and callers from
     caller_usages' file field.
     Returns dependency info based on actual symbol usage rather than import-level.
+    Only the files of all_file_list are callers and callees.
 
     Args:
         base_output_dir: Base output directory.
-        all_file_list: List of relative paths of files to analyze.
+        all_file_list: Relative paths of the files the consolidated outputs list.
 
     Returns:
         A {file relative path: {"callers": set, "callees": set}} dict.
     """
     # Initialize empty dependency maps for all files
     dep_dict: dict[str, dict[str, set[str]]] = {
-        f: {"callers": set(), "callees": set()} for f in all_file_list
+        file_rel: {"callers": set(), "callees": set()} for file_rel in all_file_list
     }
 
     # Collect callee/caller from each file's file_dependencies.json
     for file_rel in all_file_list:
         output_file_dir = resolve_file_output_dir(base_output_dir, file_rel)
-        file_deps = _load_json(os.path.join(output_file_dir, "file_dependencies.json"))
-        if file_deps is None:
+        file_dep_dict = load_file_dependencies(output_file_dir)
+        if file_dep_dict is None:
             continue
 
-        # Add dependency target files from callee_usages' from field
-        for usage in file_deps.get("callee_usages", []):
-            callee_file = usage.get("from")
-            if callee_file:
-                dep_dict[file_rel]["callees"].add(output_path_to_rel(callee_file))
-
-        # Add dependency source files from caller_usages' file field
-        for usage in file_deps.get("caller_usages", []):
-            caller_file = usage.get("file")
-            if caller_file:
-                dep_dict[file_rel]["callers"].add(output_path_to_rel(caller_file))
+        # Add dependency target files from callee_usages' from field, and dependency
+        # source files from caller_usages' file field
+        for direction, usage_key, path_key in (
+            ("callees", "callee_usages", "from"), ("callers", "caller_usages", "file"),
+        ):
+            for usage in file_dep_dict.get(usage_key, []):
+                other_path = usage.get(path_key)
+                if not other_path:
+                    continue
+                other_rel = output_path_to_rel(other_path)
+                if other_rel in dep_dict:
+                    dep_dict[file_rel][direction].add(other_rel)
 
     return dep_dict
 
@@ -284,64 +299,74 @@ def save_dependency_summary(
     base_output_dir: str,
     all_file_list: list[str],
     output_path: str,
-    symbol_deps: dict[str, dict[str, set[str]]],
-    summary_map: dict[str, str | None],
+    symbol_dep_dict: dict[str, dict[str, set[str]]],
+    summary_dict: dict[str, str | None],
 ) -> None:
     """Output a lightweight JSON combining symbol-level dependencies and summaries for each file.
 
     Combine symbol-level dependencies from file_dependencies.json (only actually used dependencies)
     with summaries generated from design documents into a single file.
 
-    Files without a doc.json (no LLM used / generation failed) output with a null summary,
-    with only the dependency structure included.
+    Files without a current doc.json (no LLM used / generation failed / source changed)
+    output with a null summary, with only the dependency structure included.
+
+    The JSON is written to a temporary path and moved to output_path once it is
+    complete (replace_on_success).
 
     Args:
         base_output_dir: Base output directory for file_dependencies.
-        all_file_list: List of relative paths of files to analyze.
+        all_file_list: Relative paths of the files the consolidated outputs list.
         output_path: Output file path for the dependency graph + summary JSON.
-        symbol_deps: Return value of build_symbol_level_deps (symbol-level dependency info).
-        summary_map: Return value of build_summary_map (file relative path -> summary text or None).
+        symbol_dep_dict: Return value of build_symbol_level_dep_dict (symbol-level dependency
+            info).
+        summary_dict: Return value of build_summary_dict (file relative path -> summary text
+            or None).
     """
     project_name = os.path.basename(base_output_dir)
-    written_count = 0
+    write_count = 0
 
-    with open(output_path, "w", encoding="utf-8") as f:
+    with replace_on_success(output_path) as tmp_path, open(tmp_path, "w", encoding="utf-8") as f:
         _write_object_start(f, project_name)
         f.write('  "files": [\n')
-        dep_entry_iter = iter_dependency_entries(
-            base_output_dir, all_file_list, symbol_deps, summary_map
+        dep_entry_iter = _iter_dependency_entry(
+            base_output_dir, all_file_list, symbol_dep_dict, summary_dict
         )
         for dep_entry in dep_entry_iter:
-            _write_array_item(f, dep_entry, written_count == 0)
-            written_count += 1
+            _write_array_item(f, dep_entry, write_count == 0)
+            write_count += 1
         f.write("\n  ]\n}")
 
-    summary_count = sum(1 for summary in summary_map.values() if summary is not None)
+    summary_count = sum(1 for summary in summary_dict.values() if summary is not None)
     logger.info(
         f"Dependency graph + summary JSON output: {output_path} "
-        f"(files: {written_count}, with summary: {summary_count})"
+        f"(files: {write_count}, with summary: {summary_count})"
     )
 
 
 def save_dependency_graph_as_mermaid(
     base_output_dir: str,
     output_path: str,
-    symbol_deps: dict[str, dict[str, set[str]]],
+    symbol_dep_dict: dict[str, dict[str, set[str]]],
 ) -> None:
     """Generate a Mermaid flowchart from the symbol-level dependency graph
     and output it as a Markdown file.
 
+    Each file is one node labelled with its relative path; the node IDs are n0, n1, ...
+    in the order of the sorted output paths. The Markdown is written to a temporary path
+    and moved to output_path once it is complete (replace_on_success).
+
     Args:
         base_output_dir: Base output directory.
         output_path: Output file path for the Mermaid Markdown.
-        symbol_deps: Return value of build_symbol_level_deps (symbol-level dependency info).
+        symbol_dep_dict: Return value of build_symbol_level_dep_dict (symbol-level dependency
+            info).
     """
 
     # Collect nodes and edges
     node_set: set[str] = set()
     edge_set: set[tuple] = set()
 
-    for file_rel, dep in symbol_deps.items():
+    for file_rel, dep in symbol_dep_dict.items():
         node_path = to_output_path(base_output_dir, file_rel)
         node_set.add(node_path)
         for callee in dep["callees"]:
@@ -350,15 +375,16 @@ def save_dependency_graph_as_mermaid(
             edge_set.add((node_path, callee_path))
 
     # Build the Mermaid text: one node per file labelled with its source relative path
+    node_id_dict = {node_path: f"n{index}" for index, node_path in enumerate(sorted(node_set))}
     line_list = ["```mermaid", "graph LR"]
 
-    for node_path in sorted(node_set):
-        line_list.append(f'    {_to_mermaid_node_id(node_path)}["{output_path_to_rel(node_path)}"]')
+    for node_path, node_id in node_id_dict.items():
+        line_list.append(f'    {node_id}["{_to_mermaid_label(output_path_to_rel(node_path))}"]')
 
     for src_path, dst_path in sorted(edge_set):
-        line_list.append(f"    {_to_mermaid_node_id(src_path)} --> {_to_mermaid_node_id(dst_path)}")
+        line_list.append(f"    {node_id_dict[src_path]} --> {node_id_dict[dst_path]}")
 
     line_list.append("```")
 
-    with open(output_path, "w", encoding="utf-8") as f:
+    with replace_on_success(output_path) as tmp_path, open(tmp_path, "w", encoding="utf-8") as f:
         f.write("\n".join(line_list))

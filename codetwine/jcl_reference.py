@@ -5,7 +5,7 @@ from codetwine.parsers.ts_parser import parse_file
 from codetwine.cobol_file_index import (
     CobolReferenceTarget,
     program_definition,
-    reference_target_cache,
+    reference_target_cache_dict,
     resolve_cobol_module_path,
 )
 from codetwine.extractors.cobol_source import CALL_KIND, CobolDefinition
@@ -261,8 +261,8 @@ def jcl_reference_target_list(
     them to. Names are compared without regard to upper and lower case.
 
     Processing flow:
-    1. Return the targets of reference_target_cache when they were resolved with the
-       same project file set
+    1. Return the targets of reference_target_cache_dict when they were resolved with
+       the same project file set
     2. Resolve the procedures the EXEC statements call
     3. Resolve each reference
 
@@ -273,12 +273,12 @@ def jcl_reference_target_list(
 
     Returns:
         One target per reference and definition it resolves to, in line order, without
-        duplicates. The targets are kept in reference_target_cache until the project
-        file set changes or the cache is cleared.
+        duplicates. The targets are kept in reference_target_cache_dict until the
+        project file set changes or the cache is cleared.
     """
     # == Step 1: Cache ========================================================
     cache_key = os.path.abspath(os.path.join(project_dir, file_rel))
-    target_list = project_cache_value(reference_target_cache, cache_key, project_file_set)
+    target_list = project_cache_value(reference_target_cache_dict, cache_key, project_file_set)
     if target_list is not None:
         return target_list
 
@@ -310,5 +310,5 @@ def jcl_reference_target_list(
             )
 
     target_list = sorted(target_dict.values(), key=lambda target: (target.line, target.name))
-    reference_target_cache[cache_key] = (project_file_set, target_list)
+    reference_target_cache_dict[cache_key] = (project_file_set, target_list)
     return target_list

@@ -9,7 +9,7 @@ from codetwine.utils.file_utils import read_source
 logger = logging.getLogger(__name__)
 
 # Cache of the config files of a project: project_dir -> _ProjectCache
-path_config_cache: dict[str, "_ProjectCache"] = {}
+path_config_cache_dict: dict[str, "_ProjectCache"] = {}
 
 # The one wildcard a "paths" pattern and its targets can hold
 _WILDCARD = "*"
@@ -41,10 +41,10 @@ class PathConfig:
     def module_path_list(self, module: str) -> list[str]:
         """Return the paths a module that is not relative can stand for.
 
-        Examples ("paths": {"app": ["./src/index.ts"], "app/*": ["./src/*.ts"]},
+        Examples ("paths": {"app": ["./index.ts"], "app/*": ["./*.ts"]},
         "baseUrl": "./lib", both in the config file of the project root):
-            "app"          -> ["src/index.ts", "lib/app"]
-            "app/store"    -> ["src/store.ts", "lib/app/store"]
+            "app"          -> ["lib/index.ts", "lib/app"]
+            "app/store"    -> ["lib/store.ts", "lib/app/store"]
             "react"        -> ["lib/react"]
 
         Args:
@@ -142,17 +142,17 @@ def _strip_json_comment(text: str) -> str:
         char = text[index]
         if char == '"':
             # A string is copied as it is, up to its closing quote
-            end = index + 1
-            while end < len(text) and text[end] != '"':
-                end += 2 if text[end] == "\\" else 1
-            part_list.append(text[index:end + 1])
-            index = end + 1
+            end_index = index + 1
+            while end_index < len(text) and text[end_index] != '"':
+                end_index += 2 if text[end_index] == "\\" else 1
+            part_list.append(text[index:end_index + 1])
+            index = end_index + 1
         elif text.startswith("//", index):
-            end = text.find("\n", index)
-            index = len(text) if end == -1 else end
+            end_index = text.find("\n", index)
+            index = len(text) if end_index == -1 else end_index
         elif text.startswith("/*", index):
-            end = text.find("*/", index + 2)
-            index = len(text) if end == -1 else end + 2
+            end_index = text.find("*/", index + 2)
+            index = len(text) if end_index == -1 else end_index + 2
         else:
             part_list.append(char)
             index += 1
@@ -223,6 +223,9 @@ def _glob_regex(pattern: str) -> re.Pattern:
 
     Args:
         pattern: The pattern, relative to the directory it is written for.
+
+    Returns:
+        The compiled expression, matched against a path relative to that directory.
     """
     clean_pattern = posixpath.normpath(pattern)
     part_list: list[str] = []
@@ -473,7 +476,7 @@ def path_config(
     of them that covers the file (its "files", "include" and "exclude") gives the
     settings. When none does, the next config file further up is looked at the same
     way. A file no config file covers takes the settings of the nearest one. The
-    result is kept in path_config_cache until the cache is cleared.
+    result is kept in path_config_cache_dict until the cache is cleared.
 
     Args:
         file_rel: Relative path of the file an import statement is written in.
@@ -484,7 +487,7 @@ def path_config(
         The PathConfig, None when no directory from the file up to the project root
         has a config file.
     """
-    project_cache = path_config_cache.setdefault(project_dir, _ProjectCache())
+    project_cache = path_config_cache_dict.setdefault(project_dir, _ProjectCache())
     file_rel = file_rel.replace("\\", "/")
     if file_rel in project_cache.file_config_dict:
         return project_cache.file_config_dict[file_rel]

@@ -15,8 +15,10 @@ import os
 import sqlite3
 from collections.abc import Iterator
 from datetime import datetime, timezone
+from pathlib import Path
 
 from codetwine.output import build_file_entry, to_output_path
+from codetwine.utils.file_utils import replace_on_success
 
 logger = logging.getLogger(__name__)
 
@@ -56,17 +58,17 @@ CREATE INDEX idx_definitions_file ON definitions(file);
 """
 
 
-def _iter_definition_row(file_path: str, file_deps: dict) -> Iterator[tuple]:
+def _iter_definition_row(file_path: str, file_dep_dict: dict) -> Iterator[tuple]:
     """Yield the definitions table rows for one file.
 
     Args:
         file_path: The file's path in "project_name/copy_path" format.
-        file_deps: The file_dependencies member of a consolidated entry.
+        file_dep_dict: The file_dependencies member of a consolidated entry.
 
     Yields:
         A (file, name, type, start_line, end_line) tuple per definition.
     """
-    for definition in file_deps.get("definitions", []):
+    for definition in file_dep_dict.get("definitions", []):
         yield (
             file_path,
             definition.get("name"),
@@ -76,95 +78,96 @@ def _iter_definition_row(file_path: str, file_deps: dict) -> Iterator[tuple]:
         )
 
 
+def _to_json_text(content: dict | None) -> str | None:
+    """Return a member of a consolidated entry as JSON text, None when the entry has none."""
+    return json.dumps(content, ensure_ascii=False) if content is not None else None
+
+
 def save_consolidated_sqlite(
     base_output_dir: str,
     all_file_list: list[str],
     output_path: str,
-    symbol_deps: dict[str, dict[str, set[str]]],
-    summary_map: dict[str, str | None],
+    symbol_dep_dict: dict[str, dict[str, set[str]]],
+    summary_dict: dict[str, str | None],
 ) -> None:
     """Write the entire project's analysis results to a SQLite database.
 
-    The database is written to output_path + ".tmp" and moved to output_path once it is
-    complete, replacing any existing database there. When writing fails, the existing
-    database is left as it was. The database is built from the per-file JSON files on
-    every run.
+    The database is written to a temporary path and moved to output_path once it is
+    complete, replacing any existing database there (replace_on_success). When writing
+    fails, the existing database is left as it was. The database is built from the
+    per-file JSON files on every run.
 
     Each file's analysis results are read, inserted and released before the next file is
     read.
 
     Args:
         base_output_dir: Base output directory for file_dependencies.
-        all_file_list: List of relative paths of files to analyze.
+        all_file_list: Relative paths of the files the consolidated outputs list.
         output_path: Output file path for the SQLite database.
-        symbol_deps: Return value of build_symbol_level_deps (symbol-level dependency info).
-        summary_map: Return value of build_summary_map (file relative path -> summary text or None).
+        symbol_dep_dict: Return value of build_symbol_level_dep_dict (symbol-level dependency
+            info).
+        summary_dict: Return value of build_summary_dict (file relative path -> summary text
+            or None, for the files whose doc.json is current; only those get a doc).
     """
     project_name = os.path.basename(base_output_dir)
 
-    # A file that a stopped run left at the temporary path is removed first
-    tmp_path = output_path + ".tmp"
-    if os.path.exists(tmp_path):
-        os.remove(tmp_path)
-
-    written_count = 0
-    connection = sqlite3.connect(tmp_path)
-    try:
-        connection.executescript(_SCHEMA)
-        connection.executemany(
-            "INSERT INTO meta (key, value) VALUES (?, ?)",
-            [
-                ("project_name", project_name),
-                ("schema_version", SCHEMA_VERSION),
-                ("created_at", datetime.now(timezone.utc).isoformat()),
-            ],
-        )
-
-        # One row per file, plus its definitions index
-        for file_rel in all_file_list:
-            entry = build_file_entry(base_output_dir, file_rel)
-            if entry is None:
-                continue
-            file_deps = entry.get("file_dependencies")
-            doc = entry.get("doc")
-            connection.execute(
-                "INSERT INTO files (file, summary, file_dependencies, doc) "
-                "VALUES (?, ?, ?, ?)",
-                (
-                    entry["file"],
-                    summary_map.get(file_rel),
-                    json.dumps(file_deps, ensure_ascii=False) if file_deps else None,
-                    json.dumps(doc, ensure_ascii=False) if doc else None,
-                ),
+    write_count = 0
+    with replace_on_success(output_path) as tmp_path:
+        connection = sqlite3.connect(tmp_path)
+        try:
+            connection.executescript(_SCHEMA)
+            connection.executemany(
+                "INSERT INTO meta (key, value) VALUES (?, ?)",
+                [
+                    ("project_name", project_name),
+                    ("schema_version", SCHEMA_VERSION),
+                    ("created_at", datetime.now(timezone.utc).isoformat()),
+                ],
             )
-            if file_deps:
-                connection.executemany(
-                    "INSERT INTO definitions "
-                    "(file, name, type, start_line, end_line) VALUES (?, ?, ?, ?, ?)",
-                    _iter_definition_row(entry["file"], file_deps),
+
+            # One row per file, plus its definitions index
+            for file_rel in all_file_list:
+                entry = build_file_entry(base_output_dir, file_rel, file_rel in summary_dict)
+                if entry is None:
+                    continue
+                file_dep_dict = entry.get("file_dependencies")
+                doc = entry.get("doc")
+                connection.execute(
+                    "INSERT INTO files (file, summary, file_dependencies, doc) "
+                    "VALUES (?, ?, ?, ?)",
+                    (
+                        entry["file"],
+                        summary_dict.get(file_rel),
+                        _to_json_text(file_dep_dict),
+                        _to_json_text(doc),
+                    ),
                 )
-            written_count += 1
+                if file_dep_dict is not None:
+                    connection.executemany(
+                        "INSERT INTO definitions "
+                        "(file, name, type, start_line, end_line) VALUES (?, ?, ?, ?, ?)",
+                        _iter_definition_row(entry["file"], file_dep_dict),
+                    )
+                write_count += 1
 
-        # Both directions, each as symbol_deps holds it
-        for file_rel in all_file_list:
-            file_path = to_output_path(base_output_dir, file_rel)
-            for direction in ("caller", "callee"):
-                connection.executemany(
-                    "INSERT OR IGNORE INTO file_edges (file, direction, other) "
-                    "VALUES (?, ?, ?)",
-                    [(file_path, direction, to_output_path(base_output_dir, other))
-                     for other in sorted(symbol_deps[file_rel][direction + "s"])],
-                )
+            # Both directions, each as symbol_dep_dict holds it
+            for file_rel in all_file_list:
+                file_path = to_output_path(base_output_dir, file_rel)
+                for direction in ("caller", "callee"):
+                    connection.executemany(
+                        "INSERT OR IGNORE INTO file_edges (file, direction, other) "
+                        "VALUES (?, ?, ?)",
+                        [(file_path, direction, to_output_path(base_output_dir, other))
+                         for other in sorted(symbol_dep_dict[file_rel][direction + "s"])],
+                    )
 
-        connection.commit()
-    finally:
-        connection.close()
-
-    os.replace(tmp_path, output_path)
+            connection.commit()
+        finally:
+            connection.close()
 
     logger.info(
         f"Consolidated SQLite output: {output_path} "
-        f"(files: {written_count}/{len(all_file_list)})"
+        f"(files: {write_count}/{len(all_file_list)})"
     )
 
 
@@ -172,7 +175,7 @@ def open_knowledge(path: str) -> sqlite3.Connection:
     """Open a knowledge database for reading.
 
     Args:
-        path: Path to the SQLite database.
+        path: Path to the SQLite database, absolute or relative to the current directory.
 
     Returns:
         A read-only connection whose rows come back as sqlite3.Row.
@@ -182,7 +185,7 @@ def open_knowledge(path: str) -> sqlite3.Connection:
     """
     if not os.path.exists(path):
         raise FileNotFoundError(f"no knowledge database: {path}")
-    connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    connection = sqlite3.connect(f"{Path(os.path.abspath(path)).as_uri()}?mode=ro", uri=True)
     connection.row_factory = sqlite3.Row
     return connection
 
@@ -317,6 +320,11 @@ def callers_of(connection: sqlite3.Connection, file: str) -> list[str]:
     return _edge_list(connection, file, "caller")
 
 
+def _casefold(text: str | None) -> str | None:
+    """Return str.casefold() of a text read from the database (None stays None)."""
+    return text.casefold() if text is not None else None
+
+
 def find_definitions(connection: sqlite3.Connection, name: str,
                      partial: bool = False) -> list[dict]:
     """Return every definition with a given name, read from the definitions table.
@@ -325,7 +333,7 @@ def find_definitions(connection: sqlite3.Connection, name: str,
         connection: An open knowledge database connection.
         name: The definition name to look for.
         partial: False matches the name exactly. True matches any name containing it,
-            case-insensitively.
+            case-insensitively: both are compared after str.casefold().
 
     Returns:
         A list of {"file", "name", "type", "start_line", "end_line"} dicts.
@@ -333,11 +341,10 @@ def find_definitions(connection: sqlite3.Connection, name: str,
     select_sql = "SELECT file, name, type, start_line, end_line FROM definitions "
     order_sql = " ORDER BY file, start_line"
     if partial:
-        # % and _ in the name are matched literally
-        pattern = name.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        connection.create_function("casefold", 1, _casefold, deterministic=True)
         cursor = connection.execute(
-            select_sql + "WHERE name LIKE ? ESCAPE '\\'" + order_sql,
-            (f"%{pattern}%",),
+            select_sql + "WHERE instr(casefold(name), ?) > 0" + order_sql,
+            (name.casefold(),),
         )
     else:
         cursor = connection.execute(select_sql + "WHERE name = ?" + order_sql, (name,))

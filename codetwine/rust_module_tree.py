@@ -3,13 +3,20 @@ import logging
 import tomllib
 from dataclasses import dataclass, field
 from tree_sitter import Node
+from codetwine.parsers.ts_node import node_text
 from codetwine.parsers.ts_parser import parse_file
 from codetwine.extractors.definitions import (
     ATTACHED_DEFINITION_TYPE_SET,
+    DefinitionInfo,
     extract_definitions,
     select_top_level_definitions,
 )
-from codetwine.extractors.rust_path import mod_declaration, rust_import_list
+from codetwine.extractors.rust_path import (
+    UseCacheDict,
+    inline_module_name,
+    mod_declaration,
+    rust_import_list,
+)
 from codetwine.utils.project_cache import project_cache_value
 from codetwine.config.settings import EXT_TO_DEFINITION_DICT
 
@@ -22,7 +29,11 @@ _OWN_DIR_FILE_NAME_TUPLE = ("mod.rs", "lib.rs", "main.rs")
 _MAX_USE_HOP = 8
 
 # Cache of module trees: project_dir -> (project file set the tree was built from, tree)
-module_tree_cache: dict[str, tuple[set[str], "RustModuleTree"]] = {}
+module_tree_cache_dict: dict[str, tuple[set[str], "RustModuleTree"]] = {}
+
+# A module: (relative path of its file, names of the inline modules it is nested in,
+# outermost first; () for the file itself)
+_Scope = tuple[str, tuple[str, ...]]
 
 
 def _join_path(*part_tuple: str) -> str:
@@ -33,23 +44,41 @@ def _join_path(*part_tuple: str) -> str:
         ("", "lib.rs")              -> "lib.rs"
         ("src/a", "../b.rs")        -> "src/b.rs"
     """
-    return os.path.normpath("/".join(p for p in part_tuple if p)).replace("\\", "/")
+    return os.path.normpath("/".join(part for part in part_tuple if part)).replace("\\", "/")
+
+
+def _mod_file_candidate_list(directory: str, name: str) -> list[str]:
+    """Return the files a declaration mod name; without #[path] is looked up as in a directory.
+
+    Examples:
+        ("src/util", "log")   -> ["src/util/log.rs", "src/util/log/mod.rs"]
+
+    Args:
+        directory: Relative path of the directory to look in ("" is the project root).
+        name: Name of the module.
+
+    Returns:
+        <directory>/<name>.rs and <directory>/<name>/mod.rs, in this order.
+    """
+    return [_join_path(directory, name + ".rs"), _join_path(directory, name, "mod.rs")]
 
 
 @dataclass
 class _ModuleFile:
-    """Top-level contents of one .rs file."""
+    """Contents written directly in one .rs file, or in one inline module of it."""
 
-    # Names of top-level definitions
+    # Names of the definitions written directly in it
     definition_name_set: set[str] = field(default_factory=set)
-    # Bound name -> segments of its use path
+    # Bound name -> segments of its use path, written from the file's module
     use_dict: dict[str, list[str]] = field(default_factory=dict)
-    # Segments of glob imports (use a::*)
+    # Segments of glob imports (use a::*), written from the file's module
     glob_list: list[list[str]] = field(default_factory=list)
-    # (module name, #[path] value) of each mod declaration without a body
+    # (module name, #[path] value) of each mod declaration without a body (a file only)
     mod_list: list[tuple[str, str | None]] = field(default_factory=list)
-    # Name of a top-level enum -> names of its variants
+    # Name of an enum written directly in it -> names of its variants
     variant_dict: dict[str, list[str]] = field(default_factory=dict)
+    # Name of an inline module written directly in it (mod name { ... }) -> its contents
+    inline_dict: dict[str, "_ModuleFile"] = field(default_factory=dict)
 
 
 def _enum_variant(node: Node) -> tuple[str, list[str]] | None:
@@ -70,45 +99,117 @@ def _enum_variant(node: Node) -> tuple[str, list[str]] | None:
     for child in body_node.named_children:
         variant_name_node = child.child_by_field_name("name") if child.type == "enum_variant" else None
         if variant_name_node is not None:
-            variant_name_list.append(variant_name_node.text.decode("utf-8"))
-    return name_node.text.decode("utf-8"), variant_name_list
+            variant_name_list.append(node_text(variant_name_node))
+    return node_text(name_node), variant_name_list
 
 
-def _read_module_file(file_abs: str) -> _ModuleFile:
-    """Parse a .rs file and collect its top-level definitions, use declarations, mod
-    declarations and enum variants.
+def _read_module_scope(
+    scope_node: Node,
+    definition_list: list[DefinitionInfo],
+    use_cache_dict: UseCacheDict,
+    module_name_tuple: tuple[str, ...] = (),
+) -> _ModuleFile:
+    """Collect what a file or the body of an inline module writes directly in it.
+
+    What is collected is the definitions, use declarations, mod declarations, enum
+    variants and inline modules.
 
     Args:
-        file_abs: Absolute path of the .rs file.
+        scope_node: The root node of the file, or the body of an inline module.
+        definition_list: Definitions of the whole file (extract_definitions).
+        use_cache_dict: Cache of the use declarations of the file's blocks and inline
+            modules, shared by the calls for one file.
+        module_name_tuple: Names of the inline modules from the file's module down to
+            scope_node, outermost first; empty for the file.
 
     Returns:
-        A _ModuleFile.
+        A _ModuleFile. The paths of the use declarations of an inline module are
+        written from the file's module (rust_import_list, _rebase_scope_path). The mod
+        declarations without a body are read for the file only.
     """
-    root_node = parse_file(file_abs)[0]
     module_file = _ModuleFile()
-
-    definition_list = extract_definitions(root_node, EXT_TO_DEFINITION_DICT["rs"])
+    is_file = scope_node.parent is None
+    scope_definition_list = definition_list if is_file else [
+        definition for definition in definition_list
+        if scope_node.start_byte <= definition.start_byte
+        and definition.end_byte <= scope_node.end_byte
+    ]
     module_file.definition_name_set = {
-        d.name for d in select_top_level_definitions(definition_list)
-        if d.type not in ATTACHED_DEFINITION_TYPE_SET
+        definition.name for definition in select_top_level_definitions(scope_definition_list)
+        if definition.type not in ATTACHED_DEFINITION_TYPE_SET
     }
 
-    for child in root_node.children:
+    for child in scope_node.children:
         if child.type == "mod_item":
-            declaration = mod_declaration(child)
-            if declaration is not None:
+            name = inline_module_name(child)
+            declaration = mod_declaration(child) if is_file else None
+            if name:
+                module_file.inline_dict[name] = _read_module_scope(
+                    child.child_by_field_name("body"), definition_list, use_cache_dict,
+                    (*module_name_tuple, name),
+                )
+            elif declaration is not None:
                 module_file.mod_list.append(declaration)
         elif child.type == "enum_item":
             enum_variant = _enum_variant(child)
             if enum_variant is not None:
                 module_file.variant_dict[enum_variant[0]] = enum_variant[1]
         elif child.type in ("use_declaration", "extern_crate_declaration"):
-            for module, name, _, _ in rust_import_list(child):
+            for module, name, _, _ in rust_import_list(child, use_cache_dict):
                 if name == "*":
                     module_file.glob_list.append(module.split("::"))
                 elif name:
                     module_file.use_dict[name] = module.split("::")
+    if module_name_tuple:
+        _rebase_scope_path(module_file, module_name_tuple)
     return module_file
+
+
+def _rebase_scope_path(module_file: _ModuleFile, module_name_tuple: tuple[str, ...]) -> None:
+    """Rewrite the use paths of an inline module that start with its own names from the file's module.
+
+    A path whose first segment is a definition, an inline module or a name another use
+    declaration binds in the module gets self and the names of the inline modules in
+    front of it; other paths are kept.
+
+    Examples (inside mod o { mod imp { ... } }):
+        ["imp", "g"]          -> ["self", "o", "imp", "g"]
+        ["self", "o", "g"]    -> ["self", "o", "g"]
+        ["std", "fmt"]        -> ["std", "fmt"]
+
+    Args:
+        module_file: The _ModuleFile of the inline module; its use_dict and glob_list
+            are rewritten in place.
+        module_name_tuple: Names of the inline modules from the file's module down to
+            this one, outermost first.
+    """
+    scope_name_set = module_file.definition_name_set | module_file.inline_dict.keys() | {
+        name for name, segment_list in module_file.use_dict.items() if segment_list[0] != name
+    }
+    prefix_list = ["self", *module_name_tuple]
+
+    def rebase(segment_list: list[str]) -> list[str]:
+        """Put prefix_list in front of a path that starts with a name of the module."""
+        return [*prefix_list, *segment_list] if segment_list[0] in scope_name_set else segment_list
+
+    module_file.use_dict = {
+        name: rebase(segment_list) for name, segment_list in module_file.use_dict.items()
+    }
+    module_file.glob_list = [rebase(segment_list) for segment_list in module_file.glob_list]
+
+
+def _read_module_file(file_abs: str) -> _ModuleFile:
+    """Parse a .rs file and collect what it and its inline modules write directly in them (_read_module_scope).
+
+    Args:
+        file_abs: Absolute path of the .rs file.
+
+    Returns:
+        The _ModuleFile of the file.
+    """
+    root_node = parse_file(file_abs)[0]
+    definition_list = extract_definitions(root_node, EXT_TO_DEFINITION_DICT["rs"])
+    return _read_module_scope(root_node, definition_list, {})
 
 
 def _ancestor_dir_set(file_rel_set: set[str]) -> set[str]:
@@ -175,10 +276,10 @@ def _crate_lib_dict(cargo_package_dict: dict[str, dict], rs_file_set: set[str]) 
     """
     crate_lib_dict: dict[str, str] = {}
     for directory, cargo_dict in cargo_package_dict.items():
-        package = cargo_dict["package"]
-        lib = cargo_dict.get("lib") if isinstance(cargo_dict.get("lib"), dict) else {}
-        crate_name = str(lib.get("name") or package.get("name", "")).replace("-", "_")
-        lib_rel = _join_path(directory, str(lib.get("path", "src/lib.rs")))
+        package_dict = cargo_dict["package"]
+        lib_dict = cargo_dict.get("lib") if isinstance(cargo_dict.get("lib"), dict) else {}
+        crate_name = str(lib_dict.get("name") or package_dict.get("name", "")).replace("-", "_")
+        lib_rel = _join_path(directory, str(lib_dict.get("path", "src/lib.rs")))
         if crate_name and lib_rel in rs_file_set:
             crate_lib_dict[crate_name] = lib_rel
     return crate_lib_dict
@@ -202,7 +303,7 @@ class RustModuleTree:
             file_rel: _read_module_file(os.path.join(project_dir, file_rel))
             for file_rel in sorted(rs_file_set)
         }
-        self.child_dict: dict[str, dict[str, str]] = {f: {} for f in self.module_file_dict}
+        self.child_dict: dict[str, dict[str, str]] = {file_rel: {} for file_rel in self.module_file_dict}
         self.parent_dict: dict[str, str] = {}
         cargo_package_dict = _read_cargo_package_dict(project_dir, rs_file_set)
         self.crate_lib_dict = _crate_lib_dict(cargo_package_dict, rs_file_set)
@@ -212,19 +313,25 @@ class RustModuleTree:
             for directory, cargo_dict in cargo_package_dict.items()
         }
         # (file, segments) -> result of resolve, for calls from outside the tree
-        self._resolve_cache: dict[tuple[str, tuple[str, ...]], tuple[str | None, tuple[str, ...]]] = {}
-        self._link_modules()
+        self._resolve_cache_dict: dict[tuple[str, tuple[str, ...]], tuple[str | None, tuple[str, ...]]] = {}
+        # Scope -> the scopes its glob imports lead to, None while they are being read
+        self._glob_target_dict: dict[_Scope, list[_Scope] | None] = {}
+        # (scope, name) -> whether the scope or a scope its glob imports lead to has the name
+        self._glob_reach_dict: dict[tuple[_Scope, str], bool] = {}
+        self._link_module()
 
-    def _link_modules(self) -> None:
+    def _link_module(self) -> None:
         """Fill child_dict and parent_dict from the mod declarations.
 
         mod name; is looked up as <dir>/name.rs and <dir>/name/mod.rs, where <dir> is
         the file's directory for mod.rs / lib.rs / main.rs and <dir>/<file stem> otherwise;
         #[path = "..."] is taken relative to the file's directory. A declaration
-        that none of these match is then looked up in the file's directory, when
-        that file has no parent yet.
+        that none of these match is then looked up in the file's directory: the file
+        found there is taken when it has no parent yet, and after that also when the
+        declaring file has no parent (a crate root; tests/a.rs and tests/b.rs can each
+        declare mod common; for tests/common/mod.rs).
         When two declarations share a name (#[cfg] alternatives), the first one is the
-        child, and every matched file gets the declaring file as its parent.
+        child. A file declared by several files gets the first of them as its parent.
         """
         fallback_list: list[tuple[str, str, list[str]]] = []
         for file_rel, module_file in self.module_file_dict.items():
@@ -237,21 +344,41 @@ class RustModuleTree:
                 if path_value:
                     candidate_list = [_join_path(directory, path_value)]
                 else:
-                    candidate_list = [_join_path(own_dir, name + ".rs"), _join_path(own_dir, name, "mod.rs")]
+                    candidate_list = _mod_file_candidate_list(own_dir, name)
                 target = next(
-                    (c for c in candidate_list if c in self.module_file_dict and c != file_rel), None,
+                    (
+                        candidate for candidate in candidate_list
+                        if candidate in self.module_file_dict and candidate != file_rel
+                    ),
+                    None,
                 )
                 if target is not None:
                     self._link(file_rel, name, target)
                 elif not path_value and own_dir != directory:
-                    fallback_list.append((file_rel, name, [
-                        _join_path(directory, name + ".rs"), _join_path(directory, name, "mod.rs"),
-                    ]))
+                    fallback_list.append((file_rel, name, _mod_file_candidate_list(directory, name)))
 
         for file_rel, name, candidate_list in fallback_list:
             target = next(
-                (c for c in candidate_list
-                 if c in self.module_file_dict and c != file_rel and c not in self.parent_dict),
+                (
+                    candidate for candidate in candidate_list
+                    if candidate in self.module_file_dict and candidate != file_rel
+                    and candidate not in self.parent_dict
+                ),
+                None,
+            )
+            if target is not None:
+                self._link(file_rel, name, target)
+
+        # A file with no parent takes the file found in its own directory also when that
+        # file is the module of another file already
+        for file_rel, name, candidate_list in fallback_list:
+            if file_rel in self.parent_dict or name in self.child_dict[file_rel]:
+                continue
+            target = next(
+                (
+                    candidate for candidate in candidate_list
+                    if candidate in self.module_file_dict and candidate != file_rel
+                ),
                 None,
             )
             if target is not None:
@@ -296,7 +423,47 @@ class RustModuleTree:
                 return False
             directory = os.path.dirname(directory)
 
-    def _is_found(
+    def _inline_module(self, file_rel: str, name_list: list[str]) -> _ModuleFile | None:
+        """Return the inline module a file reaches through the names of nested inline modules.
+
+        Args:
+            file_rel: Relative path of a .rs file of the project.
+            name_list: Names of inline modules, outermost first ([] is the file itself).
+
+        Returns:
+            The _ModuleFile of the inline module (of the file for []), None when a name
+            is not an inline module written directly in the one before it.
+        """
+        module_file = self.module_file_dict[file_rel]
+        for name in name_list:
+            module_file = module_file.inline_dict.get(name)
+            if module_file is None:
+                return None
+        return module_file
+
+    def _inline_scope(self, file_rel: str, segment_list: list[str]) -> tuple[_ModuleFile, int]:
+        """Follow the leading segments that name nested inline modules of a file.
+
+        Examples (src/lib.rs has pub mod prelude { pub mod inner { ... } }):
+            ("src/lib.rs", ["prelude", "inner", "Circle"])  -> (inner, 2)
+            ("src/lib.rs", ["prelude"])                     -> (src/lib.rs, 0)
+
+        Args:
+            file_rel: Relative path of a .rs file of the project.
+            segment_list: Segments left over in the file.
+
+        Returns:
+            (_ModuleFile of the innermost inline module reached, number of segments
+            consumed). The last segment is not consumed.
+        """
+        module_file = self.module_file_dict[file_rel]
+        depth = 0
+        while depth < len(segment_list) - 1 and segment_list[depth] in module_file.inline_dict:
+            module_file = module_file.inline_dict[segment_list[depth]]
+            depth += 1
+        return module_file, depth
+
+    def _is_glob_hit(
         self, target_rel: str | None, rest_list: list[str], segment_list: list[str],
     ) -> bool:
         """Return whether resolving through a glob import reached what segment_list names.
@@ -308,18 +475,98 @@ class RustModuleTree:
 
         Returns:
             True when the glob path was consumed and then either the first segment was
-            consumed as a module, or target_rel defines the first remaining segment
-            (the segments after it being the same as in segment_list).
+            consumed as a module, or target_rel (or an inline module of it the segments
+            before it name) defines the first remaining segment (the segments after it
+            being the same as in segment_list).
         """
         if target_rel is None:
             return False
         if len(rest_list) < len(segment_list):
             return rest_list == segment_list[len(segment_list) - len(rest_list):]
+        depth = len(rest_list) - len(segment_list)
+        module_file = self._inline_module(target_rel, rest_list[:depth])
         return (
-            len(rest_list) == len(segment_list)
-            and rest_list[1:] == segment_list[1:]
-            and rest_list[0] in self.module_file_dict[target_rel].definition_name_set
+            module_file is not None
+            and rest_list[depth + 1:] == segment_list[1:]
+            and rest_list[depth] in module_file.definition_name_set
         )
+
+    def _glob_target_list(self, scope: _Scope) -> list[_Scope] | None:
+        """Return the scopes the glob imports of a scope lead to, read once per scope.
+
+        Args:
+            scope: (file relative path, names of the inline modules) of a module.
+
+        Returns:
+            The file or inline module each glob path resolves to, in the order written;
+            a glob path that leads to no module (an enum, outside the project) is left
+            out. None while the glob paths of the scope are being resolved.
+        """
+        if scope in self._glob_target_dict:
+            return self._glob_target_dict[scope]
+        self._glob_target_dict[scope] = None
+        file_rel, inline_tuple = scope
+        target_list: list[_Scope] = []
+        for glob_segment_list in self._inline_module(file_rel, list(inline_tuple)).glob_list:
+            target_rel, rest_list = self.resolve(file_rel, glob_segment_list)
+            if target_rel is not None and self._inline_module(target_rel, rest_list) is not None:
+                target_list.append((target_rel, tuple(rest_list)))
+        self._glob_target_dict[scope] = target_list
+        return target_list
+
+    def _has_name(self, scope: _Scope, name: str) -> bool:
+        """Return whether a name is a definition, a use-bound name, a child module or an inline module of a scope."""
+        file_rel, inline_tuple = scope
+        module_file = self._inline_module(file_rel, list(inline_tuple))
+        return (
+            name in module_file.definition_name_set or name in module_file.use_dict
+            or (not inline_tuple and name in self.child_dict[file_rel])
+        )
+
+    def _glob_reach(self, scope: _Scope, name: str) -> bool:
+        """Return whether the glob imports of a scope can lead to a name.
+
+        Args:
+            scope: (file relative path, names of the inline modules) of a module.
+            name: First segment of a path the scope does not have itself.
+
+        Returns:
+            True when a scope reached through one or more glob imports has the name
+            (_has_name), and when that cannot be told while glob paths are being
+            resolved. False when none has it: then resolving the name through the glob
+            imports leads to no definition.
+        """
+        target_list = self._glob_target_list(scope)
+        return target_list is None or any(self._scope_reach(target, name) for target in target_list)
+
+    def _scope_reach(self, start: _Scope, name: str) -> bool:
+        """Return whether a scope, or a scope its glob imports lead to, has a name (_glob_reach).
+
+        The answer is kept per (scope, name) unless it could not be told.
+        """
+        key = (start, name)
+        if key in self._glob_reach_dict:
+            return self._glob_reach_dict[key]
+        visit_set = {start}
+        scope_stack = [start]
+        is_reach = False
+        while scope_stack and not is_reach:
+            scope = scope_stack.pop()
+            prior_reach = self._glob_reach_dict.get((scope, name))
+            if prior_reach is False:
+                continue
+            if prior_reach or self._has_name(scope, name):
+                is_reach = True
+                continue
+            target_list = self._glob_target_list(scope)
+            if target_list is None:
+                return True
+            for target in target_list:
+                if target not in visit_set:
+                    visit_set.add(target)
+                    scope_stack.append(target)
+        self._glob_reach_dict[key] = is_reach
+        return is_reach
 
     def resolve(
         self,
@@ -336,6 +583,7 @@ class RustModuleTree:
             crate / self / super    -> the crate root / this module / the parent module
             a child module          -> that module's file
             a name bound by use     -> the path of that use declaration
+            an inline module of the file -> the next segment in that module (_walk)
             a definition of the file -> the file itself
             a crate of the project  -> the crate's library root (Cargo.toml)
             a name of a glob import (use super::*) -> the module the glob path leads to
@@ -356,16 +604,16 @@ class RustModuleTree:
         """
         if not segment_list or file_rel not in self.module_file_dict:
             return None, segment_list
-        state = (file_rel, tuple(segment_list))
+        state_tuple = (file_rel, tuple(segment_list))
         if visit_set is None:
-            if state not in self._resolve_cache:
-                target_rel, rest_list = self._resolve_head(file_rel, segment_list, hop, {state})
-                self._resolve_cache[state] = (target_rel, tuple(rest_list))
-            target_rel, rest_tuple = self._resolve_cache[state]
+            if state_tuple not in self._resolve_cache_dict:
+                target_rel, rest_list = self._resolve_head(file_rel, segment_list, hop, {state_tuple})
+                self._resolve_cache_dict[state_tuple] = (target_rel, tuple(rest_list))
+            target_rel, rest_tuple = self._resolve_cache_dict[state_tuple]
             return target_rel, list(rest_tuple)
-        if state in visit_set:
+        if state_tuple in visit_set:
             return None, segment_list
-        visit_set.add(state)
+        visit_set.add(state_tuple)
         return self._resolve_head(file_rel, segment_list, hop, visit_set)
 
     def _resolve_head(
@@ -393,14 +641,18 @@ class RustModuleTree:
         use_list = module_file.use_dict.get(head)
         if use_list is not None and use_list != [head] and hop < _MAX_USE_HOP:
             return self.resolve(file_rel, use_list + segment_list[1:], hop + 1, visit_set)
+        if head in module_file.inline_dict:
+            return self._walk(file_rel, segment_list, hop, visit_set)
         if head in module_file.definition_name_set:
             return file_rel, segment_list
         if head in self.crate_lib_dict:
             return self._walk(self.crate_lib_dict[head], segment_list[1:], hop, visit_set)
-        if hop < _MAX_USE_HOP:
-            for glob in module_file.glob_list:
-                target_rel, rest_list = self.resolve(file_rel, glob + segment_list, hop + 1, visit_set)
-                if self._is_found(target_rel, rest_list, segment_list):
+        if hop < _MAX_USE_HOP and self._glob_reach((file_rel, ()), head):
+            for glob_segment_list in module_file.glob_list:
+                target_rel, rest_list = self.resolve(
+                    file_rel, glob_segment_list + segment_list, hop + 1, visit_set,
+                )
+                if self._is_glob_hit(target_rel, rest_list, segment_list):
                     return target_rel, rest_list
         root_rel = self.crate_root(file_rel)
         if root_rel != file_rel and head in self.child_dict[root_rel] and self._is_edition_2015(file_rel):
@@ -416,8 +668,9 @@ class RustModuleTree:
     ) -> tuple[str | None, list[str]]:
         """Follow the segments through child and parent modules starting from a file.
 
-        When the first remaining segment is not defined in the reached file, it is
-        followed through that file's use declarations (re-exports) and glob imports.
+        Segments that name inline modules of the reached file are followed into them.
+        When the next segment is not defined in the reached file or inline module, it
+        is followed through its use declarations (re-exports) and glob imports.
 
         Args:
             file_rel: Relative path of the module file to start from.
@@ -445,8 +698,8 @@ class RustModuleTree:
 
         if not rest_list or rest_list[0] == "*" or hop >= _MAX_USE_HOP:
             return current_rel, rest_list
-        module_file = self.module_file_dict[current_rel]
-        name = rest_list[0]
+        module_file, depth = self._inline_scope(current_rel, rest_list)
+        name = rest_list[depth]
         if name in module_file.definition_name_set:
             return current_rel, rest_list
 
@@ -454,18 +707,21 @@ class RustModuleTree:
         use_list = module_file.use_dict.get(name)
         if use_list is not None:
             target_rel, target_rest_list = self.resolve(
-                current_rel, use_list + rest_list[1:], hop + 1, visit_set,
+                current_rel, use_list + rest_list[depth + 1:], hop + 1, visit_set,
             )
             if target_rel is not None:
                 return target_rel, target_rest_list
             return current_rel, rest_list
 
         # The name comes from a glob import (pub use a::*) of a module that has it
-        for glob in module_file.glob_list:
+        name_list = rest_list[depth:]
+        if not self._glob_reach((current_rel, tuple(rest_list[:depth])), name):
+            return current_rel, rest_list
+        for glob_segment_list in module_file.glob_list:
             target_rel, target_rest_list = self.resolve(
-                current_rel, glob + rest_list, hop + 1, visit_set,
+                current_rel, glob_segment_list + name_list, hop + 1, visit_set,
             )
-            if self._is_found(target_rel, target_rest_list, rest_list):
+            if self._is_glob_hit(target_rel, target_rest_list, name_list):
                 return target_rel, target_rest_list
         return current_rel, rest_list
 
@@ -473,7 +729,7 @@ class RustModuleTree:
 def _get_module_tree(project_dir: str, project_file_set: set[str]) -> RustModuleTree:
     """Return the module tree of the project, building it on the first call.
 
-    The tree is kept in module_tree_cache until the project file set changes or the
+    The tree is kept in module_tree_cache_dict until the project file set changes or the
     cache is cleared.
 
     Args:
@@ -483,43 +739,20 @@ def _get_module_tree(project_dir: str, project_file_set: set[str]) -> RustModule
     Returns:
         The RustModuleTree of the .rs files in project_file_set.
     """
-    module_tree = project_cache_value(module_tree_cache, project_dir, project_file_set)
+    module_tree = project_cache_value(module_tree_cache_dict, project_dir, project_file_set)
     if module_tree is not None:
         return module_tree
 
-    module_tree = RustModuleTree(project_dir, {f for f in project_file_set if f.endswith(".rs")})
-    module_tree_cache[project_dir] = (project_file_set, module_tree)
+    module_tree = RustModuleTree(
+        project_dir, {file_rel for file_rel in project_file_set if file_rel.endswith(".rs")},
+    )
+    module_tree_cache_dict[project_dir] = (project_file_set, module_tree)
     return module_tree
 
 
 def _is_path_attribute(module: str) -> bool:
     """Return whether an ImportInfo module is the value of a #[path] attribute ("unix.rs")."""
     return "." in module or "/" in module
-
-
-def _resolve_import(
-    module: str,
-    current_file_rel: str,
-    project_file_set: set[str],
-    project_dir: str,
-) -> tuple[str | None, list[str]]:
-    """Resolve a module path of a Rust import through the module tree of the project.
-
-    Args:
-        module: A module string of an ImportInfo (segments joined with "::").
-        current_file_rel: Relative path of the file the import is written in.
-        project_file_set: Set of file paths within the project.
-        project_dir: Absolute path to the project root.
-
-    Returns:
-        (file relative path, segments not consumed by modules). The file is None
-        when the path leads outside the project or to the current file itself.
-    """
-    module_tree = _get_module_tree(project_dir, project_file_set)
-    target_rel, rest_list = module_tree.resolve(current_file_rel, module.split("::"))
-    if target_rel == current_file_rel:
-        return None, rest_list
-    return target_rel, rest_list
 
 
 def resolve_rust_module_path(
@@ -550,7 +783,9 @@ def resolve_rust_module_path(
     if _is_path_attribute(module):
         target_rel = _join_path(os.path.dirname(current_file_rel), module)
         return target_rel if target_rel in project_file_set and target_rel != current_file_rel else None
-    return _resolve_import(module, current_file_rel, project_file_set, project_dir)[0]
+    module_tree = _get_module_tree(project_dir, project_file_set)
+    target_rel = module_tree.resolve(current_file_rel, module.split("::"))[0]
+    return target_rel if target_rel != current_file_rel else None
 
 
 def rust_import_name_dict(
@@ -560,15 +795,17 @@ def rust_import_name_dict(
     project_file_set: set[str],
     project_dir: str,
 ) -> dict[str, str | None]:
-    """Return the names a Rust import binds that refer to a definition, with the path the
-    definition has in the resolved file.
+    """Return the names a Rust import binds that refer to a definition, with their paths.
 
-    A name that refers to a module is left out. "*" is kept when the path is a module
-    of another file (use a::*); when the path is a top-level enum (use a::Enum::*),
-    the names of its variants are returned in its place. An import that leads to the
-    current file gives its names when the first segment left over is a top-level
-    definition of the file. An import whose first segment left over is a name a use
-    declaration of the resolved file binds (pub use std::fmt::Write) gives no names.
+    The path of a name is the path its definition has in the resolved file. A name that
+    refers to a module is left out. "*" is kept when the path is a module of another
+    file (use a::*); when the path is an enum of the file or of an inline module of it
+    (use a::Enum::*), the names of its variants are returned in its place. The segments
+    left over that name inline modules (pub mod prelude { ... }) are followed into them,
+    and "the segment" below is the first one after them. An import that leads to the
+    current file gives its names when the segment is a definition of the file. An import
+    whose segment is a name a use declaration of the resolved file or inline module
+    binds (pub use std::fmt::Write) gives no names.
 
     Examples (module, name_list -> result):
         "crate::config::Settings", ["Settings"]          -> {"Settings": "Settings"}
@@ -582,6 +819,8 @@ def rust_import_name_dict(
         "self::parse", ["self::parse"] (the current file defines parse)
                                                           -> {"self::parse": "parse"}
         "crate::prelude::Write", ["Write"] (prelude has pub use std::fmt::Write)  -> {}
+        "crate::prelude::Circle", ["Circle"]
+            (lib.rs has pub mod prelude { pub use crate::shape::Circle; })  -> {"Circle": "Circle"}
 
     Args:
         module: A module string of an ImportInfo.
@@ -600,11 +839,10 @@ def rust_import_name_dict(
     target_rel, rest_list = module_tree.resolve(current_file_rel, module.split("::"))
     if target_rel is None:
         return {}
-    module_file = module_tree.module_file_dict[target_rel]
-    is_definition = bool(rest_list) and rest_list[0] in module_file.definition_name_set
-    if not is_definition and (
-        target_rel == current_file_rel or (rest_list and rest_list[0] in module_file.use_dict)
-    ):
+    module_file, depth = module_tree._inline_scope(target_rel, rest_list)
+    head = rest_list[depth] if rest_list else None
+    is_definition = head in module_file.definition_name_set
+    if not is_definition and (target_rel == current_file_rel or head in module_file.use_dict):
         return {}
 
     name_dict: dict[str, str | None] = {}
@@ -612,9 +850,9 @@ def rust_import_name_dict(
         if name == "*":
             if not rest_list:
                 name_dict[name] = None
-            elif len(rest_list) == 1:
-                for variant_name in module_file.variant_dict.get(rest_list[0], []):
-                    name_dict.setdefault(variant_name, f"{rest_list[0]}::{variant_name}")
+            elif depth == len(rest_list) - 1:
+                for variant_name in module_file.variant_dict.get(head, []):
+                    name_dict.setdefault(variant_name, "::".join([*rest_list, variant_name]))
         elif rest_list:
             name_dict[name] = "::".join(rest_list)
     return name_dict

@@ -103,8 +103,8 @@ def read_csd_source(source: str) -> JclSource:
 
     # == Step 2: Names of each command ========================================
     for command_definition in command_definition_list:
-        for name in command_definition.file_name_list:
-            add_csd_file_name(jcl_source, name)
+        for csd_name in command_definition.file_name_list:
+            add_csd_file_name(jcl_source, csd_name)
         for attribute in command_definition.attribute_list:
             definition = _attribute_definition(
                 attribute, command_definition.group, resource_dict, group_resource_dict,

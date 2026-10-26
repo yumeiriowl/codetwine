@@ -36,7 +36,11 @@ class JsonStore:
         return self._knowledge_dict.get("project_dependencies", [])
 
     def entry(self, file: str) -> dict | None:
-        """Return one file's {"file", "file_dependencies", "doc"} entry, or None."""
+        """Return one file's {"file", "file_dependencies", "doc"} entry, or None.
+
+        Args:
+            file: File path as it appears in the "file" field.
+        """
         return self._entry_dict.get(file)
 
     def iter_entries(self) -> Iterator[dict]:
@@ -44,20 +48,34 @@ class JsonStore:
         return iter(self._knowledge_dict.get("files", []))
 
     def find_definitions(self, name: str, partial: bool = False) -> list[dict]:
-        """Return every definition matching a name, as {"file", "name", "type", lines}."""
+        """Return every definition matching a name, as {"file", "name", "type", lines}.
+
+        Args:
+            name: The definition name to look for.
+            partial: False matches the name exactly. True matches any name containing it,
+                case-insensitively: both are compared after str.casefold().
+
+        Returns:
+            The definitions in the order of file path and start line.
+        """
+        casefold_name = name.casefold()
         definition_list = []
         for entry in self.iter_entries():
             for definition in entry.get("file_dependencies", {}).get("definitions", []):
-                is_match = (name.lower() in definition["name"].lower()) if partial else (definition["name"] == name)
+                if partial:
+                    is_match = casefold_name in definition["name"].casefold()
+                else:
+                    is_match = definition["name"] == name
                 if is_match:
                     definition_list.append({"file": entry["file"], "name": definition["name"],
                                   "type": definition.get("type", ""),
                                   "start_line": definition["start_line"],
                                   "end_line": definition["end_line"]})
+        definition_list.sort(key=lambda definition: (definition["file"], definition["start_line"]))
         return definition_list
 
     def close(self) -> None:
-        """Release the data. Present so both stores are used the same way."""
+        """Release the data held in memory."""
         self._knowledge_dict = {}
         self._entry_dict = {}
 
@@ -80,7 +98,11 @@ class SqliteStore:
         return list(knowledge_db.iter_dependencies(self._conn))
 
     def entry(self, file: str) -> dict | None:
-        """Return one file's {"file", "file_dependencies", "doc"} entry, or None."""
+        """Return one file's {"file", "file_dependencies", "doc"} entry, or None.
+
+        Args:
+            file: File path as it appears in the "file" field.
+        """
         return knowledge_db.get_file(self._conn, file)
 
     def iter_entries(self) -> Iterator[dict]:
@@ -88,7 +110,16 @@ class SqliteStore:
         return knowledge_db.iter_files(self._conn)
 
     def find_definitions(self, name: str, partial: bool = False) -> list[dict]:
-        """Return every definition matching a name, as {"file", "name", "type", lines}."""
+        """Return every definition matching a name, as {"file", "name", "type", lines}.
+
+        Args:
+            name: The definition name to look for.
+            partial: False matches the name exactly. True matches any name containing it,
+                case-insensitively: both are compared after str.casefold().
+
+        Returns:
+            The definitions in the order of file path and start line.
+        """
         return knowledge_db.find_definitions(self._conn, name, partial=partial)
 
     def close(self) -> None:

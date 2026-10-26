@@ -1,7 +1,10 @@
+import bisect
+import itertools
 import re
 from collections.abc import Callable, Container, Iterable
 from dataclasses import dataclass, field
 from tree_sitter import Node
+from codetwine.parsers.ts_node import has_ancestor, node_text
 from codetwine.extractors.cobol_source import CobolSource
 from codetwine.extractors.definitions import (
     declarator_name_node,
@@ -9,11 +12,13 @@ from codetwine.extractors.definitions import (
     pattern_name_list,
 )
 from codetwine.extractors.rust_path import macro_path_list, path_segment_list
+from codetwine.utils.project_cache import identity_cache_tuple
 
 # Separators between the parts of a usage name: "." (attribute access) and "::" (Rust / C++ path)
 _SYMBOL_SEPARATOR_RE = re.compile(r"\.|::")
 
-# Type reference / namespace reference node types (skip_parent_types check not needed)
+# Type reference / namespace reference node types (their parents are checked against
+# type_reference_skip_set)
 _TYPE_REFERENCE_NODE_TYPE_SET = {"type_identifier", "namespace_identifier"}
 
 # Node types of a name written with its scopes (C++: geo::Shape::count, Kotlin: a.b.c)
@@ -52,14 +57,20 @@ _LEAD_NAME_RE = re.compile(r"[^\W\d]\w*")
 # A name written with dots only (core.Engine)
 _DOTTED_NAME_RE = re.compile(r"[^\W\d]\w*(?:\.[^\W\d]\w*)*")
 
+# A name written with "::" between its parts (geo::Shape)
+_SCOPED_NAME_RE = re.compile(r"[^\W\d]\w*(?:::[^\W\d]\w*)+")
+
 # The text of a type written as a string: names, dots, brackets, commas and "|"; and
-# two words with only white space between them, which no type is written with
+# two words with only white space between them (a text that is no type)
 _TYPE_TEXT_RE = re.compile(r"[\w\s.,|\[\]]+")
 _WORD_GAP_RE = re.compile(r"\w\s+\w")
 
 # Node types of a type written with the name it is a member of (Python: core.Engine,
-# Java: Circle.Builder, TS: models.Shape)
+# Java: Circle.Builder, TS: models.Shape, Rust: shape::Circle)
 _DOTTED_TYPE_NODE_TYPE_SET = {"attribute", "scoped_type_identifier", "nested_type_identifier"}
+
+# Node types of a type written with the namespace or class it is a member of (C++: Table::Cmp)
+_SCOPED_TYPE_NODE_TYPE_SET = {"qualified_identifier"}
 
 # Node types of the name a chain of names starts from
 _CHAIN_BASE_NODE_TYPE_SET = {"identifier", "type_identifier"}
@@ -76,6 +87,14 @@ class UsageInfo:
     # Whether the name is one of a member: written after self / this, or by itself
     # where the members of the class around it are named that way
     is_member: bool = False
+    # Byte range of the source text the usage is read from; None when it is not known
+    start_byte: int | None = field(default=None, compare=False, repr=False)
+    end_byte: int | None = field(default=None, compare=False, repr=False)
+    # Whether the name is the function part of a call (func(), module.func())
+    is_call: bool = field(default=False, compare=False, repr=False)
+    # Name of the variable the usage is written after when its name is turned into the
+    # name of the type of the variable (root.v -> Node.v: "root"); None otherwise
+    alias_name: str | None = field(default=None, compare=False, repr=False)
 
 
 def symbol_part_list(name: str) -> list[str]:
@@ -141,7 +160,7 @@ def usage_root_name(name: str, tracked_name_set: Container[str]) -> str:
 class _UsageSetting:
     """The node type settings of one language and the names tracked in one file."""
 
-    name_set: set[str]                 # Names whose usages are tracked
+    name_set: Container[str]           # Names whose usages are tracked
     member_name_set: set[str]          # Names tracked when written after self / this
     # Variable name -> the lines it is tracked for (typed_alias_dict)
     alias_dict: dict[str, list["TypedAlias"]]
@@ -154,15 +173,17 @@ class _UsageSetting:
     # binding the name (Rust: a constant, a variant); None when no name does
     is_reference_name: Callable[[str], bool] | None = None
     # Names tracked when they are written after any value (Kotlin: extension functions)
-    extension_name_set: set[str] = field(default_factory=set)
+    extension_name_set: Container[str] = field(default_factory=set)
+    # Byte ranges of the names the definitions of the file are written with
+    definition_name_range_set: Container[tuple[int, int]] = field(default_factory=set)
 
     def type_set(self, key: str) -> set[str]:
         """Return a node type set of the settings, empty when the language has none."""
         return self.usage_node_types.get(key, _EMPTY_SET)
 
     def scope_type_set(self) -> set[str]:
-        """Return the node types that open a scope: the functions and the blocks (scope_type_set)."""
-        return scope_type_set(self.usage_node_types)
+        """Return the node types that open a scope: the functions and the blocks (_scope_type_set)."""
+        return _scope_type_set(self.usage_node_types)
 
     def type_reference_skip_set(self) -> set[str]:
         """Return the parent node types under which a type reference or a path is no usage.
@@ -180,10 +201,10 @@ _UsageHandler = Callable[[Node, _UsageSetting], list[UsageInfo]]
 
 
 # The node types that open a scope, by the id of the language settings they are read from
-_scope_type_set_cache: dict[int, tuple[dict, set[str]]] = {}
+_scope_type_set_cache_dict: dict[int, tuple[dict, set[str]]] = {}
 
 
-def scope_type_set(usage_node_types: dict) -> set[str]:
+def _scope_type_set(usage_node_types: dict) -> set[str]:
     """Return the node types that open a scope for the names bound inside them.
 
     Args:
@@ -193,15 +214,15 @@ def scope_type_set(usage_node_types: dict) -> set[str]:
         scope_types (functions) and block_scope_types (blocks) together. Built once
         per settings dict.
     """
-    cache_entry = _scope_type_set_cache.get(id(usage_node_types))
-    if cache_entry is None or cache_entry[0] is not usage_node_types:
-        cache_entry = (
+    cache_tuple = identity_cache_tuple(_scope_type_set_cache_dict, usage_node_types)
+    if cache_tuple is None:
+        cache_tuple = (
             usage_node_types,
             set(usage_node_types.get("scope_types", ()))
             | set(usage_node_types.get("block_scope_types", ())),
         )
-        _scope_type_set_cache[id(usage_node_types)] = cache_entry
-    return cache_entry[1]
+        _scope_type_set_cache_dict[id(usage_node_types)] = cache_tuple
+    return cache_tuple[1]
 
 
 def _is_function_binding(node: Node, setting: _UsageSetting) -> bool:
@@ -317,7 +338,7 @@ def _local_name_set(scope_node: Node, setting: _UsageSetting) -> set[str]:
         node, is_in_block = node_stack.pop()
         if node.type in unbind_type_set:
             global_name_set.update(
-                child.text.decode("utf-8") for child in node.named_children
+                node_text(child) for child in node.named_children
             )
             continue
         field_name = local_binding_dict.get(node.type)
@@ -340,19 +361,9 @@ def _local_name_set(scope_node: Node, setting: _UsageSetting) -> set[str]:
     return local_name_set
 
 
-def _has_ancestor(node: Node, node_type_set: set[str]) -> bool:
-    """Return whether a node is written inside a node of one of the given types."""
-    current = node.parent
-    while current is not None:
-        if current.type in node_type_set:
-            return True
-        current = current.parent
-    return False
-
-
 def _has_function_scope(node: Node, setting: _UsageSetting) -> bool:
     """Return whether a node is written inside a function (a scope_types node)."""
-    return _has_ancestor(node, setting.type_set("scope_types"))
+    return has_ancestor(node, setting.type_set("scope_types"))
 
 
 def _is_local_name(node: Node, name: str, setting: _UsageSetting) -> bool:
@@ -369,8 +380,7 @@ def _is_local_name(node: Node, name: str, setting: _UsageSetting) -> bool:
         for the line of the node (alias_dict). A scope whose type is a key of scope_body_dict binds
         its names only for the nodes inside that field of it (Python: a default value
         or an annotation of a function is read outside the function). A block written
-        outside every function does not bind a name of member_name_set: the file
-        lists what such a block declares as a definition.
+        outside every function does not bind a name of member_name_set.
     """
     scope_type_set = setting.scope_type_set()
     if not scope_type_set:
@@ -405,6 +415,40 @@ def _is_local_name(node: Node, name: str, setting: _UsageSetting) -> bool:
     return False
 
 
+def _is_outer_binding_name(node: Node, setting: _UsageSetting) -> bool:
+    """Return whether an identifier is a name a binding node binds outside every function.
+
+    Examples (Python, outer_binding_types):
+        validate: bool = True     in a class body         -> True for validate
+        a, b = 1, 2               in a module             -> True for a and b
+        x = 1                     in a function           -> False
+
+    Args:
+        node: An identifier node.
+        setting: The usage settings of the file.
+
+    Returns:
+        True when the node, or a pattern of pattern_types holding it, is the field
+        local_binding_dict gives for a parent of outer_binding_types, and no
+        scope_types node is around the node.
+    """
+    outer_type_set = setting.type_set("outer_binding_types")
+    if not outer_type_set:
+        return False
+    pattern_type_set = setting.type_set("pattern_types")
+    child = node
+    parent = node.parent
+    while parent is not None and parent.type in pattern_type_set:
+        child = parent
+        parent = parent.parent
+    if parent is None or parent.type not in outer_type_set:
+        return False
+    field_name = setting.usage_node_types.get("local_binding_dict", {}).get(parent.type)
+    if field_name is None or child not in parent.children_by_field_name(field_name):
+        return False
+    return not _has_function_scope(node, setting)
+
+
 def _is_class_member_name(node: Node, name: str, setting: _UsageSetting) -> bool:
     """Return whether a name written by itself names a member of the class it is written in.
 
@@ -433,7 +477,7 @@ def _is_class_member_name(node: Node, name: str, setting: _UsageSetting) -> bool
             dot_node is not None and dot_node.type == "." and self_node is not None
             and (
                 self_node.type in setting.type_set("self_types")
-                or self_node.text.decode("utf-8") in setting.type_set("self_names")
+                or node_text(self_node) in setting.type_set("self_names")
             )
         )
     scope_type_set = setting.scope_type_set()
@@ -447,7 +491,7 @@ def _is_class_member_name(node: Node, name: str, setting: _UsageSetting) -> bool
     return False
 
 
-def _chain_part(node: Node, attribute_types: set[str]) -> tuple[Node, list[str]] | None:
+def _chain_part(node: Node, attribute_type_set: set[str]) -> tuple[Node, list[str]] | None:
     """Split an attribute access into the node it starts from and the names after it.
 
     Examples:
@@ -458,7 +502,7 @@ def _chain_part(node: Node, attribute_types: set[str]) -> tuple[Node, list[str]]
 
     Args:
         node: An attribute access node.
-        attribute_types: Node types of an attribute access.
+        attribute_type_set: Node types of an attribute access.
 
     Returns:
         (first node that is no attribute access, names written after it), None when
@@ -466,7 +510,7 @@ def _chain_part(node: Node, attribute_types: set[str]) -> tuple[Node, list[str]]
     """
     part_list: list[str] = []
     current = node
-    while current.type in attribute_types:
+    while current.type in attribute_type_set:
         child_list = current.named_children
         if len(child_list) < 2:
             return None
@@ -497,7 +541,7 @@ def _chain_usage(
     Returns:
         UsageInfo, or None when the chain names nothing tracked.
     """
-    base_text = base_node.text.decode("utf-8")
+    base_text = node_text(base_node)
     is_self = (
         base_node.type in setting.type_set("self_types")
         or (base_node.type == "identifier" and base_text in setting.type_set("self_names"))
@@ -537,7 +581,7 @@ def _qualified_segment_list(node: Node) -> list[str]:
         name_node = current.child_by_field_name("name")
         if name_node is None:
             # Kotlin: the parts are plain children
-            segment_list.extend(child.text.decode("utf-8") for child in current.named_children)
+            segment_list.extend(node_text(child) for child in current.named_children)
             return segment_list
         if scope_node is not None:
             segment_list.append(_template_name(scope_node))
@@ -550,17 +594,16 @@ def _qualified_segment_list(node: Node) -> list[str]:
 def _template_name(node: Node) -> str:
     """Return the name of a node without its template arguments (Box<int> -> Box)."""
     name_node = node.child_by_field_name("name") if node.type in _TEMPLATE_NODE_TYPE_SET else None
-    return (name_node or node).text.decode("utf-8")
+    return node_text(name_node or node)
 
 
 def _qualified_usage(node: Node, setting: _UsageSetting) -> UsageInfo | None:
     """Return the usage a qualified name gives.
 
-    The name from the first tracked part on is the usage, so the namespaces written in
+    The name from the first tracked part on is the usage; the namespaces written in
     front of it are dropped: geo::Shape::count with "Shape" tracked -> "Shape::count".
     A part with further parts after it that is tracked as a variable of a function
-    (alias_dict) is no such part: a variable named like a namespace is not the
-    namespace.
+    (alias_dict) is no such part.
 
     Args:
         node: The outermost qualified_identifier node of the name.
@@ -581,13 +624,14 @@ def _qualified_usage(node: Node, setting: _UsageSetting) -> UsageInfo | None:
 
 def extract_usages(
     root_node: Node | CobolSource,
-    imported_names: set[str],
+    imported_names: Container[str],
     usage_node_types: dict | None = None,
     member_names: set[str] | None = None,
     alias_list: list["TypedAlias"] | None = None,
     import_line_dict: dict[str, set[int]] | None = None,
     is_reference_name: Callable[[str], bool] | None = None,
-    extension_names: set[str] | None = None,
+    extension_names: Container[str] | None = None,
+    definition_name_range_set: Container[tuple[int, int]] | None = None,
 ) -> list[UsageInfo]:
     """Extract usage locations of imported names from the AST and return them.
 
@@ -614,7 +658,8 @@ def extract_usages(
 
     A name is not a usage where a scope around it (scope_types) binds it as a
     parameter or a local variable. A name an import statement binds inside a scope
-    (import_line_dict) is no local variable of it.
+    (import_line_dict) is no local variable of it. An identifier or a type reference
+    written as the name of a definition (definition_name_range_set) is no usage.
 
     Duplicate and redundant entries are removed at the end by deduplicate_usage_list.
 
@@ -623,9 +668,9 @@ def extract_usages(
 
     Args:
         root_node: The AST root node covering the entire file, or the CobolSource of a COBOL file.
-        imported_names: Set of names whose usage is to be tracked. A name may have several
+        imported_names: Names whose usage is to be tracked (any container). A name may have several
                         parts ("pkg.core"); a usage starts from the longest tracked name.
-        usage_node_types: Per-language node type settings dict, obtained from EXT_TO_USAGE_NODE_TYPE_DICT in config.py.
+        usage_node_types: Per-language node type settings dict, obtained from EXT_TO_USAGE_NODE_TYPE_DICT in config/settings.py.
                           Returns an empty list when None (for languages with no usage tracking defined).
                           Required keys: "call_types", "attribute_types", "skip_parent_types"
                           Optional key: "attribute_skip_parent_types" (parent node types of an
@@ -660,6 +705,8 @@ def extract_usages(
                             whose paths are read from loose tokens)
                           Optional keys: "self_names" / "self_types" (identifier texts / node
                             types that stand for the object a member is written on)
+                          Optional key: "call_ignores_local" (the name of a called function is
+                            a usage also where a scope binds a variable of that name)
                           Optional keys: "block_scope_types", "function_binding_types",
                             "function_binding_token_types" (the blocks that are scopes of
                             their own and the bindings that count for the whole function,
@@ -668,6 +715,10 @@ def extract_usages(
                             "local_binding_dict", "pattern_types", "pattern_field_dict",
                             "opaque_types", "unbind_types"
                             (how the names bound inside a function are found, see _local_name_set)
+                          Optional key: "outer_binding_types" (binding nodes whose names are no
+                            usages outside every function, see _is_outer_binding_name)
+                          Optional key: "type_declarator_types" (node types whose declarator
+                            names the type they define, see _is_type_declarator_name)
         member_names: Names tracked when they are written after self / this. None for none.
         alias_list: Variables declared with a tracked type (extract_typed_aliases); such a
                     name stays a usage on the lines it is declared for, where a scope
@@ -679,9 +730,13 @@ def extract_usages(
         extension_names: Names tracked when they are written after any value
                     (value.name, value.name(...)); such a usage is named by the name
                     alone. None for none.
+        definition_name_range_set: (start byte, end byte) of the names the definitions
+                    of the file are written with (DefinitionInfo.name_start_byte,
+                    name_end_byte). None for none.
 
     Returns:
-        A list of UsageInfo (deduplicated).
+        A list of UsageInfo (deduplicated), each with the byte range of the source text
+        it is read from (start_byte, end_byte); None for the usages of a CobolSource.
     """
     if isinstance(root_node, CobolSource):
         return [
@@ -699,6 +754,7 @@ def extract_usages(
         import_line_dict=import_line_dict or {},
         is_reference_name=is_reference_name,
         extension_name_set=extension_names or set(),
+        definition_name_range_set=definition_name_range_set or set(),
     )
 
     handler_dict = _usage_handler_dict(setting)
@@ -709,11 +765,12 @@ def extract_usages(
         node = node_stack.pop()
         handler = handler_dict.get(node.type)
         if handler is not None:
-            usage_list.extend(handler(node, setting))
-        # Add child nodes to the stack to continue traversal
+            for usage in handler(node, setting):
+                if usage.start_byte is None:
+                    usage.start_byte, usage.end_byte = node.start_byte, node.end_byte
+                usage_list.append(usage)
         node_stack.extend(node.children)
 
-    # Remove duplicate and redundant entries and return
     return deduplicate_usage_list(usage_list)
 
 
@@ -760,11 +817,29 @@ def _usage_list_of(*usage_tuple: UsageInfo | None) -> list[UsageInfo]:
 
 
 def _call_usage_list(node: Node, setting: _UsageSetting) -> list[UsageInfo]:
-    """Return the usages of a function call node: its extension name and the function it calls."""
-    return _usage_list_of(
-        _extension_usage(node.children[0] if node.children else None, setting),
-        _parse_call_node(node, setting),
+    """Return the usages of a function call node: its extension name and the function it calls.
+
+    The usages are read from the part of the call that names the function, without
+    its arguments: from the object to the name of a call with both fields (Java:
+    repo.items.all), else the first child.
+    """
+    call_usage = _parse_call_node(node, setting)
+    if call_usage is not None:
+        call_usage.is_call = True
+    usage_list = _usage_list_of(
+        _extension_usage(node.children[0] if node.children else None, setting), call_usage,
     )
+    object_node = node.child_by_field_name("object")
+    name_node = node.child_by_field_name("name")
+    if object_node is not None and name_node is not None:
+        start_byte, end_byte = object_node.start_byte, name_node.end_byte
+    elif node.children:
+        start_byte, end_byte = node.children[0].start_byte, node.children[0].end_byte
+    else:
+        return usage_list
+    for usage in usage_list:
+        usage.start_byte, usage.end_byte = start_byte, end_byte
+    return usage_list
 
 
 def _attribute_usage_list(node: Node, setting: _UsageSetting) -> list[UsageInfo]:
@@ -815,26 +890,72 @@ def _template_name_usage_list(node: Node, setting: _UsageSetting) -> list[UsageI
 
 
 def _macro_argument_usage_list(node: Node, setting: _UsageSetting) -> list[UsageInfo]:
-    """Return the usages of the paths written as loose tokens in the arguments of a macro."""
+    """Return the usages of the paths written as loose tokens in the arguments of a macro.
+
+    Each usage is read from the text of its path, from its first name to its last.
+    """
     usage_list: list[UsageInfo] = []
-    for first_node, segment_list in macro_path_list(node):
-        name = "::".join(segment_list)
-        if name in setting.name_set or segment_list[0] in setting.name_set:
-            usage_list.append(UsageInfo(name=name, line=first_node.start_point[0] + 1))
+    for first_node, last_node, segment_list in macro_path_list(node):
+        usage = _path_usage(segment_list, first_node.start_point[0] + 1, setting.name_set)
+        if usage is not None:
+            usage.start_byte, usage.end_byte = first_node.start_byte, last_node.end_byte
+            usage_list.append(usage)
     return usage_list
+
+
+def _is_type_declarator_name(node: Node, setting: _UsageSetting) -> bool:
+    """Return whether a type identifier is the name a node of type_declarator_types defines.
+
+    Examples (C, type_definition):
+        typedef unsigned long fd_t;          -> True for fd_t
+        typedef int (*cmp_fn)(const a_t *);  -> True for cmp_fn, False for a_t
+
+    Args:
+        node: A type_identifier node.
+        setting: The usage settings of the file.
+
+    Returns:
+        True when the node is in the "declarator" field of such a node, directly or
+        through the declarators wrapping it (a parenthesized declarator holds it as a
+        plain child).
+    """
+    holder_type_set = setting.type_set("type_declarator_types")
+    if not holder_type_set:
+        return False
+    child = node
+    parent = node.parent
+    while parent is not None and parent.type not in holder_type_set:
+        if parent.type != "parenthesized_declarator" and child not in (
+            parent.children_by_field_name("declarator")
+        ):
+            return False
+        child = parent
+        parent = parent.parent
+    return parent is not None and child in parent.children_by_field_name("declarator")
+
+
+def _is_definition_name(node: Node, setting: _UsageSetting) -> bool:
+    """Return whether a node is the name of a definition (definition_name_range_set)."""
+    return (node.start_byte, node.end_byte) in setting.definition_name_range_set
 
 
 def _type_reference_usage_list(node: Node, setting: _UsageSetting) -> list[UsageInfo]:
     """Return the usage of a type reference node.
 
-    Only a parent in skip_parent_types_for_type_ref (import statements and scope
-    resolution) keeps a type reference from being a usage; a type written in a
-    parameter or a method declaration is one.
+    Only a parent in type_reference_skip_set (skip_parent_types_for_type_ref: import
+    statements and scope resolution; skip_parent_types for a language without it),
+    the name of a definition (_is_definition_name) and the name a typedef defines
+    (_is_type_declarator_name) keep a type reference from being a usage; a type
+    written in a parameter or a method declaration is one.
     """
     parent = node.parent
     if parent is not None and parent.type in setting.type_reference_skip_set():
         return []
-    name = node.text.decode("utf-8")
+    if _is_definition_name(node, setting):
+        return []
+    if _is_type_declarator_name(node, setting):
+        return []
+    name = node_text(node)
     if name not in setting.name_set:
         return []
     return [UsageInfo(name=name, line=node.start_point[0] + 1)]
@@ -853,32 +974,88 @@ def _identifier_usage_list(node: Node, setting: _UsageSetting) -> list[UsageInfo
     return _usage_list_of(_parse_identifier_node(node, setting))
 
 
-def _leading_part_set(name_set: set[str]) -> set[str]:
-    """Return every leading part of the names that ends right before a "." or "::".
+def _leading_part_list(name: str) -> list[str]:
+    """Return every leading part of a name that ends right before a "." or "::".
 
     Examples:
-        {"a.b.c", "x::y"} -> {"a", "a.b", "x"}
+        "a.b.c"  -> ["a", "a.b"]
+        "x::y"   -> ["x"]
 
     Args:
-        name_set: Usage names.
+        name: A usage name.
 
     Returns:
-        The text of each name up to (not including) each separator in it.
+        The text of the name up to (not including) each separator in it.
     """
-    part_set: set[str] = set()
-    for name in name_set:
-        for index, char in enumerate(name):
-            if char == "." or name.startswith("::", index):
-                part_set.add(name[:index])
-    return part_set
+    return [
+        name[:index] for index, char in enumerate(name)
+        if char == "." or name.startswith("::", index)
+    ]
+
+
+@dataclass
+class _LongerNameIndex:
+    """The usages of one line, by each leading part of their names (_leading_part_list)."""
+
+    # Leading part -> start bytes of the usages whose names have it, in ascending order
+    start_dict: dict[str, list[int]]
+    # Leading part -> largest end byte among the usages up to each start of start_dict
+    max_end_dict: dict[str, list[int]]
+    # Leading parts of the names of the usages without a byte range
+    unknown_part_set: set[str]
+
+    def has_longer(self, usage: UsageInfo) -> bool:
+        """Return whether a longer name of the line holds the usage.
+
+        Args:
+            usage: A usage of the line.
+
+        Returns:
+            True when the name of the usage is a leading part of the name of a usage
+            whose byte range holds the byte range of this one; a usage without a byte
+            range holds, and is held by, every usage of the line.
+        """
+        if usage.name in self.unknown_part_set:
+            return True
+        start_list = self.start_dict.get(usage.name)
+        if start_list is None:
+            return False
+        if usage.start_byte is None or usage.end_byte is None:
+            return True
+        index = bisect.bisect_right(start_list, usage.start_byte) - 1
+        return index >= 0 and self.max_end_dict[usage.name][index] >= usage.end_byte
+
+
+def _longer_name_index(usage_list: list[UsageInfo]) -> _LongerNameIndex:
+    """Return the _LongerNameIndex of the usages of one line."""
+    range_list_dict: dict[str, list[tuple[int, int]]] = {}
+    unknown_part_set: set[str] = set()
+    for usage in usage_list:
+        part_list = _leading_part_list(usage.name)
+        if usage.start_byte is None or usage.end_byte is None:
+            unknown_part_set.update(part_list)
+            continue
+        for part in part_list:
+            range_list_dict.setdefault(part, []).append((usage.start_byte, usage.end_byte))
+    start_dict: dict[str, list[int]] = {}
+    max_end_dict: dict[str, list[int]] = {}
+    for part, range_list in range_list_dict.items():
+        range_list.sort()
+        start_dict[part] = [start_byte for start_byte, _ in range_list]
+        max_end_dict[part] = list(itertools.accumulate(
+            (end_byte for _, end_byte in range_list), max,
+        ))
+    return _LongerNameIndex(start_dict, max_end_dict, unknown_part_set)
 
 
 def deduplicate_usage_list(usage_list: list[UsageInfo]) -> list[UsageInfo]:
     """Remove redundant entries within the same line and eliminate duplicates.
 
-    When both "module" and "module.attr" (or "module::item") exist on the same line,
-    the more detailed name is kept and "module" is removed.
-    Entries with duplicate (name, line) pairs are also removed.
+    When "module" is read from the source text of "module.attr" (or "module::item") on
+    the same line, the more detailed name is kept and "module" is removed; a "module"
+    written apart from it is kept. A usage without a byte range counts as read from
+    the text of every usage of its line.
+    Entries with duplicate (name, line, is_member, is_call) are also removed.
 
     Args:
         usage_list: A UsageInfo list that may contain duplicates.
@@ -891,23 +1068,23 @@ def deduplicate_usage_list(usage_list: list[UsageInfo]) -> list[UsageInfo]:
     for usage in usage_list:
         by_line_dict.setdefault(usage.line, []).append(usage)
 
-    seen_key_set: set[tuple] = set()
+    entry_key_set: set[tuple] = set()
     unique_list: list[UsageInfo] = []
 
     # Process each group in ascending line-number order
     for line in sorted(by_line_dict):
         line_usage_list = by_line_dict[line]
-        shorter_name_set = _leading_part_set({usage.name for usage in line_usage_list})
+        longer_name_index = _longer_name_index(line_usage_list)
 
         for usage in line_usage_list:
-            # Exclude the shorter name if a more detailed name (usage.name.xxx) exists on the same line
-            if usage.name in shorter_name_set:
+            # Exclude the shorter name read from the text of a more detailed name (usage.name.xxx)
+            if longer_name_index.has_longer(usage):
                 continue
 
-            # Also remove entries with duplicate (name, line) pairs
-            entry_key = (usage.name, usage.line, usage.is_member)
-            if entry_key not in seen_key_set:
-                seen_key_set.add(entry_key)
+            # Also remove entries with duplicate (name, line, is_member, is_call)
+            entry_key_tuple = (usage.name, usage.line, usage.is_member, usage.is_call)
+            if entry_key_tuple not in entry_key_set:
+                entry_key_set.add(entry_key_tuple)
                 unique_list.append(usage)
 
     return unique_list
@@ -959,23 +1136,22 @@ def _is_skip_attribute(node: Node, skip_parent_type_set: set[str]) -> bool:
     return outer_node.parent is not None and outer_node.parent.type in skip_parent_type_set
 
 
-def _is_function_part_of_call(node: Node, call_types: set[str]) -> bool:
+def _is_function_part_of_call(node: Node, call_type_set: set[str]) -> bool:
     """Determine whether this attribute node is the function part of a call node.
 
     In the AST for "func()", the first child of the call node is an identifier or attribute.
-    In that case, the call node handles the processing, so the attribute node alone is not processed.
+    Such an attribute node is read with the call node, not by itself.
 
     Args:
         node: The attribute node to check.
-        call_types: Set of node types representing function calls.
+        call_type_set: Set of node types representing function calls.
 
     Returns:
         True if it is the function part of a call, False if it is a standalone attribute access.
     """
-    # Check if the parent node is a call type
+    # The first identifier or attribute child of a call parent must be the node
     parent = node.parent
-    if parent and parent.type in call_types:
-        # Check if the first child of the call node is this node
+    if parent and parent.type in call_type_set:
         for child in parent.children:
             if child.type in ("identifier", node.type):
                 return child.id == node.id
@@ -1001,17 +1177,17 @@ def _parse_call_node(node: Node, setting: _UsageSetting) -> UsageInfo | None:
         UsageInfo, or None if not applicable.
     """
     line = node.start_point[0] + 1
-    attribute_types = setting.usage_node_types["attribute_types"]
+    attribute_type_set = setting.usage_node_types["attribute_types"]
 
     # A call with an object and a name field (Java method_invocation)
     object_node = node.child_by_field_name("object")
     name_node = node.child_by_field_name("name")
     if object_node is not None and name_node is not None:
-        chain = _chain_part(object_node, attribute_types)
-        if chain is None:
+        chain_tuple = _chain_part(object_node, attribute_type_set)
+        if chain_tuple is None:
             return None
-        base_node, part_list = chain
-        return _chain_usage(base_node, [*part_list, name_node.text.decode("utf-8")], line, setting)
+        base_node, part_list = chain_tuple
+        return _chain_usage(base_node, [*part_list, node_text(name_node)], line, setting)
 
     # Check only the first child (function name part) of the call node
     function_node = node.children[0] if node.children else None
@@ -1020,10 +1196,10 @@ def _parse_call_node(node: Node, setting: _UsageSetting) -> UsageInfo | None:
     if function_node.type == "identifier":
         # Simple function call: func()
         return _chain_usage(function_node, [], line, setting, is_call_name=True)
-    if function_node.type in attribute_types:
+    if function_node.type in attribute_type_set:
         # Call via attribute access: module.func()
-        chain = _chain_part(function_node, attribute_types)
-        return _chain_usage(*chain, line, setting) if chain else None
+        chain_tuple = _chain_part(function_node, attribute_type_set)
+        return _chain_usage(*chain_tuple, line, setting) if chain_tuple else None
     if function_node.type == "qualified_identifier":
         # C++ scope resolution operator call: geo::doSomething()
         usage = _qualified_usage(function_node, setting)
@@ -1046,13 +1222,13 @@ def _parse_attribute_node(node: Node, setting: _UsageSetting) -> UsageInfo | Non
     Returns:
         UsageInfo, or None if not applicable.
     """
-    chain = _chain_part(node, setting.usage_node_types["attribute_types"])
-    if chain is None:
+    chain_tuple = _chain_part(node, setting.usage_node_types["attribute_types"])
+    if chain_tuple is None:
         return None
     line = node.start_point[0] + 1
-    usage = _chain_usage(*chain, line, setting)
+    usage = _chain_usage(*chain_tuple, line, setting)
     if usage is None and node.type in setting.type_set("package_path_types"):
-        part_list = chain[1]
+        part_list = chain_tuple[1]
         for index, part in enumerate(part_list):
             if part in setting.name_set:
                 return UsageInfo(name=".".join(part_list[index:]), line=line)
@@ -1061,7 +1237,7 @@ def _parse_attribute_node(node: Node, setting: _UsageSetting) -> UsageInfo | Non
 
 def _parse_path_node(
     node: Node,
-    imported_names: set[str],
+    name_set: set[str],
 ) -> UsageInfo | None:
     """Extract symbol usage information from a Rust path node.
 
@@ -1072,7 +1248,7 @@ def _parse_path_node(
 
     Args:
         node: A path node (scoped_identifier / scoped_type_identifier).
-        imported_names: Set of names to track.
+        name_set: Set of names to track.
 
     Returns:
         UsageInfo, or None if not applicable.
@@ -1080,9 +1256,24 @@ def _parse_path_node(
     segment_list = path_segment_list(node)
     if not segment_list:
         return None
+    return _path_usage(segment_list, node.start_point[0] + 1, name_set)
+
+
+def _path_usage(segment_list: list[str], line: int, name_set: set[str]) -> UsageInfo | None:
+    """Return the usage of a path written with "::".
+
+    Args:
+        segment_list: The segments of the path (not empty).
+        line: Line of the path (1-based).
+        name_set: Set of names to track.
+
+    Returns:
+        UsageInfo named with the whole path when the whole path or its first segment
+        is in name_set, else None.
+    """
     name = "::".join(segment_list)
-    if name in imported_names or segment_list[0] in imported_names:
-        return UsageInfo(name=name, line=node.start_point[0] + 1)
+    if name in name_set or segment_list[0] in name_set:
+        return UsageInfo(name=name, line=line)
     return None
 
 
@@ -1113,7 +1304,7 @@ def _parse_name_path_node(node: Node, setting: _UsageSetting) -> UsageInfo | Non
     if min_part_count is None or len(part_node_list) < max(min_part_count, 1):
         return None
     return _chain_usage(
-        part_node_list[0], [part_node.text.decode("utf-8") for part_node in part_node_list[1:]],
+        part_node_list[0], [node_text(part_node) for part_node in part_node_list[1:]],
         node.start_point[0] + 1, setting,
     )
 
@@ -1135,9 +1326,9 @@ def _parse_template_name_node(node: Node, setting: _UsageSetting) -> UsageInfo |
     """
     marker = setting.usage_node_types["template_name_dict"][node.type]
     name_node = node.next_sibling
-    if node.text.decode("utf-8") != marker or name_node is None or name_node.type != node.type:
+    if node_text(node) != marker or name_node is None or name_node.type != node.type:
         return None
-    name_match = _LEAD_NAME_RE.match(name_node.text.decode("utf-8"))
+    name_match = _LEAD_NAME_RE.match(node_text(name_node))
     if name_match is None:
         return None
     name = name_match.group()
@@ -1182,15 +1373,15 @@ def _annotation_string_usage_list(node: Node, setting: _UsageSetting) -> list[Us
         name_node = next(iter(holder.named_children), None)
         if name_node is None or name_node is node:
             continue
-        name_text = name_node.text.decode("utf-8")
+        name_text = node_text(name_node)
         if _DOTTED_NAME_RE.fullmatch(name_text) and symbol_part_list(name_text)[-1] in literal_name_set:
             return []
     if any(child.type == "interpolation" for child in node.named_children):
         return []
-    text = "".join(
-        child.text.decode("utf-8") for child in node.named_children
-        if child.type == "string_content"
-    )
+    content_node_list = [
+        child for child in node.named_children if child.type == "string_content"
+    ]
+    text = "".join(node_text(child) for child in content_node_list)
     if not _TYPE_TEXT_RE.fullmatch(text) or _WORD_GAP_RE.search(text):
         return []
     line = node.start_point[0] + 1
@@ -1201,19 +1392,44 @@ def _annotation_string_usage_list(node: Node, setting: _UsageSetting) -> list[Us
             continue
         if _is_local_name(node, symbol_part_list(name)[0], setting):
             continue
-        usage_list.append(UsageInfo(name=name, line=line))
+        usage_list.append(UsageInfo(
+            name=name, line=line,
+            start_byte=_content_byte(content_node_list, name_match.start()),
+            end_byte=_content_byte(content_node_list, name_match.end()),
+        ))
     return usage_list
+
+
+def _content_byte(content_node_list: list[Node], char_index: int) -> int:
+    """Return the byte a character of the text of string content nodes starts at.
+
+    Args:
+        content_node_list: The string content nodes of a string, in order.
+        char_index: Index of a character of their texts joined, or the length of the
+            joined text for the byte right after the last one.
+
+    Returns:
+        The byte position in the file.
+    """
+    for content_node in content_node_list:
+        content_text = node_text(content_node)
+        if char_index < len(content_text):
+            char_byte_count = len(content_text[:char_index].encode("utf-8"))
+            return content_node.start_byte + char_byte_count
+        char_index -= len(content_text)
+    return content_node_list[-1].end_byte
 
 
 def _parse_identifier_node(node: Node, setting: _UsageSetting) -> UsageInfo | None:
     """Extract symbol usage information from a simple identifier node.
 
     Ignored when the identifier is part of import statements, definitions,
-    or argument declarations (i.e., part of syntax), and where a scope around it
-    binds its name.
+    or argument declarations (i.e., part of syntax), when it is written as the name of
+    a definition (_is_definition_name), and where a scope around it binds its name.
     For node types in skip_name_field_types, only the "name"-field child is
     skipped while the "value" side is detected as a usage. The child a pattern node
-    binds (pattern_field_dict) is skipped the same way.
+    binds (pattern_field_dict) is skipped the same way, and so is a name bound outside
+    every function (_is_outer_binding_name).
     When identifier_parent_types is not empty, only an identifier whose parent
     is one of those types is detected (SQL: object_reference).
 
@@ -1228,9 +1444,11 @@ def _parse_identifier_node(node: Node, setting: _UsageSetting) -> UsageInfo | No
     Returns:
         UsageInfo, or None if not applicable.
     """
-    identifier_parent_types = setting.type_set("identifier_parent_types")
+    identifier_parent_type_set = setting.type_set("identifier_parent_types")
     parent = node.parent
-    if identifier_parent_types and (not parent or parent.type not in identifier_parent_types):
+    if identifier_parent_type_set and (not parent or parent.type not in identifier_parent_type_set):
+        return None
+    if _is_definition_name(node, setting):
         return None
     # The name of a macro called as a statement is a usage of the macro
     is_macro_call = (
@@ -1264,9 +1482,11 @@ def _parse_identifier_node(node: Node, setting: _UsageSetting) -> UsageInfo | No
         pattern_field = setting.usage_node_types.get("pattern_field_dict", {}).get(parent.type)
         if pattern_field is not None and node in parent.children_by_field_name(pattern_field):
             return None
+        if _is_outer_binding_name(node, setting):
+            return None
 
     # Check if the name matches an imported name
-    name = node.text.decode("utf-8")
+    name = node_text(node)
     if name in setting.name_set:
         if not _is_local_name(node, name, setting):
             return UsageInfo(name=name, line=node.start_point[0] + 1)
@@ -1290,17 +1510,23 @@ class TypedAlias:
 
 
 def _scope_node(
-    node: Node, scope_types: set[str], root_node: Node, opaque_types: set[str] = _EMPTY_SET,
+    node: Node, scope_type_set: set[str], root_node: Node, opaque_type_set: set[str] = _EMPTY_SET,
 ) -> Node | None:
-    """Return the innermost scope_types node around a node, the root node when there is none.
+    """Return the innermost scope node around a node, the root node when there is none.
+
+    Args:
+        node: The node whose scope is looked for.
+        scope_type_set: Node types of a scope (_scope_type_set).
+        root_node: The AST root node of the file.
+        opaque_type_set: Node types whose names belong to no scope around them (opaque_types).
 
     Returns:
-        The node; None when an opaque_types node (Python: a class body) comes before
-        it, since a name written there is no variable of the scope.
+        The node; None when a node of opaque_type_set (Python: a class body) comes
+        before it.
     """
     scope_node = node.parent
-    while scope_node is not None and scope_node.type not in scope_types:
-        if scope_node.type in opaque_types:
+    while scope_node is not None and scope_node.type not in scope_type_set:
+        if scope_node.type in opaque_type_set:
             return None
         scope_node = scope_node.parent
     return scope_node or root_node
@@ -1308,18 +1534,18 @@ def _scope_node(
 
 def extract_typed_aliases(
     root_node: Node,
-    imported_names: set[str],
+    imported_names: Container[str],
     usage_node_types: dict,
 ) -> list[TypedAlias]:
     """Traverse the AST to find the variables declared with a tracked type.
 
     Detects variables declared with an imported type (e.g. Genre) such as genre.
     A variable counts for the lines of the innermost scope node around its
-    declaration (scope_type_set: a function, a block), for the lines of the
+    declaration (_scope_type_set: a function, a block), for the lines of the
     declaration when it is such a node itself (the variable of a loop), or for the
     whole file when there is none (a field); a variable declared outside every
-    function is is_file_level. A
-    declaration written in an opaque_types node (Python: a class body) is not read.
+    function is is_file_level. A declaration written in an opaque_types node (Python:
+    a class body) is not read.
 
     Supported AST patterns (typed_alias_parent_types):
       Java:   field_declaration / local_variable_declaration / formal_parameter
@@ -1334,60 +1560,89 @@ def extract_typed_aliases(
 
     Args:
         root_node: The AST root node covering the entire file.
-        imported_names: Set of type names to track.
+        imported_names: Type names to track (any container).
         usage_node_types: The EXT_TO_USAGE_NODE_TYPE_DICT entry of the language.
 
     Returns:
         One TypedAlias per variable whose type name is in imported_names, or starts
-        with a name of it ("core.Engine"), in no particular order.
+        with a name of it ("core.Engine"), in no particular order. With
+        typed_alias_last_part, a type written with "::" (geo::Shape) that starts with
+        no such name is taken by its last part when that part is such a name.
     """
-    typed_alias_parent_types = usage_node_types.get("typed_alias_parent_types", set())
-    if not typed_alias_parent_types:
+    parent_type_set = usage_node_types.get("typed_alias_parent_types", set())
+    if not parent_type_set:
         return []
-    scope_types = scope_type_set(usage_node_types)
+    scope_type_set = _scope_type_set(usage_node_types)
     function_type_set = usage_node_types.get("scope_types", set())
-    opaque_types = usage_node_types.get("opaque_types", set())
+    opaque_type_set = usage_node_types.get("opaque_types", set())
     name_field_dict = usage_node_types.get("typed_alias_name_field_dict", {})
     type_field_dict = usage_node_types.get("typed_alias_type_field_dict", {})
     first_name_type_set = usage_node_types.get("skip_first_name_types", set())
+    is_last_part = bool(usage_node_types.get("typed_alias_last_part"))
 
     alias_list: list[TypedAlias] = []
-    stack = [root_node]
+    node_stack = [root_node]
 
-    while stack:
-        node = stack.pop()
-
-        if node.type in typed_alias_parent_types:
-            if node.type in name_field_dict:
-                type_name, var_names = _field_type_and_var(
-                    node, name_field_dict[node.type], type_field_dict.get(node.type, "type"),
-                )
-            else:
-                type_name, var_names = _extract_type_and_var(node)
-                if node.type in first_name_type_set:
-                    # Only the first name is declared; a later one is its default value
-                    var_names = var_names[:1]
-            scope_node = None
-            if type_name and _track_root(type_name, imported_names) is not None:
-                # A declaration that is a scope itself binds its variable for its own lines
-                scope_node = (
-                    node if node.type in scope_types
-                    else _scope_node(node, scope_types, root_node, opaque_types)
-                )
-            if scope_node is not None:
-                for var_name in var_names:
-                    if var_name != type_name:
-                        alias_list.append(TypedAlias(
-                            var_name, type_name,
-                            scope_node.start_point[0] + 1, scope_node.end_point[0] + 1,
-                            is_file_level=scope_node == root_node or not _has_ancestor(
-                                node, function_type_set,
-                            ),
-                        ))
-
-        stack.extend(node.children)
+    while node_stack:
+        node = node_stack.pop()
+        node_stack.extend(node.children)
+        if node.type not in parent_type_set:
+            continue
+        type_name, var_name_list = _declaration_type_and_var(
+            node, name_field_dict, type_field_dict, first_name_type_set,
+        )
+        if type_name and _track_root(type_name, imported_names) is None:
+            type_name = type_name.rsplit("::", 1)[-1] if is_last_part and "::" in type_name else None
+        if not type_name or _track_root(type_name, imported_names) is None:
+            continue
+        # A declaration that is a scope itself binds its variable for its own lines
+        scope_node = (
+            node if node.type in scope_type_set
+            else _scope_node(node, scope_type_set, root_node, opaque_type_set)
+        )
+        if scope_node is None:
+            continue
+        for var_name in var_name_list:
+            if var_name != type_name:
+                alias_list.append(TypedAlias(
+                    var_name, type_name,
+                    scope_node.start_point[0] + 1, scope_node.end_point[0] + 1,
+                    is_file_level=scope_node == root_node or not has_ancestor(
+                        node, function_type_set,
+                    ),
+                ))
 
     return alias_list
+
+
+def _declaration_type_and_var(
+    node: Node,
+    name_field_dict: dict[str, str],
+    type_field_dict: dict[str, str],
+    first_name_type_set: set[str],
+) -> tuple[str | None, list[str]]:
+    """Return the type name and the variable names a typed declaration node declares.
+
+    Args:
+        node: A node whose type is in typed_alias_parent_types.
+        name_field_dict: typed_alias_name_field_dict of the language settings.
+        type_field_dict: typed_alias_type_field_dict of the language settings.
+        first_name_type_set: skip_first_name_types of the language settings.
+
+    Returns:
+        (type name or None, variable names): read by _field_type_and_var for a node
+        type of name_field_dict, else by _extract_type_and_var, keeping only the first
+        name for a node type of first_name_type_set.
+    """
+    if node.type in name_field_dict:
+        return _field_type_and_var(
+            node, name_field_dict[node.type], type_field_dict.get(node.type, "type"),
+        )
+    type_name, var_name_list = _extract_type_and_var(node)
+    if node.type in first_name_type_set:
+        # Only the first name is declared; a later one is its default value
+        var_name_list = var_name_list[:1]
+    return type_name, var_name_list
 
 
 def _new_type_name(value_node: Node, usage_node_types: dict) -> str | None:
@@ -1411,11 +1666,11 @@ def _new_type_name(value_node: Node, usage_node_types: dict) -> str | None:
     if name_node is None:
         return None
     if name_node.type == "identifier":
-        return name_node.text.decode("utf-8")
+        return node_text(name_node)
     if name_node.type in usage_node_types["attribute_types"]:
-        chain = _chain_part(name_node, usage_node_types["attribute_types"])
-        if chain is not None and chain[0].type == "identifier":
-            return ".".join([chain[0].text.decode("utf-8"), *chain[1]])
+        chain_tuple = _chain_part(name_node, usage_node_types["attribute_types"])
+        if chain_tuple is not None and chain_tuple[0].type == "identifier":
+            return ".".join([node_text(chain_tuple[0]), *chain_tuple[1]])
     return None
 
 
@@ -1456,7 +1711,7 @@ def extract_value_aliases(
     value_dict = usage_node_types.get("typed_alias_value_dict", {})
     if not value_dict or not usage_node_types.get("typed_alias_new_dict"):
         return []
-    scope_types = scope_type_set(usage_node_types)
+    scope_type_set = _scope_type_set(usage_node_types)
     pattern_type_set = usage_node_types.get("pattern_types", set())
     pattern_field_dict = usage_node_types.get("pattern_field_dict", {})
     setting = _UsageSetting(
@@ -1465,10 +1720,10 @@ def extract_value_aliases(
     )
 
     alias_list: list[TypedAlias] = []
-    stack = [root_node]
-    while stack:
-        node = stack.pop()
-        stack.extend(node.children)
+    node_stack = [root_node]
+    while node_stack:
+        node = node_stack.pop()
+        node_stack.extend(node.children)
         field_tuple = value_dict.get(node.type)
         if field_tuple is None:
             continue
@@ -1476,14 +1731,9 @@ def extract_value_aliases(
         target_node = node.child_by_field_name(name_field)
         if target_node is None:
             continue
-        if value_field is None:
-            value_node = None
-        elif value_field:
-            value_node = node.child_by_field_name(value_field)
-        else:
-            value_node = next(iter(node.named_children), None)
+        value_node = _value_node(node, value_field)
         scope_node = _scope_node(
-            node, scope_types, root_node, usage_node_types.get("opaque_types", set()),
+            node, scope_type_set, root_node, usage_node_types.get("opaque_types", set()),
         )
         if scope_node is None or scope_node is root_node:
             continue
@@ -1492,15 +1742,8 @@ def extract_value_aliases(
         if name_node.type != "identifier" and name_node.named_child_count == 1:
             name_node = name_node.named_children[0]
         if name_node.type == "identifier":
-            name_list = [name_node.text.decode("utf-8")]
-            type_name = (
-                _new_type_name(value_node, usage_node_types) if value_node is not None else None
-            )
-            if type_name is not None and (
-                not is_type_name(type_name)
-                or _is_local_name(value_node, symbol_part_list(type_name)[0], setting)
-            ):
-                type_name = None
+            name_list = [node_text(name_node)]
+            type_name = _value_type_name(value_node, usage_node_types, is_type_name, setting)
         else:
             # A pattern of several variables gives none of them an object of its own
             name_list = pattern_name_list(target_node, pattern_type_set, pattern_field_dict)
@@ -1510,10 +1753,57 @@ def extract_value_aliases(
             for name in name_list
         )
 
-    typed_key_set = {
+    type_key_set = {
         (alias.name, alias.end_line) for alias in alias_list if alias.type_name is not None
     }
-    return [alias for alias in alias_list if (alias.name, alias.end_line) in typed_key_set]
+    return [alias for alias in alias_list if (alias.name, alias.end_line) in type_key_set]
+
+
+def _value_node(node: Node, value_field: str | None) -> Node | None:
+    """Return the value node of a node that gives a value to a variable.
+
+    Args:
+        node: A node whose type is a key of typed_alias_value_dict.
+        value_field: The field of the value; "" for the first named child, None for a
+            node whose value is not read.
+
+    Returns:
+        The value node, or None.
+    """
+    if value_field is None:
+        return None
+    if value_field:
+        return node.child_by_field_name(value_field)
+    return next(iter(node.named_children), None)
+
+
+def _value_type_name(
+    value_node: Node | None,
+    usage_node_types: dict,
+    is_type_name: Callable[[str], bool],
+    setting: _UsageSetting,
+) -> str | None:
+    """Return the tracked type a value makes an object of.
+
+    Args:
+        value_node: The value node; None for none.
+        usage_node_types: The EXT_TO_USAGE_NODE_TYPE_DICT entry of the language.
+        is_type_name: Returns whether a name written as the type names a tracked type.
+        setting: The usage settings of the file (its import_line_dict).
+
+    Returns:
+        The name _new_type_name gives; None when there is none, it names no tracked
+        type, or its first part is a name a scope around the value binds.
+    """
+    if value_node is None:
+        return None
+    type_name = _new_type_name(value_node, usage_node_types)
+    if type_name is not None and (
+        not is_type_name(type_name)
+        or _is_local_name(value_node, symbol_part_list(type_name)[0], setting)
+    ):
+        return None
+    return type_name
 
 
 def typed_alias_dict(alias_list: list[TypedAlias]) -> dict[str, list[TypedAlias]]:
@@ -1547,35 +1837,20 @@ def typed_alias(
     return min(match_list, key=lambda alias: alias.end_line - alias.start_line)
 
 
-def typed_alias_type(
-    alias_dict: dict[str, list[TypedAlias]], name: str, line: int,
-) -> str | None:
-    """Return the type a variable name stands for on a line.
-
-    Args:
-        alias_dict: The aliases of a file by their variable names (typed_alias_dict).
-        name: A variable name.
-        line: Line the name is written on (1-based).
-
-    Returns:
-        The type of typed_alias(); None when there is no such alias or it has no type.
-    """
-    alias = typed_alias(alias_dict, name, line)
-    return alias.type_name if alias is not None else None
-
-
 def _type_name(type_node: Node) -> str | None:
     """Return the name of the type a declaration is written with.
 
     Examples:
         User               -> "User"
         struct node        -> "node"
-        geo::Shape         -> "Shape"
+        geo::Shape         -> "geo::Shape"
+        geo::Box<int>      -> "Box"
         Box<int>           -> "Box"
         core.Engine        -> "core.Engine" (Python)
         Circle.Builder     -> "Circle.Builder" (Java)
         Shape.Empty        -> "Shape.Empty" (Kotlin)
         &mut Circle        -> "Circle" (Rust)
+        &shape::Circle     -> "shape::Circle" (Rust)
 
     Args:
         type_node: The type node of a declaration.
@@ -1586,14 +1861,20 @@ def _type_name(type_node: Node) -> str | None:
     current: Node | None = type_node
     while current is not None:
         if current.type in ("type_identifier", "identifier"):
-            return current.text.decode("utf-8")
+            return node_text(current)
         if current.type in _DOTTED_TYPE_NODE_TYPE_SET:
             # A type written with the module or type it is a member of
-            text = current.text.decode("utf-8")
-            return text if _DOTTED_NAME_RE.fullmatch(text) else None
+            text = node_text(current)
+            if _DOTTED_NAME_RE.fullmatch(text) or _SCOPED_NAME_RE.fullmatch(text):
+                return text
+            return None
+        if current.type in _SCOPED_TYPE_NODE_TYPE_SET:
+            text = node_text(current)
+            if _SCOPED_NAME_RE.fullmatch(text):
+                return text
         if current.type == "user_type":
             # Kotlin: a type written with the type it is a member of (Shape.Empty)
-            text = current.text.decode("utf-8")
+            text = node_text(current)
             if _DOTTED_NAME_RE.fullmatch(text):
                 return text
         name_node = current.child_by_field_name("name")
@@ -1630,7 +1911,7 @@ def _field_type_and_var(
     )
     if type_node is None or name_node is None or name_node.type != "identifier":
         return None, []
-    return _type_name(type_node), [name_node.text.decode("utf-8")]
+    return _type_name(type_node), [node_text(name_node)]
 
 
 def _extract_type_and_var(node: Node) -> tuple[str | None, list[str]]:
@@ -1647,7 +1928,8 @@ def _extract_type_and_var(node: Node) -> tuple[str | None, list[str]]:
         node: An AST node representing a typed variable declaration.
 
     Returns:
-        A (type_name, [list of variable names]) tuple. Returns (None, []) if not found.
+        A (type_name, [list of variable names]) tuple; the type name is None when no
+        type is found and the list is empty when no variable name is found.
     """
     # Kotlin: val name: Type holds its name and type in a variable_declaration
     holder_node = node
@@ -1663,19 +1945,19 @@ def _extract_type_and_var(node: Node) -> tuple[str | None, list[str]]:
         if child == type_node or child.type in ("type_identifier", "user_type"):
             type_name = _type_name(child) or type_name
         elif child.type == "identifier":
-            var_name_list.append(child.text.decode("utf-8"))
+            var_name_list.append(node_text(child))
         elif child.type in _DECLARATOR_TYPE_SET:
             name_node = declarator_name_node(child)
             if name_node is not None and name_node.type == "variable_declarator":
                 name_node = name_node.child_by_field_name("name")
             if name_node is not None and name_node.type == "identifier":
-                var_name_list.append(name_node.text.decode("utf-8"))
+                var_name_list.append(node_text(name_node))
         elif (
             child.type == _CALL_DECLARATOR_TYPE and node.parent is not None
             and node.parent.type in _STATEMENT_PARENT_TYPE_SET
         ):
             name_node = child.child_by_field_name("declarator")
             if name_node is not None and name_node.type == "identifier":
-                var_name_list.append(name_node.text.decode("utf-8"))
+                var_name_list.append(node_text(name_node))
 
     return type_name, var_name_list

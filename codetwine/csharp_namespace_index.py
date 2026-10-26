@@ -29,7 +29,11 @@ _ANY_TYPE_SET = {"object", "dynamic"}
 
 # Type name of a number -> the wider number types a value of it is passed as
 _WIDER_TYPE_DICT = {
-    "char": {"int", "uint", "long", "ulong", "float", "double", "decimal"},
+    "sbyte": {"short", "int", "long", "float", "double", "decimal"},
+    "byte": {"short", "ushort", "int", "uint", "long", "ulong", "float", "double", "decimal"},
+    "short": {"int", "long", "float", "double", "decimal"},
+    "ushort": {"int", "uint", "long", "ulong", "float", "double", "decimal"},
+    "char": {"ushort", "int", "uint", "long", "ulong", "float", "double", "decimal"},
     "int": {"long", "float", "double", "decimal"},
     "uint": {"long", "ulong", "float", "double", "decimal"},
     "long": {"float", "double", "decimal"},
@@ -44,11 +48,11 @@ _PROJECT_FILE_EXT = ".csproj"
 _ATTRIBUTE_SUFFIX = "Attribute"
 
 # Cache of namespace indexes: project_dir -> (project file set the index was built from, index)
-namespace_index_cache: dict[str, tuple[set[str], "CsharpNamespaceIndex"]] = {}
+namespace_index_cache_dict: dict[str, tuple[set[str], "CsharpNamespaceIndex"]] = {}
 
 # Cache of the resolved references of C# files: absolute path -> (project file set they
 # were resolved with, targets)
-csharp_target_cache: dict[str, tuple[set[str], list["CsharpReferenceTarget"]]] = {}
+csharp_target_cache_dict: dict[str, tuple[set[str], list["CsharpReferenceTarget"]]] = {}
 
 
 @dataclass
@@ -106,6 +110,9 @@ class _Match:
     part_count: int                 # Number of leading parts of the reference the name takes
     member_name: str = ""           # Name of the member; "" when the name is the type
     is_type_first: bool = False     # Whether the first part of the reference names the type
+    # Declarations of the type a call of the member chooses the declaration of the
+    # method among (_select_entry_list without the referring file first)
+    overload_entry_list: list[_TypeEntry] = field(default_factory=list)
 
 
 def _project_dir_dict(project_dir: str, file_rel_list: list[str]) -> dict[str, str]:
@@ -164,8 +171,9 @@ def _add_declaration(
         namespace_index.type_dict.setdefault(
             (csharp_type.namespace, csharp_type.path), [],
         ).append(entry)
-        for name in csharp_type.extension_dict:
-            namespace_index.extension_dict.setdefault(name, []).append(entry)
+        for name, member_list in csharp_type.member_list_dict.items():
+            if any(member.is_extension for member in member_list):
+                namespace_index.extension_dict.setdefault(name, []).append(entry)
 
 
 def _build_namespace_index(project_dir: str, project_file_set: set[str]) -> CsharpNamespaceIndex:
@@ -200,7 +208,7 @@ def _build_namespace_index(project_dir: str, project_file_set: set[str]) -> Csha
 def _get_namespace_index(project_dir: str, project_file_set: set[str]) -> CsharpNamespaceIndex:
     """Return the namespace index of the project, building it on the first call.
 
-    The index is kept in namespace_index_cache until the project file set changes or
+    The index is kept in namespace_index_cache_dict until the project file set changes or
     the cache is cleared.
 
     Args:
@@ -210,12 +218,12 @@ def _get_namespace_index(project_dir: str, project_file_set: set[str]) -> Csharp
     Returns:
         The CsharpNamespaceIndex of the C# files in project_file_set.
     """
-    namespace_index = project_cache_value(namespace_index_cache, project_dir, project_file_set)
+    namespace_index = project_cache_value(namespace_index_cache_dict, project_dir, project_file_set)
     if namespace_index is not None:
         return namespace_index
 
     namespace_index = _build_namespace_index(project_dir, project_file_set)
-    namespace_index_cache[project_dir] = (project_file_set, namespace_index)
+    namespace_index_cache_dict[project_dir] = (project_file_set, namespace_index)
     return namespace_index
 
 
@@ -262,6 +270,15 @@ def _find_type(
     return None
 
 
+def _match_member_list(match: _Match) -> list[CsharpMember]:
+    """Return the declarations of the member a match names in each declaration of its type."""
+    return [
+        member
+        for entry in match.entry_list
+        for member in entry.csharp_type.member_list_dict.get(match.member_name, [])
+    ]
+
+
 def _is_constructor_match(match: _Match) -> bool:
     """Return whether a match is the constructors of a type and nothing else.
 
@@ -269,11 +286,7 @@ def _is_constructor_match(match: _Match) -> bool:
         True when the member the match names is declared, and every declaration of it
         is a constructor.
     """
-    member_list = [
-        member
-        for entry in match.entry_list
-        for member in entry.csharp_type.member_list_dict.get(match.member_name, [])
-    ]
+    member_list = _match_member_list(match)
     return bool(member_list) and all(member.is_constructor for member in member_list)
 
 
@@ -289,11 +302,7 @@ def _is_static_name(match: _Match) -> bool:
         return False
     if not match.member_name:
         return True
-    return any(
-        member.is_static
-        for entry in match.entry_list
-        for member in entry.csharp_type.member_list_dict.get(match.member_name, [])
-    )
+    return any(member.is_static for member in _match_member_list(match))
 
 
 def _is_type_fit(
@@ -310,6 +319,9 @@ def _is_type_fit(
         argument_type_tuple: Type name of each argument of the call, None where unknown.
         is_extension: Whether the call is written on a value, which is the argument of
             the first parameter.
+
+    Returns:
+        True when every argument fits its parameter.
     """
     offset = 1 if is_extension else 0
     for index, argument_type in enumerate(argument_type_tuple):
@@ -333,6 +345,10 @@ def _exact_type_count(
         argument_type_tuple: Type name of each argument of the call, None where unknown.
         is_extension: Whether the call is written on a value, which is the argument of
             the first parameter.
+
+    Returns:
+        The number of arguments of a known type equal to the type name of their
+        parameter.
     """
     offset = 1 if is_extension else 0
     return sum(
@@ -340,6 +356,68 @@ def _exact_type_count(
         if argument_type is not None and index + offset < len(member.parameter_type_tuple)
         and member.parameter_type_tuple[index + offset] == argument_type
     )
+
+
+def _is_count_fit(member: CsharpMember, full_count: int) -> bool:
+    """Return whether a method declaration takes a number of arguments.
+
+    Args:
+        member: The declaration.
+        full_count: Number of arguments, the value an extension method is called on
+            included.
+
+    Returns:
+        True when the declaration is a method whose argument_range holds full_count.
+    """
+    if member.argument_range is None:
+        return False
+    least, most = member.argument_range
+    return least <= full_count and (most is None or full_count <= most)
+
+
+def _select_member(
+    member_list: list[CsharpMember],
+    argument_count: int,
+    is_extension: bool = False,
+    argument_type_tuple: tuple[str | None, ...] = (),
+) -> CsharpMember | None:
+    """Choose the declaration a call takes among the declarations of a method name.
+
+    Args:
+        member_list: The declarations of the name.
+        argument_count: Number of arguments of the call.
+        is_extension: Whether the call is written on a value, which is the argument of
+            the first parameter.
+        argument_type_tuple: Type name of each argument of the call, None where the
+            file does not tell it.
+
+    Returns:
+        The one declaration that takes that number of arguments, or the one among
+        several of them whose parameter types the arguments fit (_is_type_fit), an
+        exact type before a wider one. None when the call fits none or several.
+    """
+    full_count = argument_count + 1 if is_extension else argument_count
+    fit_list = [
+        member for member in member_list
+        if (member.is_extension or not is_extension) and _is_count_fit(member, full_count)
+    ]
+    if len(fit_list) > 1:
+        type_fit_list = [
+            member for member in fit_list
+            if _is_type_fit(member, argument_type_tuple, is_extension)
+        ]
+        # Of several that fit, the ones with the most parameters of exactly the
+        # type of their argument (Show(int) before Show(double) for Show(1))
+        exact_count_list = [
+            _exact_type_count(member, argument_type_tuple, is_extension)
+            for member in type_fit_list
+        ]
+        type_fit_list = [
+            member for member, exact_count in zip(type_fit_list, exact_count_list)
+            if exact_count == max(exact_count_list)
+        ]
+        fit_list = type_fit_list if len(type_fit_list) == 1 else fit_list
+    return fit_list[0] if len(fit_list) == 1 else None
 
 
 def _declaration_line(
@@ -369,44 +447,18 @@ def _declaration_line(
             file does not tell it.
 
     Returns:
-        The line of the one method declaration of the name that takes that number of
-        arguments, or of the one among several of them whose parameter types the
-        arguments fit (_is_type_fit), an exact type before a wider one; the line of the
-        first declaration of the name
-        when the member is not called or the call fits none or several; the line of
-        the type when it declares no member of the name.
+        The line of the declaration of the name the call takes (_select_member); the
+        line of the first declaration of the name when the member is not called or the
+        call fits none or several; the line of the type when it declares no member of
+        the name.
     """
     member_list = csharp_type.member_list_dict.get(member_name, [])
     if not member_list:
         return csharp_type.start_line
     if argument_count is not None:
-        # Number of arguments with the value an extension method is called on
-        full_count = argument_count + 1 if is_extension else argument_count
-        fit_list = [
-            member for member in member_list
-            if member.argument_range is not None
-            and (member.is_extension or not is_extension)
-            and member.argument_range[0] <= full_count
-            and (member.argument_range[1] is None or full_count <= member.argument_range[1])
-        ]
-        if len(fit_list) > 1:
-            type_fit_list = [
-                member for member in fit_list
-                if _is_type_fit(member, argument_type_tuple, is_extension)
-            ]
-            # Of several that fit, the ones with the most parameters of exactly the
-            # type of their argument (Show(int) before Show(double) for Show(1))
-            exact_count_list = [
-                _exact_type_count(member, argument_type_tuple, is_extension)
-                for member in type_fit_list
-            ]
-            type_fit_list = [
-                member for member, exact_count in zip(type_fit_list, exact_count_list)
-                if exact_count == max(exact_count_list)
-            ]
-            fit_list = type_fit_list if len(type_fit_list) == 1 else fit_list
-        if len(fit_list) == 1:
-            return fit_list[0].start_line
+        member = _select_member(member_list, argument_count, is_extension, argument_type_tuple)
+        if member is not None:
+            return member.start_line
     return member_list[0].start_line
 
 
@@ -457,13 +509,13 @@ class _ReferenceResolver:
         if scope_index in self._step_list_dict:
             return self._step_list_dict[scope_index]
 
-        innermost = self.declaration.scope_list[scope_index]
+        innermost_scope = self.declaration.scope_list[scope_index]
         scope_list = sorted(
             (
                 scope for scope in self.declaration.scope_list
-                if scope.start_line <= innermost.start_line
-                and innermost.end_line <= scope.end_line
-                and scope.depth <= innermost.depth
+                if scope.start_line <= innermost_scope.start_line
+                and innermost_scope.end_line <= scope.end_line
+                and scope.depth <= innermost_scope.depth
             ),
             key=lambda scope: scope.depth,
             reverse=True,
@@ -603,10 +655,12 @@ class _ReferenceResolver:
             (0,) * max(prefix_count - 1, 0) + (prefix_arity,) * min(prefix_count, 1)
             + reference.arity_tuple[skip_count:]
         )
-        type_match = _find_type(self.namespace_index, namespace, part_tuple, is_namespace_part)
-        if type_match is None:
+        type_match_tuple = _find_type(
+            self.namespace_index, namespace, part_tuple, is_namespace_part,
+        )
+        if type_match_tuple is None:
             return None
-        type_namespace, path, type_start, type_end = type_match
+        type_namespace, path, type_start, type_end = type_match_tuple
 
         is_member = type_end < len(part_tuple)
         name_end = type_end + 1 if is_member else type_end
@@ -646,6 +700,7 @@ class _ReferenceResolver:
             part_count=write_end,
             member_name=part_tuple[type_end] if is_member else "",
             is_type_first=write_start == 0 and type_write_end >= 1,
+            overload_entry_list=self._select_entry_list(entry_list, is_own_first=False),
         )
 
     def _match_outer_type(
@@ -722,10 +777,17 @@ class _ReferenceResolver:
         if match_list:
             match = match_list[0]
             entry_dict = {
-                id(entry): entry for other in match_list for entry in other.entry_list
+                id(entry): entry for other_match in match_list for entry in other_match.entry_list
             }
             match.entry_list = self._select_entry_list(
                 list(entry_dict.values()), is_own_first=True,
+            )
+            overload_entry_dict = {
+                id(entry): entry
+                for other_match in match_list for entry in other_match.overload_entry_list
+            }
+            match.overload_entry_list = self._select_entry_list(
+                list(overload_entry_dict.values()), is_own_first=False,
             )
             return match
 
@@ -775,8 +837,11 @@ class _ReferenceResolver:
     def _match_written(
         self, reference: CsharpReference, line: int, is_any_arity: bool,
     ) -> _Match | None:
-        """Look up a chain with the names it writes: from the global namespace when it
-        starts with "global::" (_match_name), else from where it is written (_match_chain)."""
+        """Look up a chain with the names it writes.
+
+        A chain that starts with "global::" is looked up from the global namespace
+        (_match_name); any other chain from where it is written (_match_chain).
+        """
         if reference.is_absolute:
             return self._match_name(reference, "", is_any_arity=is_any_arity)
         return self._match_chain(reference, line, is_any_arity)
@@ -852,8 +917,8 @@ class _ReferenceResolver:
         candidate_list = [
             entry for entry in self.namespace_index.extension_dict.get(name, [])
             if any(
-                least <= argument_count and (most is None or argument_count <= most)
-                for least, most in entry.csharp_type.extension_dict[name]
+                member.is_extension and _is_count_fit(member, argument_count + 1)
+                for member in entry.csharp_type.member_list_dict[name]
             )
         ]
         if not candidate_list:
@@ -875,34 +940,121 @@ class _ReferenceResolver:
                 return self._select_entry_list(entry_list, is_own_first=False)
         return []
 
+    def _overload_entry_line(
+        self, match: _Match, argument_count: int, argument_type_tuple: tuple[str | None, ...],
+    ) -> tuple[_TypeEntry, int] | None:
+        """Choose the declaration a call of a member takes among every declaration of its type.
+
+        The declarations of the method in all the files of a partial type are taken
+        together (_select_member).
+
+        Args:
+            match: The match of the member.
+            argument_count: Number of arguments of the call.
+            argument_type_tuple: Type name of each argument of the call, None where the
+                file does not tell it.
+
+        Returns:
+            (declaration of the type with the declaration the call takes, first line
+            of that declaration). None when the call fits none or several.
+        """
+        entry_member_list = [
+            (entry, member)
+            for entry in match.overload_entry_list
+            for member in entry.csharp_type.member_list_dict.get(match.member_name, [])
+        ]
+        member = _select_member(
+            [member for _, member in entry_member_list], argument_count,
+            argument_type_tuple=argument_type_tuple,
+        )
+        if member is None:
+            return None
+        entry = next(entry for entry, other in entry_member_list if other is member)
+        return entry, member.start_line
+
+    def _is_namespace_name(self, name: str, line: int, follow_count: int) -> bool:
+        """Return whether the first name of a chain names a namespace or an alias.
+
+        Args:
+            name: The name.
+            line: Line the name is written on.
+            follow_count: Number of parts of the chain after the name.
+
+        Returns:
+            True for the alias of a using alias directive; and, when two or more parts
+            follow the name (a type and its member: System.IO.File.Exists()), for a
+            namespace of the project seen from the namespaces around the line and the
+            first name of what a using directive written for them names (System of
+            using System.IO;).
+        """
+        for step in self._step_list(self._scope_index(line)):
+            if any(using.alias == name for using in step.using_list):
+                return True
+            if follow_count < 2:
+                continue
+            if join_name(step.namespace, name) in self.namespace_index.namespace_set:
+                return True
+            if any(using.part_tuple[0] == name for using in step.using_list):
+                return True
+        return False
+
+    def _is_value_call(self, reference: CsharpReference, part_count: int) -> bool:
+        """Return whether the last part of a call is a method called on a value.
+
+        Args:
+            reference: The reference.
+            part_count: Number of leading parts of the reference a type or member of
+                the project takes; 0 for none.
+
+        Returns:
+            True for a call whose last part the project does not take, written after
+            "this.", after another expression, or after a member of the project; and
+            for a call of two or more parts whose first part the project does not take,
+            except one written after "global::" or after a name _is_namespace_name
+            gives (System.IO.File.Exists()).
+        """
+        if not reference.is_call or part_count >= len(reference.part_tuple):
+            return False
+        if reference.kind in (THIS_REFERENCE, MEMBER_REFERENCE) or part_count >= 1:
+            return True
+        if len(reference.part_tuple) < 2:
+            return False
+        return not reference.is_absolute and not self._is_namespace_name(
+            reference.part_tuple[0], reference.line, len(reference.part_tuple) - 1,
+        )
+
     def resolve(self, reference: CsharpReference) -> list[CsharpReferenceTarget]:
         """Resolve one reference to the definitions it refers to.
 
         The leading parts are resolved to a type or a member of a type
-        (_match_reference). The last part of a call is resolved to an extension method
-        (_extension_entry_list) when the leading parts do not take it and the call is
-        written on a value: a chain of two or more parts, a chain after "this.", or a
-        member of another expression.
+        (_match_reference). A call of a member is resolved to the declaration of the
+        method that the call takes among the declarations in all the files of the type
+        (_overload_entry_line); when it takes none or several, to each file the match
+        gives. The last part of a call is resolved to an extension method
+        (_extension_entry_list) when the call is written on a value (_is_value_call).
 
         Args:
             reference: A reference of the file.
 
         Returns:
-            One target per file a definition is in, with the line of the declaration
-            in that file (_declaration_line). Empty when the reference leads to no
-            definition of the project.
+            For a call of a member that one declaration of the type takes, one target
+            with the file and line of that declaration (_overload_entry_line); else
+            one target per file a definition is in, with the line of the declaration in
+            that file (_declaration_line). Then one target per extension method the
+            call is linked to. Empty when the reference leads to no definition of the
+            project.
         """
         line = reference.line
         match = None
         if reference.kind != MEMBER_REFERENCE:
-            match_key = (
+            match_key_tuple = (
                 reference.kind, reference.part_tuple, reference.arity_tuple,
                 reference.is_absolute, self._scope_index(line),
                 tuple(csharp_type.start_line for csharp_type in self._outer_type_list(line)),
             )
-            if match_key not in self._match_dict:
-                self._match_dict[match_key] = self._match_reference(reference, line)
-            match = self._match_dict[match_key]
+            if match_key_tuple not in self._match_dict:
+                self._match_dict[match_key_tuple] = self._match_reference(reference, line)
+            match = self._match_dict[match_key_tuple]
 
         target_list: list[CsharpReferenceTarget] = []
         part_count = 0
@@ -910,22 +1062,29 @@ class _ReferenceResolver:
             part_count = match.part_count
             is_member_call = reference.is_call and part_count == len(reference.part_tuple)
             argument_count = reference.argument_count if is_member_call else None
-            target_list.extend(
-                CsharpReferenceTarget(
-                    match.name, line, entry.file_rel, match.definition_name,
-                    _declaration_line(
-                        entry.csharp_type, match.member_name, argument_count,
-                        argument_type_tuple=reference.argument_type_tuple,
-                    ),
+            entry_line_tuple = None
+            if argument_count is not None and match.member_name:
+                entry_line_tuple = self._overload_entry_line(
+                    match, argument_count, reference.argument_type_tuple,
                 )
-                for entry in match.entry_list
-            )
+            if entry_line_tuple is not None:
+                target_list.append(CsharpReferenceTarget(
+                    match.name, line, entry_line_tuple[0].file_rel, match.definition_name,
+                    entry_line_tuple[1],
+                ))
+            else:
+                target_list.extend(
+                    CsharpReferenceTarget(
+                        match.name, line, entry.file_rel, match.definition_name,
+                        _declaration_line(
+                            entry.csharp_type, match.member_name, argument_count,
+                            argument_type_tuple=reference.argument_type_tuple,
+                        ),
+                    )
+                    for entry in match.entry_list
+                )
 
-        is_value_call = reference.is_call and (
-            len(reference.part_tuple) >= 2
-            or reference.kind in (THIS_REFERENCE, MEMBER_REFERENCE)
-        )
-        if is_value_call and part_count < len(reference.part_tuple):
+        if self._is_value_call(reference, part_count):
             name = reference.part_tuple[-1]
             target_list.extend(
                 CsharpReferenceTarget(
@@ -959,10 +1118,11 @@ def csharp_reference_target_list(
     the extension methods of the types the line sees.
     A type declared in several files leads to the file itself when it declares the
     type, else to the files under the .csproj directory of the file, else to all of
-    them; with a member named, only the files that define the member count.
+    them; with a member named, only the files that define the member count, and a call
+    leads to the one file whose declaration of the method the call takes when one does.
 
     Processing flow:
-    1. Return the targets of csharp_target_cache when they were resolved with the same
+    1. Return the targets of csharp_target_cache_dict when they were resolved with the same
        project file set
     2. Read the references of the file
     3. Resolve each reference
@@ -977,13 +1137,13 @@ def csharp_reference_target_list(
         duplicates. A target whose file_rel is the file itself is a reference to a
         definition of the file. definition_line is the first line of the declaration
         of the type or member; of several declarations of a called method, the one
-        that takes the number of arguments of the call (_declaration_line). The
-        targets are kept in csharp_target_cache until the project file set changes or
-        the cache is cleared.
+        the call takes by the number and types of its arguments (_select_member),
+        else the first. The targets are kept in csharp_target_cache_dict until the
+        project file set changes or the cache is cleared.
     """
     # == Step 1: Cache ========================================================
     cache_key = os.path.abspath(os.path.join(project_dir, file_rel))
-    target_list = project_cache_value(csharp_target_cache, cache_key, project_file_set)
+    target_list = project_cache_value(csharp_target_cache_dict, cache_key, project_file_set)
     if target_list is not None:
         return target_list
 
@@ -1008,5 +1168,5 @@ def csharp_reference_target_list(
     target_list = sorted(
         target_dict.values(), key=lambda target: (target.line, target.name, target.file_rel),
     )
-    csharp_target_cache[cache_key] = (project_file_set, target_list)
+    csharp_target_cache_dict[cache_key] = (project_file_set, target_list)
     return target_list

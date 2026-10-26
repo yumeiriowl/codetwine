@@ -3,11 +3,10 @@ import string
 from bisect import bisect_left, bisect_right
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from codetwine.config.settings import TAB_SIZE
 
 # Column (0-based) after the last column of a line of CSD commands
 TEXT_END_COLUMN = 72
-# Width of a tab
-_TAB_SIZE = 8
 # Start of a comment line
 COMMENT_PREFIX = "*"
 # Last character of a line whose open value goes on with the next line
@@ -71,8 +70,8 @@ _RESOURCE_NAME_RE = re.compile(r"[^\s()']+")
 # == Places in the text of a command, as _CommandText follows it ==============
 _OUTSIDE = "outside"            # Outside the values
 _VALUE_START = "value_start"    # After the "(" of a value, before its first character
-_UNQUOTED = "unquoted"          # In a value that does not start with a quote
-_QUOTED = "quoted"              # In the quotes of a value
+_IN_PLAIN_VALUE = "unquoted"    # In a value that does not start with a quote
+_IN_QUOTE = "quoted"            # In the quotes of a value
 _QUOTE_END = "quote_end"        # After a quote in the quotes of a value
 _AFTER_QUOTE = "after_quote"    # After the closing quote of a value, before its ")"
 
@@ -170,8 +169,8 @@ class _CommandText:
         parentheses.
         """
         if self.place == _QUOTE_END:
-            self.place = _QUOTED if char == "'" else _AFTER_QUOTE
-            if self.place == _QUOTED:
+            self.place = _IN_QUOTE if char == "'" else _AFTER_QUOTE
+            if self.place == _IN_QUOTE:
                 return
         if self.place == _OUTSIDE:
             if char == "(" and self.is_after_keyword:
@@ -183,17 +182,17 @@ class _CommandText:
             if char == " ":
                 return
             if char == "'":
-                self.place = _QUOTED
+                self.place = _IN_QUOTE
                 return
-            self.place, self.depth = _UNQUOTED, 1
-        if self.place == _UNQUOTED:
+            self.place, self.depth = _IN_PLAIN_VALUE, 1
+        if self.place == _IN_PLAIN_VALUE:
             if char == "(":
                 self.depth += 1
             elif char == ")":
                 self.depth -= 1
                 if self.depth == 0:
                     self.place, self.is_after_keyword = _OUTSIDE, False
-        elif self.place == _QUOTED:
+        elif self.place == _IN_QUOTE:
             if char == "'":
                 self.place = _QUOTE_END
         elif char == ")":
@@ -217,6 +216,26 @@ def _verb(word: str) -> str:
         return ""
     verb_list = [verb for verb in _VERB_TUPLE if verb.startswith(word)]
     return verb_list[0] if len(verb_list) == 1 else ""
+
+
+def non_blank_index(text: str, index: int) -> int:
+    """Return the index of the first character at or after an index that is not a blank.
+
+    Examples:
+        ("//S1   EXEC", 4) -> 7
+        ("AB  ", 2)        -> 4
+
+    Args:
+        text: The text to look in.
+        index: Index (0-based) to start at.
+
+    Returns:
+        The index of that character; len(text) when only blanks follow, and index
+        itself when it is past the end of the text.
+    """
+    while index < len(text) and text[index] == " ":
+        index += 1
+    return index
 
 
 class _ValueTable:
@@ -272,9 +291,7 @@ class _ValueTable:
         """
         text = self.text
         start = open_index + 1
-        index = start
-        while index < len(text) and text[index] == " ":
-            index += 1
+        index = non_blank_index(text, start)
         value_start = index if index < len(text) else open_index
         if index < len(text) and text[index] == "'":
             quote_end = self.quote_end_list[bisect_left(self.quote_list, index) + 1]
@@ -313,9 +330,7 @@ def _keyword_list(text: str, line_of: Callable[[int], int]) -> list[CsdKeyword]:
             continue
         keyword = CsdKeyword(match.group(0).upper(), None)
         index = match.end()
-        open_index = index
-        while open_index < len(text) and text[open_index] == " ":
-            open_index += 1
+        open_index = non_blank_index(text, index)
         if open_index < len(text) and text[open_index] == "(":
             keyword.value, value_start, index = value_table.read(open_index)
             keyword.line = line_of(value_start)
@@ -332,7 +347,7 @@ def _command_start(text: str) -> tuple[str, int]:
 
 def is_command_line(text: str) -> bool:
     """Return whether a line of DFHCSDUP input starts a command (columns 1 to 72 are read)."""
-    return bool(_command_start(text.expandtabs(_TAB_SIZE)[:TEXT_END_COLUMN])[0])
+    return bool(_command_start(text.expandtabs(TAB_SIZE)[:TEXT_END_COLUMN])[0])
 
 
 def csd_command_list(line_list: list[tuple[int, str]]) -> list[CsdCommand]:
@@ -359,7 +374,7 @@ def csd_command_list(line_list: list[tuple[int, str]]) -> list[CsdCommand]:
     command_text: _CommandText | None = None
     is_value_continue = False
     for line, raw_line in line_list:
-        text = raw_line.expandtabs(_TAB_SIZE)[:TEXT_END_COLUMN].rstrip()
+        text = raw_line.expandtabs(TAB_SIZE)[:TEXT_END_COLUMN].rstrip()
         if not text.strip() or text.startswith(COMMENT_PREFIX):
             continue
         if is_value_continue and command_text is not None:

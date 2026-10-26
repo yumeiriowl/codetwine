@@ -3,7 +3,9 @@ import re
 import logging
 from codetwine.parsers.ts_parser import parse_file
 from codetwine.extractors.jcl_source import (
+    COMMENT_PREFIX as JCL_COMMENT_PREFIX,
     INCLUDE_KIND,
+    JES_PREFIX,
     PROC_KIND,
     TEXT_END_COLUMN as JCL_TEXT_END_COLUMN,
     JclSource,
@@ -16,11 +18,12 @@ from codetwine.parsers.csd_command import (
 from codetwine.config.settings import (
     CSD_EXT_SET,
     JCL_EXT_SET,
+    TAB_SIZE,
     add_copy_target_ext,
     language_ext,
     set_copy_target_ext,
 )
-from codetwine.utils.file_utils import add_file_name, head_codec
+from codetwine.utils.file_utils import add_file_name, directory_distance, head_codec, lower_ext
 
 logger = logging.getLogger(__name__)
 
@@ -39,10 +42,8 @@ _BYTE_CODEC = "latin-1"
 _LINE_HEAD_SIZE = 256
 # Characters that end a line
 _LINE_END_TUPLE = ("\n", "\r")
-# Width of a tab
-_TAB_SIZE = 8
 # Start of a JCL comment statement and of a JES statement
-_SKIP_LINE_PREFIX_TUPLE = ("//*", "/*")
+_SKIP_LINE_PREFIX_TUPLE = (JCL_COMMENT_PREFIX, JES_PREFIX)
 # Operations of the JCL statements other than comment statements, JES2 job group
 # statements among them
 _OPERATION_PATTERN = (
@@ -50,13 +51,14 @@ _OPERATION_PATTERN = (
     r"|XMIT|COMMAND|JOBGROUP|ENDGROUP|GJOB|SJOB|JOBSET|ENDSET|SCHEDULE|CONCURRENT"
     r"|BEFORE|AFTER|NOTIFY)"
 )
+# An upper-case name of 1 to 8 characters
+_STRICT_NAME_PATTERN = r"[A-Z@#$][A-Z0-9@#$]{0,7}"
 # A JOB or JOBGROUP statement and a JCL statement in upper case with a name of 1 to 8
 # characters (STEP.DD for an override) or, for a JCL statement, none, as a file without
 # a JCL extension is read
-_STRICT_JOB_LINE_RE = re.compile(r"//[A-Z@#$][A-Z0-9@#$]{0,7} +JOB(GROUP)?( |$)")
+_STRICT_JOB_LINE_RE = re.compile(rf"//{_STRICT_NAME_PATTERN} +JOB(GROUP)?( |$)")
 _STRICT_JCL_LINE_RE = re.compile(
-    r"//([A-Z@#$][A-Z0-9@#$]{0,7}(\.[A-Z@#$][A-Z0-9@#$]{0,7})?)? +"
-    rf"{_OPERATION_PATTERN}( |$)",
+    rf"//({_STRICT_NAME_PATTERN}(\.{_STRICT_NAME_PATTERN})?)? +{_OPERATION_PATTERN}( |$)",
 )
 # A JOB or JOBGROUP statement and a JCL statement with any name field in any case
 _JOB_LINE_RE = re.compile(r"//\S* +JOB(GROUP)?( |$)", re.IGNORECASE)
@@ -90,7 +92,7 @@ def _first_statement_line(
             codec = head_codec(file.read(_HEAD_SIZE)) or _BYTE_CODEC
         with open(file_abs, encoding=codec, errors="replace", newline="") as file:
             while line_head := file.readline(_LINE_HEAD_SIZE):
-                line = line_head.expandtabs(_TAB_SIZE)[:end_column].rstrip()
+                line = line_head.expandtabs(TAB_SIZE)[:end_column].rstrip()
                 if line and not line.startswith(skip_prefix_tuple):
                     return line
                 rest = line_head
@@ -119,7 +121,8 @@ def _is_jcl_file(file_abs: str, is_strict: bool) -> bool:
     Args:
         file_abs: Absolute path of the file.
         is_strict: Whether the statement must be in upper case with a name of 1 to 8
-            characters or none; otherwise any name field in any case.
+            characters, two such names joined by "." (STEP.DD) or none; otherwise any
+            name field in any case.
     """
     line_re = _STRICT_JCL_LINE_RE if is_strict else _JCL_LINE_RE
     return bool(line_re.match(_first_statement_line(file_abs)))
@@ -137,7 +140,7 @@ def _member_candidate_list(
     The files whose name, with or without its extension, is the name are the
     candidates; upper and lower case are not told apart. A job is neither a procedure
     nor a member. The order: for a procedure a file with a procedure extension first,
-    then a file in the directory of the current file, then path order.
+    then the file nearest to the current file (directory_distance), then path order.
 
     Args:
         name: Name of the procedure or member.
@@ -151,7 +154,6 @@ def _member_candidate_list(
     Returns:
         Relative paths of the other files with the name that are no jobs.
     """
-    current_dir = os.path.dirname(current_file_rel)
     return sorted(
         (
             file_rel for file_rel in name_dict.get(name.upper(), [])
@@ -159,8 +161,8 @@ def _member_candidate_list(
         ),
         key=lambda file_rel: (
             kind == PROC_KIND
-            and os.path.splitext(file_rel)[1].lstrip(".").lower() not in _PROC_EXT_SET,
-            os.path.dirname(file_rel) != current_dir,
+            and lower_ext(file_rel) not in _PROC_EXT_SET,
+            *directory_distance(file_rel, current_file_rel),
             file_rel,
         ),
     )
@@ -234,8 +236,9 @@ def register_jcl_target(
     candidates (_member_candidate_list, with the files without a language as candidates
     too) are taken in order; a candidate with a language, or recorded already, ends the
     search, the first candidate whose first statement is a JCL statement in upper case
-    with a name of 1 to 8 characters or none (_is_jcl_file with is_strict) and is no JOB
-    or JOBGROUP statement is recorded, and the other candidates are passed over. The
+    with a name of 1 to 8 characters, two such names joined by "." (STEP.DD) or none
+    (_is_jcl_file with is_strict) and is no JOB or JOBGROUP statement is recorded, and
+    the other candidates are passed over. The
     statements of such a file are followed as well. The files are recorded with
     set_copy_target_ext() and add_copy_target_ext(), replacing the ones recorded before
     for the project.
@@ -289,9 +292,9 @@ def register_jcl_target(
             )
         return is_jcl_text_dict[file_rel]
 
-    queue = [*language_jcl_file_list, *jcl_ext_dict]
-    while queue:
-        file_rel = queue.pop(0)
+    file_queue = [*language_jcl_file_list, *jcl_ext_dict]
+    while file_queue:
+        file_rel = file_queue.pop(0)
         # (kind, upper-case name) -> the candidates of the file's statements, best first
         candidate_list_dict: dict[tuple[str, str], list[str]] = {}
         for kind, name in _member_name_list(file_rel, project_dir):
@@ -306,7 +309,7 @@ def register_jcl_target(
                 if is_jcl_text(candidate):
                     jcl_ext_dict[candidate] = _JCL_EXT
                     add_copy_target_ext(project_dir, candidate, _JCL_EXT)
-                    queue.append(candidate)
+                    file_queue.append(candidate)
                     break
     return jcl_ext_dict
 
@@ -325,7 +328,7 @@ def no_jcl_file_list(project_dir: str, file_rel_list: list[str]) -> list[str]:
     """
     return [
         file_rel for file_rel in file_rel_list
-        if os.path.splitext(file_rel)[1].lstrip(".").lower() in JCL_EXT_SET
+        if lower_ext(file_rel) in JCL_EXT_SET
         and not _is_jcl_file(os.path.join(project_dir, file_rel), is_strict=False)
     ]
 
@@ -345,7 +348,7 @@ def no_csd_file_list(project_dir: str, file_rel_list: list[str]) -> list[str]:
     """
     return [
         file_rel for file_rel in file_rel_list
-        if os.path.splitext(file_rel)[1].lstrip(".").lower() in CSD_EXT_SET
+        if lower_ext(file_rel) in CSD_EXT_SET
         and not is_command_line(_first_statement_line(
             os.path.join(project_dir, file_rel), CSD_TEXT_END_COLUMN, (CSD_COMMENT_PREFIX,),
         ))

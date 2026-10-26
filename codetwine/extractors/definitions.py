@@ -2,6 +2,7 @@ import re
 from collections import deque
 from dataclasses import dataclass
 from tree_sitter import Node
+from codetwine.parsers.ts_node import node_text
 from codetwine.extractors.cobol_source import CobolSource
 from codetwine.extractors.r_source import r_definition_list
 from codetwine.config.settings import (
@@ -37,6 +38,7 @@ CONTAINER_DEFINITION_TYPE_SET = {
     "object_declaration",          # Kotlin
     "companion_object",            # Kotlin
     "internal_module",             # TS
+    "module",                      # TS
     "export_statement",            # JS / TS
     "class",                       # JS / TS (a class written as a value)
     "impl_item",                   # Rust
@@ -70,10 +72,10 @@ TYPE_NAME_DEFINITION_TYPE_SET = {"type_definition"}
 # Container definition types whose inner definitions are not members of the container:
 # they are defined at the level the container itself is written at
 # (C / C++: the enumerators of an enum, the names of a namespace)
-OPEN_DEFINITION_TYPE_SET = {"namespace_definition", "enum_specifier"}
+_OPEN_DEFINITION_TYPE_SET = {"namespace_definition", "enum_specifier"}
 
 # Definition node types that only group other definitions; their own name is not a name
-# of the file (C++: a namespace is written in every file that adds to it)
+# of the file (C++: a namespace)
 TRANSPARENT_DEFINITION_TYPE_SET = {"namespace_definition"}
 
 # Definition node types of which only the type is searched for further definitions
@@ -98,6 +100,11 @@ COMPANION_NAME = "Companion"
 
 # Name of the definition an anonymous default export is listed under (JS / TS)
 DEFAULT_EXPORT_NAME = "default"
+
+# Node types a JS/TS module string is written with, and the node type of a ${} part of a
+# template string
+_MODULE_STRING_TYPE_SET = {"string", "template_string"}
+_TEMPLATE_SUBSTITUTION_TYPE = "template_substitution"
 
 # Node types of a function written as a value, and of a block that is run where it is
 # written; the declarations inside one are local to it and are no definitions of the file
@@ -167,6 +174,13 @@ _WRAP_DECLARATOR_TYPE_SET = {
     "pointer_declarator", "array_declarator", "reference_declarator", "parenthesized_declarator",
 }
 
+# Declarator node types that make a declarator in parentheses one of a pointer or a
+# reference to a function (C / C++: int (*fp)(int), void (&ref)(int))
+_POINTER_DECLARATOR_TYPE_SET = {"pointer_declarator", "reference_declarator"}
+
+# Declarator node types a declaration holds its names in (C / C++)
+_NAME_DECLARATOR_TYPE_SET = _WRAP_DECLARATOR_TYPE_SET | {"init_declarator", "function_declarator"}
+
 # Node types of a value that is a function or a class (JS / TS)
 _FUNCTION_VALUE_TYPE_SET = {
     "function_expression", "arrow_function", "generator_function", "class",
@@ -180,8 +194,44 @@ _VALUE_DECLARATION_TYPE_SET = {"lexical_declaration", "variable_declaration"}
 # Node types of the name of a class member (JS / TS)
 _PROPERTY_NAME_TYPE_SET = {"property_identifier", "private_property_identifier"}
 
+# Node type of an object written with braces (JS / TS)
+_OBJECT_TYPE = "object"
+
+# Node types of an expression that holds a value without changing it -> the index of
+# that value among its named children other than comments (JS / TS: (value),
+# value as T, value satisfies T, value!, <T>value)
+_VALUE_WRAPPER_INDEX_DICT = {
+    "parenthesized_expression": 0,
+    "as_expression": 0,
+    "satisfies_expression": 0,
+    "non_null_expression": 0,
+    "type_assertion": -1,
+}
+
+# Node type of a conditional expression and the fields of the values it can give
+# (JS / TS: cond ? a : b)
+_CONDITIONAL_TYPE = "ternary_expression"
+_CONDITIONAL_VALUE_FIELD_TUPLE = ("consequence", "alternative")
+
+# Operators of a binary_expression that gives the value of one of its two sides
+# (JS / TS: a || b, a ?? b)
+_VALUE_CHOICE_OPERATOR_SET = {"||", "??"}
+
+# Node type of an enum member written with a value (TS)
+_ENUM_ASSIGNMENT_TYPE = "enum_assignment"
+
+# Members of a function that call it (JS / TS: fn.call(this), fn.apply(this, arguments))
+_CALL_IN_PLACE_MEMBER_SET = {"call", "apply"}
+
+# Fields a definition node holds its name in, directly or through the declarators
+# around it (C / C++: int *add(int a);)
+_NAME_FIELD_TUPLE = ("name", "declarator")
+
+# Words in the node types of a string or a comment, inside which no name is written
+_NO_NAME_TYPE_WORD_TUPLE = ("string", "comment")
+
 # Node types of a name inside a binding pattern
-PATTERN_NAME_TYPE_SET = {
+_PATTERN_NAME_TYPE_SET = {
     "identifier", "shorthand_property_identifier_pattern", "shorthand_field_identifier",
 }
 
@@ -204,6 +254,11 @@ class DefinitionInfo:
     # Whether the definition is declared for values of another type (Kotlin: an
     # extension function or property, fun Shape.describe())
     has_receiver: bool = False
+    # Byte range of the node the name is written as (_name_range_dict); None when the
+    # name is written as no one node (Companion) or for a COBOL, BMS, JCL, CSD or R
+    # definition
+    name_start_byte: int | None = None
+    name_end_byte: int | None = None
 
 
 def extract_definitions(
@@ -234,13 +289,13 @@ def extract_definitions(
     A node that defines several names (int a, b; / X, Y = 1, 2 / const { a, b } = obj)
     gives one definition per name, all with the line range of the node.
 
-    If no name is obtained (e.g. a C/C++ declaration is a function prototype),
-    child nodes are added to the queue and BFS continues. This allows detection of
-    definitions like function_declarator nested inside.
+    If no name is obtained (e.g. a C/C++ declaration that is a function prototype),
+    its child nodes are searched as well (BFS), and a definition nested inside, such as
+    a function_declarator, is listed.
 
     For a C / C++ file, a statement written only inside a function and a block that
-    is the body of no function and follows no name are not searched: the grammar read
-    them outside the function they belong to (_is_local_statement).
+    is the body of no function and follows no name, which the grammar reads outside a
+    function, are not searched (_is_local_statement).
 
     For a Kotlin file, a class declaration the grammar reads as part of an ERROR node
     is a definition as well (_error_class_definition_list), and so is a function
@@ -248,13 +303,22 @@ def extract_definitions(
     searched; a class declaration whose body it reads as an ERROR node after it covers
     that node (_error_body_node).
 
+    Processing flow:
+    1. A CobolSource or an R file: the definitions its reader gives.
+    2. A syntax tree: a BFS over its nodes. A definition node gives one definition per
+       name (_named_definition_list), and the search goes on into the nodes inside it
+       that _inner_search_node_list() gives.
+
     Args:
         root_node: The AST root node covering the entire file, or the CobolSource of a COBOL file.
         definition_dict: Per-language definition node settings.
 
     Returns:
-        A list of DefinitionInfo sorted by line number in ascending order.
+        A list of DefinitionInfo sorted by line number in ascending order; of a syntax
+        tree, the definitions that start on the same line in the order they are
+        written, each before the definitions written inside it.
     """
+    # == Step 1: Definitions read without a syntax tree =======================
     if isinstance(root_node, CobolSource):
         return [
             DefinitionInfo(
@@ -269,11 +333,10 @@ def extract_definitions(
             for definition in r_definition_list(root_node)
         ]
 
+    # == Step 2: BFS over the syntax tree =====================================
     definition_list: list[DefinitionInfo] = []
     is_error_class_read = definition_dict is KOTLIN_DEFINITION_DICT
     is_local_statement_skip = definition_dict is C_DEFINITION_DICT or definition_dict is CPP_DEFINITION_DICT
-
-    # BFS traversal of the AST using a deque
     node_queue = deque([root_node])
 
     while node_queue:
@@ -310,43 +373,151 @@ def extract_definitions(
             node_queue.extend(child for child in node.children if child != body_node)
             continue
 
-        # The definition covers the declaration its node is the declarator of, and a
-        # body the grammar reads as an ERROR node after it
-        extent_node = _extent_node(node, definition_dict)
-        start_line, end_line = _line_range(extent_node)
-        end_byte = extent_node.end_byte
-        body_node = _error_body_node(node) if is_error_class_read else None
-        if body_node is not None:
-            end_line, end_byte = _line_range(body_node)[1], body_node.end_byte
-        has_receiver = _has_receiver(inner_node)
         # A class written as the value of the one name a statement gives is the
         # definition of that name
         class_node = _class_value_node(inner_node) if len(name_list) == 1 else None
-        definition_type = class_node.type if class_node is not None else inner_node.type
-        for name in name_list:
-            definition_list.append(DefinitionInfo(
-                name=name, type=definition_type, start_line=start_line, end_line=end_line,
-                start_byte=extent_node.start_byte, end_byte=end_byte,
-                has_receiver=has_receiver,
-            ))
+        definition_list.extend(_named_definition_list(
+            node, inner_node, class_node, name_list, definition_dict, is_error_class_read,
+        ))
+        node_queue.extend(_inner_search_node_list(inner_node, class_node))
 
-        # Continue traversal inside container-type definitions (e.g. namespace),
-        # and inside the type a declaration is written with
-        if class_node is not None:
-            node_queue.extend(class_node.children)
-        elif inner_node.type in CONTAINER_DEFINITION_TYPE_SET:
-            node_queue.extend(inner_node.children)
-        elif inner_node.type in _TYPE_FIELD_DEFINITION_TYPE_SET:
-            type_node = inner_node.child_by_field_name("type")
-            if type_node is not None:
-                node_queue.append(type_node)
-        elif inner_node.type == "expression_statement":
-            # The entries of an object a CommonJS module exports
-            export_assignment = commonjs_export_assignment(inner_node)
-            if export_assignment is not None and export_assignment[1].type == "object":
-                node_queue.extend(export_assignment[1].children)
+    return sorted(definition_list, key=_written_order_key)
 
-    return sorted(definition_list, key=lambda definition: definition.start_line)
+
+def _written_order_key(definition: DefinitionInfo) -> tuple[int, int, int]:
+    """Return the sort key of a definition read from a syntax tree: by where it starts, a longer one first.
+
+    Definitions that start on the same line follow the order they are written in, and a
+    definition comes before the definitions written inside it (struct A { int x; };
+    struct B { int y; }; -> A, x, B, y).
+    """
+    return definition.start_line, definition.start_byte or 0, -(definition.end_byte or 0)
+
+
+def _named_definition_list(
+    node: Node,
+    inner_node: Node,
+    class_node: Node | None,
+    name_list: list[str],
+    definition_dict: dict[str, str],
+    is_error_class_read: bool,
+) -> list[DefinitionInfo]:
+    """Return one definition per name a definition node gives, all with the same range.
+
+    The definition covers the declaration its node is the declarator of (_extent_node),
+    and a body the grammar reads as an ERROR node after it (_error_body_node).
+
+    Args:
+        node: A definition node.
+        inner_node: The definition inside a decorated definition, else node.
+        class_node: The class written as the value of the name (_class_value_node), or None.
+        name_list: The names the node gives, none of them empty.
+        definition_dict: Per-language definition node settings.
+        is_error_class_read: Whether a body read as an ERROR node is covered (Kotlin).
+
+    Returns:
+        The definitions, in the order of name_list. Their type is the one of class_node
+        when it is given, else the one of inner_node.
+    """
+    extent_node = _extent_node(node, definition_dict)
+    start_line, end_line = _line_range(extent_node)
+    end_byte = extent_node.end_byte
+    body_node = _error_body_node(node) if is_error_class_read else None
+    if body_node is not None:
+        end_line, end_byte = _line_range(body_node)[1], body_node.end_byte
+    has_receiver = _has_receiver(inner_node)
+    definition_type = class_node.type if class_node is not None else inner_node.type
+    name_range_dict = _name_range_dict(inner_node, name_list)
+    definition_list: list[DefinitionInfo] = []
+    for name in name_list:
+        name_start_byte, name_end_byte = name_range_dict.get(name, (None, None))
+        definition_list.append(DefinitionInfo(
+            name=name, type=definition_type, start_line=start_line, end_line=end_line,
+            start_byte=extent_node.start_byte, end_byte=end_byte,
+            has_receiver=has_receiver,
+            name_start_byte=name_start_byte, name_end_byte=name_end_byte,
+        ))
+    return definition_list
+
+
+def _name_range_dict(node: Node, name_list: list[str]) -> dict[str, tuple[int, int]]:
+    """Return the byte range of the node a definition node writes each of its names as.
+
+    Examples:
+        class Box {}              ["Box"]        -> Box: the range of Box (field "name")
+        int *add(int a);          ["add"]        -> add: through the "declarator" fields
+        X, Y = 1, 2               ["X", "Y"]     -> the ranges of the first X and Y
+        int W::W(double b) {}     ["W::W"]       -> W::W: the range of W::W
+
+    Args:
+        node: A definition node (the definition inside a decorated definition).
+        name_list: The names definition_name_list() gives for the node.
+
+    Returns:
+        {name: (start byte, end byte)} of the first node whose text is the name: along
+        the fields of _NAME_FIELD_TUPLE from node down, else anywhere inside node
+        outside strings and comments (@get:JvmName("size") val size). A name no such
+        node has as its text is left out.
+    """
+    range_dict: dict[str, tuple[int, int]] = {}
+    name_set = set(name_list)
+    holder_queue = deque([node])
+    while holder_queue and len(range_dict) < len(name_set):
+        holder = holder_queue.popleft()
+        for field_name in _NAME_FIELD_TUPLE:
+            for child in holder.children_by_field_name(field_name):
+                child_text = node_text(child)
+                if child_text in name_set:
+                    child_range = (child.start_byte, child.end_byte)
+                    range_dict.setdefault(child_text, child_range)
+                else:
+                    holder_queue.append(child)
+    # The first node in source order, outside strings and comments, whose text is a
+    # name not found along the fields
+    name_byte_dict = {
+        name.encode("utf-8"): name for name in name_list if name not in range_dict
+    }
+    length_set = {len(name_byte) for name_byte in name_byte_dict}
+    node_stack = [node]
+    while node_stack and name_byte_dict:
+        inner_node = node_stack.pop()
+        if any(word in inner_node.type for word in _NO_NAME_TYPE_WORD_TUPLE):
+            continue
+        if inner_node.end_byte - inner_node.start_byte in length_set:
+            name = name_byte_dict.pop(inner_node.text, None)
+            if name is not None:
+                range_dict[name] = (inner_node.start_byte, inner_node.end_byte)
+                continue
+        node_stack.extend(reversed(inner_node.children))
+    return range_dict
+
+
+def _inner_search_node_list(inner_node: Node, class_node: Node | None) -> list[Node]:
+    """Return the nodes inside a definition node that are searched for further definitions.
+
+    Args:
+        inner_node: The definition inside a decorated definition, else the definition node.
+        class_node: The class written as the value of the name (_class_value_node), or None.
+
+    Returns:
+        The children of class_node, or of a container-type definition (e.g. a
+        namespace); the type a declaration is written with; the entries of each
+        object a CommonJS module may export (_export_value_option_list). Empty for
+        any other definition.
+    """
+    if class_node is not None:
+        return class_node.children
+    if inner_node.type in CONTAINER_DEFINITION_TYPE_SET:
+        return inner_node.children
+    if inner_node.type in _TYPE_FIELD_DEFINITION_TYPE_SET:
+        type_node = inner_node.child_by_field_name("type")
+        return [type_node] if type_node is not None else []
+    if inner_node.type == "expression_statement":
+        return [
+            child for value_node in _export_value_option_list(inner_node)
+            if value_node.type == _OBJECT_TYPE for child in value_node.children
+        ]
+    return []
 
 
 def select_top_level_definitions(
@@ -355,35 +526,39 @@ def select_top_level_definitions(
     """Keep only definitions that are not members of another definition.
 
     Members of a class, an impl block or a trait (methods, constructors, fields) are left out.
-    The definitions inside a container in OPEN_DEFINITION_TYPE_SET (a C++ namespace, a
+    The definitions inside a container in _OPEN_DEFINITION_TYPE_SET (a C++ namespace, a
     C / C++ enum) are kept, and a definition of a type in BARE_NAME_DEFINITION_TYPE_SET
     is kept wherever it is.
 
+    A definition is inside a container when it is written within the container's bytes,
+    or within its lines when either has no bytes (is_within).
+
     Args:
-        definition_list: Definitions of a single file, sorted by start_line.
+        definition_list: Definitions of a single file in the order extract_definitions()
+            returns them.
 
     Returns:
-        The outermost definitions, sorted by start_line.
+        The outermost definitions, in the order of definition_list.
     """
     outer_list: list[DefinitionInfo] = []
-    member_end = 0
+    container: DefinitionInfo | None = None
     for definition in definition_list:
         if definition.type in BARE_NAME_DEFINITION_TYPE_SET:
             outer_list.append(definition)
             continue
-        # Skip definitions that start within the range of a container with members
-        if definition.start_line <= member_end:
+        # Skip definitions written inside a container with members
+        if container is not None and is_within(definition, container):
             continue
         outer_list.append(definition)
         if (
             definition.type in CONTAINER_DEFINITION_TYPE_SET
-            and definition.type not in OPEN_DEFINITION_TYPE_SET
+            and definition.type not in _OPEN_DEFINITION_TYPE_SET
         ):
-            member_end = definition.end_line
+            container = definition
     return outer_list
 
 
-def _is_within(definition: DefinitionInfo, container: DefinitionInfo) -> bool:
+def is_within(definition: DefinitionInfo, container: DefinitionInfo) -> bool:
     """Return whether a definition is written inside another one (by bytes when both have them)."""
     if definition.start_byte is not None and container.start_byte is not None:
         return (
@@ -400,7 +575,8 @@ def member_owner_dict(definition_list: list[DefinitionInfo]) -> dict[int, Defini
     """Return the class each member of a class is written in.
 
     Args:
-        definition_list: Definitions of a single file, sorted by start_line.
+        definition_list: Definitions of a single file in the order extract_definitions()
+            returns them (each container before the definitions written inside it).
 
     Returns:
         {id of a definition: the definition of MEMBER_OWNER_TYPE_SET it is a direct
@@ -410,13 +586,13 @@ def member_owner_dict(definition_list: list[DefinitionInfo]) -> dict[int, Defini
     owner_dict: dict[int, DefinitionInfo] = {}
     container_stack: list[DefinitionInfo] = []
     for definition in definition_list:
-        while container_stack and not _is_within(definition, container_stack[-1]):
+        while container_stack and not is_within(definition, container_stack[-1]):
             container_stack.pop()
         if container_stack and container_stack[-1].type in MEMBER_OWNER_TYPE_SET:
             owner_dict[id(definition)] = container_stack[-1]
         if (
             definition.type in CONTAINER_DEFINITION_TYPE_SET
-            and definition.type not in OPEN_DEFINITION_TYPE_SET
+            and definition.type not in _OPEN_DEFINITION_TYPE_SET
         ):
             container_stack.append(definition)
     return owner_dict
@@ -452,13 +628,8 @@ def definition_name_list(node: Node, definition_dict: dict[str, str]) -> list[st
     # Standard pattern: search direct children for one matching name_type
     for child in node.children:
         if child.type == name_type:
-            return [_node_text(child)]
+            return [node_text(child)]
     return []
-
-
-def _node_text(node: Node) -> str:
-    """Return the source text of a node."""
-    return node.text.decode("utf-8")
 
 
 def _extent_node(node: Node, definition_dict: dict[str, str]) -> Node:
@@ -466,21 +637,22 @@ def _extent_node(node: Node, definition_dict: dict[str, str]) -> Node:
 
     A declarator that is a definition node is listed with the declaration it is
     written in, when that declaration defines no name itself (C/C++: the
-    function_declarator of int *add(int a, int b); with the whole declaration).
+    function_declarator of int *add(int a, int b); with the whole declaration). The
+    type a declaration is written with is listed by itself (C/C++: struct T { ... } of
+    struct T { ... } make_t(void);).
 
     Args:
         node: A definition node.
         definition_dict: Per-language definition node settings.
 
     Returns:
-        The declaration or field declaration around the node, reached through
-        declarators only, when it gives no name; else the node itself.
+        For a declarator, the declaration or field declaration around the node, reached
+        through declarators only, when it gives no name; else the node itself.
     """
+    if node.type not in _NAME_DECLARATOR_TYPE_SET:
+        return node
     ancestor = node.parent
-    while ancestor is not None and (
-        ancestor.type in _WRAP_DECLARATOR_TYPE_SET
-        or ancestor.type in ("init_declarator", "function_declarator")
-    ):
+    while ancestor is not None and ancestor.type in _NAME_DECLARATOR_TYPE_SET:
         ancestor = ancestor.parent
     if (
         ancestor is not None
@@ -619,13 +791,12 @@ def _error_class_definition_list(node: Node) -> list[DefinitionInfo]:
             or not any(later.type == "{" for later in child_list[index + 2:])
         ):
             continue
-        start_node = child
-        if index > 0 and child_list[index - 1].type == "modifiers":
-            start_node = child_list[index - 1]
+        start_node = _keyword_start_node(child_list, index)
         definition_list.append(DefinitionInfo(
-            name=_node_text(name_node), type=definition_type,
+            name=node_text(name_node), type=definition_type,
             start_line=start_node.start_point[0] + 1, end_line=end_line,
             start_byte=start_node.start_byte, end_byte=node.end_byte,
+            name_start_byte=name_node.start_byte, name_end_byte=name_node.end_byte,
         ))
     return definition_list
 
@@ -671,41 +842,80 @@ def _error_function_definition_list(node: Node) -> tuple[list[DefinitionInfo], s
             for later in child_list[index:parameter_index]
         ):
             continue
-        open_index = None
-        for later_index in range(parameter_index + 1, len(child_list)):
-            if child_list[later_index].type == "{":
-                open_index = later_index
-                break
-            if child_list[later_index].type in ("=", "}", _ERROR_FUNCTION_KEYWORD):
-                break
+        open_index = _body_open_index(child_list, parameter_index)
         if open_index is None:
             continue
-        # The "}" that closes the body
-        depth = 1
-        close_index = len(child_list)
-        for later_index in range(open_index + 1, len(child_list)):
-            if child_list[later_index].type == "{":
-                depth += 1
-            elif child_list[later_index].type == "}":
-                depth -= 1
-                if depth == 0:
-                    close_index = later_index
-                    break
+        close_index = _body_close_index(child_list, open_index)
         local_id_set.update(body_child.id for body_child in child_list[open_index + 1:close_index])
-        start_node = child
-        if keyword_index > 0 and child_list[keyword_index - 1].type == "modifiers":
-            start_node = child_list[keyword_index - 1]
+        start_node = _keyword_start_node(child_list, keyword_index)
         end_node = child_list[close_index] if close_index < len(child_list) else node
+        name_node = child_list[parameter_index - 1]
         definition_list.append(DefinitionInfo(
-            name=_node_text(child_list[parameter_index - 1]), type=_ERROR_FUNCTION_TYPE,
+            name=node_text(name_node), type=_ERROR_FUNCTION_TYPE,
             start_line=start_node.start_point[0] + 1, end_line=_line_range(end_node)[1],
             start_byte=start_node.start_byte, end_byte=end_node.end_byte,
             has_receiver=any(
                 later.type == "." for later in child_list[index:parameter_index]
             ),
+            name_start_byte=name_node.start_byte, name_end_byte=name_node.end_byte,
         ))
         index = close_index + 1
     return definition_list, local_id_set
+
+
+def _keyword_start_node(child_list: list[Node], keyword_index: int) -> Node:
+    """Return the node a declaration read from the children of an ERROR node starts at (Kotlin).
+
+    Args:
+        child_list: The children of an ERROR node.
+        keyword_index: Index of the keyword of the declaration in child_list.
+
+    Returns:
+        The modifiers directly in front of the keyword, else the keyword.
+    """
+    if keyword_index > 0 and child_list[keyword_index - 1].type == "modifiers":
+        return child_list[keyword_index - 1]
+    return child_list[keyword_index]
+
+
+def _body_open_index(child_list: list[Node], parameter_index: int) -> int | None:
+    """Return the index of the "{" that opens a function body among the children of an ERROR node.
+
+    Args:
+        child_list: The children of an ERROR node.
+        parameter_index: Index of the parameters of the function in child_list.
+
+    Returns:
+        The index of the first "{" after the parameters, or None when a "=", a "}" or
+        the keyword _ERROR_FUNCTION_KEYWORD comes first or there is no "{".
+    """
+    for later_index in range(parameter_index + 1, len(child_list)):
+        if child_list[later_index].type == "{":
+            return later_index
+        if child_list[later_index].type in ("=", "}", _ERROR_FUNCTION_KEYWORD):
+            return None
+    return None
+
+
+def _body_close_index(child_list: list[Node], open_index: int) -> int:
+    """Return the index of the "}" that closes a "{" among the children of a node.
+
+    Args:
+        child_list: The children of a node.
+        open_index: Index of the "{" in child_list.
+
+    Returns:
+        The index of the "}", or len(child_list) when no "}" closes the "{".
+    """
+    depth = 1
+    for later_index in range(open_index + 1, len(child_list)):
+        if child_list[later_index].type == "{":
+            depth += 1
+        elif child_list[later_index].type == "}":
+            depth -= 1
+            if depth == 0:
+                return later_index
+    return len(child_list)
 
 
 def _class_value_node(node: Node) -> Node | None:
@@ -741,24 +951,40 @@ def _class_value_node(node: Node) -> Node | None:
 def _is_call_in_place(node: Node) -> bool:
     """Return whether a function written as a value is called where it is written.
 
-    (function () { ... })() and (() => { ... })() wrap the code of a whole file; the
-    declarations inside such a function are read as the definitions of the file.
+    (function () { ... })(), (() => { ... })() and (function () { ... }).call(this)
+    wrap the code of a whole file; the declarations inside such a function are read as
+    the definitions of the file.
 
     Args:
         node: A node whose type is in _LOCAL_BODY_TYPE_SET.
 
     Returns:
-        True when the node, with the parentheses around it, is what a call calls.
+        True when the node, with the parentheses around it, is what a call calls, or
+        is the object of a member call or apply (_CALL_IN_PLACE_MEMBER_SET) that a call
+        calls.
     """
-    callee_node = node
-    while callee_node.parent is not None and callee_node.parent.type == "parenthesized_expression":
-        callee_node = callee_node.parent
+    callee_node = _parenthesized_outer_node(node)
+    member_node = callee_node.parent
+    if (
+        member_node is not None and member_node.type == "member_expression"
+        and member_node.child_by_field_name("object") == callee_node
+        and (property_node := member_node.child_by_field_name("property")) is not None
+        and node_text(property_node) in _CALL_IN_PLACE_MEMBER_SET
+    ):
+        callee_node = _parenthesized_outer_node(member_node)
     call_node = callee_node.parent
     return (
         call_node is not None
         and call_node.type == "call_expression"
         and call_node.child_by_field_name("function") == callee_node
     )
+
+
+def _parenthesized_outer_node(node: Node) -> Node:
+    """Return the outermost of the parenthesized expressions written around a node, else the node (JS / TS)."""
+    while node.parent is not None and node.parent.type == "parenthesized_expression":
+        node = node.parent
+    return node
 
 
 def _decorated_inner_node(node: Node, definition_dict: dict[str, str]) -> Node | None:
@@ -783,7 +1009,7 @@ def pattern_name_list(
 ) -> list[str]:
     """Return the names a binding pattern binds.
 
-    A node in PATTERN_NAME_TYPE_SET is a name. Of a node in pattern_field_dict only the
+    A node in _PATTERN_NAME_TYPE_SET is a name. Of a node in pattern_field_dict only the
     child in that field is read (b = 1 -> b, key: local -> local), its first named
     child when the field is "", and of a node in pattern_type_set every named child.
     Any other node (an attribute, a subscript, a type) binds nothing.
@@ -800,8 +1026,8 @@ def pattern_name_list(
     Returns:
         The bound names, in the order they are written.
     """
-    if node.type in PATTERN_NAME_TYPE_SET:
-        return [_node_text(node)]
+    if node.type in _PATTERN_NAME_TYPE_SET:
+        return [node_text(node)]
     field_name = pattern_field_dict.get(node.type)
     if field_name is not None:
         child_list = (
@@ -851,7 +1077,7 @@ def _extract_type_alias_name_list(node: Node) -> list[str]:
     name_node = node.child_by_field_name("left")
     while name_node is not None and name_node.type != "identifier":
         name_node = next(iter(name_node.named_children), None)
-    return [_node_text(name_node)] if name_node is not None else []
+    return [node_text(name_node)] if name_node is not None else []
 
 
 def _extract_variable_declarator_name_list(node: Node) -> list[str]:
@@ -867,25 +1093,35 @@ def _extract_variable_declarator_name_list(node: Node) -> list[str]:
                +-- (value)
 
     The same structure applies to variable_declaration (var declarations) and to
-    Java field_declaration (modifiers + type + declarator: variable_declarator).
-    Every declarator gives its name (int a, b;), and a destructuring pattern every
-    name it binds (const { a, b } = obj). A declarator whose value is a module an
-    import brings in (const m = require("./m"), _is_module_value) gives none: the
-    name is one of the import, not a definition of the file.
+    Java field_declaration and constant_declaration (modifiers + type + declarator:
+    variable_declarator). Every declarator gives the names _variable_declarator_name_list()
+    returns (int a, b; / const { a, b } = obj). A declarator of a JS / TS declaration
+    (_VALUE_DECLARATION_TYPE_SET) whose value is a module an import brings in
+    (const m = require("./m"), _is_module_value) gives none.
 
     Args:
-        node: A lexical_declaration, variable_declaration or field_declaration node.
+        node: A lexical_declaration, variable_declaration, field_declaration or
+            constant_declaration node.
 
     Returns:
         The variable names.
     """
-    name_list: list[str] = []
-    for child in node.children:
-        if child.type == "variable_declarator":
-            name_node = child.child_by_field_name("name")
-            if name_node is not None and not _is_module_value(child.child_by_field_name("value")):
-                name_list.extend(pattern_name_list(name_node, PATTERN_TYPE_SET, PATTERN_FIELD_DICT))
-    return name_list
+    is_module_value_skip = node.type in _VALUE_DECLARATION_TYPE_SET
+    return [
+        name
+        for child in node.children
+        if child.type == "variable_declarator"
+        and not (is_module_value_skip and _is_module_value(child.child_by_field_name("value")))
+        for name in _variable_declarator_name_list(child)
+    ]
+
+
+def _variable_declarator_name_list(declarator_node: Node) -> list[str]:
+    """Return the names a variable_declarator binds: its name, or every name of its destructuring pattern (JS / TS / Java / C#)."""
+    name_node = declarator_node.child_by_field_name("name")
+    if name_node is None:
+        return []
+    return pattern_name_list(name_node, PATTERN_TYPE_SET, PATTERN_FIELD_DICT)
 
 
 def commonjs_export_assignment(node: Node) -> tuple[str, Node] | None:
@@ -898,51 +1134,201 @@ def commonjs_export_assignment(node: Node) -> tuple[str, Node] | None:
                +-- right: (value)
 
     In a chain (exports = module.exports = value) the first target that is one of
-    these counts.
+    these counts. The expressions that hold a value without changing it
+    (_VALUE_WRAPPER_INDEX_DICT) are looked through: (module.exports = value),
+    module.exports = (value) as T.
 
     Args:
         node: An expression_statement node.
 
     Returns:
         (exported name, value node): the name is the property of exports.name and
-        module.exports.name, and DEFAULT_EXPORT_NAME for module.exports itself. None
-        when the statement is no such assignment.
+        module.exports.name, and DEFAULT_EXPORT_NAME for module.exports itself; the
+        value is the one _bare_value_node() gives. None when the statement is no such
+        assignment.
     """
-    inner_node = node.children[0] if node.children else None
+    inner_node = _unwrapped_node(node.children[0]) if node.children else None
     while inner_node is not None and inner_node.type == "assignment_expression":
         left_node = inner_node.child_by_field_name("left")
         right_node = inner_node.child_by_field_name("right")
         if left_node is None or right_node is None:
             return None
-        value_node = right_node
-        while value_node.type == "assignment_expression":
-            value_node = value_node.child_by_field_name("right") or value_node.children[-1]
         if left_node.type == "member_expression":
-            if _node_text(left_node) == "module.exports":
-                return DEFAULT_EXPORT_NAME, value_node
+            if node_text(left_node) == "module.exports":
+                return DEFAULT_EXPORT_NAME, _bare_value_node(right_node)
             object_node = left_node.child_by_field_name("object")
             property_node = left_node.child_by_field_name("property")
             if (
                 object_node is not None and property_node is not None
-                and _node_text(object_node) in ("exports", "module.exports")
+                and node_text(object_node) in ("exports", "module.exports")
             ):
-                return _node_text(property_node), value_node
-        inner_node = right_node
+                return node_text(property_node), _bare_value_node(right_node)
+        inner_node = _unwrapped_node(right_node)
     return None
 
 
+def _wrapped_value_node(node: Node) -> Node | None:
+    """Return the value an expression of _VALUE_WRAPPER_INDEX_DICT holds, None for any other node (JS / TS)."""
+    value_index = _VALUE_WRAPPER_INDEX_DICT.get(node.type)
+    if value_index is None:
+        return None
+    child_list = [child for child in node.named_children if child.type != "comment"]
+    return child_list[value_index] if child_list else None
+
+
+def _unwrapped_node(node: Node) -> Node:
+    """Return a value without the expressions of _VALUE_WRAPPER_INDEX_DICT around it (JS / TS)."""
+    while (inner_node := _wrapped_value_node(node)) is not None:
+        node = inner_node
+    return node
+
+
+def _bare_value_node(node: Node) -> Node:
+    """Return the value an expression gives, through the expressions and assignments that hold it (JS / TS).
+
+    Examples:
+        ({ ... }) satisfies Config   -> the object
+        a = b = { ... }              -> the object
+        name                         -> name
+
+    Args:
+        node: An expression node.
+
+    Returns:
+        The node after removing, in turn, the expressions of _VALUE_WRAPPER_INDEX_DICT
+        and the assignment_expression nodes (by their right side).
+    """
+    while True:
+        inner_node = _wrapped_value_node(node)
+        if inner_node is None and node.type == "assignment_expression":
+            inner_node = node.child_by_field_name("right") or node.children[-1]
+        if inner_node is None or inner_node == node:
+            return node
+        node = inner_node
+
+
+def _choice_value_node_list(node: Node) -> list[Node]:
+    """Return the expressions whose value an expression gives, one of them chosen when it runs (JS / TS).
+
+    cond ? a : b  -> [a, b]
+    a || b        -> [a, b]
+    a ?? b        -> [a, b]
+
+    Args:
+        node: An expression node.
+
+    Returns:
+        The consequence and alternative of a ternary_expression, the left and right
+        side of a binary_expression of _VALUE_CHOICE_OPERATOR_SET; empty for any
+        other node.
+    """
+    if node.type == _CONDITIONAL_TYPE:
+        field_tuple = _CONDITIONAL_VALUE_FIELD_TUPLE
+    elif (
+        node.type == "binary_expression"
+        and (operator_node := node.child_by_field_name("operator")) is not None
+        and operator_node.type in _VALUE_CHOICE_OPERATOR_SET
+    ):
+        field_tuple = ("left", "right")
+    else:
+        return []
+    return [
+        value_node for field in field_tuple
+        if (value_node := node.child_by_field_name(field)) is not None
+    ]
+
+
+def _export_value_option_list(node: Node) -> list[Node]:
+    """Return each value a statement may export, through the choices of _choice_value_node_list (JS / TS).
+
+    export default cond ? { ... } : { ... };   -> both objects
+    module.exports = window.api || { ... };    -> window.api and the object
+    export default { ... };                    -> the object
+
+    Args:
+        node: A statement node.
+
+    Returns:
+        The nodes _bare_value_node() gives for export_value_node() and, in turn, for
+        each choice of a value that _choice_value_node_list() gives in place of that
+        value; empty when export_value_node() gives None.
+    """
+    value_node = export_value_node(node)
+    pending_list = [value_node] if value_node is not None else []
+    option_list = []
+    while pending_list:
+        value_node = pending_list.pop()
+        choice_list = _choice_value_node_list(value_node)
+        if choice_list:
+            pending_list.extend(_bare_value_node(choice) for choice in reversed(choice_list))
+        else:
+            option_list.append(value_node)
+    return option_list
+
+
+def export_value_node(node: Node) -> Node | None:
+    """Return the value a statement exports, through the expressions that hold it (JS / TS).
+
+    export default { ... } satisfies Config;  -> the object
+    export = { ... };                          -> the object (TS)
+    module.exports = ({ ... });                -> the object
+    exports.api = { ... };                     -> the object
+    export const x = 1; / app.use({ ... });    -> None
+
+    Args:
+        node: A statement node.
+
+    Returns:
+        The value _bare_value_node() gives for the value of an export default
+        statement and of a TS export assignment (export = value), the value of a
+        CommonJS export assignment (commonjs_export_assignment); None for any other
+        statement.
+    """
+    if node.type == "expression_statement":
+        export_tuple = commonjs_export_assignment(node)
+        return export_tuple[1] if export_tuple is not None else None
+    if node.type != "export_statement":
+        return None
+    value_node = node.child_by_field_name("value")
+    if value_node is None:
+        # export = value: the value is the first named node after "="
+        is_after_assign = False
+        for child in node.children:
+            if child.type == "=":
+                is_after_assign = True
+            elif is_after_assign and child.is_named and child.type != "comment":
+                value_node = child
+                break
+    return _bare_value_node(value_node) if value_node is not None else None
+
+
+def is_module_string(node: Node) -> bool:
+    """Return whether a node is a string, or a template string without a ${} part (JS / TS)."""
+    return node.type in _MODULE_STRING_TYPE_SET and not any(
+        child.type == _TEMPLATE_SUBSTITUTION_TYPE for child in node.named_children
+    )
+
+
 def require_module(node: Node) -> str | None:
-    """Return the module string of a require("module") call, None for any other node (JS / TS)."""
+    """Return the module string of a require("module") call (JS / TS).
+
+    Args:
+        node: An AST node.
+
+    Returns:
+        The text of the only argument without its quotes, or None when the node is no
+        call of require with one argument that is_module_string accepts.
+    """
     if node.type != "call_expression":
         return None
     function_node = node.child_by_field_name("function")
     argument_node = node.child_by_field_name("arguments")
-    if function_node is None or argument_node is None or _node_text(function_node) != "require":
+    if function_node is None or argument_node is None or node_text(function_node) != "require":
         return None
-    string_node_list = [child for child in argument_node.named_children if child.type == "string"]
+    string_node_list = [child for child in argument_node.named_children if is_module_string(child)]
     if len(string_node_list) != 1:
         return None
-    return _node_text(string_node_list[0])[1:-1]
+    return node_text(string_node_list[0])[1:-1]
 
 
 def _is_module_value(node: Node | None) -> bool:
@@ -969,7 +1355,8 @@ def _is_module_value(node: Node | None) -> bool:
             call_node is not None and call_node.type == "call_expression"
             and function_node is not None and function_node.type == "import"
             and argument_node is not None
-            and [child.type for child in argument_node.named_children] == ["string"]
+            and len(argument_node.named_children) == 1
+            and is_module_string(argument_node.named_children[0])
         )
     if node.type == "member_expression":
         node = node.child_by_field_name("object")
@@ -1006,7 +1393,7 @@ def _member_function_name(node: Node) -> str | None:
     property_node = left_node.child_by_field_name("property")
     if property_node is None or property_node.type != "property_identifier":
         return None
-    return _node_text(property_node)
+    return node_text(property_node)
 
 
 def _member_assignment_name_list(node: Node) -> list[str]:
@@ -1015,8 +1402,7 @@ def _member_assignment_name_list(node: Node) -> list[str]:
     exports.name = ... and module.exports.name = ... give the name;
     module.exports = <unnamed value> gives DEFAULT_EXPORT_NAME. An export whose value
     is a name (module.exports = name, exports.run = run) and
-    module.exports = require("./m") give none (the named definition, or the module,
-    stands for the export). A function assigned to a member
+    module.exports = require("./m") give none. A function assigned to a member
     of another object at the top level of the file gives the member name
     (_member_function_name).
 
@@ -1026,11 +1412,11 @@ def _member_assignment_name_list(node: Node) -> list[str]:
     Returns:
         [name], or empty.
     """
-    export_assignment = commonjs_export_assignment(node)
-    if export_assignment is None:
+    export_tuple = commonjs_export_assignment(node)
+    if export_tuple is None:
         member_name = _member_function_name(node)
         return [member_name] if member_name else []
-    export_name, value_node = export_assignment
+    export_name, value_node = export_tuple
     if value_node.type == "identifier" or (
         export_name == DEFAULT_EXPORT_NAME and require_module(value_node) is not None
     ):
@@ -1043,8 +1429,8 @@ def _extract_export_member_name_list(node: Node) -> list[str]:
 
     module.exports = { run: function () {} };   -> "run"
     export default { run: () => 1 };            -> "run"
-    An entry whose value is a name (key: name) gives none (the named definition
-    stands for it), and so does an entry of any other object.
+    An entry whose value is a name (key: name) gives none, and so does an entry of
+    any other object.
 
     Args:
         node: A pair node.
@@ -1054,23 +1440,50 @@ def _extract_export_member_name_list(node: Node) -> list[str]:
     """
     key_node = node.child_by_field_name("key")
     value_node = node.child_by_field_name("value")
-    object_node = node.parent
     if (
-        key_node is None or value_node is None or object_node is None
+        key_node is None or value_node is None
         or key_node.type != "property_identifier" or value_node.type == "identifier"
+        or not _is_export_object(node.parent)
     ):
         return []
-    holder_node = object_node.parent
-    is_export_value = holder_node is not None and (
-        (holder_node.type == "export_statement" and holder_node.child_by_field_name("value") == object_node)
+    return [node_text(key_node)]
+
+
+def _is_export_object(object_node: Node | None) -> bool:
+    """Return whether an object is the value a module exports (JS / TS).
+
+    export default { ... }                    -> True
+    export default ({ ... }) satisfies T      -> True
+    export default cond ? { ... } : { ... }   -> True (each object)
+    module.exports = { ... }                  -> True
+    module.exports = window.api || { ... }    -> True
+    exports = module.exports = { ... }        -> True
+    exports.api = { ... }                     -> True
+    app.use({ ... }) / const x = { ... }       -> False
+
+    Args:
+        object_node: The parent of an entry of an object, or None.
+
+    Returns:
+        True when the object is one of the values _export_value_option_list() gives
+        for the statement it is written in, through the expressions that hold it,
+        the assignments it is assigned by and the expressions that choose it.
+    """
+    if object_node is None:
+        return False
+    node = object_node
+    holder_node = node.parent
+    while holder_node is not None and (
+        _wrapped_value_node(holder_node) == node
         or (
-            holder_node.type == "assignment_expression" and holder_node.parent is not None
-            and holder_node.parent.type == "expression_statement"
-            and (export_assignment := commonjs_export_assignment(holder_node.parent)) is not None
-            and export_assignment[1] == object_node
+            holder_node.type == "assignment_expression"
+            and holder_node.child_by_field_name("right") == node
         )
-    )
-    return [_node_text(key_node)] if is_export_value else []
+        or node in _choice_value_node_list(holder_node)
+    ):
+        node = holder_node
+        holder_node = node.parent
+    return holder_node is not None and object_node in _export_value_option_list(holder_node)
 
 
 def _extract_property_name_list(node: Node) -> list[str]:
@@ -1078,7 +1491,10 @@ def _extract_property_name_list(node: Node) -> list[str]:
 
     run() {}        -> "run"
     #count = 0;     -> "#count"
-    A member named by a string, a number or a computed key gives none.
+    A member named by a string, a number or a computed key gives none. A method of an
+    object gives its name only when the object is the value a module exports
+    (_is_export_object): export default { run() {} } gives "run",
+    app.use({ run() {} }) gives none.
 
     Args:
         node: A method_definition, field_definition or public_field_definition node.
@@ -1086,9 +1502,11 @@ def _extract_property_name_list(node: Node) -> list[str]:
     Returns:
         [name], or empty.
     """
+    if node.parent is not None and node.parent.type == _OBJECT_TYPE and not _is_export_object(node.parent):
+        return []
     for child in node.children:
         if child.type in _PROPERTY_NAME_TYPE_SET:
-            return [_node_text(child)]
+            return [node_text(child)]
     return []
 
 
@@ -1121,22 +1539,61 @@ def _extract_enum_entry_name_list(node: Node) -> list[str]:
     )
     if not is_enum:
         return []
-    return [_node_text(child) for child in node.children if child.type == "identifier"][:1]
+    return [node_text(child) for child in node.children if child.type == "identifier"][:1]
 
 
 def _extract_enum_member_name_list(node: Node) -> list[str]:
-    """Extract the name of a TypeScript enum member written without a value (enum E { A, B })."""
+    """Extract the name of a TypeScript enum member.
+
+    enum E { A, B = 2, "up-left" = 3, 'down' }  -> "A", "B", "up-left", "down"
+
+    Args:
+        node: An enum_assignment node, or the property_identifier or string node of a
+            member written without a value.
+
+    Returns:
+        [name], a string without its quotes; empty for a node that is not a member
+        written directly in an enum_body, and for a member named by another node (a
+        number, a computed key).
+    """
     if node.parent is None or node.parent.type != "enum_body":
         return []
-    return [_node_text(node)]
+    name_node = node.child_by_field_name("name") if node.type == _ENUM_ASSIGNMENT_TYPE else node
+    if name_node is None:
+        return []
+    if name_node.type == "property_identifier":
+        return [node_text(name_node)]
+    if name_node.type == "string":
+        return [node_text(name_node)[1:-1]]
+    return []
+
+
+def _extract_module_name_list(node: Node) -> list[str]:
+    """Extract the name of a TypeScript namespace or module declaration.
+
+    namespace Geo { ... }          -> "Geo"
+    namespace Outer.Inner { ... }  -> "Outer.Inner"
+    module Legacy { ... }          -> "Legacy"
+    declare module "x" { ... }     -> none
+
+    Args:
+        node: An internal_module or module node.
+
+    Returns:
+        [name], its parts joined with "."; empty for a module named by a string.
+    """
+    name_node = node.child_by_field_name("name")
+    if name_node is None or name_node.type not in ("identifier", "nested_identifier"):
+        return []
+    return ["".join(node_text(name_node).split())]
 
 
 def _default_export_name_list(node: Node) -> list[str]:
     """Return [DEFAULT_EXPORT_NAME] for an export default statement of an unnamed value (JS / TS).
 
-    export default function () {} / class {} / { ... } / call() gives the name;
-    export default name and export default function name() {} give none (the named
-    definition stands for the export).
+    export default function () {} / class {} / { ... } / call() gives the name, and
+    so does a TS export assignment (export = { ... }); export default name,
+    export default (name) and export default function name() {} give none.
 
     Args:
         node: An export_statement node.
@@ -1144,12 +1601,11 @@ def _default_export_name_list(node: Node) -> list[str]:
     Returns:
         [DEFAULT_EXPORT_NAME] or empty.
     """
-    if not any(child.type == "default" for child in node.children):
-        return []
-    value_node = node.child_by_field_name("value")
+    value_node = export_value_node(node)
     if value_node is None or value_node.type == "identifier":
         return []
-    if value_node.child_by_field_name("name") is not None:
+    written_node = node.child_by_field_name("value")
+    if written_node is not None and written_node.child_by_field_name("name") is not None:
         return []
     return [DEFAULT_EXPORT_NAME]
 
@@ -1178,22 +1634,103 @@ def declarator_name_node(declarator_node: Node | None) -> Node | None:
     return declarator_node
 
 
-def _declarator_name_list(node: Node, name_type_tuple: tuple[str, ...]) -> list[str]:
-    """Return the names of the declarators of a C/C++ declaration that are of the given node types.
+def _function_pointer_name_node(name_node: Node | None) -> Node | None:
+    """Return the node inside the parentheses of a C/C++ function pointer declarator.
+
+    Examples:
+        (*open)(const char *path)     -> the node of open
+        (*callbacks[4])(void)         -> the node of callbacks
+        (*signal(int sig))(int)       -> the function_declarator of signal
+        area(int a)                   -> the function_declarator itself
+        (area)(int a)                 -> the function_declarator itself
 
     Args:
-        node: A declaration, field_declaration or type_definition node.
-        name_type_tuple: Node types of a name ("identifier", "field_identifier", ...).
+        name_node: The innermost node of a declarator (declarator_name_node), or None.
 
     Returns:
-        One name per declarator whose innermost node is of one of the types.
+        For a function_declarator whose declarator is a pointer or a reference in
+        parentheses, the innermost node of that declarator, for each such
+        function_declarator in turn; else name_node itself.
+    """
+    while name_node is not None and name_node.type == "function_declarator":
+        inner_node = name_node.child_by_field_name("declarator")
+        if (
+            inner_node is None or inner_node.type != "parenthesized_declarator"
+            or _unparenthesized_declarator(inner_node).type not in _POINTER_DECLARATOR_TYPE_SET
+        ):
+            break
+        name_node = declarator_name_node(inner_node)
+    return name_node
+
+
+def _unparenthesized_declarator(declarator_node: Node) -> Node:
+    """Return a C/C++ declarator without the parentheses around it ((area) -> area, ((*fp)) -> *fp)."""
+    while declarator_node.type == "parenthesized_declarator":
+        inner_node = next(
+            (child for child in declarator_node.named_children if child.type != "comment"), None,
+        )
+        if inner_node is None:
+            break
+        declarator_node = inner_node
+    return declarator_node
+
+
+def _declarator_name_list(node: Node, name_type_tuple: tuple[str, ...]) -> list[str]:
+    """Return the names the declarators of a C/C++ declaration declare.
+
+    Examples:
+        int a, *b[2];                     -> ["a", "b"]
+        int (*open)(const char *path);    -> ["open"]
+        int Shape::count = 0;             -> ["Shape::count"]
+        template <class T> int Box<T>::total = 0;  -> ["Box::total"]
+        explicit operator bool() const;   -> ["operator bool"]
+
+    Args:
+        node: A declaration or field_declaration node.
+        name_type_tuple: Node types of a name ("identifier", "field_identifier").
+
+    Returns:
+        One name per declarator whose innermost node, inside the parentheses of a
+        function pointer (_function_pointer_name_node), is of one of the types, with
+        the scopes it is written with and without template arguments; a conversion
+        operator gives the name _operator_cast_name() returns.
     """
     name_list: list[str] = []
     for declarator_node in node.children_by_field_name("declarator"):
-        name_node = declarator_name_node(declarator_node)
+        name_node = _function_pointer_name_node(declarator_name_node(declarator_node))
+        cast_name = _operator_cast_name(name_node)
+        if cast_name is not None:
+            name_list.append(cast_name)
+            continue
+        scope_list, name_node = _split_scope(name_node)
         if name_node is not None and name_node.type in name_type_tuple:
-            name_list.append(_node_text(name_node))
+            name_list.append("::".join([*scope_list, node_text(name_node)]))
     return name_list
+
+
+def _split_scope(name_node: Node | None) -> tuple[list[str], Node | None]:
+    """Split the scopes off a C++ qualified_identifier.
+
+    Examples:
+        Shape::get_name   -> (["Shape"], the node of get_name)
+        Box<T>::get       -> (["Box"], the node of get)
+        area              -> ([], the node of area)
+
+    Args:
+        name_node: A name node, or None.
+
+    Returns:
+        (the names of the scopes in the order they are written, without template
+        arguments; the node written after the last scope, or name_node itself when it
+        is no qualified_identifier).
+    """
+    scope_list: list[str] = []
+    while name_node is not None and name_node.type == "qualified_identifier":
+        scope_node = name_node.child_by_field_name("scope")
+        if scope_node is not None:
+            scope_list.append(node_text(scope_node.child_by_field_name("name") or scope_node))
+        name_node = name_node.child_by_field_name("name")
+    return scope_list, name_node
 
 
 def _function_name(function_declarator_node: Node) -> str | None:
@@ -1203,6 +1740,7 @@ def _function_name(function_declarator_node: Node) -> str | None:
     operator_name (operator==) and destructor_name (~Shape) are taken as written. A
     qualified_identifier (a member defined outside its class) is taken with its
     scopes, without template arguments: Shape::get_name, Box<T>::get -> "Box::get".
+    A name in parentheses is taken without them: int (area)(int a) -> "area".
 
     Args:
         function_declarator_node: A function_declarator node.
@@ -1210,17 +1748,14 @@ def _function_name(function_declarator_node: Node) -> str | None:
     Returns:
         The name, or None for another declarator (a function pointer).
     """
-    name_node = function_declarator_node.child_by_field_name("declarator")
-    scope_list: list[str] = []
-    while name_node is not None and name_node.type == "qualified_identifier":
-        scope_node = name_node.child_by_field_name("scope")
-        if scope_node is not None:
-            scope_list.append(_node_text(scope_node.child_by_field_name("name") or scope_node))
-        name_node = name_node.child_by_field_name("name")
+    declarator_node = function_declarator_node.child_by_field_name("declarator")
+    if declarator_node is not None:
+        declarator_node = _unparenthesized_declarator(declarator_node)
+    scope_list, name_node = _split_scope(declarator_node)
     if name_node is not None and name_node.type in (
         "identifier", "field_identifier", "operator_name", "destructor_name",
     ):
-        return "::".join([*scope_list, _node_text(name_node)])
+        return "::".join([*scope_list, node_text(name_node)])
     return None
 
 
@@ -1229,27 +1764,33 @@ def _operator_cast_name(declarator_node: Node | None) -> str | None:
 
     operator bool() const { ... }         -> "operator bool"
     Flag::operator int() const { ... }    -> "Flag::operator int"
+    explicit operator bool() const;       -> "operator bool"
 
     Args:
-        declarator_node: The declarator of a function_definition, without the
-            declarators that wrap it.
+        declarator_node: The declarator of a function_definition or of a
+            declaration, without the declarators that wrap it, or None.
 
     Returns:
         "operator " and the text of the type, after the scopes the operator is
         written with.
     """
-    scope_list: list[str] = []
-    while declarator_node is not None and declarator_node.type == "qualified_identifier":
-        scope_node = declarator_node.child_by_field_name("scope")
-        if scope_node is not None:
-            scope_list.append(_node_text(scope_node.child_by_field_name("name") or scope_node))
-        declarator_node = declarator_node.child_by_field_name("name")
+    scope_list, declarator_node = _split_scope(declarator_node)
     if declarator_node is None or declarator_node.type != "operator_cast":
         return None
     type_node = declarator_node.child_by_field_name("type")
     if type_node is None:
         return None
-    return "::".join([*scope_list, "operator " + " ".join(_node_text(type_node).split())])
+    return "::".join([*scope_list, _conversion_operator_name(type_node)])
+
+
+def _conversion_operator_name(type_node: Node) -> str:
+    """Return "operator " and the text of the type of a conversion operator, its blanks made one space (C++ / C#).
+
+    Examples:
+        bool                       -> "operator bool"
+        Dictionary<int,   string>  -> "operator Dictionary<int, string>"
+    """
+    return "operator " + " ".join(node_text(type_node).split())
 
 
 def _extract_function_declarator_name_list(node: Node) -> list[str]:
@@ -1264,7 +1805,9 @@ def _extract_function_declarator_name_list(node: Node) -> list[str]:
           +-- body: compound_statement { ... }
 
     The function_declarator may be wrapped in pointer or reference declarators
-    (node_t *list_push(...) { ... }). See _function_name for the forms of the name.
+    (node_t *list_push(...) { ... }), and in the declarator of the function pointer
+    the function returns (void (*handler_of(int sig))(int) { ... } -> handler_of). See
+    _function_name for the forms of the name.
     A function written with a macro that takes its name (TEST_IMPL(ping) { ... }) has
     a name in parentheses in place of a function_declarator and gives that name. A
     conversion operator gives the name _operator_cast_name() returns.
@@ -1282,10 +1825,11 @@ def _extract_function_declarator_name_list(node: Node) -> list[str]:
         and function_declarator_node is not None
         and function_declarator_node.type == "identifier"
     ):
-        return [_node_text(function_declarator_node)]
+        return [node_text(function_declarator_node)]
     cast_name = _operator_cast_name(function_declarator_node)
     if cast_name is not None:
         return [cast_name]
+    function_declarator_node = _function_pointer_name_node(function_declarator_node)
     if function_declarator_node is None or function_declarator_node.type != "function_declarator":
         return []
     name = _function_name(function_declarator_node)
@@ -1305,8 +1849,8 @@ def is_macro_call_declarator(node: Node) -> bool:
 
     Returns:
         True when the node is the declarator of a declaration or field_declaration
-        without a type, its name is a plain name, and it is not written in the body
-        of a class of that name.
+        without a type, its name is a plain name (also in parentheses), and it is not
+        written in the body of a class of that name.
     """
     holder_node = node.parent
     while holder_node is not None and (
@@ -1314,6 +1858,8 @@ def is_macro_call_declarator(node: Node) -> bool:
     ):
         holder_node = holder_node.parent
     name_node = node.child_by_field_name("declarator")
+    if name_node is not None:
+        name_node = _unparenthesized_declarator(name_node)
     if (
         holder_node is None or holder_node.type not in _DECLARATION_TYPE_SET
         or holder_node.child_by_field_name("type") is not None
@@ -1329,7 +1875,7 @@ def is_macro_call_declarator(node: Node) -> bool:
         or class_node is None or class_node.type not in _TAG_SPECIFIER_TYPE_SET
     ):
         return True
-    return _node_text(name_node) not in _extract_body_name_list(class_node)
+    return node_text(name_node) not in _extract_body_name_list(class_node)
 
 
 def _extract_declarator_name_list(node: Node) -> list[str]:
@@ -1368,8 +1914,10 @@ def _extract_init_declarator_name_list(node: Node) -> list[str]:
           +-- declarator: pointer_declarator
                +-- declarator: identifier "p"  <- extract this
 
-    A function prototype (void freeFunction();) gives no name here; the caller's BFS
-    reaches its function_declarator.
+    A function pointer, a member defined outside its class and a conversion operator
+    give the names _declarator_name_list() returns. A function prototype
+    (void freeFunction();) gives no name here; the caller's BFS reaches its
+    function_declarator.
 
     Args:
         node: A declaration node.
@@ -1381,7 +1929,7 @@ def _extract_init_declarator_name_list(node: Node) -> list[str]:
 
 
 def _extract_field_declarator_name_list(node: Node) -> list[str]:
-    """Extract the member names from a C/C++ field declaration (int *p, q;)."""
+    """Extract the member names from a C/C++ field declaration (int *p, q; / int (*open)(const char *);)."""
     return _declarator_name_list(node, ("field_identifier",))
 
 
@@ -1406,14 +1954,15 @@ def _extract_type_declarator_name_list(node: Node) -> list[str]:
     )
     name_list: list[str] = []
     for declarator_node in node.children_by_field_name("declarator"):
-        name_node = declarator_name_node(declarator_node)
+        # A function pointer type, then a function type (typedef int fn_t(int);)
+        name_node = _function_pointer_name_node(declarator_name_node(declarator_node))
         if name_node is not None and name_node.type == "function_declarator":
             name_node = declarator_name_node(name_node.child_by_field_name("declarator"))
         if (
             name_node is not None and name_node.type in ("type_identifier", "identifier")
-            and _node_text(name_node) not in tag_name_list
+            and node_text(name_node) not in tag_name_list
         ):
-            name_list.append(_node_text(name_node))
+            name_list.append(node_text(name_node))
     return name_list
 
 
@@ -1432,7 +1981,7 @@ def _extract_body_name_list(node: Node) -> list[str]:
     name_node = node.child_by_field_name("name")
     if name_node is None or node.child_by_field_name("body") is None:
         return []
-    return [_node_text(name_node)]
+    return [node_text(name_node)]
 
 
 def _extract_kotlin_property_name_list(node: Node) -> list[str]:
@@ -1467,7 +2016,7 @@ def _extract_kotlin_property_name_list(node: Node) -> list[str]:
                 continue
             for name_node in declaration_node.children:
                 if name_node.type == "identifier":
-                    name_list.append(_node_text(name_node))
+                    name_list.append(node_text(name_node))
                     break
     return name_list
 
@@ -1494,7 +2043,7 @@ def _extract_object_reference_name_list(node: Node) -> list[str]:
     for child in node.children:
         if child.type == "object_reference":
             name_node = child.child_by_field_name("name")
-            return [_node_text(name_node)] if name_node else []
+            return [node_text(name_node)] if name_node else []
     return []
 
 
@@ -1524,14 +2073,14 @@ def _extract_impl_type_name_list(node: Node) -> list[str]:
     inner_node: Node | None = type_node
     while inner_node is not None:
         if inner_node.type == "type_identifier":
-            return [_node_text(inner_node)]
+            return [node_text(inner_node)]
         if inner_node.type == "scoped_type_identifier":
             inner_node = inner_node.child_by_field_name("name")
         elif inner_node.type in ("generic_type", "reference_type"):
             inner_node = inner_node.child_by_field_name("type")
         else:
             break
-    return [" ".join(_node_text(type_node).split())]
+    return [" ".join(node_text(type_node).split())]
 
 
 def _extract_inline_module_name_list(node: Node) -> list[str]:
@@ -1546,7 +2095,7 @@ def _extract_inline_module_name_list(node: Node) -> list[str]:
     if node.child_by_field_name("body") is None:
         return []
     name_node = node.child_by_field_name("name")
-    return [_node_text(name_node)] if name_node else []
+    return [node_text(name_node)] if name_node else []
 
 
 def _extract_name_field_name_list(node: Node) -> list[str]:
@@ -1570,7 +2119,7 @@ def _extract_name_field_name_list(node: Node) -> list[str]:
         [name], or empty if the node has no name field.
     """
     name_node = node.child_by_field_name("name")
-    return [_node_text(name_node).removeprefix("@")] if name_node else []
+    return [node_text(name_node).removeprefix("@")] if name_node else []
 
 
 def _extract_variable_declaration_name_list(node: Node) -> list[str]:
@@ -1596,7 +2145,10 @@ def _extract_variable_declaration_name_list(node: Node) -> list[str]:
     for child in node.children:
         if child.type == "variable_declaration":
             return [
-                name.removeprefix("@") for name in _extract_variable_declarator_name_list(child)
+                name.removeprefix("@")
+                for declarator_node in child.children
+                if declarator_node.type == "variable_declarator"
+                for name in _variable_declarator_name_list(declarator_node)
             ]
     return []
 
@@ -1606,8 +2158,13 @@ def _extract_unnamed_member_name_list(node: Node) -> list[str]:
 
     public T this[int i] => ...;                  -> "this[]"
     public static Vec operator +(Vec a, Vec b)    -> "operator +"
+    public static Vec operator checked +(Vec a, Vec b)  -> "operator +"
     public static implicit operator int(Vec v)    -> "operator int"
+    public static implicit operator List<int>(Vec v)    -> "operator List<int>"
     ~Vec() {}                                     -> "~Vec"
+
+    The type of a conversion operator is written with its blanks made one space
+    (_conversion_operator_name).
 
     Args:
         node: An indexer_declaration, operator_declaration,
@@ -1620,16 +2177,13 @@ def _extract_unnamed_member_name_list(node: Node) -> list[str]:
         return ["this[]"]
     if node.type == "destructor_declaration":
         name_node = node.child_by_field_name("name")
-        return ["~" + _node_text(name_node)] if name_node else []
+        return ["~" + node_text(name_node)] if name_node else []
     if node.type == "conversion_operator_declaration":
         type_node = node.child_by_field_name("type")
-        return ["operator " + _node_text(type_node)] if type_node else []
-    # operator_declaration: the token written after the operator keyword
-    child_list = node.children
-    for index, child in enumerate(child_list[:-1]):
-        if child.type == "operator":
-            return ["operator " + _node_text(child_list[index + 1])]
-    return []
+        return [_conversion_operator_name(type_node)] if type_node else []
+    # operator_declaration: the operator in the field "operator"
+    operator_node = node.child_by_field_name("operator")
+    return ["operator " + node_text(operator_node)] if operator_node else []
 
 
 # Sentinel value in definition_dict -> function extracting the names from the definition node
@@ -1638,8 +2192,8 @@ _SENTINEL_EXTRACTOR_DICT = {
     "__assignment__": _extract_assignment_name_list,
     # Python: type_alias_statement > left: type > identifier
     "__type_alias__": _extract_type_alias_name_list,
-    # JS/TS/Java: lexical_declaration / variable_declaration / field_declaration
-    #             > variable_declarator > identifier / pattern
+    # JS/TS/Java: lexical_declaration / variable_declaration / field_declaration /
+    #             constant_declaration > variable_declarator > identifier / pattern
     "__variable_declarator__": _extract_variable_declarator_name_list,
     # JS/TS: expression_statement > assignment_expression > exports.name / module.exports.name /
     #        a member given a function
@@ -1648,13 +2202,17 @@ _SENTINEL_EXTRACTOR_DICT = {
     "__export_member__": _extract_export_member_name_list,
     # JS/TS: method_definition / field_definition > property_identifier / private_property_identifier
     "__property_name__": _extract_property_name_list,
-    # TS: property_identifier directly in an enum_body
+    # TS: enum_assignment / property_identifier / string directly in an enum_body
     "__enum_member__": _extract_enum_member_name_list,
+    # TS: internal_module / module > name: identifier / nested_identifier
+    "__module_name__": _extract_module_name_list,
     # JS/TS: export_statement with default and an unnamed value
     "__default_export__": _default_export_name_list,
-    # C/C++: declaration > (init / pointer / array) declarator > identifier
+    # C/C++: declaration > (init / pointer / array / function pointer) declarator
+    #        > identifier / qualified_identifier / operator_cast
     "__init_declarator__": _extract_init_declarator_name_list,
-    # C/C++: field_declaration > (pointer / array) declarator > field_identifier
+    # C/C++: field_declaration > (pointer / array / function pointer) declarator
+    #        > field_identifier / operator_cast
     "__field_declarator__": _extract_field_declarator_name_list,
     # C/C++: type_definition > declarator > type_identifier
     "__type_declarator__": _extract_type_declarator_name_list,

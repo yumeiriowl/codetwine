@@ -98,7 +98,7 @@ Extract and print() only the parts you need.
 ### Top level
 - `file` (str): File path
 - `file_dependencies` (object): Dependency details
-- `doc` (object): Design document
+- `doc` (object): Design document. Absent when the file has no design document
 
 ### file_dependencies.definitions[]
 - `name` (str): Function/class name
@@ -109,15 +109,23 @@ Extract and print() only the parts you need.
 
 ### file_dependencies.callee_usages[] (dependencies used by this file)
 - `lines` (int[]): Usage line numbers within this file
-- `name` (str): Function/class name being used
+- `name` (str): Function/class name being used, as this file writes it (e.g. `helper.process`)
 - `from` (str): Dependency file path
-- `target_context` (str): Full source code of the dependency function/class
+- `target_context` (str|null): Full source code of the dependency function/class (null when the name leads to no definition)
+- `target_name` (str|null): `name` of that definition in the dependency file's `definitions`
+- `target_start_line` (int|null): `start_line` of that definition
+
+### file_dependencies.same_file_usages[] (definitions of this file used in this file)
+- `lines` (int[]): Usage line numbers within this file
+- `name` (str): Function/class name being used, as this file writes it
+- `target_name` (str|null): `name` of the definition in this file's `definitions`
+- `target_start_line` (int|null): `start_line` of that definition
 
 ### file_dependencies.caller_usages[] (dependents using this file)
 - `lines` (int[]): Usage line numbers within the dependent file
 - `name` (str): Function/class name being used
 - `file` (str): Dependent file path
-- `usage_context` (str): Source code of the usage location in the dependent
+- `usage_context` (str): Source code of the usage location in the dependent (absent when the dependent file cannot be read)
 
 ### doc
 - `summary` (str): Summary of the file
@@ -127,7 +135,7 @@ Extract and print() only the parts you need.
 
 ## Code examples
 
-### Keyword search (across all fields)
+### Keyword search (design documents and source code)
 ```python
 for hit in search_text("search_term"):
     print(hit["kind"], hit["file"], hit["name"])
@@ -149,7 +157,7 @@ print("Dependents:", [(c["file"], c["name"]) for c in deps["caller_usages"]])
 ### Reading one file's design document
 ```python
 detail = get_file_detail(project_data["project_dependencies"][0]["file"])
-for section in detail["doc"]["sections"]:
+for section in detail.get("doc", {}).get("sections", []):
     print(section["title"])
     print(section["content"])
 ```
@@ -165,7 +173,7 @@ def build_doc_schema(store: knowledge_store.Store) -> str:
         store: An open knowledge store
 
     Returns:
-        Text listing doc sections
+        Text listing doc sections; "" when no file has a section
     """
     section_list = []
     for file_entry in store.iter_entries():
@@ -173,6 +181,8 @@ def build_doc_schema(store: knowledge_store.Store) -> str:
         if doc.get("sections"):
             section_list = doc["sections"]
             break
+    if not section_list:
+        return ""
 
     section_row_list = [f"| `{section['id']}` | {section['title']} |" for section in section_list]
     section_table = "| id | title |\n|---|---|\n" + "\n".join(section_row_list)
@@ -233,25 +243,25 @@ def create_interpreter() -> PythonInterpreter:
     if not deno_dir:
         deno_dir = os.path.expanduser("~/.cache/deno")
 
-    # Set DENO_DIR environment variable
     os.environ["DENO_DIR"] = deno_dir
 
-    deno_command = [
+    deno_command_list = [
         "deno", "run",
         "--node-modules-dir=false",
         f"--allow-read={runner_path},{deno_dir}",
         runner_path,
     ]
 
-    return PythonInterpreter(deno_command=deno_command)
+    return PythonInterpreter(deno_command=deno_command_list)
 
 
-def create_qa_agent(knowledge_path: str) -> dspy.RLM:
+def create_qa_agent(knowledge_path: str, interpreter: PythonInterpreter) -> dspy.RLM:
     """
     Create a dspy.RLM-based Q&A agent.
 
     Args:
         knowledge_path: Path to project_knowledge.json or project_knowledge.sqlite
+        interpreter: The PythonInterpreter the agent runs its code in (create_interpreter())
 
     Returns:
         Configured dspy.RLM instance
@@ -272,13 +282,11 @@ def create_qa_agent(knowledge_path: str) -> dspy.RLM:
         .replace("<<<RLM_OUTPUT_LANGUAGE>>>", OUTPUT_LANGUAGE)
     )
 
-    # Create Signature and PythonInterpreter
+    # Create Signature
     signature = dspy.Signature(
         "project_data, question -> answer",
         instructions,
     )
-
-    interpreter = create_interpreter()
 
     # Assemble and return the RLM agent
     rlm = dspy.RLM(
@@ -328,14 +336,15 @@ def main() -> None:
         print("Run uv run python main.py first.")
         sys.exit(1)
 
-    # Initialize the RLM agent
-    print(f"Loading: {knowledge_path}")
-    rlm = create_qa_agent(knowledge_path)
-    print("\n[OK] Initialization complete")
-    print("\nEnter your question (exit: exit, quit, q)\n")
-
-    # Interactive loop
+    interpreter = create_interpreter()
     try:
+        # Initialize the RLM agent
+        print(f"Loading: {knowledge_path}")
+        rlm = create_qa_agent(knowledge_path, interpreter)
+        print("\n[OK] Initialization complete")
+        print("\nEnter your question (exit: exit, quit, q)\n")
+
+        # Interactive loop
         while True:
             try:
                 question = input("> ")
@@ -349,12 +358,13 @@ def main() -> None:
                 answer = ask(rlm, question)
                 print(f"{answer}\n")
 
-            except KeyboardInterrupt:
+            except (KeyboardInterrupt, EOFError):
                 break
     finally:
-        # Shut down PythonInterpreter (Deno process)
-        if rlm._interpreter is not None:
-            rlm._interpreter.shutdown()
+        # Shut down PythonInterpreter (Deno process) and close the knowledge store
+        interpreter.shutdown()
+        if qa_tools.store is not None:
+            qa_tools.store.close()
 
 
 if __name__ == "__main__":

@@ -11,7 +11,9 @@ Description:
 
 import argparse
 import asyncio
+import logging
 import os
+import sys
 from codetwine.pipeline import process_all_files
 from codetwine.llm.client import LLMClient
 from codetwine.config.settings import (
@@ -21,6 +23,8 @@ from codetwine.config.settings import (
     REPO_ROOT,
 )
 from codetwine.config.logger import setup_logging
+
+logger = logging.getLogger(__name__)
 
 
 def parse_args() -> argparse.Namespace:
@@ -68,13 +72,21 @@ def resolve_dirs(args: argparse.Namespace) -> tuple[str, str]:
 
 
 def main() -> None:
-    """Entry point for dependency analysis and design document generation."""
+    """Entry point for dependency analysis and design document generation.
+
+    A ValueError of a wrong setting or directory (LLMClient, process_all_files) is
+    logged as an error and the process exits with status 1.
+    """
     setup_logging()
     args = parse_args()
     project_dir, output_dir = resolve_dirs(args)
 
-    llm_client = LLMClient() if ENABLE_LLM_DOC else None
-    asyncio.run(process_all_files(project_dir, output_dir, llm_client))
+    try:
+        llm_client = LLMClient() if ENABLE_LLM_DOC else None
+        asyncio.run(process_all_files(project_dir, output_dir, llm_client))
+    except ValueError as e:
+        logger.error(str(e))
+        sys.exit(1)
 
 
 if __name__ == "__main__":

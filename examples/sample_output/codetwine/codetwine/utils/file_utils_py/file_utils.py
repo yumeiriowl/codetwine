@@ -241,8 +241,8 @@ def rel_to_copy_path(rel_path: str) -> str:
 
     Examples:
         "config.py"                    -> "config_py/config.py"
-        "repo_graphrag/prompts.py"     -> "repo_graphrag/prompts_py/prompts.py"
-        "repo_graphrag/llm/client.py"  -> "repo_graphrag/llm/client_py/client.py"
+        "src/prompts.py"     -> "src/prompts_py/prompts.py"
+        "src/llm/client.py"  -> "src/llm/client_py/client.py"
         "Makefile"                     -> "Makefile/Makefile"
 
     Args:
@@ -270,8 +270,8 @@ def copy_path_to_rel(copy_path: str) -> str:
 
     Examples:
         "config_py/config.py"                    -> "config.py"
-        "repo_graphrag/prompts_py/prompts.py"     -> "repo_graphrag/prompts.py"
-        "repo_graphrag/llm/client_py/client.py"   -> "repo_graphrag/llm/client.py"
+        "src/prompts_py/prompts.py"     -> "src/prompts.py"
+        "src/llm/client_py/client.py"   -> "src/llm/client.py"
         "Makefile/Makefile"                       -> "Makefile"
 
     Args:

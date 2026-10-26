@@ -1,6 +1,5 @@
-import os
 import logging
-from codetwine.parsers.ts_parser import parse_file
+from codetwine.parsers.ts_parser import file_detect_encoding, parse_file
 from codetwine.extractors.definitions import DefinitionInfo
 from codetwine.extractors.definition_source import file_content, file_definition_list
 from codetwine.extractors.usage_analysis import (
@@ -11,7 +10,7 @@ from codetwine.extractors.usage_analysis import (
 )
 from codetwine.reference_target import reference_kind, reference_target_list
 from codetwine.config.settings import EXT_TO_DEFINITION_DICT, language_ext
-from codetwine.utils.file_utils import detected_encoding, line_list_of
+from codetwine.utils.file_utils import line_list_of, path_to_rel
 
 logger = logging.getLogger(__name__)
 
@@ -58,8 +57,10 @@ def get_file_dependencies(
     (language_ext), "" for a file without a language. Such a file is not parsed: its lists
     come back empty.
     "detected_encoding" is the encoding read_source() had to detect for the file
-    (detected_encoding), "" when it reads the file as UTF-8 with replacement, and None
-    when a BOM, UTF-8 or SOURCE_ENCODING decodes it or the file has no language.
+    (file_detect_encoding: from the read of the file for its analysis), "" when it reads
+    the file as UTF-8 with replacement, the codec of the BOM when it reads a file with a
+    UTF-16 or UTF-32 BOM by that codec with replacement, and None when a BOM, UTF-8 or
+    SOURCE_ENCODING decodes it or the file has no language.
     A definition of a COBOL file, a BMS source, a JCL file or a CSD file also has
     "name_line", and a data item "level" and "is_group". The references of the file, and
     of the files depending on it, are resolved by reference_target_list().
@@ -74,7 +75,7 @@ def get_file_dependencies(
         A dict with {"file", "language", "detected_encoding", "definitions",
         "callee_usages", "same_file_usages", "caller_usages"} keys.
     """
-    target_file_rel = os.path.relpath(target_file, project_dir).replace("\\", "/")
+    target_file_rel = path_to_rel(target_file, project_dir)
     file_ext = language_ext(target_file)
     # Per-language definition extraction settings (None for a file without a language)
     definition_dict = EXT_TO_DEFINITION_DICT.get(file_ext)
@@ -107,19 +108,19 @@ def get_file_dependencies(
     # references of the files depending on this file that lead to it
     target_list = reference_target_list(target_file_rel, project_file_set, project_dir)
     usage_list = build_callee_usages(target_list, target_file_rel, project_dir)
-    same_file_usages = build_same_file_usages(
+    same_file_usage_list = build_same_file_usages(
         target_list, target_file_rel, project_dir, definition_info_list, root_node,
     )
-    caller_usages = build_caller_usages(
+    caller_usage_list = build_caller_usages(
         target_file_rel, caller_map.get(target_file_rel, []), project_dir, project_file_set,
     )
 
     return {
         "file":          target_file_rel,
         "language":      file_ext,
-        "detected_encoding": detected_encoding(target_file),
+        "detected_encoding": file_detect_encoding(target_file),
         "definitions":   definition_list,
         "callee_usages": usage_list,
-        "same_file_usages": same_file_usages,
-        "caller_usages": caller_usages,
+        "same_file_usages": same_file_usage_list,
+        "caller_usages": caller_usage_list,
     }

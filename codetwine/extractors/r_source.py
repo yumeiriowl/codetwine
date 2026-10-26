@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 from tree_sitter import Node
+from codetwine.parsers.ts_node import node_text
 from codetwine.utils.file_utils import line_list_of
 
 # Kinds of an RImport
@@ -15,9 +16,6 @@ MEMBER_REFERENCE = "member"          # owner$name / owner@name
 # Assignment operators whose target is on the left / on the right
 _LEFT_ASSIGN_SET = {"<-", "=", "<<-"}
 _RIGHT_ASSIGN_SET = {"->", "->>"}
-
-# Name of the call that evaluates its argument in an environment of its own
-_LOCAL_CALL = "local"
 
 # Assignment operators that bind the name in the function they are written in
 _LOCAL_ASSIGN_SET = {"<-", "=", "->"}
@@ -88,10 +86,8 @@ _MEMBER_ARGUMENT_DICT = {
 
 # Call -> name of the argument whose string names a definition
 _STRING_NAME_CALL_DICT = {
+    **_ATTACH_CALL_DICT,
     "new": "Class",
-    "setValidity": "Class",
-    "setMethod": "f",
-    "setReplaceMethod": "f",
     "do.call": "what",
     "match.fun": "FUN",
 }
@@ -126,6 +122,19 @@ _SOURCE_CALL_SET = {"source", "sys.source"}
 # Calls that attach a package: the package is the first argument, or the one named "package"
 _LIBRARY_CALL_SET = {"library", "require"}
 
+# Packages a call of base R is written with (base::source);
+# "" for a call written without one
+_BASE_PACKAGE_SET = {"", "base"}
+
+# Package and name of the call whose arguments name box modules
+_BOX_USE_PART = ("box", "use")
+
+# Argument of library() / require() that makes the package a string or a variable
+_CHARACTER_ONLY_ARGUMENT = "character.only"
+
+# Identifier that R binds to TRUE
+_TRUE_NAME = "T"
+
 # Calls whose string arguments, all of them, make up a path
 _PATH_CALL_SET = {"file.path", "here"}
 
@@ -134,6 +143,14 @@ _GENERIC_CALL = "UseMethod"
 
 # Calls whose arguments are code that is not run where it is written
 _QUOTE_CALL_SET = {"quote", "bquote", "substitute", "expression"}
+
+# Call whose arguments run when the function they are written in ends -> the packages it
+# is called from ("" for a call written without one)
+_EXIT_CALL_DICT = {
+    "on.exit": _BASE_PACKAGE_SET,
+    "defer": {"", "withr"},
+    "defer_parent": {"", "withr"},
+}
 
 
 @dataclass
@@ -148,6 +165,9 @@ class RDefinition:
     is_generic: bool = False    # Whether the function calls UseMethod
     is_member: bool = False     # Whether it is a member of a class (R6Class, setRefClass)
     is_attach: bool = False     # Whether it is written for a name defined elsewhere (setMethod)
+    # Byte offset from which an assignment binds the name (the end of the assignment);
+    # -1 when it is bound in the whole file
+    bind_position: int = -1
 
 
 @dataclass
@@ -156,7 +176,7 @@ class RImport:
 
     kind: str     # SOURCE_IMPORT / BOX_IMPORT / LIBRARY_IMPORT
     path: str     # Path as written (source), module path "a/b" or package name (box), package name (library)
-    line: int     # Line of the call (1-based)
+    line: int     # Line of the call (1-based); box: line of the argument
     alias: str = ""                                            # box: name the module is bound to
     name_dict: dict[str, str] = field(default_factory=dict)    # box: {name in the file: name in the module}
     is_attach_all: bool = False                                # box: whether every name is attached ([...])
@@ -171,6 +191,9 @@ class RReference:
     kind: str        # NAME_REFERENCE / NAMESPACE_REFERENCE / MEMBER_REFERENCE
     owner: str = ""  # Package of pkg::name, or the name before the first "$" / "@"
     member_tuple: tuple[str, ...] = ()  # owner$name$a$b: the names after name ("a", "b")
+    # Byte offset the name is read at when the reference is outside every function (run
+    # where it is written); -1 inside a function
+    read_position: int = -1
 
 
 @dataclass
@@ -182,14 +205,23 @@ class RSource:
     reference_list: list[RReference]
 
 
-def _node_text(node: Node) -> str:
-    """Return the source text of a node."""
-    return node.text.decode("utf-8")
+@dataclass
+class _Statement:
+    """One top-level statement of an R file, with what it binds and refers to."""
+
+    node: Node                              # The statement node
+    bind_list: list[tuple[str, Node]]       # Names it binds, with their nodes (_local_bind_list)
+    reference_list: list[RReference]        # The references written in it
 
 
 def _line(node: Node) -> int:
     """Return the line a node starts on (1-based)."""
     return node.start_point[0] + 1
+
+
+def _end_line(node: Node) -> int:
+    """Return the line a node ends on (1-based)."""
+    return node.end_point[0] + 1
 
 
 def _string_text(node: Node | None) -> str | None:
@@ -203,8 +235,18 @@ def _string_text(node: Node | None) -> str | None:
         return None
     content = node.child_by_field_name("content")
     if content is not None:
-        return _node_text(content)
+        return node_text(content)
     return "" if node.child_by_field_name("open") is not None else None
+
+
+def _identifier_text(node: Node) -> str:
+    """Return the name an identifier node writes, without its backticks.
+
+    Examples:
+        add        -> "add"
+        `my var`   -> "my var"
+    """
+    return node_text(node).strip("`")
 
 
 def _name_text(node: Node | None) -> str | None:
@@ -219,14 +261,14 @@ def _name_text(node: Node | None) -> str | None:
     if node is None:
         return None
     if node.type == "identifier":
-        return _node_text(node).strip("`")
+        return _identifier_text(node)
     return _string_text(node)
 
 
 def _operator(node: Node) -> str:
     """Return the operator of a binary_operator, extract_operator or namespace_operator node."""
     operator_node = node.child_by_field_name("operator")
-    return _node_text(operator_node) if operator_node is not None else ""
+    return node_text(operator_node) if operator_node is not None else ""
 
 
 def _assign_part(node: Node) -> tuple[Node | None, Node | None] | None:
@@ -298,7 +340,7 @@ def _call_name_part(node: Node) -> tuple[str, str] | None:
     if function_node is None:
         return None
     if function_node.type == "identifier":
-        return "", _node_text(function_node).strip("`")
+        return "", _identifier_text(function_node)
     if function_node.type == "namespace_operator":
         owner = _name_text(function_node.child_by_field_name("lhs"))
         name = _name_text(function_node.child_by_field_name("rhs"))
@@ -311,8 +353,8 @@ def _call_name(node: Node | None) -> str | None:
     """Return the name of the function a call node calls, without its package."""
     if node is None or node.type != "call":
         return None
-    name_part = _call_name_part(node)
-    return name_part[1] if name_part else None
+    name_part_tuple = _call_name_part(node)
+    return name_part_tuple[1] if name_part_tuple else None
 
 
 def _argument_list(node: Node) -> list[tuple[str | None, Node | None, Node]]:
@@ -413,11 +455,11 @@ def _assign_chain(node: Node) -> tuple[list[Node], Node | None]:
     target_list: list[Node] = []
     value: Node | None = node
     while value is not None:
-        assign_part = _assign_part(value)
-        if assign_part is None:
+        assign_part_tuple = _assign_part(value)
+        if assign_part_tuple is None:
             break
-        target_list.extend(_target_part_list(assign_part[0]))
-        value = assign_part[1]
+        target_list.extend(_target_part_list(assign_part_tuple[0]))
+        value = assign_part_tuple[1]
     return target_list, value
 
 
@@ -504,7 +546,7 @@ def _member_definition_list(call_node: Node) -> list[RDefinition]:
                 name=member_name,
                 type="argument",
                 start_line=_line(argument_node),
-                end_line=argument_node.end_point[0] + 1,
+                end_line=_end_line(argument_node),
                 is_function=value is not None and value.type == "function_definition",
                 is_member=True,
             ))
@@ -593,7 +635,7 @@ def _call_definition_list(call_node: Node, statement: Node, skip_name_set: set[s
         name=name,
         type="call",
         start_line=_line(statement),
-        end_line=statement.end_point[0] + 1,
+        end_line=_end_line(statement),
         is_attach=is_attach,
     )]
 
@@ -612,8 +654,8 @@ def r_definition_list(root_node: Node) -> list[RDefinition]:
     R6Class and of methods and fields of setRefClass are members (type "argument").
     The statements of a top-level if, "{ }", "( )", for, while and repeat are top-level
     statements (_read_top_level). An assignment inside a function is not a definition.
-    A name assigned inside a top-level statement, outside the functions written in it,
-    is a definition when a later top-level statement refers to it
+    A name assigned inside a top-level statement, outside the functions and calls
+    written in it, is a definition when a later top-level statement refers to it
     (_inner_definition_list).
 
     Args:
@@ -622,10 +664,23 @@ def r_definition_list(root_node: Node) -> list[RDefinition]:
     Returns:
         The RDefinition list, sorted by start_line.
     """
+    return _definition_list(_statement_list(root_node))
+
+
+def _definition_list(statement_list: list[_Statement]) -> list[RDefinition]:
+    """Return the definitions of the top-level statements of an R file (see r_definition_list).
+
+    Args:
+        statement_list: The top-level statements of the file (_statement_list).
+
+    Returns:
+        The RDefinition list, sorted by start_line.
+    """
     definition_list: list[RDefinition] = []
-    for statement in _read_top_level(root_node)[0]:
+    for top_level in statement_list:
+        statement = top_level.node
         start_line = _line(statement)
-        end_line = statement.end_point[0] + 1
+        end_line = _end_line(statement)
         target_list, value = _assign_chain(statement)
         name_list = [name for name in map(_name_text, target_list) if name]
 
@@ -641,6 +696,7 @@ def r_definition_list(root_node: Node) -> list[RDefinition]:
                     end_line=end_line,
                     is_function=is_function,
                     is_generic=is_generic,
+                    bind_position=statement.end_byte,
                 )
                 for name in name_list
             )
@@ -650,68 +706,68 @@ def r_definition_list(root_node: Node) -> list[RDefinition]:
             definition_list.extend(_call_definition_list(call_node, statement, set(name_list)))
             definition_list.extend(_member_definition_list(call_node))
 
-    definition_list.extend(_inner_definition_list(root_node))
+    definition_list.extend(_inner_definition_list(statement_list))
     return sorted(definition_list, key=lambda definition: definition.start_line)
 
 
-def _is_inside_local_call(node: Node, statement: Node) -> bool:
-    """Return whether a node of a statement is written inside a call of local()."""
+def _is_inside_call(node: Node, statement: Node) -> bool:
+    """Return whether a node of a statement is written inside a call, the statement included."""
     current = node.parent
     while current is not None and current.id != statement.id:
-        if current.type == "call" and _call_name(current) == _LOCAL_CALL:
+        if current.type == "call":
             return True
         current = current.parent
-    return statement.type == "call" and _call_name(statement) == _LOCAL_CALL
+    return statement.type == "call"
 
 
-def _inner_definition_list(root_node: Node) -> list[RDefinition]:
+def _inner_definition_list(statement_list: list[_Statement]) -> list[RDefinition]:
     """Return the definitions written inside the top-level statements of an R file.
 
-    A name assigned inside a top-level statement, outside the functions and the
-    local() calls written in it (tryCatch({ cfg <- load() }), system.time(fit <- run())),
-    is a definition when a top-level statement after it refers to the name without
-    assigning it itself.
+    A name assigned inside a top-level statement, outside the functions and the calls
+    written in it (if ((n <- length(x)) > 0), x <- (y <- 2)), is a definition when a
+    top-level statement after it refers to the name (a reference of the statement,
+    _statement_list). A name assigned inside the arguments of a call
+    (test_that("...", { x <- 1 }), local({ }), tryCatch({ cfg <- load() })) is not.
 
     Args:
-        root_node: The AST root node of the file.
+        statement_list: The top-level statements of the file (_statement_list).
 
     Returns:
         One RDefinition per such name and statement, with the lines of the first
         assignment of the name in the statement: of type "function_definition" when
         the value is a function, else "binary_operator".
     """
-    statement_list, loop_name_set = _read_top_level(root_node)
     definition_list: list[RDefinition] = []
     later_name_set: set[str] = set()
-    for statement in reversed(statement_list):
-        bind_list = _local_bind_list(statement, _chain_node_id_set(statement))
+    for top_level in reversed(statement_list):
+        statement = top_level.node
         first_node_dict: dict[str, Node] = {}
-        for name, bind_node in sorted(bind_list, key=lambda bind: bind[1].start_byte):
-            if bind_node.type == "binary_operator" and not _is_inside_local_call(bind_node, statement):
+        for name, bind_node in sorted(
+            top_level.bind_list, key=lambda bind_tuple: bind_tuple[1].start_byte,
+        ):
+            if bind_node.type == "binary_operator" and not _is_inside_call(bind_node, statement):
                 first_node_dict.setdefault(name, bind_node)
         for name, assign_node in first_node_dict.items():
             if name not in later_name_set:
                 continue
-            assign_part = _assign_part(assign_node)
+            assign_part_tuple = _assign_part(assign_node)
             is_function = (
-                assign_part is not None and assign_part[1] is not None
-                and assign_part[1].type == "function_definition"
+                assign_part_tuple is not None and assign_part_tuple[1] is not None
+                and assign_part_tuple[1].type == "function_definition"
             )
             definition_list.append(RDefinition(
                 name=name,
                 type="function_definition" if is_function else "binary_operator",
                 start_line=_line(assign_node),
-                end_line=assign_node.end_point[0] + 1,
+                end_line=_end_line(assign_node),
                 is_function=is_function,
+                bind_position=assign_node.end_byte,
             ))
 
-        # The names the statement refers to without binding them itself; of owner$name
-        # the owner
-        walker = _ReferenceWalker()
-        walker.walk(statement, [{name for name, _ in bind_list} | loop_name_set])
+        # The names the statement refers to; of owner$name the owner
         later_name_set.update(
             reference.owner if reference.kind == MEMBER_REFERENCE else reference.name
-            for reference in walker.reference_list
+            for reference in top_level.reference_list
         )
     return definition_list
 
@@ -731,11 +787,17 @@ def r_definition_text(root_node: Node, content: bytes, name: str) -> str | None:
         The lines of the first such definition joined with "\\n". None when the file
         has no definition of the name.
     """
-    candidate_list = [d for d in r_definition_list(root_node) if d.name == name]
+    candidate_list = [
+        candidate for candidate in r_definition_list(root_node) if candidate.name == name
+    ]
     if not candidate_list:
         return None
     definition = next(
-        (d for d in candidate_list if not d.is_member and not d.is_attach), candidate_list[0],
+        (
+            candidate for candidate in candidate_list
+            if not candidate.is_member and not candidate.is_attach
+        ),
+        candidate_list[0],
     )
     line_list = line_list_of(content.decode("utf-8"))
     return "\n".join(line_list[definition.start_line - 1:definition.end_line])
@@ -778,7 +840,7 @@ def _box_path_part_list(node: Node | None) -> list[str] | None:
     if node is None:
         return None
     if node.type == "identifier":
-        return [_node_text(node).strip("`")]
+        return [_identifier_text(node)]
     if node.type == "subset":
         return _box_path_part_list(node.child_by_field_name("function"))
     if node.type == "binary_operator" and _operator(node) == "/":
@@ -843,13 +905,57 @@ def _box_import(argument_name: str | None, value: Node | None) -> RImport | None
     return box_import
 
 
+def _is_box_use(name_part_tuple: tuple[str, str] | None) -> bool:
+    """Return whether the (package, name) of a call (_call_name_part) is box::use."""
+    return name_part_tuple == _BOX_USE_PART
+
+
+def _is_library_call(name_part_tuple: tuple[str, str] | None) -> bool:
+    """Return whether the (package, name) of a call (_call_name_part) is library() / require()."""
+    return (
+        name_part_tuple is not None
+        and name_part_tuple[1] in _LIBRARY_CALL_SET and name_part_tuple[0] in _BASE_PACKAGE_SET
+    )
+
+
+def _is_true(node: Node | None) -> bool:
+    """Return whether a node writes TRUE or T."""
+    return node is not None and (
+        node.type == "true" or (node.type == "identifier" and node_text(node) == _TRUE_NAME)
+    )
+
+
+def _library_package(call_node: Node) -> tuple[Node | None, str | None]:
+    """Return the package argument of a call of library() / require() and the package it names.
+
+    The package is written as a name or a string. With character.only = TRUE (or T) it
+    is a string only, and a name is a variable that holds the package name.
+
+    Examples:
+        library(calc)                              -> (calc, "calc")
+        library("calc", character.only = FALSE)    -> ("calc", "calc")
+        library("calc", character.only = TRUE)     -> ("calc", "calc")
+        library(pk, character.only = TRUE)         -> (pk, None)
+
+    Args:
+        call_node: A call node of library() / require().
+
+    Returns:
+        (value node of the package argument or None, package name or None).
+    """
+    package_node = _argument_value(call_node, "package")
+    if _is_true(_argument_value(call_node, _CHARACTER_ONLY_ARGUMENT)):
+        return package_node, _string_text(package_node)
+    return package_node, _name_text(package_node)
+
+
 def _import_list(root_node: Node) -> list[RImport]:
     """Return the files and packages an R file reads, in line order.
 
     source("path") and sys.source("path") with a path written with string literals
     (_literal_path), library(pkg) and require(pkg) with the package written as a name
-    or a string, and each argument of box::use(...). The calls are read wherever they
-    are written in the file.
+    or a string (a string only with character.only = TRUE), and each argument of
+    box::use(...). The calls are read wherever they are written in the file.
 
     Args:
         root_node: The AST root node of the file.
@@ -864,24 +970,22 @@ def _import_list(root_node: Node) -> list[RImport]:
         node_stack.extend(node.children)
         if node.type != "call":
             continue
-        name_part = _call_name_part(node)
-        if name_part is None:
+        name_part_tuple = _call_name_part(node)
+        if name_part_tuple is None:
             continue
-        owner, name = name_part
+        owner, name = name_part_tuple
 
-        if (owner, name) == ("box", "use"):
+        if _is_box_use(name_part_tuple):
             for argument_name, value, _ in _argument_list(node):
                 box_import = _box_import(argument_name, value)
                 if box_import is not None:
                     import_list.append(box_import)
-        elif name in _SOURCE_CALL_SET and owner in ("", "base"):
+        elif name in _SOURCE_CALL_SET and owner in _BASE_PACKAGE_SET:
             path = _literal_path(_argument_value(node, "file"))
             if path:
                 import_list.append(RImport(kind=SOURCE_IMPORT, path=path, line=_line(node)))
-        elif name in _LIBRARY_CALL_SET and owner in ("", "base"):
-            package_node = _argument_value(node, "package")
-            is_string_only = _argument_value(node, "character.only") is not None
-            package = _string_text(package_node) if is_string_only else _name_text(package_node)
+        elif _is_library_call(name_part_tuple):
+            package = _library_package(node)[1]
             if package:
                 import_list.append(RImport(kind=LIBRARY_IMPORT, path=package, line=_line(node)))
 
@@ -899,25 +1003,26 @@ def _chain_node_id_set(statement: Node) -> set[int]:
     node_id_set: set[int] = set()
     current: Node | None = statement
     while current is not None:
-        assign_part = _assign_part(current)
-        if assign_part is None:
+        assign_part_tuple = _assign_part(current)
+        if assign_part_tuple is None:
             break
         node_id_set.add(current.id)
-        target = assign_part[0]
+        target = assign_part_tuple[0]
         while _is_target_pair(target):
             node_id_set.add(target.id)
             target = target.child_by_field_name("rhs")
-        current = assign_part[1]
+        current = assign_part_tuple[1]
     return node_id_set
 
 
 def _local_bind_list(
     node: Node, skip_node_id_set: set[int] | None = None,
 ) -> list[tuple[str, Node]]:
-    """Return the names bound inside a node, outside the functions written in it, with the node that binds each.
+    """Return the names bound inside a node with the node that binds each.
 
     The targets of "<-", "=" and "->" (with their assignment node) and the variables
-    of for loops (with the loop node) are returned.
+    of for loops (with the loop node) are returned; the names bound inside the
+    functions written in the node are left out.
 
     Args:
         node: The node to read: the body of a function, or a top-level statement.
@@ -951,37 +1056,97 @@ def _local_bind_list(
     return bind_list
 
 
-def _local_name_set(node: Node, skip_node_id_set: set[int] | None = None) -> set[str]:
-    """Return the names assigned inside a node, outside the functions written in it.
+# The names one scope binds: name -> byte offset from which it is bound (_scope_dict)
+_Scope = dict[str, int]
 
-    The targets of "<-", "=" and "->" and the variables of for loops are returned
-    (_local_bind_list).
+
+def _bind_position(bind_node: Node) -> int:
+    """Return the byte offset from which a binding of _local_bind_list binds its name.
+
+    An assignment binds its target from its end, after its value (x in x <- f(x) is read
+    before it is bound); a for loop binds its variable from the end of its sequence.
+    """
+    if bind_node.type == "for_statement":
+        sequence = bind_node.child_by_field_name("sequence")
+        return sequence.end_byte if sequence is not None else bind_node.start_byte
+    return bind_node.end_byte
+
+
+def _scope_dict(bind_list: list[tuple[str, Node]], always_name_set: set[str]) -> _Scope:
+    """Return the names a scope binds with the byte offset from which each is bound.
 
     Args:
-        node: The node to read: the body of a function, or a top-level statement.
-        skip_node_id_set: Ids of the assignments whose own target is not returned (the
-            assignments a top-level statement defines names with).
+        bind_list: (name, node that binds it) pairs (_local_bind_list).
+        always_name_set: Names bound in the whole scope (parameters, top-level for
+            variables).
 
     Returns:
-        The set of names.
+        {name: the first offset any binding of it binds it from (_bind_position); -1
+        for a name of always_name_set}.
     """
-    return {name for name, _ in _local_bind_list(node, skip_node_id_set)}
+    scope_dict: _Scope = {}
+    for name, bind_node in bind_list:
+        bind_position = _bind_position(bind_node)
+        scope_dict[name] = min(bind_position, scope_dict.get(name, bind_position))
+    scope_dict.update(dict.fromkeys(always_name_set, -1))
+    return scope_dict
 
 
-def _function_local_name_set(function_node: Node) -> set[str]:
-    """Return the names a function binds: its parameters and the names assigned in its body."""
-    name_set: set[str] = set()
+def _function_scope_dict(function_node: Node) -> _Scope:
+    """Return the names a function binds: its parameters and the names assigned in its body.
+
+    Returns:
+        {name: byte offset from which it is bound} (_scope_dict); the parameters are
+        bound in the whole function.
+    """
+    parameter_name_set: set[str] = set()
     parameter_holder = function_node.child_by_field_name("parameters")
     if parameter_holder is not None:
         for parameter in parameter_holder.children:
             if parameter.type == "parameter":
                 name = _name_text(parameter.child_by_field_name("name"))
                 if name:
-                    name_set.add(name)
+                    parameter_name_set.add(name)
     body = function_node.child_by_field_name("body")
-    if body is not None:
-        name_set.update(_local_name_set(body))
-    return name_set
+    bind_list = _local_bind_list(body) if body is not None else []
+    return _scope_dict(bind_list, parameter_name_set)
+
+
+def _read_position(scope_list: list[_Scope], position: int | None) -> int:
+    """Return the read_position of an RReference: the offset outside every function, else -1.
+
+    Args:
+        scope_list: The scopes around the reference (only the top-level statement's
+            outside every function).
+        position: Byte offset the name is read at; None when it is not known.
+    """
+    return position if position is not None and len(scope_list) == 1 else -1
+
+
+def _all_bound_scope_list(scope_list: list[_Scope]) -> list[_Scope]:
+    """Return the scopes with every name of the innermost one bound from its start.
+
+    Used for code that runs after the place it is written: the code given to on.exit()
+    and the default values of the parameters of a function.
+    """
+    return scope_list[:-1] + [dict.fromkeys(scope_list[-1], -1)]
+
+
+def _string_argument_list(call_node: Node, is_name_only: bool = False) -> list[Node]:
+    """Return the string nodes given as the arguments of a call.
+
+    Args:
+        call_node: A call node.
+        is_name_only: Whether only the strings written with a name are returned.
+
+    Returns:
+        The string nodes, in source order.
+    """
+    return [
+        value for argument_name, value, _ in _argument_list(call_node)
+        if value is not None and value.type == "string"
+        and (argument_name is not None or not is_name_only)
+    ]
 
 
 def _string_node_list(node: Node | None, is_name_only: bool = False) -> list[Node]:
@@ -994,17 +1159,16 @@ def _string_node_list(node: Node | None, is_name_only: bool = False) -> list[Nod
         node: The value node of the argument.
         is_name_only: Whether only the strings written with a name are returned
             (c(x = "A") gives "A", c("x") and "A" give nothing).
+
+    Returns:
+        The string nodes, in source order.
     """
     if node is None:
         return []
     if node.type == "string":
         return [] if is_name_only else [node]
     if _call_name(node) in _STRING_HOLDER_CALL_SET:
-        return [
-            value for argument_name, value, _ in _argument_list(node)
-            if value is not None and value.type == "string"
-            and (argument_name is not None or not is_name_only)
-        ]
+        return _string_argument_list(node, is_name_only)
     return []
 
 
@@ -1045,10 +1209,7 @@ def _string_reference_list(call_node: Node) -> list[RReference]:
             _string_node_list(_argument_value(call_node, slot_argument), is_name_only=True)
         )
     if call_name in _CLASS_STRING_CALL_SET:
-        string_node_list.extend(
-            value for _, value, _ in _argument_list(call_node)
-            if value is not None and value.type == "string"
-        )
+        string_node_list.extend(_string_argument_list(call_node))
     for string_node in string_node_list:
         class_name = _string_text(string_node)
         if class_name:
@@ -1058,8 +1219,8 @@ def _string_reference_list(call_node: Node) -> list[RReference]:
     return reference_list
 
 
-# A node still to read, with the name sets in scope around it (outermost first)
-_ScopeNode = tuple[Node, list[set[str]]]
+# A node still to read, with the scopes around it (outermost first)
+_ScopeNode = tuple[Node, list[_Scope]]
 
 
 class _ReferenceWalker:
@@ -1069,7 +1230,7 @@ class _ReferenceWalker:
         """Start with no references."""
         self.reference_list: list[RReference] = []
 
-    def walk(self, node: Node, scope_list: list[set[str]]) -> None:
+    def walk(self, node: Node, scope_list: list[_Scope]) -> None:
         """Collect the references written in a node and below it.
 
         Each node is handed to the method _READER_DICT names for its type, which adds
@@ -1078,8 +1239,9 @@ class _ReferenceWalker:
 
         Args:
             node: The node to read.
-            scope_list: The name sets of the top-level statement and of the functions
-                around the node, outermost first. A name in one of them is no reference.
+            scope_list: The scopes of the top-level statement and of the functions
+                around the node, outermost first (_is_in_scope). A name they bind is no
+                reference.
         """
         node_stack: list[_ScopeNode] = [(node, scope_list)]
         while node_stack:
@@ -1091,40 +1253,65 @@ class _ReferenceWalker:
                 node_stack.extend(reader(self, current, current_scope_list))
 
     @staticmethod
-    def _is_bound(name: str, scope_list: list[set[str]]) -> bool:
-        """Return whether a name is in one of the scopes."""
-        return any(name in scope for scope in scope_list)
+    def _is_in_scope(name: str, scope_list: list[_Scope], position: int | None) -> bool:
+        """Return whether one of the scopes binds a name where it is read.
 
-    def _add_name(self, name: str, line: int, scope_list: list[set[str]]) -> None:
-        """Add a NAME_REFERENCE unless a scope binds the name."""
-        if not self._is_bound(name, scope_list):
-            self.reference_list.append(RReference(name=name, line=line, kind=NAME_REFERENCE))
+        The innermost scope binds a name from the offset its first binding binds it from
+        (_scope_dict); the scopes outside it, those of the functions and the statement
+        the innermost function is written in, bind their names everywhere.
 
-    def _read_comment(self, node: Node, scope_list: list[set[str]]) -> list[_ScopeNode]:
+        Args:
+            name: The name.
+            scope_list: The scopes, outermost first.
+            position: Byte offset the name is read at; None to look in every scope
+                without the offsets.
+        """
+        if not scope_list:
+            return False
+        if any(name in scope for scope in scope_list[:-1]):
+            return True
+        bind_position = scope_list[-1].get(name)
+        return bind_position is not None and (position is None or bind_position <= position)
+
+    def _add_name(
+        self, name: str, node: Node, scope_list: list[_Scope], position: int | None,
+    ) -> None:
+        """Add a NAME_REFERENCE on the line of a node unless a scope binds it (_is_in_scope)."""
+        if not self._is_in_scope(name, scope_list, position):
+            self.reference_list.append(RReference(
+                name=name, line=_line(node), kind=NAME_REFERENCE,
+                read_position=_read_position(scope_list, position),
+            ))
+
+    def _read_comment(self, node: Node, scope_list: list[_Scope]) -> list[_ScopeNode]:
         """Read nothing of a comment."""
         return []
 
-    def _read_identifier(self, node: Node, scope_list: list[set[str]]) -> list[_ScopeNode]:
+    def _read_identifier(self, node: Node, scope_list: list[_Scope]) -> list[_ScopeNode]:
         """Read a name written by itself."""
-        self._add_name(_node_text(node).strip("`"), _line(node), scope_list)
+        self._add_name(_identifier_text(node), node, scope_list, node.start_byte)
         return []
 
-    def _read_function(self, node: Node, scope_list: list[set[str]]) -> list[_ScopeNode]:
-        """Read a function: its parameter defaults and its body, with its names in scope."""
-        function_scope_list = scope_list + [_function_local_name_set(node)]
+    def _read_function(self, node: Node, scope_list: list[_Scope]) -> list[_ScopeNode]:
+        """Read a function: its parameter defaults and its body, with its names in scope.
+
+        The defaults are read with every name of the function bound (_all_bound_scope_list).
+        """
+        function_scope_list = scope_list + [_function_scope_dict(node)]
         child_list: list[_ScopeNode] = []
         parameter_holder = node.child_by_field_name("parameters")
         if parameter_holder is not None:
+            default_scope_list = _all_bound_scope_list(function_scope_list)
             for parameter in parameter_holder.children:
                 default = parameter.child_by_field_name("default")
                 if default is not None:
-                    child_list.append((default, function_scope_list))
+                    child_list.append((default, default_scope_list))
         body = node.child_by_field_name("body")
         if body is not None:
             child_list.append((body, function_scope_list))
         return child_list
 
-    def _read_namespace(self, node: Node, scope_list: list[set[str]]) -> list[_ScopeNode]:
+    def _read_namespace(self, node: Node, scope_list: list[_Scope]) -> list[_ScopeNode]:
         """Read pkg::name / pkg:::name as a NAMESPACE_REFERENCE."""
         owner = _name_text(node.child_by_field_name("lhs"))
         name = _name_text(node.child_by_field_name("rhs"))
@@ -1134,7 +1321,7 @@ class _ReferenceWalker:
             )
         return []
 
-    def _read_extract(self, node: Node, scope_list: list[set[str]]) -> list[_ScopeNode]:
+    def _read_extract(self, node: Node, scope_list: list[_Scope]) -> list[_ScopeNode]:
         """Read owner$name / owner@name: the names after the operators are not read by themselves.
 
         owner$name$a with owner a name out of every scope is one MEMBER_REFERENCE
@@ -1154,26 +1341,27 @@ class _ReferenceWalker:
         if current.type != "identifier" or not name_list:
             return [(current, scope_list)]
 
-        owner = _node_text(current).strip("`")
-        if not self._is_bound(owner, scope_list):
+        owner = _identifier_text(current)
+        if not self._is_in_scope(owner, scope_list, current.start_byte):
             name_list.reverse()
             self.reference_list.append(RReference(
                 name=name_list[0], line=_line(node), kind=MEMBER_REFERENCE,
                 owner=owner, member_tuple=tuple(name_list[1:]),
+                read_position=_read_position(scope_list, current.start_byte),
             ))
         return []
 
-    def _read_argument(self, node: Node, scope_list: list[set[str]]) -> list[_ScopeNode]:
+    def _read_argument(self, node: Node, scope_list: list[_Scope]) -> list[_ScopeNode]:
         """Read the value of an argument; its name is not read."""
         value = node.child_by_field_name("value")
         return [(value, scope_list)] if value is not None else []
 
-    def _read_for(self, node: Node, scope_list: list[set[str]]) -> list[_ScopeNode]:
+    def _read_for(self, node: Node, scope_list: list[_Scope]) -> list[_ScopeNode]:
         """Read the sequence and the body of a for loop; its variable is not read."""
         child_list = [node.child_by_field_name("sequence"), node.child_by_field_name("body")]
         return [(child, scope_list) for child in child_list if child is not None]
 
-    def _read_binary(self, node: Node, scope_list: list[set[str]]) -> list[_ScopeNode]:
+    def _read_binary(self, node: Node, scope_list: list[_Scope]) -> list[_ScopeNode]:
         """Read a binary operator: an assignment, or an expression with two sides.
 
         The left side of x := v is not read when it is a name. An operator written
@@ -1190,11 +1378,12 @@ class _ReferenceWalker:
         if operator == _COLUMN_ASSIGN and _name_text(lhs) is not None:
             return [(rhs, scope_list)] if rhs is not None else []
         if len(operator) > 2 and operator[0] == operator[-1] == "%":
-            self._add_name(operator, _line(node.child_by_field_name("operator")), scope_list)
+            operator_node = node.child_by_field_name("operator")
+            self._add_name(operator, operator_node, scope_list, operator_node.start_byte)
         return [(child, scope_list) for child in (lhs, rhs) if child is not None]
 
     def _read_assign(
-        self, target: Node | None, value: Node | None, operator: str, scope_list: list[set[str]],
+        self, target: Node | None, value: Node | None, operator: str, scope_list: list[_Scope],
     ) -> list[_ScopeNode]:
         """Read an assignment.
 
@@ -1215,10 +1404,10 @@ class _ReferenceWalker:
             if name is None:
                 child_list.extend(self._read_replace_target(part, scope_list))
             elif is_outer and position == len(part_list) - 1:
-                self._add_name(name, _line(part), scope_list[:-1])
+                self._add_name(name, part, scope_list[:-1], None)
         return child_list
 
-    def _read_replace_target(self, target: Node, scope_list: list[set[str]]) -> list[_ScopeNode]:
+    def _read_replace_target(self, target: Node, scope_list: list[_Scope]) -> list[_ScopeNode]:
         """Read the target of an assignment that is not a name.
 
         The target is followed inwards through the first argument of each call, the
@@ -1239,9 +1428,9 @@ class _ReferenceWalker:
         node: Node | None = target
         is_outer = True
         while node is not None:
-            name_part = _call_name_part(node) if node.type == "call" else None
-            if name_part is not None:
-                owner, call_name = name_part
+            name_part_tuple = _call_name_part(node) if node.type == "call" else None
+            if name_part_tuple is not None:
+                owner, call_name = name_part_tuple
                 name_list = [call_name + _REPLACE_SUFFIX]
                 if not is_outer:
                     name_list.append(call_name)
@@ -1251,7 +1440,7 @@ class _ReferenceWalker:
                             name=name, line=_line(node), kind=NAMESPACE_REFERENCE, owner=owner,
                         ))
                     else:
-                        self._add_name(name, _line(node), scope_list)
+                        self._add_name(name, node, scope_list, node.start_byte)
                 value_list = [value for _, value, _ in _argument_list(node) if value is not None]
                 child_list.extend((value, scope_list) for value in value_list[1:])
                 node = value_list[0] if value_list else None
@@ -1269,16 +1458,31 @@ class _ReferenceWalker:
             child_list.append((node, scope_list))
         return child_list
 
-    def _read_call(self, node: Node, scope_list: list[set[str]]) -> list[_ScopeNode]:
+    def _read_call(self, node: Node, scope_list: list[_Scope]) -> list[_ScopeNode]:
         """Read a call: the strings that name definitions, then its function and arguments.
 
-        The arguments of box::use, library and require are not read.
+        box::use is not read. Of library() and require() the package is not read when it
+        is a package name (_library_package); a variable that holds the name is read.
+        The arguments of on.exit() and of withr's defer() and defer_parent() are read
+        with every name of the innermost scope bound wherever they are written
+        (_all_bound_scope_list).
         """
-        name_part = _call_name_part(node)
-        if name_part == ("box", "use") or (
-            name_part is not None and name_part[1] in _LIBRARY_CALL_SET
-        ):
+        name_part_tuple = _call_name_part(node)
+        if _is_box_use(name_part_tuple):
             return []
+        if (
+            name_part_tuple is not None and scope_list
+            and name_part_tuple[0] in _EXIT_CALL_DICT.get(name_part_tuple[1], ())
+        ):
+            scope_list = _all_bound_scope_list(scope_list)
+        if _is_library_call(name_part_tuple):
+            package_node, package = _library_package(node)
+            skip_node_id = package_node.id if package_node is not None and package else None
+            child_list = [node.child_by_field_name("function")] + [
+                value for _, value, _ in _argument_list(node)
+                if value is not None and value.id != skip_node_id
+            ]
+            return [(child, scope_list) for child in child_list if child is not None]
         self.reference_list.extend(_string_reference_list(node))
         return [(child, scope_list) for child in node.children]
 
@@ -1296,8 +1500,8 @@ class _ReferenceWalker:
     }
 
 
-def _reference_list(root_node: Node) -> list[RReference]:
-    """Return the references of an R file.
+def _statement_list(root_node: Node) -> list[_Statement]:
+    """Return the top-level statements of an R file with the references of each.
 
     Read as a reference:
         - an identifier (the function of a call, a value)
@@ -1308,26 +1512,33 @@ def _reference_list(root_node: Node) -> list[RReference]:
         - f(x) <- value, a reference to f<- (_read_replace_target)
         - name <<- value and value ->> name inside a function
     Not read: the name of an argument (f(x = 1)), the name of a parameter, the target
-    of any other assignment, the names after "$" / "@", the arguments of box::use,
-    library and require.
+    of any other assignment, the names after "$" / "@", the arguments of box::use, and
+    the package name given to library() and require() (_library_package).
     A name is no reference where it is bound: by the parameters of a function around
     it, by an assignment ("<-", "=", "->") or a for loop in the body of such a function,
     or by an assignment or a for loop inside the top-level statement it is written in
     (outside the functions of that statement; the names the statement defines are not
-    bound), or by a top-level for loop of the file as its variable.
+    bound), or by a top-level for loop of the file as its variable. In the body of the
+    innermost function, and in a top-level statement outside its functions, an
+    assignment and a for loop bind the name only after the place they are written
+    (cfg <- modifyList(cfg, x) refers to cfg); a function written in the body, the code
+    given to on.exit(), withr::defer() and withr::defer_parent(), and the default values
+    of the parameters see every name of the body bound.
 
     Args:
         root_node: The AST root node of the file.
 
     Returns:
-        The RReference list, in the order the statements are read.
+        The _Statement list, in the order of _read_top_level.
     """
-    statement_list, loop_name_set = _read_top_level(root_node)
-    walker = _ReferenceWalker()
-    for statement in statement_list:
-        local_name_set = _local_name_set(statement, _chain_node_id_set(statement))
-        walker.walk(statement, [local_name_set | loop_name_set])
-    return walker.reference_list
+    statement_node_list, loop_name_set = _read_top_level(root_node)
+    statement_list: list[_Statement] = []
+    for statement in statement_node_list:
+        bind_list = _local_bind_list(statement, _chain_node_id_set(statement))
+        walker = _ReferenceWalker()
+        walker.walk(statement, [_scope_dict(bind_list, loop_name_set)])
+        statement_list.append(_Statement(statement, bind_list, walker.reference_list))
+    return statement_list
 
 
 def read_r_source(root_node: Node) -> RSource:
@@ -1337,10 +1548,14 @@ def read_r_source(root_node: Node) -> RSource:
         root_node: The AST root node of the file.
 
     Returns:
-        The RSource of the file (r_definition_list, _import_list, _reference_list).
+        The RSource of the file (r_definition_list, _import_list, and the references of
+        each statement of _statement_list in order).
     """
+    statement_list = _statement_list(root_node)
     return RSource(
-        definition_list=r_definition_list(root_node),
+        definition_list=_definition_list(statement_list),
         import_list=_import_list(root_node),
-        reference_list=_reference_list(root_node),
+        reference_list=[
+            reference for statement in statement_list for reference in statement.reference_list
+        ],
     )

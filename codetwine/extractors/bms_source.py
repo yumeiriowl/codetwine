@@ -3,6 +3,7 @@ from dataclasses import dataclass, field
 from codetwine.extractors.cobol_source import DATA_ITEM_TYPE, CobolDefinition, CobolSource
 from codetwine.parsers.operand import operand_dict
 from codetwine.utils.file_utils import line_list_of
+from codetwine.config.settings import TAB_SIZE
 
 # Column (0-based) whose character marks an assembler statement as continued on the next line
 _CONTINUE_COLUMN = 71
@@ -73,8 +74,10 @@ def _statement_list(line_list: list[str]) -> list[_Statement]:
     """Read the assembler statements of a BMS source.
 
     A line with "*" in column 1 is a comment. A statement is continued while column 72
-    holds a character, on the next line from column 16. The operands end at the first
-    blank outside quotes; what follows is a remark.
+    holds a character, on the next line from column 16. The operands of a line end at
+    the first blank outside quotes; what follows is a remark. They go on on the
+    continuation line only when that blank comes after a comma; otherwise the
+    continuation lines are remarks too.
 
     Args:
         line_list: The lines of the source.
@@ -86,7 +89,7 @@ def _statement_list(line_list: list[str]) -> list[_Statement]:
     statement: _Statement | None = None
     is_in_quote = is_operand_end = False
     for line_index, raw_line in enumerate(line_list):
-        line = raw_line.expandtabs(8)
+        line = raw_line.expandtabs(TAB_SIZE)
         if statement is None:
             if not line.strip() or line.startswith("*"):
                 continue
@@ -116,11 +119,9 @@ def _statement_list(line_list: list[str]) -> list[_Statement]:
                 is_operand_end = True
                 break
             statement.operand_text += char
-        if is_in_quote:
+        if is_in_quote or statement.operand_text.endswith(","):
             is_operand_end = False
-        if len(line) > _CONTINUE_COLUMN and line[_CONTINUE_COLUMN] != " ":
-            is_operand_end = False
-        else:
+        if len(line) <= _CONTINUE_COLUMN or line[_CONTINUE_COLUMN] == " ":
             statement_list.append(statement)
             statement = None
     if statement is not None:
@@ -234,6 +235,27 @@ def _item_definition(
     )
 
 
+def _input_output_definition_list(
+    name: str, start_line: int, end_line: int, level: int, is_group: bool,
+) -> list[CobolDefinition]:
+    """Return the definitions of <name>I in the input record and <name>O in the output record.
+
+    Args:
+        name: Name of the map or field.
+        start_line: First line of the statement or statements it comes from (1-based).
+        end_line: Last line of them.
+        level: Level number of the two items.
+        is_group: Whether items belong to them.
+
+    Returns:
+        The two data item definitions, <name>I first.
+    """
+    return [
+        _item_definition(name + letter, start_line, end_line, level, is_group)
+        for letter in (_INPUT_LETTER, _OUTPUT_LETTER)
+    ]
+
+
 def _field_definition_list(
     bms_field: _Field, attribute_list: list[str], level: int,
 ) -> list[CobolDefinition]:
@@ -270,10 +292,9 @@ def _field_definition_list(
         for suffix, item_level, item_is_group in suffix_level_list
     ]
     for member in bms_field.member_list:
-        for letter in (_INPUT_LETTER, _OUTPUT_LETTER):
-            definition_list.append(_item_definition(
-                member.name + letter, member.start_line, member.end_line, level + 1, False,
-            ))
+        definition_list += _input_output_definition_list(
+            member.name, member.start_line, member.end_line, level + 1, False,
+        )
     return definition_list
 
 
@@ -296,10 +317,9 @@ def read_bms_source(source: str) -> CobolSource:
 
     definition_list: list[CobolDefinition] = []
     for bms_map in map_list:
-        for letter in (_INPUT_LETTER, _OUTPUT_LETTER):
-            definition_list.append(_item_definition(
-                bms_map.name + letter, bms_map.start_line, bms_map.end_line, _RECORD_LEVEL, True,
-            ))
+        definition_list += _input_output_definition_list(
+            bms_map.name, bms_map.start_line, bms_map.end_line, _RECORD_LEVEL, True,
+        )
         for bms_field in bms_map.field_list:
             level = _FIELD_LEVEL + 1 if bms_field.occurs else _FIELD_LEVEL
             definition_list += _field_definition_list(bms_field, bms_map.attribute_list, level)

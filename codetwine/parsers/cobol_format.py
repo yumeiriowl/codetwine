@@ -2,6 +2,7 @@ import re
 import unicodedata
 from dataclasses import dataclass, field
 from codetwine.utils.file_utils import line_list_of
+from codetwine.config.settings import TAB_SIZE
 
 # == Columns of a fixed-format line (0-based) ================================
 # Column of the indicator ("*" / "/" comment, "-" continuation, "D" debug line)
@@ -12,8 +13,6 @@ _CODE_START_COLUMN = 7
 _CODE_END_COLUMN = 72
 # Column after the last one of the identification area
 _LINE_END_COLUMN = 80
-# Number of columns a tab character moves to a multiple of
-_TAB_SIZE = 8
 
 # East Asian width classes of the characters that take two columns
 _WIDE_CLASS_SET = {"W", "F"}
@@ -28,6 +27,8 @@ _INDICATOR_CHAR_SET = set(" */-dD$")
 _COMMENT_INDICATOR_CHAR_SET = set("*/")
 # Indicator characters of a line that holds no code
 _NO_CODE_INDICATOR_CHAR_SET = set("*/dD$")
+# Indicator character of a continuation line
+_CONTINUATION_INDICATOR = "-"
 
 # Left margin of every line of the text of a unit
 _LEFT_MARGIN = " " * _CODE_START_COLUMN
@@ -42,15 +43,32 @@ _COMMENT_START = "*"
 _INLINE_COMMENT_START = "*>"
 # Characters, besides letters and digits, a line ends with when an operand ends it
 _OPERAND_END_CHAR_SET = {")", '"', "'"}
+# Characters a literal starts and ends with
+_QUOTE_CHAR_SET = set("\"'")
 
-# A sequence area that holds a level number and nothing else
-_LEVEL_SEQUENCE_AREA_RE = re.compile(r"\s*(\d{1,2})\s*")
+# A sequence area that holds a number and nothing else
+_NUMBER_SEQUENCE_AREA_RE = re.compile(r"\s*(\d+)\s*")
+# Number of digits of a level number at most
+_MAX_LEVEL_DIGIT = 2
+# Start of the code from column 8 that no level number can come before: a level number,
+# a division or section header, PROGRAM-ID
+_NO_LEVEL_CODE_RE = re.compile(
+    r"(?:\d+|\S+\s+(?:DIVISION|SECTION)|PROGRAM-ID)(?![\w\-])", re.IGNORECASE,
+)
 # A sequence area that holds a word and the start of the text after it
 _WORD_SEQUENCE_AREA_RE = re.compile(r"\s*[A-Za-z0-9][A-Za-z0-9\-]*\s+\S")
 # Level numbers of the data items of a record
-_RECORD_LEVEL_RANGE = range(1, 50)
+RECORD_LEVEL_RANGE = range(1, 50)
 # Level numbers of the other data items (RENAMES, items without a record, condition names)
 _OTHER_LEVEL_SET = {66, 77, 78, 88}
+
+# == What columns 1 to 6 of a line hold =======================================
+# Code: a word and the start of the text after it, or a level number
+_CODE_SEQUENCE_AREA = "code"
+# A sequence number
+_NUMBER_SEQUENCE_AREA = "number"
+# Blanks, or text that tells neither
+_OTHER_SEQUENCE_AREA = ""
 
 # Compiler option lines, written from column 1 or in front of the first line with code
 _OPTION_LINE_RE = re.compile(r"^(?:CBL|PROCESS)\s", re.IGNORECASE)
@@ -60,16 +78,38 @@ _FORMAT_DIRECTIVE_RE = re.compile(
     re.IGNORECASE,
 )
 
+# == Token kinds ==============================================================
+# A word: a name, a keyword or a number
+_WORD_KIND = "word"
+# A literal with its quotes and the letters before them
+_LITERAL_KIND = "literal"
+# The picture string after PIC / PICTURE [IS]
+_PICTURE_KIND = "picture"
+# Pseudo-text with its "==" delimiters
+_PSEUDO_KIND = "pseudo"
+# A period followed by whitespace or the end of the line: the end of a statement
+_PERIOD_KIND = "period"
+# Any other character, and "<>" written as "NOT ="
+_OTHER_KIND = "other"
+
 # == Token patterns ===========================================================
+# Whitespace between tokens
 _SPACE_RE = re.compile(r"\s+")
+# Start of a literal: its quote, after up to two letters (X'0A', N'..', NX'..')
 _LITERAL_START_RE = re.compile(r"[A-Za-z]{0,2}[\"']")
+# Pseudo-text: the text between "==" and "==", with them
 _PSEUDO_TEXT_RE = re.compile(r"==.*?==")
+# A tag that COPY ... REPLACING replaces (:PFX:), part of a word
 _NAME_TAG_PATTERN = r":[A-Za-z0-9\-]+:"
+# A word: letters, digits, "_", "-", characters outside ASCII and tags, not starting with "-"
 _WORD_RE = re.compile(
     rf"(?:{_NAME_TAG_PATTERN}|[A-Za-z0-9_]|[^\x00-\x7f\s])"
     rf"(?:[A-Za-z0-9_\-]|[^\x00-\x7f\s]|{_NAME_TAG_PATTERN})*"
 )
+# A picture string: the text up to the next whitespace
 _PICTURE_RE = re.compile(r"\S+")
+# The word IS between PIC / PICTURE and the picture string
+_PICTURE_IS_RE = re.compile(r"IS(?!\S)", re.IGNORECASE)
 # A word the grammar reads as a name
 GRAMMAR_NAME_RE = re.compile(r"[A-Za-z0-9\-]+")
 
@@ -87,22 +127,40 @@ _DATA_SECTION_WORD_SET = {
 }
 # Those of the sections whose statements are in no unit
 _NO_UNIT_SECTION_WORD_SET = {"SCREEN", "REPORT"}
+# Words before SECTION in the header of a section of the environment division
+_ENVIRONMENT_SECTION_WORD_SET = {"CONFIGURATION", "INPUT-OUTPUT"}
+# Words that start a paragraph of the environment division, and SELECT
+_ENVIRONMENT_WORD_SET = {
+    "SOURCE-COMPUTER", "OBJECT-COMPUTER", "SPECIAL-NAMES", "REPOSITORY", "FILE-CONTROL",
+    "I-O-CONTROL", "SELECT",
+}
 # Words that start the description of a file
 _FILE_ENTRY_WORD_SET = {"FD", "SD"}
 # Characters of an operator that a word before or after it is separated from
 _OPERATOR_CHAR_SET = set("=<>")
 # Texts of the tokens that separate the clauses of a statement
 _SEPARATOR_TEXT_SET = {",", ";"}
+# Kinds of the tokens that can name a program, a copybook or a transaction
+_NAME_TOKEN_KIND_TUPLE = (_WORD_KIND, _LITERAL_KIND)
+# Words that start a statement of their own kind
+_COPY_WORD = "COPY"
+_EXEC_WORD = "EXEC"
+_CALL_WORD = "CALL"
+_ENTRY_WORD = "ENTRY"
+_TITLE_WORD = "TITLE"
+_REPLACE_WORD = "REPLACE"
+# Word after the name in the header of a section
+_SECTION_WORD = "SECTION"
 # Options of an EXEC CICS command that name a program and a transaction
 _CICS_PROGRAM_OPTION = "PROGRAM"
 _CICS_TRANSID_OPTION = "TRANSID"
 
 # == Divisions ================================================================
-IDENTIFICATION_DIVISION = "IDENTIFICATION"
-ENVIRONMENT_DIVISION = "ENVIRONMENT"
-DATA_DIVISION = "DATA"
-PROCEDURE_DIVISION = "PROCEDURE"
-_DIVISION_WORD_SET = {ENVIRONMENT_DIVISION, DATA_DIVISION, PROCEDURE_DIVISION}
+_IDENTIFICATION_DIVISION = "IDENTIFICATION"
+_ENVIRONMENT_DIVISION = "ENVIRONMENT"
+_DATA_DIVISION = "DATA"
+_PROCEDURE_DIVISION = "PROCEDURE"
+_DIVISION_WORD_SET = {_ENVIRONMENT_DIVISION, _DATA_DIVISION, _PROCEDURE_DIVISION}
 
 # == Line modes (how a line is read) ==========================================
 # A format directive: no code
@@ -157,7 +215,7 @@ _STAND_IN_PREFIX_CHAR = "Q"
 class _Token:
     """One token of the code of a COBOL source file."""
 
-    # "word" / "literal" / "picture" / "pseudo" / "period" / "other"
+    # One of the token kinds of this module (_WORD_KIND, ...)
     kind: str
     text: str
     # Line of the source the token starts on (1-based)
@@ -220,6 +278,8 @@ class CobolText:
     program_list: list[tuple[str, int, int]] = field(default_factory=list)
     # (name, source line) of each END PROGRAM
     program_end_list: list[tuple[str, int]] = field(default_factory=list)
+    # Source line of each END DECLARATIVES
+    declaratives_end_line_list: list[int] = field(default_factory=list)
     # (name, source line) of each ENTRY statement
     entry_list: list[tuple[str, int]] = field(default_factory=list)
     # COPY statements and EXEC SQL INCLUDE
@@ -286,7 +346,7 @@ def _column_slice(line: str, start: int, end: int | None) -> str:
 
     Examples:
         ("000100 MOVE A TO B.", 7, 72)  -> "MOVE A TO B."
-        ("       01 顧客 PIC X.  0001", 7, 22) -> "01 顧客 PIC X.  "
+        ("       01 顧客 PIC X.  0001", 7, 22) -> "01 顧客 PIC X. "
 
     Args:
         line: One line without tab characters.
@@ -337,6 +397,11 @@ def _is_directive_line(line: str) -> bool:
     )
 
 
+def _is_compiler_line(line: str) -> bool:
+    """Return whether a line is a compiler option line (_OPTION_LINE_RE) or a directive line."""
+    return _OPTION_LINE_RE.match(line) is not None or _is_directive_line(line)
+
+
 def _format_directive(line: str, is_free: bool = False) -> str | None:
     """Return the source format a directive line names ("FREE" / "FIXED" / "VARIABLE").
 
@@ -349,6 +414,9 @@ def _format_directive(line: str, is_free: bool = False) -> str | None:
         line: One line. The directive starts the line; in a fixed-format line it can
             start the code area as well.
         is_free: Whether the line is a free-format line.
+
+    Returns:
+        The format name in upper case. None when the line is not a format directive.
     """
     text = line.strip()
     if not is_free and not _DIRECTIVE_START_RE.match(text) and _indicator(line) == " ":
@@ -366,7 +434,7 @@ def _is_fixed_line(line: str) -> bool:
     """
     if not line.strip() or _line_width(line) <= _INDICATOR_COLUMN:
         return True
-    if _OPTION_LINE_RE.match(line) or _is_directive_line(line):
+    if _is_compiler_line(line):
         return True
     return _indicator(line) in _INDICATOR_CHAR_SET
 
@@ -378,40 +446,65 @@ def _fixed_code_text(line: str) -> str:
         The text from column 8 without the blanks around it; "" for a line that holds
         no code in fixed format (a comment, debug, directive or compiler option line).
     """
-    if _OPTION_LINE_RE.match(line) or _is_directive_line(line):
+    if _is_compiler_line(line):
         return ""
     if _indicator(line) in _NO_CODE_INDICATOR_CHAR_SET:
         return ""
     return _column_slice(line, _CODE_START_COLUMN, None).strip()
 
 
-def _has_code_in_sequence_area(line: str) -> bool:
-    """Return whether columns 1 to 6 of a line hold code, not a sequence number.
+def _sequence_area_kind(line: str) -> str:
+    """Return what columns 1 to 6 of a line hold: code or a sequence number.
 
     Examples:
-        "000100 01  WS-A PIC X."    -> False
-        "CHG001     MOVE A TO B."   -> False
-        "01 WS-DATE."               -> True (a word and the start of the next one)
-        "    05 WS-YEAR PIC 9(4)."  -> True (a level number)
+        "000100 01  WS-A PIC X."            -> _NUMBER_SEQUENCE_AREA
+        "    10 IDENTIFICATION DIVISION."   -> _NUMBER_SEQUENCE_AREA (a header follows)
+        "    20 01  WS-A PIC X."            -> _NUMBER_SEQUENCE_AREA (a level number follows)
+        "    50     MOVE A TO B."           -> _NUMBER_SEQUENCE_AREA (no level number)
+        "01 WS-DATE."                       -> _CODE_SEQUENCE_AREA (a word and the next one)
+        "    05 WS-YEAR PIC 9(4)."          -> _CODE_SEQUENCE_AREA (a level number)
+        "CHG001     MOVE A TO B."           -> _OTHER_SEQUENCE_AREA
 
     Args:
         line: One line without tab characters that can be a fixed-format line.
 
     Returns:
-        True when the columns hold a word followed by other text, on a line that is
-        not a comment line; or a level number alone, on a line with code after column 7.
-        False for a directive line and a compiler option line.
+        _CODE_SEQUENCE_AREA for a word followed by other text, on a line that is not a
+        comment line, or for a level number (1 to 49, 66, 77, 78, 88) before code from
+        column 8 that does not start with a level number, a division or section header or
+        PROGRAM-ID; _NUMBER_SEQUENCE_AREA for any other number before code from column 8;
+        _OTHER_SEQUENCE_AREA otherwise, and for a directive line and a compiler option line.
     """
-    if _OPTION_LINE_RE.match(line) or _is_directive_line(line):
-        return False
+    if _is_compiler_line(line):
+        return _OTHER_SEQUENCE_AREA
     sequence_area = _column_slice(line, 0, _INDICATOR_COLUMN)
     if _WORD_SEQUENCE_AREA_RE.match(sequence_area):
-        return _indicator(line) not in _COMMENT_INDICATOR_CHAR_SET
-    level_match = _LEVEL_SEQUENCE_AREA_RE.fullmatch(sequence_area)
-    if level_match is None or not _fixed_code_text(line):
-        return False
-    level = int(level_match.group(1))
-    return level in _RECORD_LEVEL_RANGE or level in _OTHER_LEVEL_SET
+        if _indicator(line) in _COMMENT_INDICATOR_CHAR_SET:
+            return _OTHER_SEQUENCE_AREA
+        return _CODE_SEQUENCE_AREA
+    digit_text = _sequence_digit_text(line)
+    if not digit_text:
+        return _OTHER_SEQUENCE_AREA
+    level = int(digit_text)
+    is_level = len(digit_text) <= _MAX_LEVEL_DIGIT and (
+        level in RECORD_LEVEL_RANGE or level in _OTHER_LEVEL_SET
+    )
+    if is_level and not _NO_LEVEL_CODE_RE.match(_fixed_code_text(line)):
+        return _CODE_SEQUENCE_AREA
+    return _NUMBER_SEQUENCE_AREA
+
+
+def _sequence_digit_text(line: str) -> str:
+    """Return the digits columns 1 to 6 of a line hold, with nothing else but blanks.
+
+    Returns:
+        The digits; "" when the columns hold other text or no digit, or the line holds
+        no code from column 8 (_fixed_code_text).
+    """
+    number_match = _NUMBER_SEQUENCE_AREA_RE.fullmatch(_column_slice(line, 0, _INDICATOR_COLUMN))
+    if number_match is None or not _fixed_code_text(line):
+        return ""
+    return number_match.group(1)
 
 
 def _is_free_start(line_list: list[str]) -> bool:
@@ -422,20 +515,35 @@ def _is_free_start(line_list: list[str]) -> bool:
 
     Returns:
         True when one of those lines cannot be a line of fixed-format source
-        (_is_fixed_line), holds code in columns 1 to 6 (_has_code_in_sequence_area), or
-        is the first line with code and has "-" in the indicator column.
+        (_is_fixed_line), or when the first line with code has "-" in the indicator
+        column. Else False when one of those lines holds a sequence number
+        (_sequence_area_kind) and the numbers columns 1 to 6 hold rise from line to line;
+        else True when more of those lines hold code in columns 1 to 6 than a sequence
+        number.
     """
     has_code = False
+    code_count = number_count = 0
+    last_number = -1
+    is_ascending = True
     for line in line_list:
         if _format_directive(line) is not None:
-            return False
-        if not _is_fixed_line(line) or _has_code_in_sequence_area(line):
+            break
+        if not _is_fixed_line(line):
             return True
         if not has_code and _fixed_code_text(line):
-            if _indicator(line) == "-":
+            if _indicator(line) == _CONTINUATION_INDICATOR:
                 return True
             has_code = True
-    return False
+        sequence_area_kind = _sequence_area_kind(line)
+        code_count += sequence_area_kind == _CODE_SEQUENCE_AREA
+        number_count += sequence_area_kind == _NUMBER_SEQUENCE_AREA
+        digit_text = _sequence_digit_text(line)
+        if digit_text:
+            is_ascending = is_ascending and int(digit_text) > last_number
+            last_number = int(digit_text)
+    if number_count and is_ascending:
+        return False
+    return code_count > number_count
 
 
 def _line_mode_list(line_list: list[str]) -> list[str]:
@@ -491,10 +599,10 @@ def _code_area_end_state(code_area_text: str) -> str:
                 position += 1
             elif char == quote:
                 quote = ""
-        elif char in "\"'":
+        elif char in _QUOTE_CHAR_SET:
             quote = char
-        elif code_area_text.startswith("*>", position):
-            return "*>"
+        elif code_area_text.startswith(_INLINE_COMMENT_START, position):
+            return _INLINE_COMMENT_START
         position += 1
     return quote
 
@@ -502,13 +610,13 @@ def _code_area_end_state(code_area_text: str) -> str:
 def _beyond_code_area(line: str, is_next_continuation: bool) -> str:
     """Return what a fixed-format line holds after column 72.
 
-    Examples (the text from column 60):
-        "... MOVE A TO B.             00010000"  -> _TAG_BEYOND
-        "... MOVE A TO OUTPUT-NAME.CHG00001"     -> _TAG_BEYOND (the sentence ends at column 72)
-        "... MOVE CUSTOMER-NAME TO OUT-NAME."    -> _CODE_BEYOND (a word runs past column 72)
-        "... DISPLAY 'A LONG TEXT THAT GOES ON'" -> _CODE_BEYOND (a literal runs past column 72)
-        "... MOVE A TO B.   *> a remark"         -> _NO_TEXT_BEYOND
-        "... DISPLAY 'A LONG TEXT THAT GOES"     -> _NO_TEXT_BEYOND (the next line continues it)
+    Examples (the text from column 61; its first 12 characters are columns 61 to 72):
+        "   MOVE A.  00010000"     -> _TAG_BEYOND
+        "MOVE A TO B.CHG00001"     -> _TAG_BEYOND (the sentence ends at column 72)
+        "MOVE CUSTOMER-NAME."      -> _CODE_BEYOND (a word runs past column 72)
+        "DISPLAY 'A LONG TEXT'"    -> _CODE_BEYOND (a literal runs past column 72)
+        "MOVE A.     *> a remark"  -> _NO_TEXT_BEYOND
+        "DISPLAY 'A LONG TEXT"     -> _NO_TEXT_BEYOND (the next line continues it)
 
     Args:
         line: A fixed-format line with code, without tab characters.
@@ -528,7 +636,9 @@ def _beyond_code_area(line: str, is_next_continuation: bool) -> str:
     code_area_text = _column_slice(line, _CODE_START_COLUMN, _CODE_END_COLUMN)
     end_state = _code_area_end_state(code_area_text)
     beyond_text = _column_slice(line, _CODE_END_COLUMN, None).strip()
-    if end_state == "*>" or (not end_state and beyond_text.startswith("*>")):
+    if end_state == _INLINE_COMMENT_START or (
+        not end_state and beyond_text.startswith(_INLINE_COMMENT_START)
+    ):
         return _NO_TEXT_BEYOND
     is_literal_continuation = (
         end_state
@@ -563,10 +673,10 @@ def _has_right_margin(fixed_line_list: list[str]) -> bool:
     for index, line in enumerate(fixed_line_list):
         if _indicator(line) in _NO_CODE_INDICATOR_CHAR_SET:
             continue
-        if _OPTION_LINE_RE.match(line) or _is_directive_line(line):
+        if _is_compiler_line(line):
             continue
         next_line = fixed_line_list[index + 1] if index + 1 < len(fixed_line_list) else ""
-        beyond = _beyond_code_area(line, _indicator(next_line) == "-")
+        beyond = _beyond_code_area(line, _indicator(next_line) == _CONTINUATION_INDICATOR)
         tag_count += beyond == _TAG_BEYOND
         code_count += beyond == _CODE_BEYOND
     return tag_count >= code_count
@@ -629,11 +739,7 @@ def _code_text_list(line_list: list[str]) -> list[tuple[str, bool]]:
             )
             if not (is_comment or _DIRECTIVE_START_RE.match(start_text)):
                 code_text = line
-        elif (
-            mode != _DIRECTIVE_MODE
-            and not _OPTION_LINE_RE.match(column_line)
-            and not _is_directive_line(column_line)
-        ):
+        elif mode != _DIRECTIVE_MODE and not _is_compiler_line(column_line):
             indicator = _indicator(column_line)
             if indicator not in _NO_CODE_INDICATOR_CHAR_SET:
                 code_end = _CODE_END_COLUMN if mode == _FIXED_MODE and has_margin else None
@@ -641,7 +747,7 @@ def _code_text_list(line_list: list[str]) -> list[tuple[str, bool]]:
                 start = len(_column_slice(column_line, 0, _CODE_START_COLUMN))
                 end = start + len(_column_slice(column_line, _CODE_START_COLUMN, code_end))
                 code_text = line[start:end]
-                is_continuation = indicator == "-"
+                is_continuation = indicator == _CONTINUATION_INDICATOR
 
         if not has_code and _OPTION_LINE_RE.match(code_text.strip() + " "):
             code_text = ""
@@ -670,7 +776,7 @@ def code_text_list(line_list: list[str]) -> list[str]:
         free-format line, "" for a line that holds no code. The source format and the
         right margin are decided from the lines given.
     """
-    return [text for text, _ in _code_text_list([line.expandtabs(_TAB_SIZE) for line in line_list])]
+    return [text for text, _ in _code_text_list([line.expandtabs(TAB_SIZE) for line in line_list])]
 
 
 def _literal_end(code_text: str, start: int, quote: str) -> int | None:
@@ -697,13 +803,21 @@ def _literal_end(code_text: str, start: int, quote: str) -> int | None:
         return position + 1
 
 
-def _is_picture_position(token_list: list[_Token]) -> bool:
-    """Return whether the next token is a picture string (after PIC / PICTURE [IS])."""
-    if not token_list or token_list[-1].kind != "word":
+def _is_picture_position(token_list: list[_Token], code_text: str, position: int) -> bool:
+    """Return whether the token at a position of a line is a picture string.
+
+    It is one after PIC / PICTURE, or after PIC / PICTURE and the word IS.
+
+    Args:
+        token_list: The last two tokens before the position.
+        code_text: The code of the line.
+        position: Position of the first character of the token.
+    """
+    if not token_list or token_list[-1].kind != _WORD_KIND:
         return False
     last_word = token_list[-1].text.upper()
     if last_word in _PICTURE_WORD_SET:
-        return True
+        return not _PICTURE_IS_RE.match(code_text, position)
     return (
         last_word == "IS"
         and len(token_list) > 1
@@ -730,7 +844,7 @@ def _picture_token(code_text: str, position: int, line: int) -> tuple[_Token, in
         text = text[:-1]
     end = position + len(text)
     text = "".join(char if char.isascii() else "9" for char in text)
-    return _Token("picture", text, line, position), end
+    return _Token(_PICTURE_KIND, text, line, position), end
 
 
 def _line_token_list(
@@ -775,7 +889,7 @@ def _line_token_list(
             position = space_match.end()
             has_gap = True
             continue
-        if code_text.startswith("*>", position):
+        if code_text.startswith(_INLINE_COMMENT_START, position):
             break
 
         token, position, open_literal = _next_token(
@@ -807,7 +921,7 @@ def _next_token(
         the token text, the letters before the quote of a literal are written in upper
         case, and "<>" is written as "NOT =".
     """
-    if _is_picture_position(last_token_list):
+    if _is_picture_position(last_token_list, code_text, position):
         token, end = _picture_token(code_text, position, line)
         return token, end, None
 
@@ -818,25 +932,25 @@ def _next_token(
         end = _literal_end(code_text, literal_match.end(), quote)
         if end is None:
             text = prefix + code_text[literal_match.end() - 1:].rstrip() + quote
-            token = _Token("literal", text, line, position)
+            token = _Token(_LITERAL_KIND, text, line, position)
             return token, len(code_text), token
         text = prefix + code_text[literal_match.end() - 1:end]
-        return _Token("literal", text, line, position), end, None
+        return _Token(_LITERAL_KIND, text, line, position), end, None
 
     if code_text.startswith("<>", position):
-        return _Token("other", "NOT =", line, position), position + 2, None
+        return _Token(_OTHER_KIND, "NOT =", line, position), position + 2, None
 
     pseudo_match = _PSEUDO_TEXT_RE.match(code_text, position)
     if pseudo_match:
-        return _Token("pseudo", pseudo_match.group(0), line, position), pseudo_match.end(), None
+        return _Token(_PSEUDO_KIND, pseudo_match.group(0), line, position), pseudo_match.end(), None
 
     word_match = _WORD_RE.match(code_text, position)
     if word_match:
-        return _Token("word", word_match.group(0), line, position), word_match.end(), None
+        return _Token(_WORD_KIND, word_match.group(0), line, position), word_match.end(), None
 
     char = code_text[position]
     next_char = code_text[position + 1:position + 2]
-    kind = "period" if char == "." and (not next_char or next_char.isspace()) else "other"
+    kind = _PERIOD_KIND if char == "." and (not next_char or next_char.isspace()) else _OTHER_KIND
     return _Token(kind, char, line, position), position + 1, None
 
 
@@ -863,7 +977,7 @@ def _source_token_list(line_list: list[str]) -> list[_Token]:
             code_text, index + 1, is_continuation, open_literal, token_list[-2:],
         )
         for token in line_token_list:
-            if token.is_glue and token_list and token.kind == token_list[-1].kind == "word":
+            if token.is_glue and token_list and token.kind == token_list[-1].kind == _WORD_KIND:
                 token_list[-1].text += token.text
             else:
                 token_list.append(token)
@@ -874,7 +988,7 @@ def _source_token_list(line_list: list[str]) -> list[_Token]:
 
 def _word(token_list: list[_Token], index: int) -> str:
     """Return the upper-case text of the word at an index, or "" when it is not a word."""
-    if 0 <= index < len(token_list) and token_list[index].kind == "word":
+    if 0 <= index < len(token_list) and token_list[index].kind == _WORD_KIND:
         return token_list[index].text.upper()
     return ""
 
@@ -882,7 +996,7 @@ def _word(token_list: list[_Token], index: int) -> str:
 def _statement_end(token_list: list[_Token], start: int) -> int:
     """Return the index of the period that ends the statement, or the token count without one."""
     for index in range(start, len(token_list)):
-        if token_list[index].kind == "period":
+        if token_list[index].kind == _PERIOD_KIND:
             return index
     return len(token_list)
 
@@ -917,7 +1031,7 @@ def _replacing_list(token_list: list[_Token]) -> list[tuple[str, str, str]]:
     """
     def operand_text(token: _Token) -> str:
         """Return the text of one operand without its pseudo-text delimiters."""
-        return token.text[2:-2].strip() if token.kind == "pseudo" else token.text
+        return token.text[2:-2].strip() if token.kind == _PSEUDO_KIND else token.text
 
     replacing_list: list[tuple[str, str, str]] = []
     for index in range(1, len(token_list) - 1):
@@ -941,7 +1055,7 @@ def literal_value(text: str) -> str:
         "X'0A'"      -> "0A"
         "TAXCALC"    -> "TAXCALC"
     """
-    if len(text) >= 2 and text[-1] in "\"'" and text[-1] in text[:-1]:
+    if len(text) >= 2 and text[-1] in _QUOTE_CHAR_SET and text[-1] in text[:-1]:
         return text[text.index(text[-1]) + 1:-1].strip()
     return text
 
@@ -993,11 +1107,35 @@ def _host_structure_name(token_list: list[_Token], index: int) -> str:
     colon_token, structure_token, dot_token = token_list[index - 3:index]
     is_host_structure = (
         colon_token.text == ":"
-        and structure_token.kind == "word"
+        and structure_token.kind == _WORD_KIND
         and dot_token.text == "."
         and not (structure_token.has_gap or dot_token.has_gap or token_list[index].has_gap)
     )
     return structure_token.text if is_host_structure else ""
+
+
+def _sql_go_to_position(token_list: list[_Token]) -> int | None:
+    """Return the index of the name after GO TO / GOTO of an EXEC SQL WHENEVER statement.
+
+    Examples (tokens of the block):
+        WHENEVER SQLERROR GO TO 9999-ERROR   -> 4
+        WHENEVER NOT FOUND GOTO 8000-END     -> 4
+        WHENEVER SQLWARNING CONTINUE         -> None
+
+    Args:
+        token_list: The tokens between EXEC SQL and END-EXEC.
+
+    Returns:
+        The index. None when the block is no WHENEVER statement with GO TO / GOTO.
+    """
+    if _word(token_list, 0) != "WHENEVER":
+        return None
+    for index in range(1, len(token_list)):
+        if _word(token_list, index) == "GOTO":
+            return index + 1
+        if _word(token_list, index) == "GO" and _word(token_list, index + 1) == "TO":
+            return index + 2
+    return None
 
 
 def _is_level_number(word: str) -> bool:
@@ -1013,42 +1151,111 @@ def _is_division_header(token_list: list[_Token], index: int) -> bool:
     return word in _IDENTIFICATION_WORD_SET or word in _DIVISION_WORD_SET
 
 
+def _is_program_end(token_list: list[_Token], index: int) -> bool:
+    """Return whether the tokens at an index are the words END PROGRAM."""
+    return _word(token_list, index) == "END" and _word(token_list, index + 1) == "PROGRAM"
+
+
+def _is_program_bound(token_list: list[_Token], index: int) -> bool:
+    """Return whether a division header, PROGRAM-ID or END PROGRAM starts at an index."""
+    return (
+        _is_division_header(token_list, index)
+        or _word(token_list, index) == "PROGRAM-ID"
+        or _is_program_end(token_list, index)
+    )
+
+
+def _copy_end(token_list: list[_Token], index: int) -> int:
+    """Return the index after the COPY statement at an index.
+
+    Args:
+        token_list: The tokens of the file.
+        index: Index of the word COPY.
+
+    Returns:
+        The index after the period that ends the statement (the token count without
+        one); index + 1 when no word or literal names a copybook after COPY.
+    """
+    if index + 1 >= len(token_list) or token_list[index + 1].kind not in _NAME_TOKEN_KIND_TUPLE:
+        return index + 1
+    return min(_statement_end(token_list, index) + 1, len(token_list))
+
+
+def _no_code_end(token_list: list[_Token], index: int, is_start: bool) -> int:
+    """Return the index after the text at an index that is no code of a statement.
+
+    Examples (tokens from the index, is_start):
+        COPY CUSTREC. 01 ...              True  -> after the period of COPY
+        EXEC SQL INCLUDE X END-EXEC ...   False -> after END-EXEC
+        EJECT 01 ...                      True  -> after EJECT
+        TITLE 'CUSTOMER' 01 ...           True  -> after the literal
+        REPLACE ==A== BY ==B==. 01 ...    True  -> after the period of REPLACE
+        EJECT 01 ...                      False -> the index
+        MOVE A TO B.                      True  -> the index
+
+    Args:
+        token_list: The tokens of the file.
+        index: Index of a token.
+        is_start: Whether the token starts a statement.
+
+    Returns:
+        The index after a COPY statement (_copy_end) or an EXEC ... END-EXEC block, or,
+        at the start of a statement, after EJECT / SKIP1 to SKIP3, TITLE and the token
+        after it, or a REPLACE statement; the index itself when none of them starts there.
+    """
+    word = _word(token_list, index)
+    if word == _COPY_WORD:
+        return _copy_end(token_list, index)
+    if word == _EXEC_WORD and _word(token_list, index + 1):
+        exec_end = _exec_end(token_list, index)
+        return index if exec_end is None else exec_end + 1
+    if not is_start:
+        return index
+    if word in _NO_CODE_WORD_SET:
+        return index + 1
+    if word == _TITLE_WORD:
+        return min(index + 2, len(token_list))
+    if word == _REPLACE_WORD:
+        return min(_statement_end(token_list, index) + 1, len(token_list))
+    return index
+
+
 def _first_statement_start(token_list: list[_Token]) -> int:
-    """Return the index of the first token that is in no EXEC block and no COPY statement.
+    """Return the index of the first token of a file that starts code (_no_code_end).
 
     Args:
         token_list: The tokens of the file.
 
     Returns:
-        The index; the number of tokens when every token is in one of them.
+        The index; the number of tokens when no token starts code.
     """
     index = 0
     while index < len(token_list):
-        word = _word(token_list, index)
-        exec_end = _exec_end(token_list, index) if word == "EXEC" else None
-        if word == "COPY":
-            index = _statement_end(token_list, index) + 1
-        elif exec_end is not None:
-            index = exec_end + 1
-        elif token_list[index].kind == "period":
+        if token_list[index].kind == _PERIOD_KIND:
             index += 1
-        else:
+            continue
+        end = _no_code_end(token_list, index, True)
+        if end == index:
             break
-    return min(index, len(token_list))
+        index = end
+    return index
 
 
 def _start_division(token_list: list[_Token]) -> str:
     """Return the division the first statement of a file belongs to.
 
-    The statement is the first one after the EXEC blocks and COPY statements the
-    file starts with.
+    The statement is the first one after the text the file starts with that is no
+    code (_first_statement_start).
 
     Examples (first tokens of the file):
         IDENTIFICATION DIVISION.    -> "IDENTIFICATION"
         PROGRAM-ID. SUB1.           -> "IDENTIFICATION"
         01 CUST-RECORD.             -> "DATA"
+        EJECT 01 CUST-RECORD.       -> "DATA"
         FD CUST-FILE.               -> "DATA"
         LINKAGE SECTION.            -> "DATA"
+        INPUT-OUTPUT SECTION.       -> "ENVIRONMENT"
+        FILE-CONTROL.               -> "ENVIRONMENT"
         SELECT CUST-FILE ASSIGN ... -> "ENVIRONMENT"
         READ-PARA.                  -> "PROCEDURE"
 
@@ -1061,14 +1268,16 @@ def _start_division(token_list: list[_Token]) -> str:
     start = _first_statement_start(token_list)
     first_word, second_word = _word(token_list, start), _word(token_list, start + 1)
     if first_word == "PROGRAM-ID" or _is_division_header(token_list, start):
-        return IDENTIFICATION_DIVISION
+        return _IDENTIFICATION_DIVISION
     if _is_level_number(first_word) or first_word in _FILE_ENTRY_WORD_SET:
-        return DATA_DIVISION
-    if first_word in _DATA_SECTION_WORD_SET and second_word == "SECTION":
-        return DATA_DIVISION
-    if first_word == "SELECT":
-        return ENVIRONMENT_DIVISION
-    return PROCEDURE_DIVISION
+        return _DATA_DIVISION
+    if first_word in _DATA_SECTION_WORD_SET and second_word == _SECTION_WORD:
+        return _DATA_DIVISION
+    if first_word in _ENVIRONMENT_SECTION_WORD_SET and second_word == _SECTION_WORD:
+        return _ENVIRONMENT_DIVISION
+    if first_word in _ENVIRONMENT_WORD_SET:
+        return _ENVIRONMENT_DIVISION
+    return _PROCEDURE_DIVISION
 
 
 def _call_name_token(token_list: list[_Token], index: int) -> _Token | None:
@@ -1090,15 +1299,17 @@ def _call_name_token(token_list: list[_Token], index: int) -> _Token | None:
         or no word or literal follows it.
     """
     word = _word(token_list, index)
-    if word not in ("CALL", "ENTRY") or index + 1 >= len(token_list):
+    if word not in (_CALL_WORD, _ENTRY_WORD) or index + 1 >= len(token_list):
         return None
     name_token = token_list[index + 1]
-    if name_token.kind not in ("word", "literal"):
+    if name_token.kind not in _NAME_TOKEN_KIND_TUPLE:
         return None
     after_token = token_list[index + 2] if index + 2 < len(token_list) else None
-    if word == "CALL" and name_token.kind == "word" and after_token and after_token.kind == "literal":
-        return after_token
-    return name_token
+    is_call_convention = (
+        word == _CALL_WORD and name_token.kind == _WORD_KIND
+        and after_token is not None and after_token.kind == _LITERAL_KIND
+    )
+    return after_token if is_call_convention else name_token
 
 
 class _Split:
@@ -1109,7 +1320,8 @@ class _Split:
     """
 
     def __init__(self, token_list: list[_Token], cobol_text: CobolText) -> None:
-        """
+        """Set up the split of the tokens of one file.
+
         Args:
             token_list: The tokens of the file in source order.
             cobol_text: Record of what is read without the grammar.
@@ -1131,7 +1343,7 @@ class _Split:
         index = 0
         while index < len(self.token_list):
             statement_token_list, index = self._statement(index)
-            if any(token.kind != "period" for token in statement_token_list):
+            if any(token.kind != _PERIOD_KIND for token in statement_token_list):
                 unit_count = len(self.unit_token_list)
                 index = self._read_statement(statement_token_list, index)
                 if len(self.unit_token_list) == unit_count:
@@ -1142,9 +1354,9 @@ class _Split:
 
     def _record_word_list(self, token_list: list[_Token]) -> None:
         """Record the words of tokens that are in no unit, with the names that qualify them."""
-        text_list = [token.text if token.kind == "word" else "" for token in token_list]
+        text_list = [token.text if token.kind == _WORD_KIND else "" for token in token_list]
         for index, token in enumerate(token_list):
-            if token.kind == "word":
+            if token.kind == _WORD_KIND:
                 self.cobol_text.word_list.append(
                     (token.text, token.line, qualifier_tuple(text_list, index))
                 )
@@ -1154,8 +1366,10 @@ class _Split:
 
         The statement ends with its period, or before PROGRAM-ID, END PROGRAM or a
         division header.
-        COPY statements and EXEC blocks inside it are read and left out, except in an
-        identification division; EJECT, SKIP1 to SKIP3 and TITLE at its start are left out.
+        COPY statements and EXEC blocks inside it, and EJECT, SKIP1 to SKIP3, TITLE and
+        REPLACE at its start, are left out (_no_code_end); COPY statements and EXEC blocks
+        are read. In an identification division, after its header or PROGRAM-ID, only
+        EJECT and SKIP1 to SKIP3 are left out.
 
         Args:
             index: Index of the first token of the statement.
@@ -1166,32 +1380,29 @@ class _Split:
         token_list = self.token_list
         statement_token_list: list[_Token] = []
         while index < len(token_list):
-            word, next_word = _word(token_list, index), _word(token_list, index + 1)
-            is_code = self.division != IDENTIFICATION_DIVISION or self.is_prologue
-            if statement_token_list and (
-                _is_division_header(token_list, index)
-                or word == "PROGRAM-ID"
-                or (word == "END" and next_word == "PROGRAM")
-            ):
+            if statement_token_list and _is_program_bound(token_list, index):
                 break
-            exec_end = _exec_end(token_list, index) if word == "EXEC" and next_word else None
-            if word == "COPY" and is_code:
-                index = self._read_copy(index)
-            elif exec_end is not None and is_code:
-                index = self._read_exec(index, exec_end, statement_token_list)
-            elif not statement_token_list and word in _NO_CODE_WORD_SET:
-                index += 1
-            elif not statement_token_list and word == "TITLE" and is_code:
-                index += 2
-            else:
-                statement_token_list.append(token_list[index])
-                index += 1
-                if statement_token_list[-1].kind == "period":
-                    break
+            word = _word(token_list, index)
+            is_code = self.division != _IDENTIFICATION_DIVISION or self.is_prologue
+            end = _no_code_end(token_list, index, not statement_token_list)
+            if end > index and (is_code or word in _NO_CODE_WORD_SET):
+                if word == _COPY_WORD:
+                    self._read_copy(index, end)
+                elif word == _EXEC_WORD:
+                    self._read_exec(index, end - 1, statement_token_list)
+                index = end
+                continue
+            statement_token_list.append(token_list[index])
+            index += 1
+            if statement_token_list[-1].kind == _PERIOD_KIND:
+                break
         return statement_token_list, index
 
     def _read_statement(self, statement_token_list: list[_Token], index: int) -> int:
         """Read one statement into a unit or into cobol_text.
+
+        A statement other than a division header, PROGRAM-ID and END PROGRAM is handed
+        to the method _DIVISION_READER_DICT names for the current division.
 
         Args:
             statement_token_list: The tokens of the statement.
@@ -1201,12 +1412,11 @@ class _Split:
             Index of the next token to read.
         """
         first_word = _word(statement_token_list, 0)
-        second_word = _word(statement_token_list, 1)
         line = statement_token_list[0].line
 
         if _is_division_header(statement_token_list, 0):
             if first_word in _IDENTIFICATION_WORD_SET:
-                self.division = IDENTIFICATION_DIVISION
+                self.division = _IDENTIFICATION_DIVISION
                 self.program_start_line = line
                 self.is_prologue = False
             else:
@@ -1216,30 +1426,25 @@ class _Split:
             return index
         if first_word == "PROGRAM-ID":
             return self._read_program(statement_token_list, index)
-        if first_word == "END" and second_word == "PROGRAM":
+        if _is_program_end(statement_token_list, 0):
             if len(statement_token_list) > 2:
                 name = literal_value(statement_token_list[2].text)
                 self.cobol_text.program_end_list.append((name, line))
             return index
-        if first_word == "REPLACE":
-            return index
 
-        if self.division == ENVIRONMENT_DIVISION:
-            self._read_environment(statement_token_list)
-        elif self.division == DATA_DIVISION:
-            self._read_data(statement_token_list)
-        elif self.division == PROCEDURE_DIVISION:
-            self._read_procedure(statement_token_list)
+        reader = self._DIVISION_READER_DICT.get(self.division)
+        if reader is not None:
+            reader(self, statement_token_list)
         return index
 
     def _read_program(self, statement_token_list: list[_Token], index: int) -> int:
         """Record the program a PROGRAM-ID paragraph names and return the index after it."""
         line = statement_token_list[0].line
         name_token_list = statement_token_list[1:]
-        if all(token.kind == "period" for token in name_token_list):
+        if all(token.kind == _PERIOD_KIND for token in name_token_list):
             name_token_list, index = self._statement(index)
         name_token = next(
-            (token for token in name_token_list if token.kind in ("word", "literal")), None,
+            (token for token in name_token_list if token.kind in _NAME_TOKEN_KIND_TUPLE), None,
         )
         if name_token is not None:
             self.cobol_text.program_list.append(
@@ -1247,7 +1452,7 @@ class _Split:
             )
         self.program_start_line = 0
         self.is_prologue = False
-        self.division = IDENTIFICATION_DIVISION
+        self.division = _IDENTIFICATION_DIVISION
         return index
 
     def _read_environment(self, statement_token_list: list[_Token]) -> None:
@@ -1264,7 +1469,7 @@ class _Split:
         SCREEN and REPORT sections are in no unit.
         """
         first_word = _word(statement_token_list, 0)
-        if first_word in _DATA_SECTION_WORD_SET and _word(statement_token_list, 1) == "SECTION":
+        if first_word in _DATA_SECTION_WORD_SET and _word(statement_token_list, 1) == _SECTION_WORD:
             self.section = first_word
         elif self.section in _NO_UNIT_SECTION_WORD_SET:
             self._record_word_list(statement_token_list)
@@ -1278,12 +1483,16 @@ class _Split:
     def _read_procedure(self, statement_token_list: list[_Token]) -> None:
         """Read a sentence of the procedure division.
 
-        DECLARATIVES. / END DECLARATIVES.   -> nothing
+        DECLARATIVES.                       -> nothing
+        END DECLARATIVES.                   -> its line in cobol_text.declaratives_end_line_list
         any other                           -> a unit
         Each CALL of the sentence is recorded in cobol_text.call_list and each ENTRY in
         cobol_text.entry_list; ENTRY is written as CALL in the unit.
         """
-        if "DECLARATIVES" in (_word(statement_token_list, 0), _word(statement_token_list, 1)):
+        if _word(statement_token_list, 0) == "DECLARATIVES":
+            return
+        if _word(statement_token_list, 1) == "DECLARATIVES":
+            self.cobol_text.declaratives_end_line_list.append(statement_token_list[0].line)
             return
 
         unit_token_list = list(statement_token_list)
@@ -1292,29 +1501,29 @@ class _Split:
             name_token = _call_name_token(statement_token_list, index)
             if name_token is None:
                 continue
-            if word == "CALL":
+            if word == _CALL_WORD:
                 self.cobol_text.call_list.append(
-                    (literal_value(name_token.text), name_token.kind == "literal", token.line)
+                    (literal_value(name_token.text), name_token.kind == _LITERAL_KIND, token.line)
                 )
-            elif word == "ENTRY":
+            elif word == _ENTRY_WORD:
                 self.cobol_text.entry_list.append((literal_value(name_token.text), token.line))
                 unit_token_list[index] = _Token(
-                    "word", "CALL", token.line, token.column, token.has_gap,
+                    _WORD_KIND, _CALL_WORD, token.line, token.column, token.has_gap,
                     position=token.position,
                 )
         self.unit_token_list.append((PROCEDURE_UNIT, unit_token_list))
 
-    def _read_exec(self, index: int, end: int, statement_token_list: list[_Token]) -> int:
-        """Read an EXEC ... END-EXEC block and return the index after it.
+    def _read_exec(self, index: int, end: int, statement_token_list: list[_Token]) -> None:
+        """Read an EXEC ... END-EXEC block.
 
         EXEC SQL INCLUDE name         -> recorded in cobol_text.copy_list
         EXEC CICS ... PROGRAM(name)   -> recorded in cobol_text.call_list
         EXEC CICS ... TRANSID(name)   -> recorded in cobol_text.transid_list
         The words of the block are recorded in cobol_text.word_list, a word with ":"
         as the words between them; a host variable written :STRUCT.NAME is qualified by
-        STRUCT. Of an EXEC SQL block only the host variables (the words after a ":")
-        are recorded. In a procedure division CONTINUE is added to the statement in
-        place of the block.
+        STRUCT. Of an EXEC SQL block only the host variables (the words after a ":") and
+        the name after GO TO / GOTO of a WHENEVER statement are recorded. In a procedure
+        division CONTINUE is added to the statement in place of the block.
 
         Args:
             index: Index of the word EXEC.
@@ -1325,23 +1534,25 @@ class _Split:
         block_token_list = token_list[index + 2:end]
         line = token_list[index].line
         kind = _word(token_list, index + 1)
+        go_to_position = _sql_go_to_position(block_token_list) if kind == "SQL" else None
         for position, token in enumerate(block_token_list):
-            if token.kind != "word":
+            if token.kind != _WORD_KIND:
                 continue
             structure_name = _host_structure_name(block_token_list, position)
-            qualifier = (structure_name,) if structure_name else ()
+            qualifier_name_tuple = (structure_name,) if structure_name else ()
             word_list = token.text.split(":")
             is_after_colon = position > 0 and block_token_list[position - 1].text == ":"
-            if kind == "SQL" and not (is_after_colon or structure_name):
+            is_name = is_after_colon or structure_name or position == go_to_position
+            if kind == "SQL" and not is_name:
                 # Only the part of the word written after a ":" is a host variable
                 word_list = word_list[1:]
             self.cobol_text.word_list.extend(
-                (word, token.line, qualifier) for word in word_list if word
+                (word, token.line, qualifier_name_tuple) for word in word_list if word
             )
 
         if kind == "SQL" and _word(block_token_list, 0) == "INCLUDE" and len(block_token_list) > 1:
             name_token = block_token_list[1]
-            if name_token.kind in ("word", "literal"):
+            if name_token.kind in _NAME_TOKEN_KIND_TUPLE:
                 self.cobol_text.copy_list.append(CobolCopy(
                     literal_value(name_token.text), line, token_list[end].line,
                     token_list[index].position,
@@ -1357,32 +1568,37 @@ class _Split:
                 if (
                     option_list is not None
                     and block_token_list[position + 1].text == "("
-                    and name_token.kind in ("word", "literal")
+                    and name_token.kind in _NAME_TOKEN_KIND_TUPLE
                 ):
                     option_list.append(
-                        (literal_value(name_token.text), name_token.kind == "literal", line)
+                        (literal_value(name_token.text), name_token.kind == _LITERAL_KIND, line)
                     )
 
-        if self.division == PROCEDURE_DIVISION:
+        if self.division == _PROCEDURE_DIVISION:
             statement_token_list.append(_Token(
-                "word", "CONTINUE", line, token_list[index].column,
+                _WORD_KIND, "CONTINUE", line, token_list[index].column,
                 position=token_list[index].position,
             ))
-        return end + 1
 
-    def _read_copy(self, index: int) -> int:
-        """Record a COPY statement in cobol_text.copy_list and return the index after it."""
+    def _read_copy(self, index: int, end: int) -> None:
+        """Record a COPY statement in cobol_text.copy_list.
+
+        Args:
+            index: Index of the word COPY.
+            end: Index after the statement (_copy_end); index + 1 records nothing.
+        """
         token_list = self.token_list
-        end = _statement_end(token_list, index)
         operand_token_list = token_list[index + 1:end]
-        if not operand_token_list or operand_token_list[0].kind not in ("word", "literal"):
-            return index + 1
+        if operand_token_list and operand_token_list[-1].kind == _PERIOD_KIND:
+            operand_token_list.pop()
+        if not operand_token_list:
+            return
 
         library = ""
         phrase_start = len(operand_token_list)
         for position in range(1, len(operand_token_list)):
             word = _word(operand_token_list, position)
-            if word in ("OF", "IN") and position == 1 and len(operand_token_list) > 2:
+            if word in _QUALIFIER_WORD_SET and position == 1 and len(operand_token_list) > 2:
                 library = literal_value(operand_token_list[2].text)
             elif word in ("REPLACING", "SUPPRESS"):
                 phrase_start = position
@@ -1390,12 +1606,18 @@ class _Split:
         self.cobol_text.copy_list.append(CobolCopy(
             name=literal_value(operand_token_list[0].text),
             line=token_list[index].line,
-            end_line=token_list[min(end, len(token_list) - 1)].line,
+            end_line=token_list[end - 1].line,
             position=token_list[index].position,
             library=library,
             replacing_list=_replacing_list(operand_token_list[phrase_start:]),
         ))
-        return min(end + 1, len(token_list))
+
+    # Division -> method that reads a statement of that division
+    _DIVISION_READER_DICT = {
+        _ENVIRONMENT_DIVISION: _read_environment,
+        _DATA_DIVISION: _read_data,
+        _PROCEDURE_DIVISION: _read_procedure,
+    }
 
 
 def _put_stand_in_name(
@@ -1414,14 +1636,14 @@ def _put_stand_in_name(
         cobol_text: Record of the stand-in names.
     """
     prefix = _STAND_IN_PREFIX
-    word_set = {token.text.upper() for token in token_list if token.kind == "word"}
+    word_set = {token.text.upper() for token in token_list if token.kind == _WORD_KIND}
     while any(word.startswith(prefix) for word in word_set):
         prefix += _STAND_IN_PREFIX_CHAR
 
     stand_in_dict: dict[str, str] = {}
     for _, statement_token_list in unit_token_list:
         for token in statement_token_list:
-            if token.kind != "word" or GRAMMAR_NAME_RE.fullmatch(token.text):
+            if token.kind != _WORD_KIND or GRAMMAR_NAME_RE.fullmatch(token.text):
                 continue
             key = token.text.upper()
             if key not in stand_in_dict:
@@ -1456,9 +1678,9 @@ def _token_gap(last_token: _Token, token: _Token) -> str:
     """Return the text written between two tokens of one line (" " or "")."""
     if token.has_gap:
         return " "
-    if token.kind == "word" and last_token.text[-1] in _OPERATOR_CHAR_SET:
+    if token.kind == _WORD_KIND and last_token.text[-1] in _OPERATOR_CHAR_SET:
         return " "
-    if last_token.kind == "word" and token.text[0] in _OPERATOR_CHAR_SET:
+    if last_token.kind == _WORD_KIND and token.text[0] in _OPERATOR_CHAR_SET:
         return " "
     return ""
 
@@ -1467,8 +1689,10 @@ def _code_line_text_list(token_list: list[_Token]) -> list[str]:
     """Write the tokens of one source line as the code of one or more fixed-format lines.
 
     The tokens keep the indent of the first one when the line fits the code area.
-    A line that does not fit is written without indent, then with each literal cut,
-    then on several lines.
+    A line that does not fit is written without indent on several lines, broken where
+    a blank is written between two tokens. A run of tokens without a blank between them
+    that does not fit one line has its literals cut, the longest first, and is then
+    broken between any two of its tokens.
 
     Args:
         token_list: The tokens of one source line, in order.
@@ -1484,25 +1708,39 @@ def _code_line_text_list(token_list: list[_Token]) -> list[str]:
     if len(indent) + sum(len(part) for part in part_list) <= _CODE_WIDTH:
         return [indent + "".join(part_list)]
 
-    # Cut the literals, the longest first, until the line fits
-    literal_index_list = sorted(
-        (index for index, token in enumerate(token_list) if token.kind == "literal"),
-        key=lambda index: -len(part_list[index]),
-    )
-    for index in literal_index_list:
-        extra_width = sum(len(part) for part in part_list) - _CODE_WIDTH
-        if extra_width <= 0:
-            break
-        gap = part_list[index][:len(part_list[index]) - len(token_list[index].text)]
-        width = max(len(token_list[index].text) - extra_width, 0)
-        part_list[index] = gap + _short_literal(token_list[index].text, width)
+    # Runs of parts: a run starts with a part written after a blank
+    run_list: list[list[int]] = []
+    for index, part in enumerate(part_list):
+        if not run_list or part.startswith(" "):
+            run_list.append([])
+        run_list[-1].append(index)
 
-    # Move the tokens that still do not fit to the next line
+    # Cut the literals of each run that does not fit a line, the longest first
+    for run in run_list:
+        literal_index_list = sorted(
+            (index for index in run if token_list[index].kind == _LITERAL_KIND),
+            key=lambda index: -len(part_list[index]),
+        )
+        for index in literal_index_list:
+            extra_width = len("".join(part_list[i] for i in run).lstrip()) - _CODE_WIDTH
+            if extra_width <= 0:
+                break
+            gap = part_list[index][:len(part_list[index]) - len(token_list[index].text)]
+            width = max(len(token_list[index].text) - extra_width, 0)
+            part_list[index] = gap + _short_literal(token_list[index].text, width)
+
+    # Start a run on the next line when it does not fit after the text of the line, and
+    # the part of a run on the next line when the run does not fit one line
     line_text_list = [""]
-    for part in part_list:
-        if line_text_list[-1] and len(line_text_list[-1]) + len(part) > _CODE_WIDTH:
+    for run in run_list:
+        run_width = sum(len(part_list[index]) for index in run)
+        if line_text_list[-1] and len(line_text_list[-1]) + run_width > _CODE_WIDTH:
             line_text_list.append("")
-        line_text_list[-1] += part if line_text_list[-1] else part.lstrip()
+        for index in run:
+            part = part_list[index]
+            if line_text_list[-1] and len(line_text_list[-1]) + len(part) > _CODE_WIDTH:
+                line_text_list.append("")
+            line_text_list[-1] += part if line_text_list[-1] else part.lstrip()
     return [_short_text(line_text) for line_text in line_text_list]
 
 
@@ -1510,7 +1748,7 @@ def _short_text(line_text: str) -> str:
     """Return the code of one line cut to the width of the code area."""
     if len(line_text) <= _CODE_WIDTH:
         return line_text
-    if line_text[-1] in "\"'":
+    if line_text[-1] in _QUOTE_CHAR_SET:
         return _short_literal(line_text, _CODE_WIDTH)
     return line_text[:_CODE_WIDTH]
 
@@ -1524,11 +1762,11 @@ def _is_name_only(token_list: list[_Token]) -> bool:
         CALC SECTION 10.     -> True
         MOVE A TO B.         -> False
     """
-    if token_list[0].kind != "word":
+    if token_list[0].kind != _WORD_KIND:
         return False
     if len(token_list) == 2:
-        return token_list[1].kind == "period"
-    return _word(token_list, 1) == "SECTION" and len(token_list) <= 4
+        return token_list[1].kind == _PERIOD_KIND
+    return _word(token_list, 1) == _SECTION_WORD and len(token_list) <= 4
 
 
 def _has_name_suffix(token_list: list[_Token]) -> bool:
@@ -1544,14 +1782,16 @@ def _has_name_suffix(token_list: list[_Token]) -> bool:
         05 CUST-(SFX) PIC X.      -> True
     """
     index = next(
-        (index for index in range(1, len(token_list)) if token_list[index].kind == "word"),
+        (index for index in range(1, len(token_list)) if token_list[index].kind == _WORD_KIND),
         len(token_list),
     )
     if index + 1 >= len(token_list):
         return False
     next_token = token_list[index + 1]
     return not (
-        next_token.has_gap or next_token.kind == "period" or next_token.text in _SEPARATOR_TEXT_SET
+        next_token.has_gap
+        or next_token.kind == _PERIOD_KIND
+        or next_token.text in _SEPARATOR_TEXT_SET
     )
 
 
@@ -1606,9 +1846,10 @@ def item_unit(name: str) -> CobolUnit:
         The unit of the statement "01 name PIC X." on line 1.
     """
     token_list = [
-        _Token(kind, text, 1, has_gap=kind != "period")
+        _Token(kind, text, 1, has_gap=kind != _PERIOD_KIND)
         for kind, text in (
-            ("word", "01"), ("word", name), ("word", "PIC"), ("picture", "X"), ("period", "."),
+            (_WORD_KIND, "01"), (_WORD_KIND, name), (_WORD_KIND, "PIC"), (_PICTURE_KIND, "X"),
+            (_PERIOD_KIND, "."),
         )
     ]
     return _unit(ITEM_UNIT, token_list, [("01", 1), (name, 1)])
@@ -1635,7 +1876,7 @@ def split_cobol_source(source: str) -> CobolText:
         A CobolText. Names and line numbers in it are those of the source, except in
         the text of the units.
     """
-    line_list = [line.expandtabs(_TAB_SIZE) for line in line_list_of(source)]
+    line_list = [line.expandtabs(TAB_SIZE) for line in line_list_of(source)]
     cobol_text = CobolText()
 
     # == Step 1: Tokens =======================================================
@@ -1645,7 +1886,7 @@ def split_cobol_source(source: str) -> CobolText:
     # == Step 2: Statements ===================================================
     unit_token_list = _Split(token_list, cobol_text).run()
     unit_word_list = [
-        [(token.text, token.line) for token in statement_token_list if token.kind == "word"]
+        [(token.text, token.line) for token in statement_token_list if token.kind == _WORD_KIND]
         for _, statement_token_list in unit_token_list
     ]
 

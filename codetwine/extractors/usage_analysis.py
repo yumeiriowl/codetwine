@@ -32,6 +32,8 @@ class _TargetDefinition:
     context: str | None      # Source text of the definition
     name: str | None         # Name of the definition, as "definitions" lists it
     start_line: int | None   # First line of the definition (1-based)
+    # First byte of the definition (DefinitionInfo.start_byte); None when it has none
+    start_byte: int | None = None
 
 
 # A reference that leads to no definition of its file
@@ -83,16 +85,16 @@ def _group_other_file_target_list(
         two definitions of a file (two overloads) gives two.
     """
     target_definition = _memo_definition_function(target_definition)
-    usage_group_map: dict[tuple, dict] = {}
+    usage_group_dict: dict[tuple, dict] = {}
     for target in target_list:
         if target.file_rel == file_rel:
             continue
         definition = target_definition(target)
-        group_key = (target.file_rel, target.name, definition.name, definition.start_line)
-        if group_key in usage_group_map:
-            usage_group_map[group_key]["lines"].append(target.line)
+        group_key_tuple = (target.file_rel, target.name, definition.name, definition.start_line)
+        if group_key_tuple in usage_group_dict:
+            usage_group_dict[group_key_tuple]["lines"].append(target.line)
             continue
-        usage_group_map[group_key] = {
+        usage_group_dict[group_key_tuple] = {
             "lines":             [target.line],
             "name":              target.name,
             "from":              target.file_rel,
@@ -101,9 +103,14 @@ def _group_other_file_target_list(
             "target_start_line": definition.start_line,
         }
 
-    for entry in usage_group_map.values():
-        entry["lines"] = sorted(set(entry["lines"]))
-    return list(usage_group_map.values())
+    _sort_group_line(usage_group_dict)
+    return list(usage_group_dict.values())
+
+
+def _sort_group_line(group_dict: dict[tuple, dict] | dict[str, dict]) -> None:
+    """Sort the "lines" of each group without duplicates, in place."""
+    for group in group_dict.values():
+        group["lines"] = sorted(set(group["lines"]))
 
 
 def _definition_range_dict(
@@ -118,11 +125,18 @@ def _definition_range_dict(
     return range_dict
 
 
+# A function from a same-file reference and the definition it leads to, to the line
+# ranges of the definition the reference names
+_OwnRangeFunction = Callable[[ReferenceTarget, _TargetDefinition], list[tuple[int, int]]]
+
+
 def _cobol_own_range_function(
-    definition_list: list[DefinitionInfo], root_node: Node | CobolSource,
-) -> Callable[[CobolReferenceTarget], list[tuple[int, int]]]:
+    definition_list: list[DefinitionInfo], root_node: Node | CobolSource | None,
+) -> _OwnRangeFunction:
     """Return the function giving the lines of the definition a COBOL reference resolved to."""
-    def cobol_range_list(target: CobolReferenceTarget) -> list[tuple[int, int]]:
+    def cobol_range_list(
+        target: CobolReferenceTarget, definition: _TargetDefinition,
+    ) -> list[tuple[int, int]]:
         """Return the lines of the definition a COBOL reference resolved to."""
         if target.definition is None:
             return []
@@ -132,10 +146,12 @@ def _cobol_own_range_function(
 
 
 def _jcl_own_range_function(
-    definition_list: list[DefinitionInfo], root_node: Node | CobolSource,
-) -> Callable[[CobolReferenceTarget], list[tuple[int, int]]]:
+    definition_list: list[DefinitionInfo], root_node: Node | CobolSource | None,
+) -> _OwnRangeFunction:
     """Return the function giving no lines for a JCL or CSD reference: each one is kept."""
-    def jcl_range_list(target: CobolReferenceTarget) -> list[tuple[int, int]]:
+    def jcl_range_list(
+        target: CobolReferenceTarget, definition: _TargetDefinition,
+    ) -> list[tuple[int, int]]:
         """Return no lines."""
         return []
 
@@ -143,19 +159,22 @@ def _jcl_own_range_function(
 
 
 def _r_own_range_function(
-    definition_list: list[DefinitionInfo], root_node: Node | CobolSource,
-) -> Callable[[RReferenceTarget], list[tuple[int, int]]]:
+    definition_list: list[DefinitionInfo], root_node: Node | CobolSource | None,
+) -> _OwnRangeFunction:
     """Return the function giving the lines of the top-level definitions of the name of an R reference.
 
-    The members of a class and the calls written for a name defined elsewhere
-    (setMethod) are not such definitions.
+    An R reference leads to every definition of its name; the members of a class and
+    the calls written for a name defined elsewhere (setMethod) are not top-level
+    definitions.
     """
     range_dict = _definition_range_dict([
         definition for definition in r_definition_list(root_node)
         if not definition.is_member and not definition.is_attach
     ])
 
-    def r_range_list(target: RReferenceTarget) -> list[tuple[int, int]]:
+    def r_range_list(
+        target: RReferenceTarget, definition: _TargetDefinition,
+    ) -> list[tuple[int, int]]:
         """Return the lines of the top-level definitions of the name of an R reference."""
         return range_dict.get(usage_root_name(target.name, range_dict), [])
 
@@ -163,22 +182,47 @@ def _r_own_range_function(
 
 
 def _name_own_range_function(
-    definition_list: list[DefinitionInfo], root_node: Node | CobolSource,
-) -> Callable[[CsharpReferenceTarget | ImportReferenceTarget], list[tuple[int, int]]]:
-    """Return the function giving the lines of the definitions the name of a reference names.
+    definition_list: list[DefinitionInfo], root_node: Node | CobolSource | None,
+) -> _OwnRangeFunction:
+    """Return the function giving the lines of the definition a C# or import reference names.
 
-    These are the lines of the definition a reference with a definition_line leads
-    to; else the lines of the member a name with several parts names (Cfg.Max -> Max),
-    else the lines of every definition named like the first part of the name as it is
-    written, else like the first part of the name of the definition it resolves to
-    (Rust: self::parse -> parse).
+    These are the lines of the definition the reference leads to (target_definition):
+    of the definitions of its name, the one that starts at its first byte (at its first
+    line when either has no bytes). For a reference written with several parts exactly
+    as the name of that definition, also the first line of every other definition of
+    the name (C++: the name of W::W(double b) {} written after W::W(int a) {}). For a
+    reference that leads to no definition: the lines of the definition an import
+    reference with a definition_line names; else the lines of the member a name with
+    several parts names (Cfg.Max -> Max), else the lines of every definition named
+    like the first part of the name as it is written, else like the first part of
+    the name of the definition it resolves to (Rust: self::parse -> parse).
     """
     range_dict = _definition_range_dict(definition_list)
+    name_definition_dict: dict[str, list[DefinitionInfo]] = {}
+    for named_definition in definition_list:
+        name_definition_dict.setdefault(named_definition.name, []).append(
+            named_definition,
+        )
 
     def name_range_list(
-        target: CsharpReferenceTarget | ImportReferenceTarget,
+        target: CsharpReferenceTarget | ImportReferenceTarget, definition: _TargetDefinition,
     ) -> list[tuple[int, int]]:
-        """Return the lines of the definitions the name of a reference names."""
+        """Return the lines of the definition a reference names."""
+        if definition.start_line is not None:
+            is_scoped_name = (
+                target.name == definition.name and len(symbol_part_list(target.name)) > 1
+            )
+            own_range_list: list[tuple[int, int]] = []
+            for named_definition in name_definition_dict.get(definition.name, []):
+                if _is_target_definition(named_definition, definition):
+                    own_range_list.append(
+                        (named_definition.start_line, named_definition.end_line),
+                    )
+                elif is_scoped_name:
+                    own_range_list.append(
+                        (named_definition.start_line, named_definition.start_line),
+                    )
+            return own_range_list
         part_list = symbol_part_list(target.definition_name)
         if isinstance(target, ImportReferenceTarget) and target.definition_line is not None:
             return [
@@ -199,25 +243,22 @@ def _name_own_range_function(
     return name_range_list
 
 
-# Reference kind of a language -> function that returns, for the definitions and the
-# root node of a file, the function from a same-file reference to the line ranges of
-# the definition it names
-_OWN_RANGE_FUNCTION_DICT: dict[str, Callable[..., Callable[..., list[tuple[int, int]]]]] = {
-    "cobol":  _cobol_own_range_function,
-    "jcl":    _jcl_own_range_function,
-    "r":      _r_own_range_function,
-    "csharp": _name_own_range_function,
-    "import": _name_own_range_function,
-}
+def _is_target_definition(
+    named_definition: DefinitionInfo, definition: _TargetDefinition,
+) -> bool:
+    """Return whether a definition of the name of a target definition is that definition.
 
-# Reference kinds whose function of _OWN_RANGE_FUNCTION_DICT reads the syntax tree
-TREE_RANGE_KIND_SET = {"r"}
+    Compared by the first byte when both have one, else by the first line.
+    """
+    if named_definition.start_byte is not None and definition.start_byte is not None:
+        return named_definition.start_byte == definition.start_byte
+    return named_definition.start_line == definition.start_line
 
 
 def _group_same_file_target_list(
     target_list: list[ReferenceTarget],
     file_rel: str,
-    own_range_list: Callable[[ReferenceTarget], list[tuple[int, int]]],
+    own_range_list: _OwnRangeFunction,
     target_definition: Callable[[ReferenceTarget], _TargetDefinition],
 ) -> list[dict]:
     """Group the resolved references of a file that lead to the file itself.
@@ -228,8 +269,8 @@ def _group_same_file_target_list(
     Args:
         target_list: The resolved references of the file.
         file_rel: Relative path of the file.
-        own_range_list: Returns the line ranges of the definition a reference names
-            (_OWN_RANGE_FUNCTION_DICT).
+        own_range_list: Returns the line ranges of the definition a reference names,
+            from the reference and the definition it leads to (_ReferenceKindSetting).
         target_definition: Returns the definition a reference leads to.
 
     Returns:
@@ -237,26 +278,28 @@ def _group_same_file_target_list(
         (name, definition).
     """
     target_definition = _memo_definition_function(target_definition)
-    usage_group_map: dict[tuple, dict] = {}
+    usage_group_dict: dict[tuple, dict] = {}
     for target in target_list:
         if target.file_rel != file_rel:
             continue
-        if any(start <= target.line <= end for start, end in own_range_list(target)):
-            continue
         definition = target_definition(target)
-        group_key = (target.name, definition.name, definition.start_line)
-        if group_key not in usage_group_map:
-            usage_group_map[group_key] = {
+        if any(
+            start_line <= target.line <= end_line
+            for start_line, end_line in own_range_list(target, definition)
+        ):
+            continue
+        group_key_tuple = (target.name, definition.name, definition.start_line)
+        if group_key_tuple not in usage_group_dict:
+            usage_group_dict[group_key_tuple] = {
                 "lines":             [],
                 "name":              target.name,
                 "target_name":       definition.name,
                 "target_start_line": definition.start_line,
             }
-        usage_group_map[group_key]["lines"].append(target.line)
+        usage_group_dict[group_key_tuple]["lines"].append(target.line)
 
-    for entry in usage_group_map.values():
-        entry["lines"] = sorted(set(entry["lines"]))
-    return list(usage_group_map.values())
+    _sort_group_line(usage_group_dict)
+    return list(usage_group_dict.values())
 
 
 def _cobol_definition_function(
@@ -296,35 +339,25 @@ def _r_definition_function(project_dir: str) -> Callable[[RReferenceTarget], _Ta
     return r_definition
 
 
-def _csharp_definition_function(
+def _source_definition_function(
     project_dir: str,
-) -> Callable[[CsharpReferenceTarget], _TargetDefinition]:
-    """Return the function giving the declaration a C# reference resolved to.
-
-    The declaration is the one named by the definition_name of the target that starts
-    on its definition_line (source_definition).
-    """
-    def csharp_definition(target: CsharpReferenceTarget) -> _TargetDefinition:
-        """Return the declaration a C# reference resolves to."""
-        return _source_target_definition(
-            target.file_rel, target.definition_name, project_dir, target.definition_line,
-        )
-
-    return csharp_definition
-
-
-def _import_definition_function(
-    project_dir: str,
-) -> Callable[[ImportReferenceTarget], _TargetDefinition]:
+) -> Callable[[CsharpReferenceTarget | ImportReferenceTarget], _TargetDefinition]:
     """Return the function giving the definition named by the definition_name of a target.
 
-    A target with a definition_line leads to the definition of that name that starts
-    on that line (source_definition).
+    Used for C# and import references. A target with a definition_line leads to the
+    definition of that name that starts on that line, at its definition_start_byte
+    when an import reference has one (source_definition).
     """
-    def named_definition(target: ImportReferenceTarget) -> _TargetDefinition:
+    def named_definition(
+        target: CsharpReferenceTarget | ImportReferenceTarget,
+    ) -> _TargetDefinition:
         """Return the definition named by the definition_name of a target."""
+        start_byte = (
+            target.definition_start_byte if isinstance(target, ImportReferenceTarget) else None
+        )
         return _source_target_definition(
             target.file_rel, target.definition_name, project_dir, target.definition_line,
+            start_byte,
         )
 
     return named_definition
@@ -332,24 +365,48 @@ def _import_definition_function(
 
 def _source_target_definition(
     file_rel: str, name: str, project_dir: str, start_line: int | None = None,
+    start_byte: int | None = None,
 ) -> _TargetDefinition:
     """Return the definition source_definition() gives as a _TargetDefinition."""
-    definition_tuple = source_definition(file_rel, name, project_dir, start_line)
+    definition_tuple = source_definition(file_rel, name, project_dir, start_line, start_byte)
     if definition_tuple is None:
         return _NO_DEFINITION
     definition, context = definition_tuple
-    return _TargetDefinition(context, definition.name, definition.start_line)
+    return _TargetDefinition(
+        context, definition.name, definition.start_line, definition.start_byte,
+    )
 
 
-# Reference kind of a language -> function that returns, for a project root, the function
-# from a reference to the definition it leads to (_NO_DEFINITION when the target has no
-# definition or the definition is not found)
-_TARGET_DEFINITION_FUNCTION_DICT: dict[str, Callable[[str], Callable[..., _TargetDefinition]]] = {
-    "cobol":  _cobol_definition_function,
-    "jcl":    _cobol_definition_function,
-    "r":      _r_definition_function,
-    "csharp": _csharp_definition_function,
-    "import": _import_definition_function,
+@dataclass(frozen=True)
+class _ReferenceKindSetting:
+    """How the references of one reference kind lead to their definitions."""
+
+    # Returns, for a project root, the function from a reference to the definition it
+    # leads to (_NO_DEFINITION when the target has no definition or it is not found)
+    definition_function: Callable[[str], Callable[..., _TargetDefinition]]
+    # Returns, for the definitions and the root node of a file, the _OwnRangeFunction
+    # of its same-file references
+    own_range_function: Callable[
+        [list[DefinitionInfo], Node | CobolSource | None], _OwnRangeFunction,
+    ]
+    # Whether own_range_function reads the root node of the file
+    is_tree_range: bool = False
+
+
+# Reference kind of a language -> its _ReferenceKindSetting
+_KIND_SETTING_DICT: dict[str, _ReferenceKindSetting] = {
+    "cobol":  _ReferenceKindSetting(_cobol_definition_function, _cobol_own_range_function),
+    "jcl":    _ReferenceKindSetting(_cobol_definition_function, _jcl_own_range_function),
+    "r":      _ReferenceKindSetting(
+        _r_definition_function, _r_own_range_function, is_tree_range=True,
+    ),
+    "csharp": _ReferenceKindSetting(_source_definition_function, _name_own_range_function),
+    "import": _ReferenceKindSetting(_source_definition_function, _name_own_range_function),
+}
+
+# Reference kinds whose own_range_function reads the syntax tree
+TREE_RANGE_KIND_SET = {
+    kind for kind, kind_setting in _KIND_SETTING_DICT.items() if kind_setting.is_tree_range
 }
 
 
@@ -363,7 +420,7 @@ def build_callee_usages(
     definition, target_name the name "definitions" of that file lists it under and
     target_start_line its first line; all three are None when the references lead to
     no definition of that file (a module used as a value). The definition is read the
-    way the reference kind of the file gives (_TARGET_DEFINITION_FUNCTION_DICT).
+    way the reference kind of the file gives (_KIND_SETTING_DICT).
 
     Args:
         target_list: Return value of reference_target_list.
@@ -378,7 +435,7 @@ def build_callee_usages(
     if file_kind is None:
         return []
     return _group_other_file_target_list(
-        target_list, file_rel, _TARGET_DEFINITION_FUNCTION_DICT[file_kind](project_dir),
+        target_list, file_rel, _KIND_SETTING_DICT[file_kind].definition_function(project_dir),
     )
 
 
@@ -392,12 +449,14 @@ def build_same_file_usages(
     """Build the same_file_usages of a file from its resolved references.
 
     The references that resolve to the file itself are grouped by name and the
-    definition they lead to. A reference
-    written inside the lines of the definition it names (the definition's own name, a
-    recursive call) is left out; the lines of that definition are found the way the
-    reference kind of the file gives (_OWN_RANGE_FUNCTION_DICT). target_name and
-    target_start_line of a group are the name and the first line of the definition its
-    references resolve to, None when they lead to no definition.
+    definition they lead to. A reference written inside the lines of the definition it
+    names (the definition's own name, a recursive call) is left out; the lines of that
+    definition are found the way the reference kind of the file gives
+    (_KIND_SETTING_DICT): the definition the reference leads to (C#, import), the
+    definition it resolved to (COBOL), every top-level definition of its name (R),
+    none (JCL, CSD). target_name and target_start_line of a group are the
+    name and the first line of the definition its references resolve to, None when
+    they lead to no definition.
 
     Args:
         target_list: Return value of reference_target_list.
@@ -414,50 +473,70 @@ def build_same_file_usages(
     file_kind = reference_kind(os.path.join(project_dir, file_rel))
     if file_kind is None:
         return []
+    kind_setting = _KIND_SETTING_DICT[file_kind]
     return _group_same_file_target_list(
-        target_list, file_rel, _OWN_RANGE_FUNCTION_DICT[file_kind](definition_list, root_node),
-        _TARGET_DEFINITION_FUNCTION_DICT[file_kind](project_dir),
+        target_list, file_rel, kind_setting.own_range_function(definition_list, root_node),
+        kind_setting.definition_function(project_dir),
     )
 
 
 def _group_caller_usage_list(
-    target_list: list[ReferenceTarget],
-    caller_rel: str,
-    target_definition: Callable[[ReferenceTarget], _TargetDefinition],
-) -> dict[tuple, dict]:
-    """Group the references of a caller by name and the definition they lead to.
+    target_list: list[ReferenceTarget], caller_rel: str,
+) -> dict[str, dict]:
+    """Group the references of a caller by name.
 
     Args:
         target_list: The caller's references that resolve to one file.
         caller_rel: Relative path of the caller file.
-        target_definition: Returns the definition a reference leads to.
 
     Returns:
-        A {(name, definition name, first line of the definition): {"lines", "name",
-        "file"}} dict, the groups _group_other_file_target_list makes for the caller;
+        A {name: {"lines", "name", "file"}} dict, in the order the names first occur;
         lines are sorted without duplicates.
     """
-    target_definition = _memo_definition_function(target_definition)
-    group_dict: dict[tuple, dict] = {}
+    group_dict: dict[str, dict] = {}
     for target in target_list:
-        definition = target_definition(target)
         group = group_dict.setdefault(
-            (target.name, definition.name, definition.start_line),
-            {"lines": [], "name": target.name, "file": caller_rel},
+            target.name, {"lines": [], "name": target.name, "file": caller_rel},
         )
         group["lines"].append(target.line)
 
-    for group in group_dict.values():
-        group["lines"] = sorted(set(group["lines"]))
+    _sort_group_line(group_dict)
     return group_dict
 
 
-def _attach_usage_context(group_dict: dict[tuple, dict], caller_abs: str) -> None:
+def _context_range_list(line_list: list[int], line_count: int) -> list[tuple[int, int]]:
+    """Return the line ranges of the code around the first usage lines of a group.
+
+    Up to _MAX_CONTEXT_LOCATION lines are taken, each with _CONTEXT_RADIUS lines
+    before and after; ranges that overlap or touch are made one.
+
+    Examples (_CONTEXT_RADIUS 3, 100 lines):
+        [10, 30]   -> [(6, 13), (26, 33)]
+        [10, 14]   -> [(6, 17)]
+
+    Args:
+        line_list: Usage lines of the group (1-based), sorted.
+        line_count: Number of lines of the caller file.
+
+    Returns:
+        (start index, end index) of each range, 0-based with the end excluded, in order.
+    """
+    range_list: list[tuple[int, int]] = []
+    for line_no in line_list[:_MAX_CONTEXT_LOCATION]:
+        start_index = max(0, line_no - 1 - _CONTEXT_RADIUS)
+        end_index = min(line_count, line_no - 1 + _CONTEXT_RADIUS + 1)
+        if range_list and start_index <= range_list[-1][1]:
+            range_list[-1] = (range_list[-1][0], max(range_list[-1][1], end_index))
+        else:
+            range_list.append((start_index, end_index))
+    return range_list
+
+
+def _attach_usage_context(group_dict: dict[str, dict], caller_abs: str) -> None:
     """Add usage_context, the code around the first usage lines, to each group.
 
-    Up to _MAX_CONTEXT_LOCATION lines of each group are taken, each with
-    _CONTEXT_RADIUS lines before and after, joined by "\n...\n". The file is decoded
-    by read_source(). Nothing is added when the caller file cannot be read.
+    The ranges of _context_range_list are joined by "\n...\n". The file is decoded
+    by read_source(). Nothing is added when the caller file cannot be read or is empty.
 
     Args:
         group_dict: Return value of _group_caller_usage_list; modified in place.
@@ -472,12 +551,10 @@ def _attach_usage_context(group_dict: dict[tuple, dict], caller_abs: str) -> Non
 
     line_count = len(caller_source_line_list)
     for group in group_dict.values():
-        context_part_list = []
-        for line_no in group["lines"][:_MAX_CONTEXT_LOCATION]:
-            start = max(0, line_no - 1 - _CONTEXT_RADIUS)
-            end = min(line_count, line_no - 1 + _CONTEXT_RADIUS + 1)
-            context_part_list.append("\n".join(caller_source_line_list[start:end]))
-        group["usage_context"] = "\n...\n".join(context_part_list)
+        group["usage_context"] = "\n...\n".join(
+            "\n".join(caller_source_line_list[start_index:end_index])
+            for start_index, end_index in _context_range_list(group["lines"], line_count)
+        )
 
 
 def build_caller_usages(
@@ -486,12 +563,11 @@ def build_caller_usages(
     project_dir: str,
     project_file_set: set[str],
 ) -> list[dict]:
-    """Collect the lines where names defined in this file are used in other project
-    files, producing data for the caller_usages JSON output.
+    """Build the caller_usages of a file: the lines of other project files that use its names.
 
     The references of each caller are resolved as get_file_dependencies resolves them
     for the caller itself (reference_target_list); the ones that lead to this file are
-    grouped by name and the definition they lead to.
+    grouped by name.
 
     Args:
         target_file_rel: Relative path of this file from the project root.
@@ -500,9 +576,11 @@ def build_caller_usages(
         project_file_set: Set of file paths within the project.
 
     Returns:
-        A list of {"lines", "name", "file", "usage_context"} dicts.
+        A list of {"lines", "name", "file", "usage_context"} dicts, one per (caller,
+        name). An entry of a caller that cannot be read or is empty has no
+        usage_context.
     """
-    caller_usages: list[dict] = []
+    caller_usage_list: list[dict] = []
     for caller_rel in caller_file_list:
         target_list = [
             target
@@ -511,10 +589,7 @@ def build_caller_usages(
         ]
         if not target_list:
             continue
-        caller_kind = reference_kind(os.path.join(project_dir, caller_rel))
-        group_dict = _group_caller_usage_list(
-            target_list, caller_rel, _TARGET_DEFINITION_FUNCTION_DICT[caller_kind](project_dir),
-        )
+        group_dict = _group_caller_usage_list(target_list, caller_rel)
         _attach_usage_context(group_dict, os.path.join(project_dir, caller_rel))
-        caller_usages.extend(group_dict.values())
-    return caller_usages
+        caller_usage_list.extend(group_dict.values())
+    return caller_usage_list

@@ -6,12 +6,19 @@ import asyncio
 import heapq
 import logging
 from bisect import bisect_left, bisect_right
-from collections.abc import Awaitable, Callable, Iterator
+from collections.abc import Awaitable, Callable, Container, Iterator
 from dataclasses import dataclass, replace
+from itertools import islice
 from codetwine.llm import ContextWindowExceededError
 from codetwine.llm.client import LLMClient
 from codetwine.utils.file_utils import (
+    DEPENDENCY_FILE_NAME,
+    DOC_JSON_NAME,
+    DOC_MD_NAME,
+    add_unique,
     compute_file_hash,
+    load_doc,
+    load_file_dependencies,
     output_path_to_rel,
     read_source_text,
     resolve_file_output_dir,
@@ -26,20 +33,22 @@ from codetwine.config.settings import (
     CODE_SUMMARY_TRIGGER_LINES,
     CODE_SUMMARY_PIECE_LINES,
     CODE_SUMMARY_MAX_CHARS,
+    C_HEADER_EXT_TUPLE,
+    C_IMPL_EXT_TUPLE,
 )
 
 logger = logging.getLogger(__name__)
 
 
 # Prompt header: heading indicating the target file
-HEADER_TARGET_FILE = "# Target File: {file}"
+_HEADER_TARGET_FILE = "# Target File: {file}"
 
 # Source code section heading
-HEADER_SOURCE_CODE = "## Source Code"
+_HEADER_SOURCE_CODE = "## Source Code"
 
 # ===== Dependency (callee_usages) section =====
 
-HEADER_CALLEE_USAGES = "## External Functions/Classes Used by This File (Dependencies)"
+_HEADER_CALLEE_USAGE = "## External Functions/Classes Used by This File (Dependencies)"
 
 CALLEE_USAGES_SCHEMA_NOTE = (
     "* Schema: name=symbol name being used, from=file path where that symbol is defined\n"
@@ -48,23 +57,23 @@ CALLEE_USAGES_SCHEMA_NOTE = (
     "Refer to it to understand what external code this target file depends on."
 )
 
-CALLEE_SOURCE_CODE_LABEL = "  Dependency Source Code:"
+_CALLEE_SOURCE_CODE_LABEL = "  Dependency Source Code:"
 
 # ===== Dependent (caller_usages) section =====
 
-HEADER_CALLER_USAGES = "## External Files Using This File (Dependents)"
+_HEADER_CALLER_USAGE = "## External Files Using This File (Dependents)"
 
-CALLER_USAGES_SCHEMA_NOTE = (
+_CALLER_USAGE_SCHEMA_NOTE = (
     "* Schema: name=symbol name being used, from=file path of the file using it"
 )
 
-CALLER_SOURCE_CODE_LABEL = "  Usage Location Source Code:"
+_CALLER_SOURCE_CODE_LABEL = "  Usage Location Source Code:"
 
 # ===== Dependency design document summary section =====
 
-HEADER_CALLEE_CONTEXT = "## Design Document Summaries of Dependency Files"
+_HEADER_CALLEE_CONTEXT = "## Design Document Summaries of Dependency Files"
 
-CALLEE_CONTEXT_NOTE = (
+_CALLEE_CONTEXT_NOTE = (
     "* The following are summaries of previously generated design documents for each dependency file. "
     "Use them as reference information to understand the responsibilities and public interfaces "
     "of external modules that the target file depends on."
@@ -72,16 +81,16 @@ CALLEE_CONTEXT_NOTE = (
 
 # ===== Request section =====
 
-HEADER_REQUEST = "## Request"
+_HEADER_REQUEST = "## Request"
 
 # {title} is replaced with the section title (e.g. "Overview & Purpose")
-SECTION_REQUEST_TEMPLATE = "Write the content for the \"{title}\" section following the instructions below."
+_SECTION_REQUEST_TEMPLATE = "Write the content for the \"{title}\" section following the instructions below."
 
 # {language} is replaced with the output language (e.g. "Japanese")
-OUTPUT_LANGUAGE_INSTRUCTION = "Write the output in {language}."
+_OUTPUT_LANGUAGE_INSTRUCTION = "Write the output in {language}."
 
 # Instruction to ensure consistency with source code
-FACTUAL_ACCURACY_INSTRUCTION = (
+_FACTUAL_ACCURACY_INSTRUCTION = (
     "\n[IMPORTANT] Do not describe information not found in the source code based on speculation. "
     "Descriptions that contradict the source code implementation are strictly prohibited. "
     "Write only based on the provided source code and dependency information."
@@ -89,9 +98,9 @@ FACTUAL_ACCURACY_INSTRUCTION = (
 
 # ===== Implementation file context (for header files) =====
 
-HEADER_IMPL_CONTEXT = "## Corresponding Implementation File"
+_HEADER_IMPL_CONTEXT = "## Corresponding Implementation File"
 
-IMPL_CONTEXT_NOTE = (
+_IMPL_CONTEXT_NOTE = (
     "* The following is the source code of the implementation (.cpp/.c) file "
     "corresponding to this header file. "
     "Refer to it to understand how the classes and functions declared in the header are implemented."
@@ -99,16 +108,19 @@ IMPL_CONTEXT_NOTE = (
 
 # ===== Summary prompt =====
 
-HEADER_DOC_CONTENT = "## Design Document Content"
+_HEADER_DOC_CONTENT = "## Design Document Content"
 
-# {max_chars} is replaced with the maximum character count
-SUMMARY_CHAR_LIMIT = "({max_chars} characters or fewer)"
+# Heading of the summary in doc.md
+_SUMMARY_TITLE = "Summary"
+
+# {max_chars} is replaced with the character count the summary is asked to keep within
+_SUMMARY_CHAR_LIMIT = "({max_chars} characters or fewer)"
 
 # ===== Code behavior summary prompt (context-overflow fallback) =====
 
-# {name} = symbol name, {max_chars} = character limit, {language} = output language.
-# Used to shrink large code blocks while keeping their behavior information.
-CODE_SUMMARY_PROMPT = (
+# {name} = symbol name, {max_chars} = character count asked for, {language} = output
+# language. Used to shrink large code blocks while keeping their behavior information.
+_CODE_SUMMARY_PROMPT = (
     "Summarize the behavior of the following code symbol `{name}` in {max_chars} "
     "characters or fewer. Keep the signature (first line) as-is, then describe what "
     "it takes, what it does internally, and what it returns or its side effects. "
@@ -117,10 +129,11 @@ CODE_SUMMARY_PROMPT = (
     "```\n{code}\n```"
 )
 
-# {name} = what the piece is, {max_chars} = character limit, {language} = output language.
+# {name} = what the piece is, {max_chars} = character count asked for, {language} = output
+# language.
 # Used for a piece of code that is no whole symbol: a run of lines of a file, a half of a
 # symbol that does not fit in one prompt.
-CODE_PIECE_SUMMARY_PROMPT = (
+_CODE_PIECE_SUMMARY_PROMPT = (
     "Summarize the behavior of the following piece of source code ({name}) in "
     "{max_chars} characters or fewer. Name the functions, classes and variables it "
     "defines, and describe what each of them does. This is reference context for "
@@ -130,22 +143,17 @@ CODE_PIECE_SUMMARY_PROMPT = (
 )
 
 # Placeholder header prefixed to a summarized code block in the prompt.
-CODE_SUMMARY_MARKER = "# [summarized] {name}"
+_CODE_SUMMARY_MARKER = "# [summarized] {name}"
 
 # Name of a half of a code block, and of a run of lines of a file, in the prompt and the marker
-CODE_PART_NAME = "{name}, part"
-CODE_PIECE_NAME = "part {index} of {count}"
+_CODE_PART_NAME = "{name}, part"
+_CODE_PIECE_NAME = "part {index} of {count}"
 
 # Characters of a line counted as one line by _line_count()
 _LINE_WIDTH = 80
 
 # Deterministic fallback body appended when summary generation fails.
-CODE_SUMMARY_FAILED_NOTE = "# ...(body omitted; summary unavailable)"
-
-# C/C++ header extension set
-_HEADER_EXT_SET = {".h", ".hpp", ".hh", ".hxx"}
-# Implementation file extensions paired with header extensions
-_IMPL_EXT_LIST = ["cpp", "c", "cc", "cxx"]
+_CODE_SUMMARY_FAILED_NOTE = "# ...(body omitted; summary unavailable)"
 
 
 def check_code_summary_setting() -> None:
@@ -160,6 +168,94 @@ def check_code_summary_setting() -> None:
             f"CODE_SUMMARY_PIECE_LINES must be 1 or more, but got {CODE_SUMMARY_PIECE_LINES}. "
             f"Set it in the .env file or your shell."
         )
+
+
+def check_worker_count(max_workers: int) -> None:
+    """Check the number of design documents generated in parallel.
+
+    Args:
+        max_workers: The max_workers argument of generate_all_docs.
+
+    Raises:
+        ValueError: When max_workers is less than 1.
+    """
+    if max_workers < 1:
+        raise ValueError(
+            f"MAX_WORKERS must be 1 or more, but got {max_workers}. "
+            f"Set it in the .env file or your shell, or pass max_workers of 1 or more."
+        )
+
+
+def check_doc_template() -> None:
+    """Check that the design document template DOC_TEMPLATE_PATH names can be used.
+
+    Raises:
+        ValueError: When the template cannot be read or has a wrong form (_load_template).
+    """
+    _load_template()
+
+
+def _load_template() -> dict:
+    """Read the design document template DOC_TEMPLATE_PATH names.
+
+    Returns:
+        The template dict: "sections", a list of one or more {"id", "title", "prompt"},
+        and "summary_prompt" when the template has one.
+
+    Raises:
+        ValueError: When the file cannot be read as JSON, or the template has a wrong
+            form (_template_problem).
+    """
+    try:
+        with open(DOC_TEMPLATE_PATH, "r", encoding="utf-8") as f:
+            template = json.load(f)
+    except (OSError, ValueError) as e:
+        raise ValueError(
+            f"DOC_TEMPLATE_PATH names a design document template that cannot be read: "
+            f"{DOC_TEMPLATE_PATH}: {e}. Set DOC_TEMPLATE_PATH in the .env file or your "
+            f"shell to the path of a template JSON file such as doc_template.json."
+        ) from None
+    problem = _template_problem(template)
+    if problem:
+        raise ValueError(
+            f"The design document template {DOC_TEMPLATE_PATH} {problem}. Fix the "
+            f"template, or set DOC_TEMPLATE_PATH in the .env file or your shell to "
+            f"another one such as doc_template.json."
+        )
+    return template
+
+
+def _template_problem(template: object) -> str | None:
+    """Tell what is wrong with the form of a design document template.
+
+    Args:
+        template: The value read from the template file.
+
+    Returns:
+        What is wrong, as the end of a sentence about the template; None for a template
+        whose "sections" is a list of one or more objects with a non-empty string "id"
+        of their own, a non-empty string "title" and a string "prompt", and whose
+        "summary_prompt" is a string where present.
+    """
+    if not isinstance(template, dict):
+        return "is not a JSON object"
+    section_list = template.get("sections")
+    if not isinstance(section_list, list) or not section_list:
+        return 'has no "sections" list holding a section'
+    id_set: set[str] = set()
+    for number, section in enumerate(section_list, 1):
+        if not isinstance(section, dict):
+            return f"has a section (number {number}) that is not a JSON object"
+        for key in ("id", "title", "prompt"):
+            value = section.get(key)
+            if not isinstance(value, str) or (key != "prompt" and not value):
+                return f'has a section (number {number}) without a "{key}" string'
+        if section["id"] in id_set:
+            return f'has two sections with the "id" {section["id"]}'
+        id_set.add(section["id"])
+    if not isinstance(template.get("summary_prompt", ""), str):
+        return 'has a "summary_prompt" that is not a string'
+    return None
 
 
 def _component_list(callee_dict: dict[str, set[str]]) -> list[list[str]]:
@@ -267,8 +363,28 @@ def _cycle_step_list(member_list: list[str], callee_dict: dict[str, set[str]]) -
     return step_list
 
 
-def _topological_sort_by_level(project_dep_list: list[dict]) -> list[list[str]]:
-    """Topologically sort the files of a dependency list and return them
+def _callee_set_dict(project_dep_list: list[dict]) -> dict[str, set[str]]:
+    """Return the files each file of a dependency list depends on.
+
+    Args:
+        project_dep_list: Dependency list whose paths are relative to the project root.
+                          Each element is {"file": str, "callers": list, "callees": list}.
+
+    Returns:
+        file -> files it depends on. Every file of the list and every callee is a key.
+    """
+    callee_set_dict: dict[str, set[str]] = {}
+    for dep_info in project_dep_list:
+        file_path = dep_info["file"]
+        callee_set_dict.setdefault(file_path, set())
+        for callee in dep_info.get("callees", []):
+            callee_set_dict.setdefault(callee, set())
+            callee_set_dict[file_path].add(callee)
+    return callee_set_dict
+
+
+def _topological_sort_by_level(callee_dict: dict[str, set[str]]) -> list[list[str]]:
+    """Topologically sort files by their dependencies and return them
     as a list grouped by level (dependency depth).
 
     A file is placed at the level after the last level of the files it depends on.
@@ -277,22 +393,12 @@ def _topological_sort_by_level(project_dep_list: list[dict]) -> list[list[str]]:
     _cycle_step_list. The files of each cycle are logged with a warning.
 
     Args:
-        project_dep_list: Dependency list whose paths are relative to the project root.
-                          Each element is {"file": str, "callers": list, "callees": list}.
+        callee_dict: file -> files it depends on; every file is a key (_callee_set_dict).
 
     Returns:
         A file list grouped by level. The outer list index is the level number.
         Example: [["config.py", "utils.py"], ["parser.py"], ["main.py"]]
     """
-    # file -> files it depends on
-    callee_dict: dict[str, set[str]] = {}
-    for dep_info in project_dep_list:
-        file_path = dep_info["file"]
-        callee_dict.setdefault(file_path, set())
-        for callee in dep_info.get("callees", []):
-            callee_dict.setdefault(callee, set())
-            callee_dict[file_path].add(callee)
-
     group_list = _component_list(callee_dict)
     cycle_group_list = [member_list for member_list in group_list if len(member_list) > 1]
     if cycle_group_list:
@@ -339,7 +445,7 @@ def _usage_part_list(
 
     Args:
         usage_list: callee_usages or caller_usages of file_dependencies.json.
-        header: Section heading (HEADER_CALLEE_USAGES / HEADER_CALLER_USAGES).
+        header: Section heading (_HEADER_CALLEE_USAGE / _HEADER_CALLER_USAGE).
         schema_note: Schema explanation printed under the heading.
         path_key: Key of the other file's path ("from" / "file").
         context_key: Key of the source code ("target_context" / "usage_context").
@@ -364,7 +470,7 @@ def _usage_part_list(
 def _build_section_prompt(
     section: dict,
     source_code: str,
-    file_deps: dict,
+    file_dep_dict: dict,
     callee_context: str,
     implementation_context: str = "",
 ) -> str:
@@ -373,7 +479,8 @@ def _build_section_prompt(
     Args:
         section: One section definition from the template (dict with id, title, prompt).
         source_code: Full source code of the target file.
-        file_deps: Contents of file_dependencies.json (definitions, callee_usages, caller_usages).
+        file_dep_dict: Contents of file_dependencies.json (definitions, callee_usages,
+            caller_usages).
         callee_context: Text combining design document summaries of dependency files (may be empty string).
         implementation_context: For header files. Source code of the corresponding implementation file.
 
@@ -382,9 +489,9 @@ def _build_section_prompt(
     """
     # Basic prompt structure: target file name + source code
     part_list = [
-        HEADER_TARGET_FILE.format(file=output_path_to_rel(file_deps.get('file', 'unknown'))),
+        _HEADER_TARGET_FILE.format(file=output_path_to_rel(file_dep_dict.get('file', 'unknown'))),
         "",
-        HEADER_SOURCE_CODE,
+        _HEADER_SOURCE_CODE,
         "```",
         source_code,
         "```",
@@ -393,44 +500,43 @@ def _build_section_prompt(
 
     # For header files, include the corresponding implementation file's source code
     if implementation_context:
-        part_list.append(HEADER_IMPL_CONTEXT)
-        part_list.append(IMPL_CONTEXT_NOTE)
+        part_list.append(_HEADER_IMPL_CONTEXT)
+        part_list.append(_IMPL_CONTEXT_NOTE)
         part_list.append("```")
         part_list.append(implementation_context)
         part_list.append("```")
         part_list.append("")
 
     # Dependencies with their source code (target_context)
-    callee_usages = file_deps.get("callee_usages", [])
-    if callee_usages:
+    callee_usage_list = file_dep_dict.get("callee_usages", [])
+    if callee_usage_list:
         part_list.extend(_usage_part_list(
-            callee_usages, HEADER_CALLEE_USAGES, CALLEE_USAGES_SCHEMA_NOTE,
-            "from", "target_context", CALLEE_SOURCE_CODE_LABEL,
+            callee_usage_list, _HEADER_CALLEE_USAGE, CALLEE_USAGES_SCHEMA_NOTE,
+            "from", "target_context", _CALLEE_SOURCE_CODE_LABEL,
         ))
 
     # Dependents with the source code around each usage (usage_context)
-    caller_usages = file_deps.get("caller_usages", [])
-    if caller_usages:
+    caller_usage_list = file_dep_dict.get("caller_usages", [])
+    if caller_usage_list:
         part_list.extend(_usage_part_list(
-            caller_usages, HEADER_CALLER_USAGES, CALLER_USAGES_SCHEMA_NOTE,
-            "file", "usage_context", CALLER_SOURCE_CODE_LABEL,
+            caller_usage_list, _HEADER_CALLER_USAGE, _CALLER_USAGE_SCHEMA_NOTE,
+            "file", "usage_context", _CALLER_SOURCE_CODE_LABEL,
         ))
 
     # Add dependency file design document summaries as context
     if callee_context:
-        part_list.append(HEADER_CALLEE_CONTEXT)
-        part_list.append(CALLEE_CONTEXT_NOTE)
+        part_list.append(_HEADER_CALLEE_CONTEXT)
+        part_list.append(_CALLEE_CONTEXT_NOTE)
         part_list.append(callee_context)
         part_list.append("")
 
-    # Add section-specific instructions
-    part_list.append(HEADER_REQUEST)
-    part_list.append(SECTION_REQUEST_TEMPLATE.format(title=section['title']))
+    # Section-specific instructions, then the output language and the source code
+    # consistency instruction at the end
+    part_list.append(_HEADER_REQUEST)
+    part_list.append(_SECTION_REQUEST_TEMPLATE.format(title=section['title']))
     part_list.append(section["prompt"])
-    # Append output language specification at the end
-    part_list.append("\n" + OUTPUT_LANGUAGE_INSTRUCTION.format(language=OUTPUT_LANGUAGE))
-    # Append source code consistency instruction at the end
-    part_list.append(FACTUAL_ACCURACY_INSTRUCTION)
+    part_list.append("\n" + _OUTPUT_LANGUAGE_INSTRUCTION.format(language=OUTPUT_LANGUAGE))
+    part_list.append(_FACTUAL_ACCURACY_INSTRUCTION)
 
     return "\n".join(part_list)
 
@@ -447,16 +553,16 @@ def _build_summary_prompt(
         file_path: Relative path of the target file.
         section_list: List of generated sections (each element is {id, title, content}).
         summary_prompt: Summary instruction text defined in the template.
-        summary_max_chars: Maximum character count for the summary.
+        summary_max_chars: Character count the summary is asked to keep within.
 
     Returns:
         The completed prompt string to send to the LLM.
     """
     # Basic prompt structure: target file name + all section contents of the design document
     part_list = [
-        HEADER_TARGET_FILE.format(file=file_path),
+        _HEADER_TARGET_FILE.format(file=file_path),
         "",
-        HEADER_DOC_CONTENT,
+        _HEADER_DOC_CONTENT,
     ]
 
     # Add each section's heading and content to the prompt
@@ -466,46 +572,46 @@ def _build_summary_prompt(
         part_list.append("")
 
     # Add summary instructions and character limit
-    part_list.append(HEADER_REQUEST)
+    part_list.append(_HEADER_REQUEST)
     part_list.append(summary_prompt)
-    part_list.append(SUMMARY_CHAR_LIMIT.format(max_chars=summary_max_chars))
-    part_list.append(OUTPUT_LANGUAGE_INSTRUCTION.format(language=OUTPUT_LANGUAGE))
+    part_list.append(_SUMMARY_CHAR_LIMIT.format(max_chars=summary_max_chars))
+    part_list.append(_OUTPUT_LANGUAGE_INSTRUCTION.format(language=OUTPUT_LANGUAGE))
 
     return "\n".join(part_list)
 
 
 def _build_callee_context_summary(
-    file_deps: dict,
-    doc_summary_map: dict[str, str],
+    file_dep_dict: dict,
+    doc_summary_dict: dict[str, str],
 ) -> str:
     """Concatenate the design document summaries of the dependency files into a single string.
 
     Args:
-        file_deps: The target file's file_dependencies.json.
-        doc_summary_map: A map of file relative path -> generated design document summary.
+        file_dep_dict: The target file's file_dependencies.json.
+        doc_summary_dict: A map of file relative path -> generated design document summary.
 
     Returns:
         Context text combining only the summaries.
     """
     # Create a deduplicated list of dependency files from callee_usages
     callee_set: set[str] = set()
-    for usage in file_deps.get("callee_usages", []):
+    for usage in file_dep_dict.get("callee_usages", []):
         from_file = usage.get("from")
         if from_file:
             callee_set.add(from_file)
     callee_file_list = sorted(callee_set)
 
-    # Retrieve and concatenate summaries for each dependency file
-    # callee_usages' from is in output format; doc_summary_map keys are source relative paths, so reverse-convert
+    # Retrieve and concatenate summaries for each dependency file; callee_usages' "from"
+    # is an output path, converted to the source relative path doc_summary_dict is keyed by
     part_list = []
     for callee_file in callee_file_list:
-        summary = doc_summary_map.get(output_path_to_rel(callee_file))
+        summary = doc_summary_dict.get(output_path_to_rel(callee_file))
         if summary:
             part_list.append(f"- **{output_path_to_rel(callee_file)}**: {summary}")
     return "\n".join(part_list)
 
 
-class LlmCallError(Exception):
+class _LlmCallError(Exception):
     """An LLM call made to reduce a prompt failed for another reason than the context window."""
 
 
@@ -524,9 +630,7 @@ def _log_summary_start(code_count: int, code_kind: str, file_path: str) -> None:
 def _line_count(text: str) -> int:
     """Return the number of lines of a text block, a long line counted as several.
 
-    A line longer than _LINE_WIDTH characters counts as one line per _LINE_WIDTH
-    characters, so code written on few long lines is as long as the same code on
-    short ones.
+    A line counts as one line per _LINE_WIDTH characters begun, and an empty line as one.
     """
     return sum(
         max(1, -(-len(line) // _LINE_WIDTH)) for line in text.split("\n")
@@ -572,7 +676,7 @@ async def _generate_by_half(
         still exceeds the context window.
 
     Raises:
-        LlmCallError: When a call fails for another reason than the context window.
+        _LlmCallError: When a call fails for another reason than the context window.
     """
     try:
         generated_text = await llm_client.generate(build_prompt(text, is_part))
@@ -580,7 +684,7 @@ async def _generate_by_half(
         half_list = _half_list(text) if len(text) > min_chars else None
     else:
         if generated_text is None:
-            raise LlmCallError("LLM call failed")
+            raise _LlmCallError("LLM call failed")
         return generated_text
     if half_list is None:
         return None
@@ -597,39 +701,39 @@ async def _summarize_code(
     code: str,
     name: str,
     llm_client: LLMClient,
-    summary_cache: dict[str, str],
+    summary_cache_dict: dict[str, str],
     is_piece: bool = False,
 ) -> str:
     """Summarize a code block into a concise behavior description via the LLM.
 
-    A summary is cached in summary_cache by the SHA256 of the code text. A code block
+    A summary is cached in summary_cache_dict by the SHA256 of the code text. A code block
     whose prompt exceeds the context window is summarized in halves
     (_generate_by_half). When even a part that is not cut further exceeds it, the
-    first line of the code followed by CODE_SUMMARY_FAILED_NOTE is returned and
+    first line of the code followed by _CODE_SUMMARY_FAILED_NOTE is returned and
     nothing is cached.
 
     Args:
         code: Full source of the code to summarize.
         name: Symbol name (used in the prompt and the placeholder marker).
         llm_client: LLM client used to generate the summary.
-        summary_cache: Shared cache mapping code-hash -> summary text.
-        is_piece: True for code that is no whole symbol (CODE_PIECE_SUMMARY_PROMPT).
+        summary_cache_dict: Shared cache mapping code-hash -> summary text.
+        is_piece: True for code that is no whole symbol (_CODE_PIECE_SUMMARY_PROMPT).
 
     Returns:
         The behavior summary text (or the deterministic fallback).
 
     Raises:
-        LlmCallError: When a call fails for another reason than the context window.
+        _LlmCallError: When a call fails for another reason than the context window.
     """
     cache_key = hashlib.sha256(code.encode("utf-8")).hexdigest()
-    if cache_key in summary_cache:
-        return summary_cache[cache_key]
+    if cache_key in summary_cache_dict:
+        return summary_cache_dict[cache_key]
 
     def build_prompt(text: str, is_part: bool) -> str:
         """Return the summary prompt of the code, or of a part of it."""
-        template = CODE_PIECE_SUMMARY_PROMPT if is_piece or is_part else CODE_SUMMARY_PROMPT
+        template = _CODE_PIECE_SUMMARY_PROMPT if is_piece or is_part else _CODE_SUMMARY_PROMPT
         return template.format(
-            name=CODE_PART_NAME.format(name=name) if is_part else name,
+            name=_CODE_PART_NAME.format(name=name) if is_part else name,
             max_chars=CODE_SUMMARY_MAX_CHARS,
             language=OUTPUT_LANGUAGE,
             code=text,
@@ -637,91 +741,61 @@ async def _summarize_code(
 
     summary = await _generate_by_half(code, build_prompt, llm_client, CODE_SUMMARY_MAX_CHARS)
     if summary:
-        summary_cache[cache_key] = summary
+        summary_cache_dict[cache_key] = summary
         return summary
 
     # Fallback: the first line (signature) and a note
     first_line = code.split("\n", 1)[0]
-    return f"{first_line}\n{CODE_SUMMARY_FAILED_NOTE}"
+    return f"{first_line}\n{_CODE_SUMMARY_FAILED_NOTE}"
 
 
-def _reduce_caller_usages(file_deps: dict) -> dict:
-    """Return a shallow copy of file_deps with caller usage_context bodies removed.
-
-    Keeps name / file / lines and drops the source snippets.
+def _without_usage_context(file_dep_dict: dict, usage_key: str, context_key: str) -> dict:
+    """Return file_dep_dict without the source code its usages of one kind carry.
 
     Args:
-        file_deps: The target file's file_dependencies.json contents.
-
-    Returns:
-        A shallow copy with each caller_usages entry stripped of usage_context;
-        file_deps itself when no entry carries one.
-    """
-    return _without_usage_context(file_deps, "caller_usages", "usage_context")
-
-
-def _without_callee_body(file_deps: dict) -> dict:
-    """Return a shallow copy of file_deps with callee target_context bodies removed.
-
-    Keeps name / from / lines and drops the source of the dependency symbols.
-
-    Args:
-        file_deps: The target file's file_dependencies.json contents.
-
-    Returns:
-        A shallow copy with each callee_usages entry stripped of target_context;
-        file_deps itself when no entry carries one.
-    """
-    return _without_usage_context(file_deps, "callee_usages", "target_context")
-
-
-def _without_usage_context(file_deps: dict, usage_key: str, context_key: str) -> dict:
-    """Return file_deps without the source code its usages of one kind carry.
-
-    Args:
-        file_deps: The target file's file_dependencies.json contents.
+        file_dep_dict: The target file's file_dependencies.json contents.
         usage_key: "callee_usages" or "caller_usages".
         context_key: Key of the source code of a usage.
 
     Returns:
-        A shallow copy whose usage_key entries have no context_key; file_deps itself
+        A shallow copy whose usage_key entries have no context_key; file_dep_dict itself
         when no entry carries one.
     """
-    usage_list = file_deps.get(usage_key, [])
+    usage_list = file_dep_dict.get(usage_key, [])
     if not any(usage.get(context_key) for usage in usage_list):
-        return file_deps
+        return file_dep_dict
 
-    deps_copy = dict(file_deps)
-    deps_copy[usage_key] = [
+    dep_copy_dict = dict(file_dep_dict)
+    dep_copy_dict[usage_key] = [
         {key: value for key, value in usage.items() if key != context_key}
         for usage in usage_list
     ]
-    return deps_copy
+    return dep_copy_dict
 
 
-async def _summarize_callee_usages(
-    file_deps: dict,
+async def _summarize_callee_usage(
+    file_dep_dict: dict,
     llm_client: LLMClient,
-    summary_cache: dict[str, str],
+    summary_cache_dict: dict[str, str],
     file_path: str = "",
 ) -> dict:
-    """Return a copy of file_deps where large callee target_context is summarized.
+    """Return a copy of file_dep_dict where large callee target_context is summarized.
 
     Only dependency symbols longer than CODE_SUMMARY_TRIGGER_LINES (_line_count) are
     replaced by an LLM behavior summary, and only by a summary shorter than the
     symbol; the others are kept verbatim.
 
     Args:
-        file_deps: The target file's file_dependencies.json contents.
+        file_dep_dict: The target file's file_dependencies.json contents.
         llm_client: LLM client used for summarization.
-        summary_cache: Shared cache mapping code-hash -> summary text.
+        summary_cache_dict: Shared cache mapping code-hash -> summary text.
         file_path: Relative path of the target file (for the progress message).
 
     Returns:
         A shallow copy with large callee_usages[].target_context summarized;
-        file_deps itself when none is replaced.
+        file_dep_dict itself when none is replaced.
     """
-    callee_usage_list = file_deps.get("callee_usages", [])
+    callee_usage_list = file_dep_dict.get("callee_usages", [])
     is_large_list = [
         bool(usage.get("target_context"))
         and _line_count(usage["target_context"]) > CODE_SUMMARY_TRIGGER_LINES
@@ -735,18 +809,18 @@ async def _summarize_callee_usages(
         if is_large:
             target_context = usage["target_context"]
             summary = await _summarize_code(
-                target_context, usage.get("name", "symbol"), llm_client, summary_cache
+                target_context, usage.get("name", "symbol"), llm_client, summary_cache_dict
             )
             if len(summary) < len(target_context):
                 usage = {**usage, "target_context": summary}
                 has_summary = True
         usage_list.append(usage)
     if not has_summary:
-        return file_deps
+        return file_dep_dict
 
-    deps_copy = dict(file_deps)
-    deps_copy["callee_usages"] = usage_list
-    return deps_copy
+    dep_copy_dict = dict(file_dep_dict)
+    dep_copy_dict["callee_usages"] = usage_list
+    return dep_copy_dict
 
 
 def _definition_start_index_set(definition_list: list[dict]) -> set[int]:
@@ -789,9 +863,7 @@ def _large_leaf_definition_list(
         line_range = (start_line, end_line)
         definition_dict.setdefault(line_range, definition)
         name = definition.get("name", "symbol")
-        name_list = name_list_dict.setdefault(line_range, [])
-        if name not in name_list:
-            name_list.append(name)
+        add_unique(name_list_dict, line_range, name)
     start_list = sorted(start_line for start_line, _ in definition_dict)
     end_list = sorted(end_line for _, end_line in definition_dict)
 
@@ -812,19 +884,18 @@ def _large_leaf_definition_list(
     return leaf_list
 
 
-async def _splice_large_definitions(
+async def _splice_large_definition(
     source_code: str,
     definition_list: list[dict],
     llm_client: LLMClient,
-    summary_cache: dict[str, str],
+    summary_cache_dict: dict[str, str],
     file_path: str = "",
 ) -> tuple[str, set[int]]:
     """Replace large definitions in the source with LLM behavior summaries.
 
-    Line numbers are 1-based and match the source copy exactly, so the
-    [start_line, end_line] range of each selected definition
-    (_large_leaf_definition_list) is spliced out and replaced by a summary
-    block when that block is shorter than the definition. Non-definition lines,
+    The [start_line, end_line] range (1-based lines of the source copy) of each
+    selected definition (_large_leaf_definition_list) is spliced out and replaced by
+    a summary block when that block is shorter than the definition. Non-definition lines,
     small definitions and the lines of a definition around the definitions it holds
     are kept as-is.
 
@@ -832,7 +903,7 @@ async def _splice_large_definitions(
         source_code: Full source of the file (as read from its copy).
         definition_list: definitions[] from the file_dependencies.json of the file.
         llm_client: LLM client used for summarization.
-        summary_cache: Shared cache mapping code-hash -> summary text.
+        summary_cache_dict: Shared cache mapping code-hash -> summary text.
         file_path: Relative path of the file (for the progress message).
 
     Returns:
@@ -840,8 +911,8 @@ async def _splice_large_definitions(
         indexes of the lines of that text the definitions start on). The source is
         the original one, unchanged, when no definition is replaced.
     """
-    # split("\n") keeps 1-based mapping: source line N -> lines[N-1] (read_source_text() leaves
-    # only "\n" line breaks, and its lines are the rows of the syntax tree)
+    # Source line N (a row of the syntax tree) is line_list[N - 1]; source_code holds
+    # only "\n" line breaks (read_source_text())
     line_list = source_code.split("\n")
     line_count = len(line_list)
     start_index_set = _definition_start_index_set(definition_list)
@@ -871,8 +942,8 @@ async def _splice_large_definitions(
         name = definition.get("name", "symbol")
         code = "\n".join(line_list[definition["start_line"] - 1:definition["end_line"]])
         summary_block = "\n".join([
-            CODE_SUMMARY_MARKER.format(name=name),
-            await _summarize_code(code, name, llm_client, summary_cache),
+            _CODE_SUMMARY_MARKER.format(name=name),
+            await _summarize_code(code, name, llm_client, summary_cache_dict),
         ])
         if len(summary_block) < len(code):
             out_list.append(summary_block)
@@ -924,7 +995,7 @@ async def _summarize_source_by_piece(
     source_code: str,
     boundary_index_set: set[int],
     llm_client: LLMClient,
-    summary_cache: dict[str, str],
+    summary_cache_dict: dict[str, str],
     file_path: str = "",
 ) -> str:
     """Replace the source by the LLM behavior summaries of its consecutive pieces.
@@ -939,7 +1010,7 @@ async def _summarize_source_by_piece(
         boundary_index_set: Indexes of the lines of source_code a run preferably
             starts on (may be empty).
         llm_client: LLM client used for summarization.
-        summary_cache: Shared cache mapping code-hash -> summary text.
+        summary_cache_dict: Shared cache mapping code-hash -> summary text.
         file_path: Relative path of the file (for the progress message).
 
     Returns:
@@ -959,10 +1030,10 @@ async def _summarize_source_by_piece(
     has_summary = False
     for index, code in enumerate(code_list):
         if is_long_list[index]:
-            name = CODE_PIECE_NAME.format(index=index + 1, count=len(range_list))
+            name = _CODE_PIECE_NAME.format(index=index + 1, count=len(range_list))
             summary_block = "\n".join([
-                CODE_SUMMARY_MARKER.format(name=name),
-                await _summarize_code(code, name, llm_client, summary_cache, is_piece=True),
+                _CODE_SUMMARY_MARKER.format(name=name),
+                await _summarize_code(code, name, llm_client, summary_cache_dict, is_piece=True),
             ])
             if len(summary_block) < len(code):
                 out_list.append(summary_block)
@@ -973,73 +1044,47 @@ async def _summarize_source_by_piece(
     return "\n".join(out_list) if has_summary else source_code
 
 
-def _find_implementation_file(file_rel: str, file_output_dir: str) -> str | None:
-    """Find the copy of the implementation file (.cpp/.c etc.) corresponding to a header file.
+def _implementation_file_rel(file_rel: str, file_set: Container[str]) -> str | None:
+    """Return the implementation file (.cpp/.c etc.) of a C/C++ header file.
 
-    Search for an implementation file with the same base name as the header
-    in the same level of the output directory.
+    The implementation file is in the directory of the header and has its base name and
+    the first extension of C_IMPL_EXT_TUPLE for which file_set holds such a file.
 
-    Args:
-        file_rel: Relative path of the target file (e.g. "MainWindow.h").
-        file_output_dir: Output directory of the target file (e.g. ".../MainWindow_h/").
-
-    Returns:
-        Path of the copy of the implementation file. None if not found or non-header file.
-    """
-    _, ext = os.path.splitext(file_rel)
-    if ext not in _HEADER_EXT_SET:
-        return None
-
-    stem = os.path.splitext(os.path.basename(file_rel))[0]
-    base_dir = os.path.dirname(file_output_dir)
-
-    for impl_ext in _IMPL_EXT_LIST:
-        impl_dir = os.path.join(base_dir, f"{stem}_{impl_ext}")
-        impl_file = os.path.join(impl_dir, f"{stem}.{impl_ext}")
-        if os.path.isfile(impl_file):
-            return impl_file
-
-    return None
-
-
-def _build_implementation_context(
-    file_rel: str,
-    file_output_dir: str,
-) -> str:
-    """Retrieve the source code of the implementation file (.cpp/.c etc.) corresponding to a header file.
-
-    Args:
-        file_rel: Relative path of the target file (e.g. "MainWindow.h").
-        file_output_dir: Output directory of the target file (e.g. ".../MainWindow_h/").
-
-    Returns:
-        Source code text of the implementation file (_find_implementation_file).
-        Empty string if not found or non-header file.
-    """
-    impl_file = _find_implementation_file(file_rel, file_output_dir)
-    return read_source_text(impl_file) if impl_file else ""
-
-
-def _implementation_definition_list(file_rel: str, file_output_dir: str) -> list[dict]:
-    """Return the definitions of the implementation file corresponding to a header file.
+    Examples:
+        ("src/a.h", {"src/a.h", "src/a.c"}) -> "src/a.c"
+        ("src/a.c", {"src/a.h", "src/a.c"}) -> None
 
     Args:
         file_rel: Relative path of the target file.
-        file_output_dir: Output directory of the target file.
+        file_set: Relative paths of the files of the project.
+
+    Returns:
+        Relative path of the implementation file. None for a file that is no header,
+        and for a header without one.
+    """
+    stem, ext = os.path.splitext(file_rel)
+    if ext not in C_HEADER_EXT_TUPLE:
+        return None
+    for impl_ext in C_IMPL_EXT_TUPLE:
+        if stem + impl_ext in file_set:
+            return stem + impl_ext
+    return None
+
+
+def _implementation_definition_list(impl_file: str) -> list[dict]:
+    """Return the definitions of the implementation file corresponding to a header file.
+
+    Args:
+        impl_file: Path of the copy of the implementation file.
 
     Returns:
         definitions[] of the file_dependencies.json written beside the copy of the
-        implementation file. Empty when there is no implementation file or no such
-        JSON file.
+        implementation file. Empty when there is no such JSON file.
     """
-    impl_file = _find_implementation_file(file_rel, file_output_dir)
-    if not impl_file:
+    file_dep_dict = load_file_dependencies(os.path.dirname(impl_file))
+    if file_dep_dict is None:
         return []
-    deps_path = os.path.join(os.path.dirname(impl_file), "file_dependencies.json")
-    if not os.path.exists(deps_path):
-        return []
-    with open(deps_path, "r", encoding="utf-8") as f:
-        return json.load(f).get("definitions", [])
+    return file_dep_dict.get("definitions", [])
 
 
 @dataclass(frozen=True)
@@ -1047,7 +1092,7 @@ class _SectionInput:
     """What the prompt of a section is built from."""
 
     source_code: str                    # Source of the target file
-    file_deps: dict                     # Contents of its file_dependencies.json
+    file_dep_dict: dict                 # Contents of its file_dependencies.json
     callee_context: str                 # Dependency design-document summaries (may be empty)
     implementation_context: str = ""    # For header files: source of the implementation file
 
@@ -1073,15 +1118,16 @@ class _PromptReducer:
         self,
         section_input: _SectionInput,
         llm_client: LLMClient,
-        summary_cache: dict[str, str],
+        summary_cache_dict: dict[str, str],
         implementation_definition_list: list[dict] | None = None,
         file_path: str = "",
     ) -> None:
-        """
+        """Start at the full input, with the stages that ENABLE_CODE_SUMMARY allows.
+
         Args:
             section_input: The full input of the section prompts of the file.
             llm_client: LLM client used for summarization.
-            summary_cache: Shared cache mapping code-hash -> summary text.
+            summary_cache_dict: Shared cache mapping code-hash -> summary text.
             implementation_definition_list: For header files. definitions[] of the
                 implementation file.
             file_path: Relative path of the file (for the progress messages).
@@ -1091,11 +1137,11 @@ class _PromptReducer:
         # Label of the stage section_input is at
         self.stage_label = "full"
         self._llm_client = llm_client
-        self._summary_cache = summary_cache
+        self._summary_cache_dict = summary_cache_dict
         self._implementation_definition_list = implementation_definition_list or []
         # Indexes of the lines of the source the definitions of the file start on
         self._source_boundary_index_set = _definition_start_index_set(
-            section_input.file_deps.get("definitions", [])
+            section_input.file_dep_dict.get("definitions", [])
         )
         stage_list: list[tuple[str, Callable[[], Awaitable[_SectionInput]], bool]] = [
             ("drop caller bodies", self._drop_caller_body, False),
@@ -1123,7 +1169,7 @@ class _PromptReducer:
             False when no stage is left that makes the input smaller.
 
         Raises:
-            LlmCallError: When a summary call of a stage fails for another reason
+            _LlmCallError: When a summary call of a stage fails for another reason
                 than the context window; the stage is tried again by the next call.
         """
         while self._stage_index < len(self._stage_list):
@@ -1139,12 +1185,17 @@ class _PromptReducer:
             return True
         return False
 
+    def _with_file_dep_dict(self, file_dep_dict: dict) -> _SectionInput:
+        """Return the input with file_dep_dict; the input itself when it already has it."""
+        if file_dep_dict is self.section_input.file_dep_dict:
+            return self.section_input
+        return replace(self.section_input, file_dep_dict=file_dep_dict)
+
     async def _drop_caller_body(self) -> _SectionInput:
         """Return the input without the caller usage_context bodies."""
-        file_deps = _reduce_caller_usages(self.section_input.file_deps)
-        if file_deps is self.section_input.file_deps:
-            return self.section_input
-        return replace(self.section_input, file_deps=file_deps)
+        return self._with_file_dep_dict(_without_usage_context(
+            self.section_input.file_dep_dict, "caller_usages", "usage_context",
+        ))
 
     async def _drop_callee_context(self) -> _SectionInput:
         """Return the input without the dependency doc summaries."""
@@ -1154,28 +1205,25 @@ class _PromptReducer:
 
     async def _summarize_callee_body(self) -> _SectionInput:
         """Return the input with the large callee dependency symbols summarized."""
-        file_deps = await _summarize_callee_usages(
-            self.section_input.file_deps, self._llm_client, self._summary_cache, self._file_path,
-        )
-        if file_deps is self.section_input.file_deps:
-            return self.section_input
-        return replace(self.section_input, file_deps=file_deps)
+        return self._with_file_dep_dict(await _summarize_callee_usage(
+            self.section_input.file_dep_dict, self._llm_client, self._summary_cache_dict,
+            self._file_path,
+        ))
 
     async def _drop_callee_body(self) -> _SectionInput:
         """Return the input without the callee target_context bodies."""
-        file_deps = _without_callee_body(self.section_input.file_deps)
-        if file_deps is self.section_input.file_deps:
-            return self.section_input
-        return replace(self.section_input, file_deps=file_deps)
+        return self._with_file_dep_dict(_without_usage_context(
+            self.section_input.file_dep_dict, "callee_usages", "target_context",
+        ))
 
     async def _summarize_implementation_definition(self) -> _SectionInput:
         """Return the input with the large definitions of the implementation file summarized."""
         implementation_context = self.section_input.implementation_context
         if not implementation_context:
             return self.section_input
-        short_context, _ = await _splice_large_definitions(
+        short_context, _ = await _splice_large_definition(
             implementation_context, self._implementation_definition_list,
-            self._llm_client, self._summary_cache, self._file_path,
+            self._llm_client, self._summary_cache_dict, self._file_path,
         )
         if short_context == implementation_context:
             return self.section_input
@@ -1190,9 +1238,9 @@ class _PromptReducer:
     async def _summarize_source_definition(self) -> _SectionInput:
         """Return the input with the large definitions in the source summarized."""
         source_code = self.section_input.source_code
-        short_code, boundary_index_set = await _splice_large_definitions(
-            source_code, self.section_input.file_deps.get("definitions", []),
-            self._llm_client, self._summary_cache, self._file_path,
+        short_code, boundary_index_set = await _splice_large_definition(
+            source_code, self.section_input.file_dep_dict.get("definitions", []),
+            self._llm_client, self._summary_cache_dict, self._file_path,
         )
         if short_code == source_code:
             return self.section_input
@@ -1201,19 +1249,20 @@ class _PromptReducer:
 
     async def _drop_usage_list(self) -> _SectionInput:
         """Return the input without the lists of callee and caller usages."""
-        file_deps = self.section_input.file_deps
-        if not file_deps.get("callee_usages") and not file_deps.get("caller_usages"):
+        file_dep_dict = self.section_input.file_dep_dict
+        if not file_dep_dict.get("callee_usages") and not file_dep_dict.get("caller_usages"):
             return self.section_input
         return replace(
-            self.section_input, file_deps={**file_deps, "callee_usages": [], "caller_usages": []},
+            self.section_input,
+            file_dep_dict={**file_dep_dict, "callee_usages": [], "caller_usages": []},
         )
 
     async def _summarize_source_piece(self) -> _SectionInput:
         """Return the input with the source summarized piece by piece."""
         source_code = self.section_input.source_code
         short_code = await _summarize_source_by_piece(
-            source_code, self._source_boundary_index_set, self._llm_client, self._summary_cache,
-            self._file_path,
+            source_code, self._source_boundary_index_set, self._llm_client,
+            self._summary_cache_dict, self._file_path,
         )
         if len(short_code) >= len(source_code):
             return self.section_input
@@ -1248,7 +1297,7 @@ async def _generate_section(
     while True:
         section_input = prompt_reducer.section_input
         prompt = _build_section_prompt(
-            section, section_input.source_code, section_input.file_deps,
+            section, section_input.source_code, section_input.file_dep_dict,
             section_input.callee_context, section_input.implementation_context,
         )
         try:
@@ -1260,7 +1309,7 @@ async def _generate_section(
             )
             try:
                 has_next_input = await prompt_reducer.advance()
-            except LlmCallError:
+            except _LlmCallError:
                 logger.warning(f"LLM call failed (code summary): {file_path}/{section['id']}")
                 return None
             if not has_next_input:
@@ -1277,10 +1326,11 @@ async def _generate_section(
 async def _generate_file_doc(
     file_rel: str,
     file_output_dir: str,
-    doc_summary_map: dict[str, str],
+    doc_summary_dict: dict[str, str],
     template: dict,
     llm_client: LLMClient,
-    summary_cache: dict[str, str],
+    summary_cache_dict: dict[str, str],
+    impl_file: str | None = None,
 ) -> dict | None:
     """Generate a design document for one file.
 
@@ -1292,16 +1342,21 @@ async def _generate_file_doc(
     Args:
         file_rel: Relative path from the project root (e.g. "src/foo.py").
         file_output_dir: Output directory for this file (source copy and JSON are stored here).
-        doc_summary_map: Design document summaries of processed files, keyed by file
+        doc_summary_dict: Design document summaries of processed files, keyed by file
             relative path (for callee context reference).
         template: Template dict.
         llm_client: LLM client.
-        summary_cache: Shared cache mapping code-hash -> summary text (context-overflow fallback).
+        summary_cache_dict: Shared cache mapping code-hash -> summary text
+            (context-overflow fallback).
+        impl_file: For header files. Path of the copy of the implementation file
+            (_implementation_file_rel), or None.
 
     Returns:
-        Design document dict ({file, sections, summary, source_hash}), or None if
-        generation completely fails. source_hash is the SHA256 of the source the
-        document was generated from.
+        Design document dict ({file, sections, summary, source_hash}), or None when the
+        copy of the source or file_dependencies.json is not in file_output_dir, or when
+        no section is generated. source_hash is the SHA256 of the source the document
+        was generated from. summary is empty when the template has no summary_prompt
+        and when the summary cannot be generated (_generate_summary).
     """
     # Read the source code
     source_file = _find_source_file(file_output_dir, file_rel)
@@ -1312,24 +1367,24 @@ async def _generate_file_doc(
     source_code = read_source_text(source_file)
 
     # Read file_dependencies.json
-    deps_path = os.path.join(file_output_dir, "file_dependencies.json")
-    if not os.path.exists(deps_path):
-        logger.warning(f"file_dependencies.json not found: {deps_path}")
+    file_dep_dict = load_file_dependencies(file_output_dir)
+    if file_dep_dict is None:
+        logger.warning(
+            f"file_dependencies.json not found: "
+            f"{os.path.join(file_output_dir, DEPENDENCY_FILE_NAME)}"
+        )
         return None
-
-    with open(deps_path, "r", encoding="utf-8") as f:
-        file_deps = json.load(f)
 
     # The full input of the section prompts: the source, the dependency information,
     # the dependency doc summaries and, for header files, the implementation file
     prompt_reducer = _PromptReducer(
         _SectionInput(
-            source_code, file_deps,
-            _build_callee_context_summary(file_deps, doc_summary_map),
-            _build_implementation_context(file_rel, file_output_dir),
+            source_code, file_dep_dict,
+            _build_callee_context_summary(file_dep_dict, doc_summary_dict),
+            read_source_text(impl_file) if impl_file else "",
         ),
-        llm_client, summary_cache,
-        _implementation_definition_list(file_rel, file_output_dir), file_rel,
+        llm_client, summary_cache_dict,
+        _implementation_definition_list(impl_file) if impl_file else [], file_rel,
     )
 
     # Generate each section
@@ -1345,22 +1400,23 @@ async def _generate_file_doc(
         section_list.append({
             "id": section["id"],
             "title": section["title"],
-            "content": section_text,
+            "content": _without_title_heading(section_text, section["title"]),
         })
 
     if not section_list:
         logger.error(f"Design document generation completely failed: {file_rel}")
         return None
 
-    # Generate summary
-    summary = await _generate_summary(
-        file_rel, section_list, template, llm_client
+    # Generate summary when the template asks for one
+    summary = (
+        await _generate_summary(file_rel, section_list, template["summary_prompt"], llm_client)
+        if "summary_prompt" in template else ""
     )
 
     return {
         "file": file_rel,
         "sections": section_list,
-        "summary": summary or "",
+        "summary": _without_title_heading(summary or "", _SUMMARY_TITLE),
         "source_hash": compute_file_hash(source_file),
     }
 
@@ -1368,7 +1424,7 @@ async def _generate_file_doc(
 async def _generate_summary(
     file_path: str,
     section_list: list[dict],
-    template: dict,
+    summary_prompt: str,
     llm_client: LLMClient,
 ) -> str | None:
     """Generate a summary from all sections of the design document.
@@ -1380,7 +1436,7 @@ async def _generate_summary(
     Args:
         file_path: Relative path of the target file.
         section_list: List of already-generated sections.
-        template: Template dict.
+        summary_prompt: The summary_prompt of the template.
         llm_client: LLM client.
 
     Returns:
@@ -1389,7 +1445,7 @@ async def _generate_summary(
     def build_prompt(summary_section_list: list[dict]) -> str:
         """Return the summary prompt over the sections given."""
         return _build_summary_prompt(
-            file_path, summary_section_list, template["summary_prompt"], SUMMARY_MAX_CHARS,
+            file_path, summary_section_list, summary_prompt, SUMMARY_MAX_CHARS,
         )
 
     try:
@@ -1432,21 +1488,28 @@ def _find_source_file(output_dir: str, file_rel: str) -> str | None:
     return None
 
 
-def load_doc(output_dir: str) -> dict | None:
-    """Read the design document (doc.json) saved in a file's output directory.
+def _without_title_heading(content: str, title: str) -> str:
+    """Remove a heading line holding only the title from the start of a section text or summary.
+
+    The heading may be of any level and may end with "#"s; the blank lines after it are
+    removed too. A heading holding more than the title is kept.
+
+    Examples:
+        ("## Data Flow\\n\\nThe input is read.", "Data Flow") -> "The input is read."
+        ("## Data Flows\\nThe input is read.", "Data Flow")   -> "## Data Flows\\nThe input is read."
 
     Args:
-        output_dir: Output directory of the file.
+        content: Section text or summary generated by the LLM.
+        title: Title of the section, or "Summary" for the summary.
 
     Returns:
-        The design document dict, or None if doc.json does not exist or cannot be read.
+        The text without the heading.
     """
-    json_path = os.path.join(output_dir, "doc.json")
-    try:
-        with open(json_path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except (json.JSONDecodeError, OSError):
-        return None
+    return re.sub(
+        r"\A\s*#+[^\S\n]+" + re.escape(title) + r"[^\S\n]*#*[^\S\n]*(?:\n|\Z)(?:[^\S\n]*\n)*",
+        "",
+        content,
+    )
 
 
 def _save_doc(doc: dict, output_dir: str) -> None:
@@ -1456,16 +1519,8 @@ def _save_doc(doc: dict, output_dir: str) -> None:
         doc: Design document dict ({file, sections, summary, source_hash}).
         output_dir: Output directory.
     """
-    # doc.md is written before doc.json, so doc.json is never older than doc.md
-    md_path = os.path.join(output_dir, "doc.md")
-
-    # Strip duplicate section title headers that the LLM may include in its response
-    for section in doc["sections"]:
-        section["content"] = re.sub(
-            r"\A\s*#+\s+" + re.escape(section["title"]) + r"\s*\n*",
-            "",
-            section["content"],
-        )
+    # doc.md is written first and doc.json after it
+    md_path = os.path.join(output_dir, DOC_MD_NAME)
 
     md_line_list = [f"# Design Document: {doc['file']}", ""]
 
@@ -1478,7 +1533,7 @@ def _save_doc(doc: dict, output_dir: str) -> None:
 
     # Append summary as a section at the end if present
     if doc.get("summary"):
-        md_line_list.append("# Summary")
+        md_line_list.append(f"# {_SUMMARY_TITLE}")
         md_line_list.append("")
         md_line_list.append(doc["summary"])
         md_line_list.append("")
@@ -1488,118 +1543,257 @@ def _save_doc(doc: dict, output_dir: str) -> None:
         f.write("\n".join(md_line_list))
 
     # JSON output
-    json_path = os.path.join(output_dir, "doc.json")
+    _write_doc_json(doc, os.path.join(output_dir, DOC_JSON_NAME))
+
+
+def _is_doc_form(doc: dict) -> bool:
+    """Tell whether a dict read from doc.json has the form _save_doc writes.
+
+    Args:
+        doc: The dict read from doc.json (load_doc).
+
+    Returns:
+        True when "file" is a string, "sections" is a list of dicts with string "id",
+        "title" and "content", and "summary" and "source_hash" are strings where present.
+    """
+    section_list = doc.get("sections")
+    if not isinstance(doc.get("file"), str) or not isinstance(section_list, list):
+        return False
+    if not all(
+        isinstance(section, dict)
+        and all(isinstance(section.get(key), str) for key in ("id", "title", "content"))
+        for section in section_list
+    ):
+        return False
+    return all(isinstance(doc.get(key, ""), str) for key in ("summary", "source_hash"))
+
+
+def _load_valid_doc(output_dir: str) -> dict | None:
+    """Read the design document saved in a file's output directory.
+
+    Args:
+        output_dir: Output directory of the file.
+
+    Returns:
+        The design document dict; None when doc.json does not exist, cannot be read, or
+        does not have the form _save_doc writes (_is_doc_form).
+    """
+    doc = load_doc(output_dir)
+    return doc if doc is not None and _is_doc_form(doc) else None
+
+
+def _write_doc_json(doc: dict, json_path: str) -> None:
+    """Write a design document dict to a doc.json file.
+
+    Args:
+        doc: Design document dict.
+        json_path: Path of the doc.json file.
+    """
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump(doc, f, indent=2, ensure_ascii=False)
 
 
-def _parse_md_sections(md_text: str, section_title_list: list[str]) -> dict[str, str]:
-    """Split markdown text by known section titles and return the content of each section.
+def _md_heading_pattern(title: str) -> re.Pattern:
+    """Return the pattern of the "# <title>" line _save_doc writes for a section."""
+    return re.compile(r"^# " + re.escape(title) + r"[^\S\n]*$", re.MULTILINE)
 
-    Use ``# {title}`` lines matching known section titles as delimiters.
+
+def _md_section_split(md_text: str, doc: dict) -> tuple[list[str | None], str | None]:
+    """Find the headings _save_doc writes for a document in doc.md and return the text under each.
+
+    The headings are searched for in the order _save_doc writes them: a "# <title>" line
+    for each section of doc, then a "# Summary" line when doc holds a summary. Each
+    heading is searched for after the heading found before it, past as many lines of
+    its form as the texts of doc between the two headings hold. A text runs from its
+    heading to the next heading, and the last one to the end of doc.md.
 
     Args:
         md_text: Full text of doc.md.
-        section_title_list: List of section titles used as split keys (including "Summary").
+        doc: The design document read from doc.json (_load_valid_doc).
 
     Returns:
-        Dict mapping title to content text. Sections not found are omitted.
+        (the text of each section, stripped, or None when its heading or the heading
+        after it is not found; the text of the summary, or None when its heading is not
+        found or doc holds no summary).
     """
-    title_pattern_list = [re.escape(title) for title in section_title_list]
-    title_alternation = "|".join(title_pattern_list)
-    pattern = re.compile(
-        r"^# (" + title_alternation + r")\s*$",
-        re.MULTILINE,
-    )
+    part_list = [(section["title"], section["content"]) for section in doc["sections"]]
+    if doc.get("summary"):
+        part_list.append((_SUMMARY_TITLE, doc["summary"]))
 
-    match_list = list(pattern.finditer(md_text))
-    content_by_title_dict: dict[str, str] = {}
+    # Heading of each part, and the doc texts since the heading found before it
+    match_list: list[re.Match | None] = []
+    position = 0
+    between_list: list[str] = []
+    for title, content in part_list:
+        pattern = _md_heading_pattern(title)
+        skip_count = sum(len(pattern.findall(text)) for text in between_list)
+        match = next(islice(pattern.finditer(md_text, position), skip_count, None), None)
+        match_list.append(match)
+        if match:
+            position = match.end()
+            between_list = []
+        between_list.append(content)
 
-    # Extract text between matches as section content
-    for i, match in enumerate(match_list):
-        title = match.group(1)
-        content_start = match.end()
-        content_end = match_list[i + 1].start() if i + 1 < len(match_list) else len(md_text)
-        content_by_title_dict[title] = md_text[content_start:content_end].strip()
+    # Text of each part, up to the heading after it
+    text_list: list[str | None] = []
+    for index, match in enumerate(match_list):
+        if index + 1 == len(match_list):
+            end = len(md_text)
+        else:
+            end_match = match_list[index + 1]
+            end = end_match.start() if end_match else None
+        text_list.append(md_text[match.end():end].strip() if match and end is not None else None)
+    md_summary = text_list.pop() if doc.get("summary") else None
+    return text_list, md_summary
 
-    return content_by_title_dict
 
-
-def _sync_md_to_json(output_dir: str) -> None:
-    """Sync manual edits from doc.md back to doc.json when MD is newer.
-
-    Only operates when the MD file has a newer timestamp than the JSON.
-    Parses the MD, overwrites matching section content in the existing JSON,
-    and re-saves. Sections not present in the MD retain their original content.
+def _is_md_newer(output_dir: str) -> bool:
+    """Tell whether the doc.md of a file was written after its doc.json.
 
     Args:
         output_dir: Directory containing doc.json and doc.md.
+
+    Returns:
+        True when both files exist and doc.md has the newer timestamp.
     """
-    json_path = os.path.join(output_dir, "doc.json")
-    md_path = os.path.join(output_dir, "doc.md")
-
+    json_path = os.path.join(output_dir, DOC_JSON_NAME)
+    md_path = os.path.join(output_dir, DOC_MD_NAME)
     if not os.path.exists(json_path) or not os.path.exists(md_path):
-        return
+        return False
+    return os.path.getmtime(md_path) > os.path.getmtime(json_path)
 
-    # Timestamp comparison: sync only when MD is newer than JSON
-    if os.path.getmtime(md_path) <= os.path.getmtime(json_path):
-        return
 
-    # Load existing JSON
-    doc = load_doc(output_dir)
+def _read_md_edit(output_dir: str) -> tuple[dict | None, list[str]] | None:
+    """Read the edits of a doc.md written after its doc.json.
+
+    The section texts and the summary of doc.md are found by the headings of the
+    doc.json document (_md_section_split) and compared with it, stripped.
+
+    Args:
+        output_dir: Directory containing doc.json and doc.md.
+
+    Returns:
+        (the doc.json document with the texts found in doc.md in place of its section
+        texts and summary, or None when no text found differs from doc.json; the titles
+        of the sections, and "Summary", whose text is not found), or None when doc.md is
+        not newer than doc.json (_is_md_newer) or doc.json cannot be read as a design
+        document (_load_valid_doc).
+
+    Raises:
+        OSError: When doc.md cannot be read.
+        UnicodeDecodeError: When doc.md is not UTF-8 text.
+    """
+    if not _is_md_newer(output_dir):
+        return None
+    doc = _load_valid_doc(output_dir)
     if doc is None:
-        return
-
-    # Read full text of the MD file
-    with open(md_path, "r", encoding="utf-8") as f:
+        return None
+    with open(os.path.join(output_dir, DOC_MD_NAME), "r", encoding="utf-8") as f:
         md_text = f.read()
 
-    # Get list of known section titles from JSON (append Summary at the end)
-    section_title_list = [section["title"] for section in doc["sections"]] + ["Summary"]
-    # Parse MD into sections
-    md_section_dict = _parse_md_sections(md_text, section_title_list)
+    # Section texts and summary of doc.md, by the headings of doc.json
+    summary = doc.get("summary", "")
+    content_list, md_summary = _md_section_split(md_text, doc)
+    skip_title_list = [
+        section["title"] for section, content in zip(doc["sections"], content_list)
+        if content is None
+    ]
+    if md_summary is None and summary:
+        skip_title_list.append(_SUMMARY_TITLE)
 
-    if not md_section_dict:
-        return
-
-    # Compare MD and JSON section content, and apply diffs to JSON.
-    # Skip if the next section heading (in JSON order) is missing from MD, as boundaries would be inaccurate.
-    md_title_set = set(md_section_dict.keys())
-    has_diff = False
-    for index, section in enumerate(doc["sections"]):
-        title = section["title"]
-        if title not in md_title_set:
-            continue
-
-        # Check if the next section (in JSON order) exists in MD
-        next_title = (
-            doc["sections"][index + 1]["title"]
-            if index + 1 < len(doc["sections"])
-            else "Summary"
-        )
-        if next_title not in md_title_set:
-            continue
-
-        if md_section_dict[title] != section["content"]:
-            section["content"] = md_section_dict[title]
-            has_diff = True
-
-    # Also apply summary section diffs
-    if "Summary" in md_title_set and md_section_dict["Summary"] != doc.get("summary", ""):
-        doc["summary"] = md_section_dict["Summary"]
-        has_diff = True
-
+    has_diff = (md_summary is not None and md_summary != summary.strip()) or any(
+        content is not None and content != section["content"].strip()
+        for section, content in zip(doc["sections"], content_list)
+    )
     if not has_diff:
+        return None, skip_title_list
+    new_doc = {
+        **doc,
+        "sections": [
+            section if content is None else {**section, "content": content}
+            for section, content in zip(doc["sections"], content_list)
+        ],
+        "summary": summary if md_summary is None else md_summary,
+    }
+    return new_doc, skip_title_list
+
+
+def _has_md_edit(output_dir: str) -> bool:
+    """Tell whether the doc.md of a file holds edits not in its doc.json.
+
+    Args:
+        output_dir: Directory containing doc.json and doc.md.
+
+    Returns:
+        True when doc.md is newer than doc.json and differs from it or lacks a heading
+        (_read_md_edit), or cannot be read as UTF-8 text.
+    """
+    try:
+        md_edit = _read_md_edit(output_dir)
+    except (OSError, UnicodeDecodeError):
+        return True
+    return md_edit is not None and (md_edit[0] is not None or bool(md_edit[1]))
+
+
+def _log_md_not_taken(file_rel: str, error: Exception) -> None:
+    """Log a warning that the edits of the doc.md of a file are not taken, with the error."""
+    logger.warning(f"  The edits of {DOC_MD_NAME} are not taken: {file_rel}: {error}")
+
+
+def _sync_md_to_json(output_dir: str, file_rel: str) -> None:
+    """Sync manual edits from doc.md back to doc.json when doc.md is newer.
+
+    The section texts and the summary that differ in doc.md (_read_md_edit) are written
+    to doc.json, and doc.md is written again from the result (_save_doc). A section
+    whose heading or the heading after it is missing from doc.md keeps its doc.json text
+    and is named in a warning; doc.md is then left as it is. A doc.md that cannot be
+    read as UTF-8 text is named in a warning and doc.json is left as it is.
+
+    Args:
+        output_dir: Directory containing doc.json and doc.md.
+        file_rel: Relative path of the file (for the log messages).
+
+    Raises:
+        OSError: When doc.json or doc.md cannot be written.
+    """
+    try:
+        md_edit = _read_md_edit(output_dir)
+    except (OSError, UnicodeDecodeError) as e:
+        _log_md_not_taken(file_rel, e)
+        return
+    if md_edit is None:
+        return
+    new_doc, skip_title_list = md_edit
+    if skip_title_list:
+        logger.warning(
+            f"  {DOC_MD_NAME} lacks a section heading next to these sections, and their "
+            f"edits are not taken: {', '.join(skip_title_list)}: {file_rel}"
+        )
+    if new_doc is None:
         return
 
-    # Save updated JSON
-    with open(json_path, "w", encoding="utf-8") as f:
-        json.dump(doc, f, indent=2, ensure_ascii=False)
+    if skip_title_list:
+        _write_doc_json(new_doc, os.path.join(output_dir, DOC_JSON_NAME))
+    else:
+        _save_doc(new_doc, output_dir)
+    logger.info(f"  MD->JSON sync: {file_rel}")
 
-    # Re-output MD to match JSON content and timestamps
-    _save_doc(doc, output_dir)
 
-    logger.info(f"  MD->JSON sync: {doc['file']}")
+def sync_md_edit(base_output_dir: str, file_list: list[str]) -> None:
+    """Sync the manual edits of the doc.md of each file to its doc.json (_sync_md_to_json).
+
+    A file whose doc.md cannot be read, or whose doc.json or doc.md cannot be written,
+    is named in a warning and the other files are synced.
+
+    Args:
+        base_output_dir: Base output directory for file_dependencies.
+        file_list: Relative paths of the files from the project root.
+    """
+    for file_rel in file_list:
+        try:
+            _sync_md_to_json(resolve_file_output_dir(base_output_dir, file_rel), file_rel)
+        except OSError as e:
+            _log_md_not_taken(file_rel, e)
 
 
 def _is_doc_complete(doc: dict, template: dict) -> bool:
@@ -1648,6 +1842,48 @@ def _dependent_closure_set(
     return closure_set
 
 
+def _implementation_dict(callee_set_dict: dict[str, set[str]]) -> dict[str, str]:
+    """Return the implementation file of each C/C++ header having one (_implementation_file_rel).
+
+    Args:
+        callee_set_dict: File relative path -> relative paths of its callees; every file
+            of the run is a key.
+
+    Returns:
+        Header file relative path -> relative path of its implementation file.
+    """
+    implementation_dict: dict[str, str] = {}
+    for file_rel in callee_set_dict:
+        implementation_rel = _implementation_file_rel(file_rel, callee_set_dict)
+        if implementation_rel:
+            implementation_dict[file_rel] = implementation_rel
+    return implementation_dict
+
+
+def _regeneration_set(
+    changed_files: set[str],
+    callee_set_dict: dict[str, set[str]],
+    implementation_dict: dict[str, str],
+) -> set[str]:
+    """Return the files whose design documents are regenerated for the changed files.
+
+    Args:
+        changed_files: Relative paths of the changed files.
+        callee_set_dict: File relative path -> relative paths of its callees.
+        implementation_dict: Header file relative path -> relative path of its
+            implementation file (_implementation_dict).
+
+    Returns:
+        The changed files, the headers whose implementation file changed, and the files
+        depending on them, directly or through others (_dependent_closure_set).
+    """
+    change_file_set = set(changed_files) | {
+        header for header, implementation_rel in implementation_dict.items()
+        if implementation_rel in changed_files
+    }
+    return _dependent_closure_set(change_file_set, callee_set_dict)
+
+
 def _needs_regeneration(
     file_rel: str,
     regeneration_set: set[str] | None,
@@ -1676,6 +1912,87 @@ def _needs_regeneration(
     return not callee_set_dict.get(file_rel, set()).isdisjoint(earlier_doc_file_set)
 
 
+def _reusable_doc(file_rel: str, output_dir: str, template: dict) -> dict | None:
+    """Return the saved design document of a file when it is complete.
+
+    Manual edits of doc.md are synced to doc.json first (_sync_md_to_json). A complete
+    document is reported as REUSE, an incomplete one as INCOMPLETE.
+
+    Args:
+        file_rel: Relative path from the project root.
+        output_dir: Output directory of the file.
+        template: Template dict.
+
+    Returns:
+        The document read from doc.json; None when doc.json is missing or unreadable
+        (_load_valid_doc), or the document is incomplete (_is_doc_complete).
+    """
+    # Sync manual edits from doc.md to JSON if user edited it
+    _sync_md_to_json(output_dir, file_rel)
+    old_doc = _load_valid_doc(output_dir)
+    # Regenerate when doc.json is missing or unreadable
+    if old_doc is None:
+        if os.path.exists(os.path.join(output_dir, DOC_JSON_NAME)):
+            logger.warning(
+                f"  {DOC_JSON_NAME} cannot be read as a design document and is "
+                f"regenerated: {file_rel}"
+            )
+        return None
+    if _is_doc_complete(old_doc, template):
+        log_progress(logger, f"  REUSE: {file_rel}")
+        return old_doc
+    log_progress(logger, f"  INCOMPLETE: {file_rel}")
+    return None
+
+
+async def _generate_level(
+    file_list: list[str],
+    process_one: Callable[[str], Awaitable[dict | None]],
+    max_workers: int,
+    template: dict,
+    doc_summary_dict: dict[str, str],
+    doc_fail_list: list[str],
+) -> None:
+    """Generate the design documents of the files of one level, max_workers files at a time.
+
+    Each file of the level left without a complete document (an exception, no document,
+    or _is_doc_complete False) is appended to doc_fail_list. Once every file of the level
+    is done, the summary of each document of the level is put in doc_summary_dict.
+
+    Args:
+        file_list: Relative paths of the files of the level.
+        process_one: Returns the design document dict of a file, or None.
+        max_workers: Number of files processed in parallel.
+        template: Template dict.
+        doc_summary_dict: File relative path -> design document summary; updated in place.
+        doc_fail_list: Files left without a complete design document; appended to in place.
+    """
+    # Summaries of the documents of this level
+    level_summary_dict: dict[str, str] = {}
+
+    # Process files in the level in batches of max_workers
+    for batch_start in range(0, len(file_list), max_workers):
+        batch_file_list = file_list[batch_start:batch_start + max_workers]
+
+        task_list = [asyncio.create_task(process_one(file_rel)) for file_rel in batch_file_list]
+        outcome_list = await asyncio.gather(*task_list, return_exceptions=True)
+
+        for file_rel, doc in zip(batch_file_list, outcome_list):
+            if isinstance(doc, Exception):
+                logger.error(
+                    f"Error during document generation: {file_rel}: "
+                    f"{type(doc).__name__}: {doc}"
+                )
+                doc_fail_list.append(file_rel)
+                continue
+            if doc:
+                level_summary_dict[file_rel] = doc.get("summary", "")
+            if not doc or not _is_doc_complete(doc, template):
+                doc_fail_list.append(file_rel)
+
+    doc_summary_dict.update(level_summary_dict)
+
+
 async def generate_all_docs(
     base_output_dir: str,
     project_dep_list: list[dict],
@@ -1686,20 +2003,25 @@ async def generate_all_docs(
     """Main function to generate design documents for all files in topological sort order.
 
     Processing flow:
-    1. Load the template.
+    1. Load the template (_load_template).
     2. Topologically sort project_dependencies and arrange by level.
-    3. Starting from level 0, generate documents for each level in parallel.
-    4. Hold generated document summaries in doc_summary_map for use as context in subsequent levels.
-    5. Save each file's document in JSON + Markdown format.
+    3. Find the changed files and the files depending on them (with changed_files).
+    4. Starting from level 0, generate documents for each level in parallel
+       (_generate_level), save each file's document in JSON + Markdown format, and hold
+       the document summaries in doc_summary_dict for use as context in subsequent levels.
+    5. Report the numbers of documents generated, reused and left incomplete.
 
     When changed_files is specified, the existing doc.json of a file is reused and the
     LLM call is skipped when it is complete, the file is not among the changed files and
     the files depending on them (_dependent_closure_set), and none of its callees was
-    regenerated at an earlier level of this run.
+    regenerated at an earlier level of this run. A C/C++ header counts as changed when
+    its implementation file (_implementation_file_rel) is among the changed files.
 
     Args:
         base_output_dir: Base output directory for file_dependencies.
-        project_dep_list: Dependency list output by save_project_dependencies.
+        project_dep_list: The project's dependency list with paths relative to the
+            project root; each element is {"file": str, "callers": list[str],
+            "callees": list[str]}.
         llm_client: LLM client.
         max_workers: Number of parallel workers within each level.
         changed_files: Set of relative paths of changed files. If None, all files are processed.
@@ -1707,12 +2029,20 @@ async def generate_all_docs(
     Returns:
         Relative paths of the files left without a complete design document
         (generation failed, or a section or the summary is missing).
-    """
-    with open(DOC_TEMPLATE_PATH, "r", encoding="utf-8") as f:
-        template = json.load(f)
 
-    # Get level-ordered file list via topological sort
-    level_list = _topological_sort_by_level(project_dep_list)
+    Raises:
+        ValueError: When max_workers is less than 1, or the template cannot be read or
+            has a wrong form (_load_template).
+    """
+    check_worker_count(max_workers)
+
+    # == Step 1: Load the template ============================================
+    template = _load_template()
+
+    # == Step 2: Sort the files into levels ===================================
+    # File relative path -> its callees (dependencies); every callee is a key too
+    callee_set_dict = _callee_set_dict(project_dep_list)
+    level_list = _topological_sort_by_level(callee_set_dict)
     level_count = len(level_list)
     total_file_count = sum(len(level) for level in level_list)
 
@@ -1723,26 +2053,23 @@ async def generate_all_docs(
         f"Total files: {total_file_count}"
     )
 
+    # == Step 3: Find the files whose documents are regenerated ===============
+    implementation_dict = _implementation_dict(callee_set_dict)
+    regeneration_set = (
+        None if changed_files is None
+        else _regeneration_set(changed_files, callee_set_dict, implementation_dict)
+    )
+
+    # == Step 4: Generate the documents level by level ========================
     # Dict holding the summaries of processed files. Only the summary is carried
     # forward between levels; the section text is not kept after a document is saved.
     # Key: file relative path, Value: design document summary text
-    doc_summary_map: dict[str, str] = {}
+    doc_summary_dict: dict[str, str] = {}
 
     # Shared code-summary cache for the whole run (context-overflow fallback).
     # Key: SHA256 of a code block, Value: its behavior summary. Reused across
     # files and sections of the run.
-    summary_cache: dict[str, str] = {}
-
-    # Per-file callee (dependency) list
-    callee_set_dict: dict[str, set[str]] = {}
-    for info in project_dep_list:
-        callee_set_dict[info["file"]] = set(info.get("callees", []))
-
-    # The changed files and the files depending on them, directly or through others
-    regeneration_set = (
-        None if changed_files is None
-        else _dependent_closure_set(changed_files, callee_set_dict)
-    )
+    summary_cache_dict: dict[str, str] = {}
 
     # Track files whose documents were regenerated in this run, and those of them
     # regenerated at the levels before the current one. Caller-side files that reference
@@ -1750,49 +2077,55 @@ async def generate_all_docs(
     new_doc_file_set: set[str] = set()
     earlier_doc_file_set: set[str] = set()
 
+    # Files whose saved document was reused in this run
+    reuse_file_set: set[str] = set()
+
     # Files left without a complete design document in this run
     doc_fail_list: list[str] = []
 
-    async def process_one(file_rel: str) -> tuple[str, dict | None]:
-        """Generate the design document for one file and return (file_rel, doc).
+    async def process_one(file_rel: str) -> dict | None:
+        """Generate or reuse the design document of one file.
 
         Args:
             file_rel: Relative path from the project root.
 
         Returns:
-            tuple[str, dict | None]: Tuple of (file relative path, design document dict). dict is None on failure.
+            The design document dict, or None on failure.
         """
         output_dir = resolve_file_output_dir(base_output_dir, file_rel)
         if not os.path.isdir(output_dir):
             logger.warning(f"Output directory does not exist: {output_dir}")
-            return file_rel, None
+            return None
+        is_md_edit = _has_md_edit(output_dir)
 
         # Reuse existing doc.json if no changes
         if not _needs_regeneration(
             file_rel, regeneration_set, callee_set_dict, earlier_doc_file_set,
         ):
-            # Sync manual edits from doc.md to JSON if user edited it
-            _sync_md_to_json(output_dir)
-            existing_doc = load_doc(output_dir)
-            # Regenerate when doc.json is missing or unreadable
-            if existing_doc is not None:
-                if _is_doc_complete(existing_doc, template):
-                    log_progress(logger, f"  REUSE: {file_rel}")
-                    return file_rel, existing_doc
-                log_progress(logger, f"  INCOMPLETE: {file_rel}")
+            old_doc = _reusable_doc(file_rel, output_dir, template)
+            if old_doc is not None:
+                reuse_file_set.add(file_rel)
+                return old_doc
 
+        implementation_rel = implementation_dict.get(file_rel)
         doc = await _generate_file_doc(
-            file_rel, output_dir, doc_summary_map, template, llm_client, summary_cache,
+            file_rel, output_dir, doc_summary_dict, template, llm_client, summary_cache_dict,
+            _find_source_file(
+                resolve_file_output_dir(base_output_dir, implementation_rel), implementation_rel,
+            ) if implementation_rel else None,
         )
-        if doc:
-            _save_doc(doc, output_dir)
-            new_doc_file_set.add(file_rel)
-            log_progress(logger, f"  OK: {file_rel}")
-        else:
-            print(f"  SKIP: {file_rel}")
+        if not doc:
             logger.warning(f"  SKIP: {file_rel}")
-
-        return file_rel, doc
+            return None
+        _save_doc(doc, output_dir)
+        new_doc_file_set.add(file_rel)
+        log_progress(logger, f"  OK: {file_rel}")
+        if is_md_edit:
+            logger.warning(
+                f"  The edits of {DOC_MD_NAME} are replaced by the regenerated document: "
+                f"{file_rel}"
+            )
+        return doc
 
     for level_index, file_list in enumerate(level_list):
         log_progress(
@@ -1801,29 +2134,18 @@ async def generate_all_docs(
             f"Generating documents for {len(file_list)} files"
         )
         earlier_doc_file_set.update(new_doc_file_set)
+        await _generate_level(
+            file_list, process_one, max_workers, template, doc_summary_dict, doc_fail_list,
+        )
 
-        # Process files in the level in batches of max_workers
-        for batch_start in range(0, len(file_list), max_workers):
-            batch = file_list[batch_start:batch_start + max_workers]
-
-            task_list = [asyncio.create_task(process_one(f)) for f in batch]
-            result_list = await asyncio.gather(*task_list, return_exceptions=True)
-
-            for file_rel, result in zip(batch, result_list):
-                if isinstance(result, Exception):
-                    logger.error(f"Error during document generation: {result}")
-                    doc_fail_list.append(file_rel)
-                    continue
-                _, doc = result
-                if doc:
-                    doc_summary_map[file_rel] = doc.get("summary", "")
-                if not doc or not _is_doc_complete(doc, template):
-                    doc_fail_list.append(file_rel)
-
+    # == Step 5: Report the result ============================================
+    doc_fail_set = set(doc_fail_list)
     log_progress(
         logger,
         f"Design document generation completed. "
-        f"Generated: {len(doc_summary_map)} / "
+        f"Generated: {len(new_doc_file_set - doc_fail_set)}, "
+        f"Reused: {len(reuse_file_set)}, "
+        f"Incomplete or failed: {len(doc_fail_set)} / "
         f"Total: {total_file_count}"
     )
 

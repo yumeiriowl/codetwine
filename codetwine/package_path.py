@@ -1,13 +1,15 @@
 import os
 import posixpath
 from codetwine.path_config import PathConfig, inside_project, read_json_file
+from codetwine.utils.project_cache import project_cache_value
 
 # Cache of the package.json files of a project:
 # project_dir -> {directory relative path: content of its package.json, or None without one}
-package_file_cache: dict[str, dict[str, dict | None]] = {}
+_package_file_cache_dict: dict[str, dict[str, dict | None]] = {}
 
-# Cache of the packages of a project: project_dir -> {package name: its directory}
-package_name_cache: dict[str, tuple[set[str], dict[str, str]]] = {}
+# Cache of the packages of a project: project_dir -> (the project file set they were
+# read for, {package name: its directory})
+_package_name_cache_dict: dict[str, tuple[set[str], dict[str, str]]] = {}
 
 # First character of a module string a package.json "imports" entry names
 _IMPORT_MODULE_START = "#"
@@ -16,6 +18,11 @@ _IMPORT_MODULE_START = "#"
 # they are tried
 _ENTRY_KEY_TUPLE = ("types", "typings", "source", "module", "main")
 
+# Keys of a package.json that list the packages it depends on
+_DEPENDENCY_KEY_TUPLE = (
+    "dependencies", "devDependencies", "peerDependencies", "optionalDependencies",
+)
+
 # Directory a package keeps its sources in, and the name of the file it is entered through
 _SOURCE_DIR_NAME = "src"
 _INDEX_FILE_NAME = "index"
@@ -23,8 +30,8 @@ _INDEX_FILE_NAME = "index"
 
 def clear_package_path_cache() -> None:
     """Forget the package.json files of every project."""
-    package_file_cache.clear()
-    package_name_cache.clear()
+    _package_file_cache_dict.clear()
+    _package_name_cache_dict.clear()
 
 
 def _package_file(dir_rel: str, project_dir: str, package_file_name: str) -> dict | None:
@@ -38,7 +45,7 @@ def _package_file(dir_rel: str, project_dir: str, package_file_name: str) -> dic
     Returns:
         The object the file holds, None when the directory has no readable one.
     """
-    dir_dict = package_file_cache.setdefault(project_dir, {})
+    dir_dict = _package_file_cache_dict.setdefault(project_dir, {})
     if dir_rel not in dir_dict:
         package_rel = posixpath.join(dir_rel, package_file_name)
         dir_dict[dir_rel] = (
@@ -146,22 +153,22 @@ def _package_dir_dict(
         {"name" of a package.json: its directory}; of two packages of one name, the
         one whose directory comes first in path order.
     """
-    cache_entry = package_name_cache.get(project_dir)
-    if cache_entry is not None and cache_entry[0] == project_file_set:
-        return cache_entry[1]
+    package_dir_dict = project_cache_value(_package_name_cache_dict, project_dir, project_file_set)
+    if package_dir_dict is not None:
+        return package_dir_dict
     dir_set: set[str] = set()
     for file_rel in project_file_set:
         dir_rel = posixpath.dirname(file_rel.replace("\\", "/"))
         while dir_rel not in dir_set:
             dir_set.add(dir_rel)
             dir_rel = posixpath.dirname(dir_rel)
-    package_dir_dict: dict[str, str] = {}
+    package_dir_dict = {}
     for dir_rel in sorted(dir_set):
         package_dict = _package_file(dir_rel, project_dir, package_file_name)
         name = package_dict.get("name") if package_dict is not None else None
         if isinstance(name, str) and name:
             package_dir_dict.setdefault(name, dir_rel)
-    package_name_cache[project_dir] = (project_file_set, package_dir_dict)
+    _package_name_cache_dict[project_dir] = (project_file_set, package_dir_dict)
     return package_dir_dict
 
 
@@ -184,6 +191,106 @@ def _source_path_list(path_rel: str, package_dir: str) -> list[str]:
     if len(inner_part_list) < 2 or inner_part_list[0] in (_SOURCE_DIR_NAME, ".."):
         return [path_rel]
     return [path_rel, posixpath.join(package_dir, _SOURCE_DIR_NAME, *inner_part_list[1:])]
+
+
+def _package_name(module: str) -> str:
+    """Return the package name a module string that is not relative starts with.
+
+    Examples:
+        "react"             -> "react"
+        "lodash/fp"         -> "lodash"
+        "@acme/ui/button"   -> "@acme/ui"
+    """
+    part_list = module.split("/")
+    return "/".join(part_list[:2]) if module.startswith("@") else part_list[0]
+
+
+def _entry_path_list(package_dict: dict, package_dir: str) -> list[str]:
+    """Return the paths the _ENTRY_KEY_TUPLE keys of a package.json name, in that order.
+
+    Args:
+        package_dict: The content of the package.json.
+        package_dir: Directory of the package.json, relative to the project root.
+
+    Returns:
+        Paths relative to the project root; a value that is not a string or leads
+        outside the project is left out.
+    """
+    entry_path_list: list[str] = []
+    for entry_key in _ENTRY_KEY_TUPLE:
+        entry_value = package_dict.get(entry_key)
+        path_rel = (
+            inside_project(posixpath.join(package_dir, entry_value))
+            if isinstance(entry_value, str) else None
+        )
+        if path_rel is not None:
+            entry_path_list.append(path_rel)
+    return entry_path_list
+
+
+def directory_entry_path_list(dir_rel: str, project_dir: str, package_file_name: str) -> list[str]:
+    """Return the paths of the files the package.json of a directory names as its entry.
+
+    Examples (pkg/package.json: {"main": "./dist/index.js"}):
+        "pkg"    -> ["pkg/dist/index.js", "pkg/src/index.js"]
+        "other"  -> []
+
+    Args:
+        dir_rel: Directory relative to the project root ("" for the root).
+        project_dir: Absolute path to the project root.
+        package_file_name: File name of the package file ("package.json").
+
+    Returns:
+        Paths relative to the project root, without duplicates: the paths of
+        _ENTRY_KEY_TUPLE, each followed by the path of its source (_source_path_list).
+        Empty when the directory has no readable package file.
+    """
+    package_dict = _package_file(dir_rel, project_dir, package_file_name)
+    if package_dict is None:
+        return []
+    return list(dict.fromkeys(
+        source_rel for path_rel in _entry_path_list(package_dict, dir_rel)
+        for source_rel in _source_path_list(path_rel, dir_rel)
+    ))
+
+
+def is_dependency_module(
+    module: str, file_rel: str, project_dir: str, package_file_name: str,
+) -> bool:
+    """Return whether a module string names a package a package.json around a file depends on.
+
+    The package.json of the directory of the file and of every directory above it up
+    to the project root are read.
+
+    Examples (package.json of the root: {"dependencies": {"axios": "^1.0"},
+    "devDependencies": {"@types/node": "*"}}):
+        "axios"           -> True
+        "axios/lib/core"  -> True
+        "@types/node"     -> True
+        "config"          -> False
+
+    Args:
+        module: The module string of an import statement that is not relative.
+        file_rel: Relative path of the file the import statement is written in.
+        project_dir: Absolute path to the project root.
+        package_file_name: File name of the package file ("package.json").
+
+    Returns:
+        True when one of those files lists the package name of the module under a key
+        of _DEPENDENCY_KEY_TUPLE.
+    """
+    name = _package_name(module)
+    dir_rel = posixpath.dirname(file_rel.replace("\\", "/"))
+    while True:
+        package_dict = _package_file(dir_rel, project_dir, package_file_name)
+        if package_dict is not None and any(
+            isinstance(dependency_dict := package_dict.get(key), dict) and name in dependency_dict
+            for key in _DEPENDENCY_KEY_TUPLE
+        ):
+            return True
+        if not dir_rel:
+            return False
+        dir_rel = posixpath.dirname(dir_rel)
 
 
 def package_name_path_list(
@@ -213,8 +320,7 @@ def package_name_path_list(
         package and under its "src", or the index file of the package.
     """
     package_dir_dict = _package_dir_dict(project_dir, project_file_set, package_file_name)
-    part_list = module.split("/")
-    name = "/".join(part_list[:2]) if module.startswith("@") else part_list[0]
+    name = _package_name(module)
     package_dir = package_dir_dict.get(name)
     if package_dir is None:
         return []
@@ -232,14 +338,7 @@ def package_name_path_list(
             if (path_rel := inside_project(posixpath.join(package_dir, target))) is not None
         )
     if not inner_path:
-        for entry_key in _ENTRY_KEY_TUPLE:
-            entry_value = package_dict.get(entry_key)
-            path_rel = (
-                inside_project(posixpath.join(package_dir, entry_value))
-                if isinstance(entry_value, str) else None
-            )
-            if path_rel is not None:
-                target_list.append(path_rel)
+        target_list.extend(_entry_path_list(package_dict, package_dir))
 
     path_list = [
         source_rel for path_rel in target_list

@@ -2,12 +2,11 @@ import os
 import logging
 from logging.handlers import RotatingFileHandler
 
+from codetwine.config.settings import REPO_ROOT
+
 
 # Log directory: logs/ under the repository root
-_LOG_DIR = os.path.join(
-    os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "..")),
-    "logs",
-)
+_LOG_DIR = os.path.join(REPO_ROOT, "logs")
 
 # Log format
 _LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
@@ -17,22 +16,28 @@ _MAX_BYTE = 1_048_576
 _BACKUP_COUNT = 5
 
 
-class _SkipBlankFormatter(logging.Formatter):
-    """Formatter that skips log messages consisting only of blank lines or whitespace."""
+class _SkipBlankFilter(logging.Filter):
+    """Handler filter that drops a record whose message is only whitespace."""
 
-    def format(self, record: logging.LogRecord) -> str:
-        """Format a log record, returning an empty string to skip blank-line messages.
+    def filter(self, record: logging.LogRecord) -> bool:
+        """Return whether a log record is written.
+
+        A record whose message is empty or only whitespace is dropped unless it carries
+        an exception or stack information. A record whose message raises any exception
+        when it is built is passed on to the handler, which reports the error.
 
         Args:
-            record: The log record to format.
+            record: The log record.
 
         Returns:
-            str: The formatted log string, or an empty string for blank-line messages.
+            False for a record that is dropped, True otherwise.
         """
-        # Suppress output to the log file when the message is whitespace-only
-        if record.getMessage().strip() in ("", "\n"):
-            return ""
-        return super().format(record)
+        if record.exc_info or record.stack_info:
+            return True
+        try:
+            return record.getMessage().strip() != ""
+        except Exception:
+            return True
 
 
 def setup_logging(level: int = logging.INFO) -> None:
@@ -43,18 +48,18 @@ def setup_logging(level: int = logging.INFO) -> None:
     Args:
         level: Log level. Defaults to logging.INFO.
     """
-    # Get the root logger and set the log level
+    # Root logger at the given level, with one formatter and one filter for both handlers
     root_logger = logging.getLogger()
     root_logger.setLevel(level)
-
-    # Create a formatter used by both console and file handlers
-    formatter = _SkipBlankFormatter(_LOG_FORMAT)
+    formatter = logging.Formatter(_LOG_FORMAT)
+    skip_blank_filter = _SkipBlankFilter()
 
     # ===== Console handler =====
     # Only WARNING and above are output to the console; details are recorded in the log file.
     console_handler = logging.StreamHandler()
     console_handler.setLevel(logging.WARNING)
     console_handler.setFormatter(formatter)
+    console_handler.addFilter(skip_blank_filter)
     root_logger.addHandler(console_handler)
 
     # ===== File handler =====
@@ -66,6 +71,7 @@ def setup_logging(level: int = logging.INFO) -> None:
         encoding="utf-8",
     )
     file_handler.setFormatter(formatter)
+    file_handler.addFilter(skip_blank_filter)
     root_logger.addHandler(file_handler)
 
     # ===== Restrict external library log levels to WARNING =====

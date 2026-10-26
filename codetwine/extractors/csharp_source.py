@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 from tree_sitter import Node
+from codetwine.parsers.ts_node import node_text
 from codetwine.extractors.definitions import definition_name_list
 from codetwine.config.settings import CSHARP_DEFINITION_DICT
 
@@ -25,19 +26,20 @@ _TYPE_DECLARATION_TYPE_SET = {
     "delegate_declaration",
 }
 
+# AST node types of the declarations that can declare type parameters (class C<T>,
+# void M<T>(), local functions)
+_GENERIC_DECLARATION_TYPE_SET = _TYPE_DECLARATION_TYPE_SET | {
+    "method_declaration", "local_function_statement",
+}
+
 # AST node types of a namespace declaration
 _NAMESPACE_TYPE_SET = {"namespace_declaration", "file_scoped_namespace_declaration"}
 
-# AST node types whose children are declarations of the place the node is written in
-_PASS_NODE_TYPE_SET = {
-    "preproc_if", "preproc_elif", "preproc_else", "declaration_list", "ERROR",
-}
+# AST node types of the preprocessor directives that hold code
+_PREPROC_CODE_TYPE_SET = {"preproc_if", "preproc_elif", "preproc_else"}
 
-# AST node types of a name chain
-_CHAIN_NODE_TYPE_SET = {
-    "identifier", "generic_name", "qualified_name", "alias_qualified_name",
-    "member_access_expression",
-}
+# AST node types whose children are declarations of the place the node is written in
+_PASS_NODE_TYPE_SET = _PREPROC_CODE_TYPE_SET | {"declaration_list", "ERROR"}
 
 # Field names of a child written where a type is
 _TYPE_FIELD_NAME_SET = {"type", "returns"}
@@ -64,9 +66,6 @@ _STATIC_MODIFIER_TUPLE = ("static", "const")
 
 # Prefix of the AST node types of preprocessor directives
 _PREPROC_PREFIX = "preproc_"
-
-# AST node types of the preprocessor directives that hold code
-_PREPROC_CODE_TYPE_SET = {"preproc_if", "preproc_elif", "preproc_else"}
 
 
 @dataclass
@@ -103,7 +102,7 @@ class CsharpMember:
     argument_range: tuple[int, int | None] | None = None
     is_extension: bool = False  # Whether the first parameter is written with "this"
     is_constructor: bool = False  # Whether the declaration is a constructor
-    # Type name of each parameter of a method (type_name); None for a type parameter and
+    # Type name of each parameter of a method (_type_name); None for a type parameter and
     # for a type without a name. Empty for a member that is not a method
     parameter_type_tuple: tuple[str | None, ...] = ()
 
@@ -121,10 +120,6 @@ class CsharpType:
     member_name_set: set[str] = field(default_factory=set)
     # Name of a member that is not a type -> its declarations in line order
     member_list_dict: dict[str, list[CsharpMember]] = field(default_factory=dict)
-    # Name of a method whose first parameter is written with "this" -> (least, most)
-    # number of arguments a call of each declaration of it takes, without the one
-    # "this" stands for; most is None for a declaration with "params"
-    extension_dict: dict[str, list[tuple[int, int | None]]] = field(default_factory=dict)
 
 
 @dataclass
@@ -145,8 +140,14 @@ _LOCAL_SCOPE_TYPE_SET = {
     "anonymous_method_expression",
 }
 
-# Node types of the body of a type declaration
-_TYPE_BODY_TYPE_SET = {"declaration_list"}
+# Name of a type of System -> the keyword the type is also written with
+_TYPE_KEYWORD_DICT = {
+    "Boolean": "bool", "Byte": "byte", "SByte": "sbyte", "Char": "char",
+    "Decimal": "decimal", "Double": "double", "Single": "float", "Int16": "short",
+    "UInt16": "ushort", "Int32": "int", "UInt32": "uint", "Int64": "long",
+    "UInt64": "ulong", "IntPtr": "nint", "UIntPtr": "nuint", "Object": "object",
+    "String": "string",
+}
 
 # Node type of a literal -> the type name of its value
 _LITERAL_TYPE_DICT = {
@@ -161,11 +162,18 @@ _NUMBER_SUFFIX_TYPE_DICT = {
     "f": "float", "d": "double", "m": "decimal",
 }
 
-# Node types that declare a local name in their field "name"
+# Prefix of an integer literal (lower case) -> the digits written after it
+_INTEGER_PREFIX_DIGIT_DICT = {"0x": "0123456789abcdef_", "0b": "01_"}
+
+# Digits of a decimal integer literal
+_DECIMAL_DIGIT = "0123456789_"
+
+# Node types that declare a local name in their field "name" (a parameter list: the
+# parameter written with "params")
 _LOCAL_DECLARE_TYPE_SET = {
     "parameter", "variable_declarator", "catch_declaration", "declaration_pattern",
     "declaration_expression", "local_function_statement", "from_clause", "join_clause",
-    "tuple_pattern",
+    "tuple_pattern", "parameter_list", "bracketed_parameter_list",
 }
 
 
@@ -181,7 +189,7 @@ class CsharpReference:
     is_absolute: bool = False       # Whether the chain starts with "global::"
     argument_count: int = 0         # Number of arguments of the invocation; 0 without is_call
     # Type name of each argument of the invocation where the file tells it
-    # (argument_type), None where it does not
+    # (_ReferenceWalker._argument_type_tuple), None where it does not
     argument_type_tuple: tuple[str | None, ...] = ()
 
 
@@ -199,9 +207,9 @@ class _Chain:
     inner_node_list: list[Node] = field(default_factory=list)
 
 
-def _node_text(node: Node) -> str:
+def _name_text(node: Node) -> str:
     """Return the text of a name node without the verbatim prefix (@class -> class)."""
-    return node.text.decode("utf-8").removeprefix("@")
+    return node_text(node).removeprefix("@")
 
 
 def _root_node(node: Node) -> Node:
@@ -214,25 +222,64 @@ def _root_node(node: Node) -> Node:
 def _has_modifier(node: Node, modifier: str) -> bool:
     """Return whether a declaration or parameter node is written with a modifier."""
     return any(
-        child.type == "modifier" and child.text.decode("utf-8") == modifier
+        child.type == "modifier" and node_text(child) == modifier
         for child in node.children
     )
 
 
 def _type_parameter_name_list(node: Node) -> list[str]:
-    """Return the names of the type parameters a declaration node declares."""
-    type_parameter_list = next(
+    """Return the names of the type parameters a declaration node declares.
+
+    A node whose type is not in _GENERIC_DECLARATION_TYPE_SET gives [].
+    """
+    if node.type not in _GENERIC_DECLARATION_TYPE_SET:
+        return []
+    type_parameter_list_node = next(
         (child for child in node.children if child.type == "type_parameter_list"), None,
     )
-    if type_parameter_list is None:
+    if type_parameter_list_node is None:
         return []
     name_list: list[str] = []
-    for child in type_parameter_list.children:
+    for child in type_parameter_list_node.children:
         if child.type == "type_parameter":
             name_node = child.child_by_field_name("name")
             if name_node is not None:
-                name_list.append(_node_text(name_node))
+                name_list.append(_name_text(name_node))
     return name_list
+
+
+def _name_field_node_list(node: Node) -> list[Node]:
+    """Return the identifiers in the field "name" of a node."""
+    return [
+        name_node for name_node in node.children_by_field_name("name")
+        if name_node.type == "identifier"
+    ]
+
+
+def _left_identifier_node_list(node: Node) -> list[Node]:
+    """Return the loop variable of a foreach statement when it is one identifier."""
+    left_node = node.child_by_field_name("left")
+    return [left_node] if left_node is not None and left_node.type == "identifier" else []
+
+
+def _node_itself_list(node: Node) -> list[Node]:
+    """Return a node that is itself the name it declares (the parameter of x => ...)."""
+    return [node]
+
+
+def _first_identifier_node_list(node: Node) -> list[Node]:
+    """Return the first identifier child of a node (the range variable of a let clause)."""
+    return [child for child in node.children if child.type == "identifier"][:1]
+
+
+# AST node type -> the function that returns the name nodes of the local names a node
+# of the type declares
+_LOCAL_NAME_READER_DICT = {
+    **{node_type: _name_field_node_list for node_type in _LOCAL_DECLARE_TYPE_SET},
+    "implicit_parameter": _node_itself_list,
+    "foreach_statement": _left_identifier_node_list,
+    "let_clause": _first_identifier_node_list,
+}
 
 
 def _local_name_list(node: Node) -> list[str]:
@@ -251,24 +298,9 @@ def _local_name_list(node: Node) -> list[str]:
     node_stack = [node]
     while node_stack:
         current = node_stack.pop()
-        if current.type in _LOCAL_DECLARE_TYPE_SET and current is not node:
-            name_list.extend(
-                _node_text(name_node)
-                for name_node in current.children_by_field_name("name")
-                if name_node.type == "identifier"
-            )
-        elif current.type == "implicit_parameter":
-            name_list.append(_node_text(current))
-        elif current.type == "foreach_statement":
-            left_node = current.child_by_field_name("left")
-            if left_node is not None and left_node.type == "identifier":
-                name_list.append(_node_text(left_node))
-        elif current.type == "let_clause":
-            name_node = next(
-                (child for child in current.children if child.type == "identifier"), None,
-            )
-            if name_node is not None:
-                name_list.append(_node_text(name_node))
+        reader = _LOCAL_NAME_READER_DICT.get(current.type)
+        if reader is not None and current is not node:
+            name_list.extend(_name_text(name_node) for name_node in reader(current))
         node_stack.extend(current.children)
     return name_list
 
@@ -282,6 +314,84 @@ def _type_argument_count(node: Node) -> int:
         <,>          -> 2
     """
     return sum(1 for child in node.children if child.type == ",") + 1
+
+
+def _read_identifier_chain(node: Node, chain: _Chain) -> None:
+    """Add the name of an identifier node to a chain."""
+    chain.part_list.append(_name_text(node))
+    chain.arity_list.append(0)
+
+
+def _read_generic_name_chain(node: Node, chain: _Chain) -> None:
+    """Add the name of a generic_name node and its number of type arguments to a chain."""
+    for child in node.children:
+        if child.type == "identifier":
+            chain.part_list.append(_name_text(child))
+        elif child.type == "type_argument_list":
+            chain.arity_list.append(_type_argument_count(child))
+            chain.inner_node_list.append(child)
+    if len(chain.arity_list) < len(chain.part_list):
+        chain.arity_list.append(0)
+
+
+def _read_alias_qualified_name_chain(node: Node, chain: _Chain) -> None:
+    """Add the alias and the name of an alias_qualified_name node to a chain.
+
+    The alias "global" is the head "global" instead of a name.
+    """
+    alias_node = node.child_by_field_name("alias")
+    name_node = node.child_by_field_name("name")
+    if alias_node is not None and _name_text(alias_node) == "global":
+        chain.head = "global"
+    elif alias_node is not None:
+        chain.part_list.append(_name_text(alias_node))
+        chain.arity_list.append(0)
+    if name_node is not None:
+        _append_chain(chain, _read_chain(name_node))
+
+
+def _read_qualified_name_chain(node: Node, chain: _Chain) -> None:
+    """Add the names of the qualifier and the name of a qualified_name node to a chain."""
+    for field_name in ("qualifier", "name"):
+        part_node = node.child_by_field_name(field_name)
+        if part_node is not None and part_node.type in _CHAIN_NODE_TYPE_SET:
+            _append_chain(chain, _read_chain(part_node))
+
+
+def _read_member_access_chain(node: Node, chain: _Chain) -> None:
+    """Add the expression and the name of a member_access_expression node to a chain.
+
+    An expression that is not a name chain gives the head of the chain: "this",
+    "base", "builtin" (predefined_type) or "value" (kept in inner_node_list).
+    """
+    expression_node = node.child_by_field_name("expression")
+    name_node = node.child_by_field_name("name")
+    if expression_node is None:
+        chain.head = "value"
+    elif expression_node.type in ("this", "base"):
+        chain.head = expression_node.type
+    elif expression_node.type == "predefined_type":
+        chain.head = "builtin"
+    elif expression_node.type in _CHAIN_NODE_TYPE_SET:
+        _append_chain(chain, _read_chain(expression_node))
+    else:
+        chain.head = "value"
+        chain.inner_node_list.append(expression_node)
+    if name_node is not None and name_node.type in _CHAIN_NODE_TYPE_SET:
+        _append_chain(chain, _read_chain(name_node))
+
+
+# AST node type of a name chain -> the function that adds its names to a chain
+_CHAIN_READER_DICT = {
+    "identifier": _read_identifier_chain,
+    "generic_name": _read_generic_name_chain,
+    "alias_qualified_name": _read_alias_qualified_name_chain,
+    "qualified_name": _read_qualified_name_chain,
+    "member_access_expression": _read_member_access_chain,
+}
+
+# AST node types of a name chain
+_CHAIN_NODE_TYPE_SET = set(_CHAIN_READER_DICT)
 
 
 def _read_chain(node: Node) -> _Chain:
@@ -301,49 +411,9 @@ def _read_chain(node: Node) -> _Chain:
         with the head "value" is written after, are in inner_node_list.
     """
     chain = _Chain()
-    if node.type == "identifier":
-        chain.part_list.append(_node_text(node))
-        chain.arity_list.append(0)
-    elif node.type == "generic_name":
-        for child in node.children:
-            if child.type == "identifier":
-                chain.part_list.append(_node_text(child))
-            elif child.type == "type_argument_list":
-                chain.arity_list.append(_type_argument_count(child))
-                chain.inner_node_list.append(child)
-        if len(chain.arity_list) < len(chain.part_list):
-            chain.arity_list.append(0)
-    elif node.type == "alias_qualified_name":
-        alias_node = node.child_by_field_name("alias")
-        name_node = node.child_by_field_name("name")
-        if alias_node is not None and _node_text(alias_node) == "global":
-            chain.head = "global"
-        elif alias_node is not None:
-            chain.part_list.append(_node_text(alias_node))
-            chain.arity_list.append(0)
-        if name_node is not None:
-            _append_chain(chain, _read_chain(name_node))
-    elif node.type == "qualified_name":
-        for field_name in ("qualifier", "name"):
-            part_node = node.child_by_field_name(field_name)
-            if part_node is not None and part_node.type in _CHAIN_NODE_TYPE_SET:
-                _append_chain(chain, _read_chain(part_node))
-    elif node.type == "member_access_expression":
-        expression_node = node.child_by_field_name("expression")
-        name_node = node.child_by_field_name("name")
-        if expression_node is None:
-            chain.head = "value"
-        elif expression_node.type in ("this", "base"):
-            chain.head = expression_node.type
-        elif expression_node.type == "predefined_type":
-            chain.head = "builtin"
-        elif expression_node.type in _CHAIN_NODE_TYPE_SET:
-            _append_chain(chain, _read_chain(expression_node))
-        else:
-            chain.head = "value"
-            chain.inner_node_list.append(expression_node)
-        if name_node is not None and name_node.type in _CHAIN_NODE_TYPE_SET:
-            _append_chain(chain, _read_chain(name_node))
+    reader = _CHAIN_READER_DICT.get(node.type)
+    if reader is not None:
+        reader(node, chain)
     return chain
 
 
@@ -397,7 +467,7 @@ def _using_directive(node: Node) -> CsharpUsing | None:
     return CsharpUsing(
         kind=kind,
         part_tuple=tuple(chain.part_list),
-        alias=_node_text(alias_node) if alias_node is not None else "",
+        alias=_name_text(alias_node) if alias_node is not None else "",
         is_global="global" in child_type_set,
         arity=chain.arity_list[-1],
     )
@@ -413,14 +483,40 @@ def join_name(*part_tuple: str) -> str:
     return ".".join(part for part in part_tuple if part)
 
 
-def type_name(type_node: Node | None) -> str | None:
+def _nullable_inner_node(node: Node) -> Node | None:
+    """Return the type a nullable type is written with (int? -> int)."""
+    return node.child_by_field_name("type")
+
+
+def _generic_inner_node(node: Node) -> Node | None:
+    """Return the name of a generic type without its type arguments (List<T> -> List)."""
+    return next(iter(node.named_children), None)
+
+
+def _qualified_inner_node(node: Node) -> Node | None:
+    """Return the last name of a qualified type name (App.Models.Order -> Order)."""
+    return node.child_by_field_name("name")
+
+
+# AST node type of a type -> the function that returns the node its name is read from
+_TYPE_INNER_NODE_DICT = {
+    "nullable_type": _nullable_inner_node,
+    "generic_name": _generic_inner_node,
+    "qualified_name": _qualified_inner_node,
+}
+
+
+def _type_name(type_node: Node | None) -> str | None:
     """Return the name a type is compared by: its last name, without type arguments.
+
+    A type of System written by its name is named with its keyword (_TYPE_KEYWORD_DICT).
 
     Examples:
         int               -> "int"
         int?              -> "int"
         List<Customer>    -> "List"
         App.Models.Order  -> "Order"
+        System.String     -> "string"
         string[]          -> None
 
     Args:
@@ -432,15 +528,12 @@ def type_name(type_node: Node | None) -> str | None:
     current = type_node
     while current is not None:
         if current.type in ("predefined_type", "identifier"):
-            return current.text.decode("utf-8")
-        if current.type == "nullable_type":
-            current = current.child_by_field_name("type")
-        elif current.type == "generic_name":
-            current = next(iter(current.named_children), None)
-        elif current.type == "qualified_name":
-            current = current.child_by_field_name("name")
-        else:
+            name = _name_text(current)
+            return _TYPE_KEYWORD_DICT.get(name, name)
+        inner_reader = _TYPE_INNER_NODE_DICT.get(current.type)
+        if inner_reader is None:
             return None
+        current = inner_reader(current)
     return None
 
 
@@ -449,135 +542,245 @@ def _type_parameter_name_set(node: Node) -> set[str]:
     name_set: set[str] = set()
     current: Node | None = node
     while current is not None:
-        parameter_list = current.child_by_field_name("type_parameters")
-        if parameter_list is not None:
-            for parameter in parameter_list.named_children:
-                name_node = parameter.child_by_field_name("name")
-                if name_node is not None:
-                    name_set.add(name_node.text.decode("utf-8"))
+        name_set.update(_type_parameter_name_list(current))
         current = current.parent
     return name_set
 
 
 def _parameter_type_tuple(node: Node) -> tuple[str | None, ...]:
-    """Return the type name of each parameter of a method_declaration node (type_name).
+    """Return the type name of each parameter of a method_declaration node (_type_name).
 
     A parameter whose type is a type parameter of the method or of a type around it
     gives None.
     """
     type_parameter_name_set = _type_parameter_name_set(node)
-    name_list: list[str | None] = []
+    type_name_list: list[str | None] = []
     for parameter in _parameter_node_list(node):
-        name = type_name(parameter.child_by_field_name("type"))
-        name_list.append(None if name in type_parameter_name_set else name)
-    return tuple(name_list)
+        name = _type_name(parameter.child_by_field_name("type"))
+        type_name_list.append(None if name in type_parameter_name_set else name)
+    return tuple(type_name_list)
 
 
-def _declared_type(name: str, node: Node) -> str | None:
-    """Return the type a name is declared with around a node.
-
-    The parameters and local variables of the methods, lambdas and local functions
-    around the node are looked up first, innermost first, then the fields and
-    properties of the types around it. A variable declared with "var" has the type
-    of the object its declaration makes (var b = new Box();).
-
-    Args:
-        name: The name.
-        node: The node the name is written at.
-
-    Returns:
-        The type name (type_name); None when no declaration of the name is found or
-        its type has no name.
-    """
-    current = node.parent
-    while current is not None:
-        if current.type in _LOCAL_SCOPE_TYPE_SET or current.type in _TYPE_BODY_TYPE_SET:
-            is_type_body = current.type in _TYPE_BODY_TYPE_SET
-            node_stack = list(current.children)
-            while node_stack:
-                declare_node = node_stack.pop()
-                if declare_node.type in ("parameter", "property_declaration"):
-                    name_node = declare_node.child_by_field_name("name")
-                    if name_node is not None and name_node.text.decode("utf-8") == name:
-                        return type_name(declare_node.child_by_field_name("type"))
-                elif declare_node.type == "variable_declaration":
-                    for declarator in declare_node.named_children:
-                        name_node = declarator.child_by_field_name("name")
-                        if (
-                            declarator.type != "variable_declarator" or name_node is None
-                            or name_node.text.decode("utf-8") != name
-                        ):
-                            continue
-                        declared_name = type_name(declare_node.child_by_field_name("type"))
-                        if declared_name is not None:
-                            return declared_name
-                        return next(
-                            (
-                                type_name(child.child_by_field_name("type"))
-                                for child in declarator.named_children
-                                if child.type == "object_creation_expression"
-                            ),
-                            None,
-                        )
-                # The members of a type are read without the bodies of its methods;
-                # the declarations of a method without the lambdas and local functions in it
-                if is_type_body and declare_node.type in _LOCAL_SCOPE_TYPE_SET:
-                    continue
-                if not is_type_body and (
-                    declare_node.type in _LOCAL_SCOPE_TYPE_SET
-                    and declare_node.type != "parameter_list"
-                ):
-                    continue
-                node_stack.extend(declare_node.children)
-        current = current.parent
-    return None
-
-
-def argument_type(node: Node) -> str | None:
-    """Return the type name of an argument of an invocation where the file tells it.
+def _variable_type_dict(node: Node) -> dict[str, str | None]:
+    """Return the variables a variable_declaration node declares, with their types.
 
     Examples:
-        1 / 2L / 2.5 / 2.5f / 1m      -> "int" / "long" / "double" / "float" / "decimal"
-        "a" / 'a' / true              -> "string" / "char" / "bool"
-        new Box(1)                    -> "Box"
-        (long)value                   -> "long"
-        name (declared Box name;)     -> "Box"
+        Box a, b = null;      -> {"a": "Box", "b": "Box"}
+        var c = new Box(1);   -> {"c": "Box"}
+        var d = Make();       -> {"d": None}
 
     Args:
-        node: An argument node.
+        node: A variable_declaration node.
 
     Returns:
-        The type name; None for any other expression and for null.
+        A {name: type name (_type_name)} dict. A variable written without a type name
+        has the type of the object its declaration makes, None when it makes none.
     """
-    value_node = next(iter(node.named_children), None)
-    # A named argument (width: 2) holds its value after the name
+    declare_type_name = _type_name(node.child_by_field_name("type"))
+    variable_type_dict: dict[str, str | None] = {}
+    for declarator in node.named_children:
+        name_node = declarator.child_by_field_name("name")
+        if declarator.type != "variable_declarator" or name_node is None:
+            continue
+        type_name = declare_type_name
+        if type_name is None:
+            type_name = next(
+                (
+                    _type_name(child.child_by_field_name("type"))
+                    for child in declarator.named_children
+                    if child.type == "object_creation_expression"
+                ),
+                None,
+            )
+        variable_type_dict.setdefault(_name_text(name_node), type_name)
+    return variable_type_dict
+
+
+def _parameter_type_dict(node: Node) -> dict[str, str | None]:
+    """Return the parameters of a node in _LOCAL_SCOPE_TYPE_SET, with their types.
+
+    Args:
+        node: A method, accessor, indexer, local function, lambda or anonymous method,
+            or a type declaration, whose primary constructor (record Rec(Box B)) is read.
+
+    Returns:
+        A {name: type name (_type_name)} dict, the parameter written with "params"
+        and the parameter of a lambda written without parentheses (x => ...) included.
+    """
+    parameter_list_node = node.child_by_field_name("parameters")
+    if parameter_list_node is None and node.type in _TYPE_DECLARATION_TYPE_SET:
+        parameter_list_node = next(
+            (child for child in node.children if child.type == "parameter_list"), None,
+        )
+    if parameter_list_node is None:
+        return {}
+    if parameter_list_node.type == "implicit_parameter":
+        return {_name_text(parameter_list_node): None}
+    parameter_node_list = [
+        child for child in parameter_list_node.children if child.type == "parameter"
+    ]
+    # The parameter written with "params" is in the fields of the list itself
+    parameter_node_list.append(parameter_list_node)
+    parameter_type_dict: dict[str, str | None] = {}
+    for parameter in parameter_node_list:
+        name_node = parameter.child_by_field_name("name")
+        if name_node is not None:
+            parameter_type_dict.setdefault(
+                _name_text(name_node), _type_name(parameter.child_by_field_name("type")),
+            )
+    return parameter_type_dict
+
+
+def _local_declare_dict(node: Node) -> dict[str, str | None]:
+    """Return the local names a node declares for the code inside it, with their types.
+
+    These are the parameters of a node in _LOCAL_SCOPE_TYPE_SET, the variables of the
+    declarations among the children of a block or statement (Box b = ...;,
+    for (Box i = ...;;), using (Box r = ...)), the typed loop variable of a foreach
+    statement and the variable of a catch clause.
+
+    Args:
+        node: A node inside a member of a type.
+
+    Returns:
+        A {name: type name (_type_name)} dict; empty for a node that declares none.
+    """
+    declare_dict: dict[str, str | None] = {}
+    if node.type in _LOCAL_SCOPE_TYPE_SET:
+        declare_dict.update(_parameter_type_dict(node))
+    if node.type == "foreach_statement":
+        for name_node in _left_identifier_node_list(node):
+            declare_dict.setdefault(
+                _name_text(name_node), _type_name(node.child_by_field_name("type")),
+            )
+    for child in node.children:
+        if child.type == "local_declaration_statement":
+            child = next(
+                (inner for inner in child.children if inner.type == "variable_declaration"),
+                child,
+            )
+        if child.type == "variable_declaration":
+            for name, type_name in _variable_type_dict(child).items():
+                declare_dict.setdefault(name, type_name)
+        elif child.type == "catch_declaration":
+            name_node = child.child_by_field_name("name")
+            if name_node is not None:
+                declare_dict.setdefault(
+                    _name_text(name_node), _type_name(child.child_by_field_name("type")),
+                )
+    return declare_dict
+
+
+def _member_declare_dict(node: Node) -> dict[str, str | None]:
+    """Return the fields and properties written in the body of a type, with their types.
+
+    The members inside #if / #elif / #else are read; the members of the types nested in
+    the body are not. For the body of a type declaration, the parameters of its primary
+    constructor (record Rec(Box B), class Prim(Box pc)) are added after the members.
+
+    Args:
+        node: The declaration_list node of a type declaration, or a node of
+            _PASS_NODE_TYPE_SET inside it.
+
+    Returns:
+        A {name: type name (_type_name)} dict; the first declaration of a name is kept.
+    """
+    declare_dict: dict[str, str | None] = {}
+    for child in node.children:
+        if child.type in _PASS_NODE_TYPE_SET:
+            child_declare_dict = _member_declare_dict(child)
+        elif child.type == "field_declaration":
+            child_declare_dict = {}
+            for inner in child.children:
+                if inner.type == "variable_declaration":
+                    child_declare_dict = _variable_type_dict(inner)
+        elif child.type == "property_declaration":
+            name_node = child.child_by_field_name("name")
+            child_declare_dict = {} if name_node is None else {
+                _name_text(name_node): _type_name(child.child_by_field_name("type")),
+            }
+        else:
+            continue
+        for name, type_name in child_declare_dict.items():
+            declare_dict.setdefault(name, type_name)
+    if _is_type_body(node):
+        for name, type_name in _parameter_type_dict(node.parent).items():
+            declare_dict.setdefault(name, type_name)
+    return declare_dict
+
+
+def _is_type_body(node: Node) -> bool:
+    """Return whether a node is the body of a type declaration."""
+    return (
+        node.type == "declaration_list"
+        and node.parent is not None
+        and node.parent.type in _TYPE_DECLARATION_TYPE_SET
+    )
+
+
+def _argument_value_node(node: Node) -> Node | None:
+    """Return the expression an argument node passes (the value after the name of a named argument)."""
     if node.child_by_field_name("name") is not None and node.named_child_count >= 2:
-        value_node = node.named_children[-1]
-    if value_node is None:
+        return node.named_children[-1]
+    return next(iter(node.named_children), None)
+
+
+def _integer_literal_type(text: str) -> str:
+    """Return the type name of the value of an integer literal by its suffix.
+
+    Examples:
+        "10" / "10L" / "0x10UL" / "0b1u"  -> "int" / "long" / "ulong" / "uint"
+
+    Args:
+        text: Text of an integer_literal node.
+
+    Returns:
+        The type name; "int" without a suffix.
+    """
+    body = text.lower()
+    digit = _DECIMAL_DIGIT
+    for prefix, prefix_digit in _INTEGER_PREFIX_DIGIT_DICT.items():
+        if body.startswith(prefix):
+            body, digit = body[len(prefix):], prefix_digit
+            break
+    return _NUMBER_SUFFIX_TYPE_DICT.get(body.lstrip(digit), "int")
+
+
+def _expression_type(node: Node | None) -> str | None:
+    """Return the type name of the value of a literal, an object creation or a cast.
+
+    Examples:
+        1 / 2L / 0xFFu / 2.5 / 2.5f / 1m  -> "int" / "long" / "uint" / "double" / "float" / "decimal"
+        "a" / 'a' / true                  -> "string" / "char" / "bool"
+        new Box(1)                        -> "Box"
+        (long)value                       -> "long"
+
+    Args:
+        node: An expression node, or None.
+
+    Returns:
+        The type name; None for any other expression, for null and for no node.
+    """
+    if node is None:
         return None
-    literal_type = _LITERAL_TYPE_DICT.get(value_node.type)
+    literal_type = _LITERAL_TYPE_DICT.get(node.type)
     if literal_type is not None:
         return literal_type
-    if value_node.type in ("integer_literal", "real_literal"):
-        text = value_node.text.decode("utf-8").lower()
-        if value_node.type == "integer_literal" and not text.startswith("0x"):
-            return _NUMBER_SUFFIX_TYPE_DICT.get(text.lstrip("0123456789_"), "int")
-        if value_node.type == "integer_literal":
-            return "int"
-        return _NUMBER_SUFFIX_TYPE_DICT.get(text[-1], "double")
-    if value_node.type in ("object_creation_expression", "cast_expression"):
-        return type_name(value_node.child_by_field_name("type"))
-    if value_node.type == "identifier":
-        return _declared_type(value_node.text.decode("utf-8"), node)
+    if node.type == "integer_literal":
+        return _integer_literal_type(node_text(node))
+    if node.type == "real_literal":
+        return _NUMBER_SUFFIX_TYPE_DICT.get(node_text(node).lower()[-1], "double")
+    if node.type in ("object_creation_expression", "cast_expression"):
+        return _type_name(node.child_by_field_name("type"))
     return None
 
 
 def _parameter_node_list(node: Node) -> list[Node]:
     """Return the parameter nodes of a method_declaration node, without a "params" one."""
-    parameter_list = node.child_by_field_name("parameters")
-    if parameter_list is None:
+    parameter_list_node = node.child_by_field_name("parameters")
+    if parameter_list_node is None:
         return []
-    return [child for child in parameter_list.children if child.type == "parameter"]
+    return [child for child in parameter_list_node.children if child.type == "parameter"]
 
 
 def _argument_range(node: Node) -> tuple[int, int | None] | None:
@@ -595,15 +798,15 @@ def _argument_range(node: Node) -> tuple[int, int | None] | None:
         (least, most) number of arguments; most is None for a declaration with
         "params". None when the declaration has no parameter list.
     """
-    parameter_list = node.child_by_field_name("parameters")
-    if parameter_list is None:
+    parameter_list_node = node.child_by_field_name("parameters")
+    if parameter_list_node is None:
         return None
     parameter_node_list = _parameter_node_list(node)
     least = sum(
         1 for parameter in parameter_node_list
         if not any(child.type == "=" for child in parameter.children)
     )
-    has_params = any(child.type == "params" for child in parameter_list.children)
+    has_params = any(child.type == "params" for child in parameter_list_node.children)
     return least, None if has_params else len(parameter_node_list)
 
 
@@ -611,29 +814,6 @@ def _is_extension(node: Node) -> bool:
     """Return whether the first parameter of a method_declaration node is written with "this"."""
     parameter_node_list = _parameter_node_list(node)
     return bool(parameter_node_list) and _has_modifier(parameter_node_list[0], "this")
-
-
-def _extension_argument_range(node: Node) -> tuple[int, int | None] | None:
-    """Return the number of arguments a call of an extension method takes.
-
-    Examples:
-        Twice(this int v)                              -> (0, 0)
-        Pad(this string s, int width, char fill = ' ') -> (1, 2)
-        Join(this string s, params object[] rest)      -> (0, None)
-        Parse(string s)                                -> None
-
-    Args:
-        node: A method_declaration node.
-
-    Returns:
-        (least, most) number of arguments, without the one the first parameter stands
-        for; most is None for a declaration with "params". None when the first
-        parameter is not written with "this".
-    """
-    if not _is_extension(node):
-        return None
-    least, most = _argument_range(node)
-    return least - 1, None if most is None else most - 1
 
 
 def _read_type(
@@ -650,7 +830,7 @@ def _read_type(
     name_node = node.child_by_field_name("name")
     if name_node is None:
         return
-    name = _node_text(name_node)
+    name = _name_text(name_node)
     csharp_type = CsharpType(
         namespace=scope.namespace,
         path=join_name(owner.path if owner else "", name),
@@ -734,8 +914,7 @@ def _member_name_list(node: Node) -> list[str]:
 
 
 def _add_member(owner: CsharpType, node: Node) -> None:
-    """Add the names a member declaration gives to its type, with the declaration, and
-    its extension method.
+    """Add the names a member declaration gives to its type, each with the declaration.
 
     Args:
         owner: The type whose body the declaration is written in; modified in place.
@@ -748,17 +927,13 @@ def _add_member(owner: CsharpType, node: Node) -> None:
         ),
     )
     member.is_constructor = node.type == "constructor_declaration"
-    argument_range = None
     if node.type == "method_declaration":
         member.argument_range = _argument_range(node)
         member.is_extension = _is_extension(node)
         member.parameter_type_tuple = _parameter_type_tuple(node)
-        argument_range = _extension_argument_range(node)
     for name in _member_name_list(node):
         owner.member_name_set.add(name)
         owner.member_list_dict.setdefault(name, []).append(member)
-        if argument_range is not None:
-            owner.extension_dict.setdefault(name, []).append(argument_range)
 
 
 def read_csharp_declaration(root_node: Node) -> CsharpDeclaration:
@@ -789,8 +964,9 @@ def _is_type_position(node: Node, field_name: str | None) -> bool:
         field_name: Name of the field the node is in its parent; None for none.
 
     Returns:
-        True for a qualified name, a child in a field of _TYPE_FIELD_NAME_SET, a child
-        of a node in _TYPE_PARENT_TYPE_SET, and the right side of "as" / "is".
+        True for a qualified name (A.B, M::B), a child in a field of
+        _TYPE_FIELD_NAME_SET, a child of a node in _TYPE_PARENT_TYPE_SET, and the right
+        side of "as" / "is".
     """
     if node.type in ("qualified_name", "alias_qualified_name"):
         return True
@@ -805,7 +981,10 @@ def _is_type_position(node: Node, field_name: str | None) -> bool:
 
 
 def _chain_reference(
-    chain: _Chain, kind: str, line: int, call_node: Node | None = None,
+    chain: _Chain,
+    kind: str,
+    line: int,
+    argument_type_tuple: tuple[str | None, ...] | None = None,
 ) -> CsharpReference | None:
     """Return the reference of a name chain.
 
@@ -814,8 +993,9 @@ def _chain_reference(
         kind: NAME_REFERENCE, TYPE_REFERENCE or ATTRIBUTE_REFERENCE; the kind of a
             chain with the head "" or "global".
         line: Line the chain starts on (1-based).
-        call_node: The invocation_expression node that calls the chain; None when
-            the chain is not called.
+        argument_type_tuple: Type name of each argument of the invocation that calls
+            the chain, None where the file does not tell it; None when the chain is
+            not called.
 
     Returns:
         The reference. A chain after "this." is a THIS_REFERENCE. A chain after a value
@@ -825,17 +1005,10 @@ def _chain_reference(
     """
     if not chain.part_list or chain.head in ("base", "builtin"):
         return None
-    is_call = call_node is not None
-    argument_count = 0
-    argument_type_tuple: tuple[str | None, ...] = ()
-    if call_node is not None:
-        argument_list = call_node.child_by_field_name("arguments")
-        if argument_list is not None:
-            argument_type_tuple = tuple(
-                argument_type(child) for child in argument_list.children
-                if child.type == "argument"
-            )
-            argument_count = len(argument_type_tuple)
+    is_call = argument_type_tuple is not None
+    if argument_type_tuple is None:
+        argument_type_tuple = ()
+    argument_count = len(argument_type_tuple)
     if chain.head == "value":
         if not is_call:
             return None
@@ -955,6 +1128,15 @@ class _ReferenceWalker:
         # (node, name of the field the node is in its parent, names of the type
         # parameters and local names of the declarations around the node)
         self.node_stack: list[tuple[Node, str | None, frozenset[str]]] = []
+        # id of a node -> the names its declarations give, with their types
+        # (_local_declare_dict, _member_declare_dict)
+        self.scope_declare_dict: dict[int, dict[str, str | None]] = {}
+        # AST node type -> the method that visits a node of the type
+        self.visit_dict = {
+            "using_directive": self._visit_using,
+            "attribute": self._visit_attribute,
+            "invocation_expression": self._visit_invocation,
+        }
 
     def walk(self, root_node: Node) -> list[CsharpReference]:
         """Visit every node under root_node and return the references found.
@@ -968,24 +1150,96 @@ class _ReferenceWalker:
         self.node_stack.append((root_node, None, frozenset()))
         while self.node_stack:
             node, field_name, local_name_set = self.node_stack.pop()
-            if node.type == "using_directive":
-                self._visit_using(node, local_name_set)
-            elif node.type in _CHAIN_NODE_TYPE_SET:
+            if node.type in _CHAIN_NODE_TYPE_SET:
                 kind = TYPE_REFERENCE if _is_type_position(node, field_name) else NAME_REFERENCE
                 self._add_chain(_read_chain(node), kind, node, local_name_set)
-            elif node.type == "attribute":
-                self._visit_attribute(node, local_name_set)
-            elif node.type == "invocation_expression":
-                self._visit_invocation(node, local_name_set)
             elif node.type.startswith(_PREPROC_PREFIX):
                 self._visit_preproc(node, local_name_set)
             else:
-                self._visit_other(node, local_name_set)
+                self.visit_dict.get(node.type, self._visit_other)(node, local_name_set)
         return list(self.reference_dict)
 
     def _push(self, node_list: list[Node], local_name_set: frozenset[str]) -> None:
         """Put nodes on the stack without the name of their field."""
         self.node_stack.extend((node, None, local_name_set) for node in node_list)
+
+    def _declare_dict(self, node: Node) -> dict[str, str | None]:
+        """Return the names the declarations of a node give, reading the node once.
+
+        Returns:
+            _member_declare_dict for the body of a type declaration, else
+            _local_declare_dict.
+        """
+        declare_dict = self.scope_declare_dict.get(node.id)
+        if declare_dict is None:
+            reader = _member_declare_dict if _is_type_body(node) else _local_declare_dict
+            declare_dict = reader(node)
+            self.scope_declare_dict[node.id] = declare_dict
+        return declare_dict
+
+    def _name_type(self, name: str, node: Node, is_local: bool) -> str | None:
+        """Return the type a name is declared with where a node is written.
+
+        A local name is looked up in the declarations of the nodes around the node up
+        to the body of its type (_local_declare_dict), innermost first. Any other name
+        is looked up among the fields, properties and primary constructor parameters of
+        the types around the node (_member_declare_dict), innermost first; the types
+        nested in them, their base types and the namespace are not looked into.
+
+        Args:
+            name: The name.
+            node: The node the name is written at.
+            is_local: Whether the name is a local name of a declaration around the node.
+
+        Returns:
+            The type name (_type_name); None when no declaration of the name is found
+            or its type has no name.
+        """
+        current = node.parent
+        while current is not None:
+            if is_local and _is_type_body(current):
+                return None
+            if is_local or _is_type_body(current):
+                declare_dict = self._declare_dict(current)
+                if name in declare_dict:
+                    return declare_dict[name]
+            current = current.parent
+        return None
+
+    def _argument_type_tuple(
+        self, call_node: Node, local_name_set: frozenset[str],
+    ) -> tuple[str | None, ...]:
+        """Return the type name of each argument of an invocation where the file tells it.
+
+        Examples:
+            Show(1, "a", new Box(), (long)v)   -> ("int", "string", "Box", "long")
+            Show(name) (declared Box name;)    -> ("Box",)
+            Show(Make(), null)                 -> (None, None)
+
+        Args:
+            call_node: An invocation_expression node.
+            local_name_set: Names of the type parameters and local names around the node.
+
+        Returns:
+            The type names (_expression_type, and _name_type for a name); None for an
+            argument whose type the file does not tell.
+        """
+        argument_list_node = call_node.child_by_field_name("arguments")
+        if argument_list_node is None:
+            return ()
+        type_name_list: list[str | None] = []
+        for argument_node in argument_list_node.children:
+            if argument_node.type != "argument":
+                continue
+            value_node = _argument_value_node(argument_node)
+            if value_node is not None and value_node.type == "identifier":
+                name = _name_text(value_node)
+                type_name_list.append(
+                    self._name_type(name, argument_node, name in local_name_set),
+                )
+            else:
+                type_name_list.append(_expression_type(value_node))
+        return tuple(type_name_list)
 
     def _add_chain(
         self,
@@ -1009,7 +1263,10 @@ class _ReferenceWalker:
             call_node: The invocation_expression node that calls the chain; None when
                 the chain is not called.
         """
-        reference = _chain_reference(chain, kind, node.start_point[0] + 1, call_node)
+        argument_type_tuple = None
+        if call_node is not None:
+            argument_type_tuple = self._argument_type_tuple(call_node, local_name_set)
+        reference = _chain_reference(chain, kind, node.start_point[0] + 1, argument_type_tuple)
         if (
             reference is not None
             and reference.kind not in (MEMBER_REFERENCE, THIS_REFERENCE)
@@ -1111,8 +1368,10 @@ def csharp_reference_list(root_node: Node) -> list[CsharpReference]:
     labels), the names of namespace declarations, the names of using directives
     (the types written inside them are read: using L = List<Order>; -> Order), the
     names of named arguments and of members set in an initializer, a chain that starts
-    with a type parameter of a declaration around it, and the name of a member of a
-    value that is not called. The conditions of #if / #elif and the other preprocessor
+    with a type parameter or a local name (parameter, variable) of a declaration
+    around it, of which a call keeps only the last name as a MEMBER_REFERENCE
+    (items.Where(...) -> Where), and the name of a member of a value that is not
+    called. The conditions of #if / #elif and the other preprocessor
     directives are not read.
 
     Args:
