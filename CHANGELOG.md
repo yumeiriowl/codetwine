@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.1 - 2026-11-06
+
+### Changed
+- A design-document call asks for no more output tokens (`DOC_MAX_TOKENS`) than the model's own output limit in litellm's model table
+- For a model whose output limit the table does not hold, a call the server refuses for the context window is sent again with half the output token limit, not below 4096, unless a call of the same client already went through asking for as many; a later call whose prompt is at least as long as that of a halved call asks for no more than the limit that call took, and a warning names the new limit
+- The model table is looked up with the calls' `LLM_API_BASE` and `LLM_API_KEY`
+- The warning of a reply cut at the output token limit names the limit the call asked for, and the limit it was lowered from
+
 ## 0.5.0 - 2026-10-27
 
 ### Added

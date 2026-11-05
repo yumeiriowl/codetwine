@@ -2,6 +2,7 @@ import asyncio
 import logging
 import litellm
 from litellm import ContextWindowExceededError
+from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from codetwine.config.settings import (
     LLM_MODEL,
@@ -29,6 +30,50 @@ _EFFORT_REFUSAL_WORD_TUPLE = ("thinking", "effort", "output_config")
 
 # Exceptions litellm raises for a failed call
 _LLM_ERROR_TUPLE = tuple(litellm.LITELLM_EXCEPTION_TYPES)
+
+# The least output token limit a call refused for the context window is sent again with:
+# a call whose halved limit would fall below it is not sent again
+_MIN_LOWER_MAX_TOKENS = 4096
+
+
+def _table_output_limit(model: str, api_base: str, api_key: str) -> int:
+    """Return the max_output_tokens litellm's model table holds for a model.
+
+    A model of a provider litellm signs in to (declared_authenticating_provider) is not
+    looked up. A provider litellm asks for the model's details is asked at api_base with
+    api_key, as the calls are.
+
+    Args:
+        model: Model name in litellm format.
+        api_base: The calls' API base URL; empty for the provider's standard endpoint.
+        api_key: The calls' API key; empty for none.
+
+    Returns:
+        The table's max_output_tokens, or 0 when the table holds no whole number above 0
+        for the model, does not know it, or the model is not looked up.
+    """
+    if declared_authenticating_provider(model) is not None:
+        return 0
+    try:
+        output_limit = litellm.get_model_info(
+            model, api_base=api_base or None, api_key=api_key or None
+        ).get("max_output_tokens")
+    except Exception:  # noqa: BLE001 - an unknown model raises
+        return 0
+    return output_limit if type(output_limit) is int and output_limit > 0 else 0
+
+
+def _half_max_tokens(max_tokens: int) -> int:
+    """Return the output token limit a call refused for the context window is sent again with.
+
+    Args:
+        max_tokens: The output token limit the refused call asked for.
+
+    Returns:
+        Half of max_tokens, or 0 when that is below _MIN_LOWER_MAX_TOKENS.
+    """
+    half = max_tokens // 2
+    return half if half >= _MIN_LOWER_MAX_TOKENS else 0
 
 
 def _is_always_think_model(model: str) -> bool:
@@ -120,6 +165,13 @@ class LLMClient:
     """Async LLM API wrapper via litellm.
 
     Accepts a prompt, calls the API with retry logic, and returns the generated text.
+
+    A call asks for no more output tokens than litellm's model table holds for the
+    model. For a model whose output limit the table does not hold, a call refused for
+    the context window is sent again with half the output token limit, down to
+    _MIN_LOWER_MAX_TOKENS, unless an earlier call of this client went through asking
+    for as many. A later call whose prompt is at least as long as that of a halved call
+    that went through asks for no more than the limit that call took.
     """
 
     def __init__(
@@ -161,6 +213,14 @@ class LLMClient:
         self.api_base = api_base
         # The first form is sent; a form the model refuses is taken off
         self.effort_param_list = _effort_param_list(effort, model)
+        # The output limit of litellm's model table, 0 when the table holds none: only a
+        # model without one has its limit halved on a refusal for the context window
+        self.table_max_tokens = _table_output_limit(model, api_base, api_key)
+        # The output token limit each halved call that went through took -> the length
+        # of the shortest prompt that took it (characters), and the largest output token
+        # limit a call went through with
+        self.fit_chars_dict: dict[int, int] = {}
+        self.pass_max_tokens = 0
 
     async def _complete(self, request_dict: dict) -> litellm.ModelResponse:
         """Call litellm with the first form of self.effort_param_list, the next once refused.
@@ -191,17 +251,101 @@ class LLMClient:
                                f"{effort_param_dict}; it is called {next_text}: {e}")
             return await self._complete(request_dict)
 
+    async def _complete_within_context(self, request_dict: dict) -> litellm.ModelResponse:
+        """Call _complete, halving the output token limit on a refusal for the context window.
+
+        A refusal for the context window is sent again with half of
+        request_dict["max_tokens"] while the table holds no output limit for the model
+        and no call has gone through asking for as many (_half_max_tokens). A halved call
+        that goes through is recorded in self.fit_chars_dict (_keep_fit).
+
+        Args:
+            request_dict: The kwargs of litellm.acompletion() but the effort's. Its
+                "max_tokens" is changed to the limit the call went through with.
+
+        Returns:
+            The litellm response.
+
+        Raises:
+            ContextWindowExceededError: When the refusal is not sent again, or the
+                halving does not get past it.
+        """
+        first_max_tokens = request_dict["max_tokens"]
+        while True:
+            try:
+                response = await self._complete(request_dict)
+                break
+            except ContextWindowExceededError as e:
+                max_tokens = request_dict["max_tokens"]
+                half = (_half_max_tokens(max_tokens)
+                        if not self.table_max_tokens and self.pass_max_tokens < max_tokens
+                        else 0)
+                if not half:
+                    raise
+                logger.info(f"{self.model} refused a call for the context window; it is "
+                            f"sent again asking for {half} output tokens in place of "
+                            f"{max_tokens}: {e}")
+                request_dict["max_tokens"] = half
+        max_tokens = request_dict["max_tokens"]
+        self.pass_max_tokens = max(self.pass_max_tokens, max_tokens)
+        if max_tokens < first_max_tokens:
+            self._keep_fit(max_tokens, len(request_dict["messages"][0]["content"]),
+                           first_max_tokens)
+        return response
+
+    def _keep_fit(self, max_tokens: int, prompt_chars: int, first_max_tokens: int) -> None:
+        """Record the output token limit a halved call went through with.
+
+        A warning is logged for a limit not recorded before, an INFO line when a shorter
+        prompt takes a recorded one.
+
+        Args:
+            max_tokens: The output token limit the call went through with.
+            prompt_chars: The length of the call's prompt (characters).
+            first_max_tokens: The output token limit the call first asked for.
+        """
+        before_chars = self.fit_chars_dict.get(max_tokens)
+        if before_chars is not None and before_chars <= prompt_chars:
+            return
+        self.fit_chars_dict[max_tokens] = prompt_chars
+        message = (f"{self.model} refused, for the context window, a call with a prompt of "
+                   f"{prompt_chars} characters asking for {first_max_tokens} output "
+                   f"tokens; calls with a prompt at least as long ask for no more than "
+                   f"{max_tokens}")
+        if before_chars is not None:
+            logger.info(message)
+            return
+        logger.warning(f"{message}. When the model's context window is short, set "
+                       f"DOC_MAX_TOKENS to what it leaves for the reply")
+
+    def _fit_max_tokens(self, prompt_chars: int) -> int:
+        """Return the output token limit a call with a prompt of this length asks for at most.
+
+        Args:
+            prompt_chars: The length of the prompt (characters).
+
+        Returns:
+            The lowest limit self.fit_chars_dict holds for a prompt no longer than this
+            one, or 0 when it holds none.
+        """
+        return min((max_tokens for max_tokens, chars in self.fit_chars_dict.items()
+                    if chars <= prompt_chars), default=0)
+
     async def _call_with_retry(self, prompt: str, max_tokens: int) -> str | None:
         """Call the LLM API with retry logic and return the generated text.
 
         Makes one call, and on 429 (rate limit exceeded) errors waits RETRY_WAIT
         seconds and retries up to MAX_RETRIES times. A call whose effort parameters
-        are refused is made again with the next form, or without them (_complete).
-        Returns None when every attempt fails, and when the reply holds no text.
+        are refused is made again with the next form, or without them (_complete), and
+        a call refused for the context window may be made again with a lower output
+        token limit (_complete_within_context). Returns None when every attempt fails,
+        and when the reply holds no text.
 
         Args:
             prompt: The prompt string to send to the LLM.
-            max_tokens: Maximum output token limit for the LLM.
+            max_tokens: Maximum output token limit for the LLM, lowered to the table's
+                (self.table_max_tokens) and to what earlier halved calls took
+                (_fit_max_tokens).
 
         Returns:
             The generated text, or None on failure.
@@ -216,7 +360,8 @@ class LLMClient:
                 # The kwargs of litellm.acompletion() but the effort's
                 request_dict = {
                     "model": self.model,
-                    "max_tokens": max_tokens,
+                    "max_tokens": min([max_tokens] + [limit for limit in (
+                        self.table_max_tokens, self._fit_max_tokens(len(prompt))) if limit]),
                     "messages": [{"role": "user", "content": prompt}],
                 }
                 if self.api_key:
@@ -224,13 +369,17 @@ class LLMClient:
                 if self.api_base:
                     request_dict["api_base"] = self.api_base
 
-                response = await self._complete(request_dict)
+                response = await self._complete_within_context(request_dict)
                 if not response.choices:
                     logger.error("LLM returned no text")
                     return None
                 # The text is returned as it is when the output was cut at max_tokens
                 if response.choices[0].finish_reason == "length":
-                    logger.warning(f"LLM output was cut at {max_tokens} tokens (DOC_MAX_TOKENS)")
+                    request_max_tokens = request_dict["max_tokens"]
+                    lower_text = (f", lowered from {max_tokens}"
+                                  if request_max_tokens < max_tokens else "")
+                    logger.warning(f"LLM output was cut at {request_max_tokens} tokens "
+                                   f"(DOC_MAX_TOKENS{lower_text})")
                 text = (response.choices[0].message.content or "").strip()
                 if not text:
                     logger.error("LLM returned no text")

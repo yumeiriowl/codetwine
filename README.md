@@ -167,8 +167,10 @@ The following options can be configured in the `.env` file.
 | `LLM_MODEL` | Model name in litellm format (required when `ENABLE_LLM_DOC=True`) | Not set |
 | `LLM_API_BASE` | API base URL (set when using non-standard endpoints, e.g. Ollama, Azure) | Not set |
 | `OUTPUT_LANGUAGE` | Output language for design documents | `English` |
-| `DOC_MAX_TOKENS` | Token limit for LLM output, the model's thinking included. Output cut at this limit is saved as it is and a warning is logged; a reply cut before any text counts as a failed call | `16384` |
+| `DOC_MAX_TOKENS` | Token limit for LLM output, the model's thinking included, lowered to the model's own output limit in litellm's model table. Output cut at this limit is saved as it is and a warning is logged; a reply cut before any text counts as a failed call. For a model whose output limit the table does not hold (e.g. one served by vLLM), the limit is lowered, not below `4096`, for the calls the server refuses for the context window, and a warning is logged | `16384` |
 | `DOC_EFFORT` | How much the model thinks while writing the design documents: `off` (thinking off; `low` on a model that always thinks or refuses it), `low` / `medium` / `high` (adaptive thinking at that effort). A model that refuses these parameters is called without them from then on and a warning is logged. On a provider whose litellm translation drops or rewrites these parameters (e.g. Gemini, Magistral), the value may not reach the model and no warning is logged | `low` |
+
+Ollama does not refuse a prompt longer than its context (`num_ctx`): it drops the start of the prompt and replies. Set `OLLAMA_CONTEXT_LENGTH` on the server, or `PARAMETER num_ctx` in the Modelfile, to a context that holds the prompt and `DOC_MAX_TOKENS`.
 
 ### Path Settings
 

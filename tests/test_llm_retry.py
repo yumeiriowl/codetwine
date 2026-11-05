@@ -417,3 +417,275 @@ def test_every_package_the_code_imports_is_a_dependency():
         } & dependency_set
     )
     assert missing_list == []
+
+
+def _unknown_model_info(model: str, **kwargs) -> dict:
+    """Stand in for litellm.get_model_info on a model its table does not hold."""
+    raise Exception("This model isn't mapped yet")
+
+
+def _context_run(monkeypatch, fit_tokens: int, max_tokens_list: list[int],
+                 table: dict | None = None) -> tuple[list, list[int]]:
+    """Call one client once per value of max_tokens_list, refusing calls over fit_tokens.
+
+    Returns:
+        (what each call returned, or the exception it raised; the max_tokens of every
+        request sent).
+    """
+    request_max_tokens_list = []
+
+    async def fake_acompletion(**kwargs):
+        request_max_tokens_list.append(kwargs["max_tokens"])
+        if kwargs["max_tokens"] > fit_tokens:
+            raise ContextWindowExceededError(
+                message="This model's maximum context length is 12000 tokens",
+                model="m", llm_provider="hosted_vllm")
+        return _reply("ok")
+
+    monkeypatch.setattr(client_module, "MAX_RETRIES", 0)
+    monkeypatch.setattr(litellm, "acompletion", fake_acompletion)
+    monkeypatch.setattr(litellm, "get_model_info",
+                        _unknown_model_info if table is None else lambda model, **kwargs: table)
+    llm_client = LLMClient(model="hosted_vllm/m", effort="low")
+    result_list = []
+    for max_tokens in max_tokens_list:
+        try:
+            result_list.append(asyncio.run(llm_client._call_with_retry("p", max_tokens)))
+        except ContextWindowExceededError as e:
+            result_list.append(e)
+    return result_list, request_max_tokens_list
+
+
+def test_a_call_asks_for_no_more_than_the_tables_output_limit(monkeypatch):
+    result_list, request_max_tokens_list = _context_run(monkeypatch, 64000, [16384, 4000],
+                                          table={"max_output_tokens": 8192})
+    assert result_list == ["ok", "ok"]
+    assert request_max_tokens_list == [8192, 4000]
+
+
+def test_an_overflow_halves_the_limit_of_a_model_the_table_does_not_hold(monkeypatch, caplog):
+    with caplog.at_level("INFO", logger=client_module.logger.name):
+        result_list, request_max_tokens_list = _context_run(monkeypatch, 8192, [32768, 32768])
+    assert result_list == ["ok", "ok"]
+    # The limit the halved call took is kept for the next call
+    assert request_max_tokens_list == [32768, 16384, 8192, 8192]
+    warning_list = [record for record in caplog.records if record.levelname == "WARNING"]
+    assert len(warning_list) == 1 and "set DOC_MAX_TOKENS" in warning_list[0].getMessage()
+
+
+def test_an_overflow_of_a_model_the_table_holds_is_raised(monkeypatch):
+    result_list, request_max_tokens_list = _context_run(monkeypatch, 8192, [16384],
+                                          table={"max_output_tokens": 64000})
+    assert isinstance(result_list[0], ContextWindowExceededError)
+    assert request_max_tokens_list == [16384]
+
+
+def test_an_overflow_at_a_limit_a_call_went_through_with_is_raised(monkeypatch):
+    """The prompt is what does not fit: the overflow goes to the caller to shorten it."""
+    request_max_tokens_list = []
+    fit_list = [16384, 4096]
+
+    async def fake_acompletion(**kwargs):
+        request_max_tokens_list.append(kwargs["max_tokens"])
+        if kwargs["max_tokens"] > fit_list[0]:
+            raise ContextWindowExceededError(message="too long", model="m",
+                                             llm_provider="hosted_vllm")
+        return _reply("ok")
+
+    monkeypatch.setattr(client_module, "MAX_RETRIES", 0)
+    monkeypatch.setattr(litellm, "acompletion", fake_acompletion)
+    monkeypatch.setattr(litellm, "get_model_info", _unknown_model_info)
+    llm_client = LLMClient(model="hosted_vllm/m", effort="low")
+    assert asyncio.run(llm_client._call_with_retry("p", 16384)) == "ok"
+    fit_list.pop(0)
+    with pytest.raises(ContextWindowExceededError):
+        asyncio.run(llm_client._call_with_retry("p", 16384))
+    assert request_max_tokens_list == [16384, 16384]
+    assert llm_client.fit_chars_dict == {}
+
+
+def test_the_halving_stops_at_the_least_limit(monkeypatch):
+    result_list, request_max_tokens_list = _context_run(monkeypatch, 0, [16384])
+    assert isinstance(result_list[0], ContextWindowExceededError)
+    assert request_max_tokens_list == [16384, 8192, 4096]
+
+
+def test_a_cut_reply_names_the_limit_it_asked_for(monkeypatch, caplog):
+    async def fake_acompletion(**kwargs):
+        if kwargs["max_tokens"] > 8192:
+            raise ContextWindowExceededError(message="too long", model="m",
+                                             llm_provider="hosted_vllm")
+        return SimpleNamespace(choices=[SimpleNamespace(
+            finish_reason="length", message=SimpleNamespace(content="part"))])
+
+    monkeypatch.setattr(client_module, "MAX_RETRIES", 0)
+    monkeypatch.setattr(litellm, "acompletion", fake_acompletion)
+    monkeypatch.setattr(litellm, "get_model_info", _unknown_model_info)
+    with caplog.at_level("WARNING", logger=client_module.logger.name):
+        asyncio.run(LLMClient(model="hosted_vllm/m", effort="low")._call_with_retry("p", 16384))
+    assert "LLM output was cut at 8192 tokens (DOC_MAX_TOKENS, lowered from 16384)" \
+        in caplog.text
+
+
+def test_overflows_of_calls_running_together_keep_one_limit_and_warn_once(monkeypatch, caplog):
+    async def fake_acompletion(**kwargs):
+        await asyncio.sleep(0)
+        if kwargs["max_tokens"] > 8192:
+            raise ContextWindowExceededError(message="too long", model="m",
+                                             llm_provider="hosted_vllm")
+        return _reply("ok")
+
+    async def run_together(llm_client):
+        return await asyncio.gather(*(llm_client._call_with_retry("p", 32768)
+                                      for _ in range(3)))
+
+    monkeypatch.setattr(client_module, "MAX_RETRIES", 0)
+    monkeypatch.setattr(litellm, "acompletion", fake_acompletion)
+    monkeypatch.setattr(litellm, "get_model_info", _unknown_model_info)
+    llm_client = LLMClient(model="hosted_vllm/m", effort="low")
+    with caplog.at_level("WARNING", logger=client_module.logger.name):
+        assert asyncio.run(run_together(llm_client)) == ["ok", "ok", "ok"]
+    assert llm_client.fit_chars_dict == {8192: 1}
+    assert sum(record.levelname == "WARNING" for record in caplog.records) == 1
+
+
+def test_a_model_of_a_provider_litellm_signs_in_to_is_not_looked_up(monkeypatch):
+    monkeypatch.setattr(litellm, "get_model_info",
+                        lambda model, **kwargs: pytest.fail("the table was looked up"))
+    assert client_module._table_output_limit("github_copilot/gpt-4o", "", "") == 0
+
+
+def _length_run(monkeypatch, context_tokens: int):
+    """Return a client and the list of its requests, on a server of context_tokens.
+
+    A prompt counts as many tokens as it has characters times 1000.
+    """
+    request_list = []
+
+    async def fake_acompletion(**kwargs):
+        prompt = kwargs["messages"][0]["content"]
+        request_list.append((prompt, kwargs["max_tokens"]))
+        if len(prompt) * 1000 + kwargs["max_tokens"] > context_tokens:
+            raise ContextWindowExceededError(message="too long", model="m",
+                                             llm_provider="hosted_vllm")
+        await asyncio.sleep(0.05 if len(prompt) < 10 else 0)
+        return _reply("ok")
+
+    monkeypatch.setattr(client_module, "MAX_RETRIES", 0)
+    monkeypatch.setattr(litellm, "acompletion", fake_acompletion)
+    monkeypatch.setattr(litellm, "get_model_info", _unknown_model_info)
+    return LLMClient(model="hosted_vllm/m", effort="low"), request_list
+
+
+def test_a_long_prompt_halved_first_lowers_only_prompts_as_long(monkeypatch, caplog):
+    llm_client, request_list = _length_run(monkeypatch, 32768)
+    with caplog.at_level("WARNING", logger=client_module.logger.name):
+        assert asyncio.run(llm_client._call_with_retry("L" * 20, 16384)) == "ok"
+        request_list.clear()
+        for prompt in ("s", "L" * 20, "s"):
+            assert asyncio.run(llm_client._call_with_retry(prompt, 16384)) == "ok"
+    assert request_list == [("s", 16384), ("L" * 20, 8192), ("s", 16384)]
+    assert sum(record.levelname == "WARNING" for record in caplog.records) == 1
+
+
+def test_short_and_long_prompts_running_together_each_keep_what_they_took(monkeypatch,
+                                                                           caplog):
+    llm_client, request_list = _length_run(monkeypatch, 32768)
+
+    async def run_together():
+        return await asyncio.gather(*(llm_client._call_with_retry(prompt, 32768)
+                                      for prompt in ("s", "s", "L" * 20)))
+
+    with caplog.at_level("WARNING", logger=client_module.logger.name):
+        assert asyncio.run(run_together()) == ["ok", "ok", "ok"]
+    assert llm_client.fit_chars_dict == {16384: 1, 8192: 20}
+    request_list.clear()
+    assert asyncio.run(llm_client._call_with_retry("s", 32768)) == "ok"
+    assert request_list == [("s", 16384)]
+    assert sum(record.levelname == "WARNING" for record in caplog.records) == 2
+
+
+def test_a_request_refused_for_its_size_is_not_halved(monkeypatch):
+    request_max_tokens_list = []
+
+    async def fake_acompletion(**kwargs):
+        request_max_tokens_list.append(kwargs["max_tokens"])
+        raise litellm.APIError(status_code=413, message="413 Request Entity Too Large",
+                               llm_provider="hosted_vllm", model="m")
+
+    monkeypatch.setattr(client_module, "MAX_RETRIES", 0)
+    monkeypatch.setattr(litellm, "acompletion", fake_acompletion)
+    monkeypatch.setattr(litellm, "get_model_info", _unknown_model_info)
+    with pytest.raises(ContextWindowExceededError):
+        asyncio.run(LLMClient(model="hosted_vllm/m", effort="low")._call_with_retry("p", 16384))
+    assert request_max_tokens_list == [16384]
+
+
+def test_an_overflow_after_a_refused_effort_is_halved(monkeypatch):
+    request_list = []
+
+    async def fake_acompletion(**kwargs):
+        request_list.append((kwargs["max_tokens"], "thinking" in kwargs))
+        if "thinking" in kwargs:
+            raise litellm.BadRequestError(message="thinking is not supported",
+                                          llm_provider="hosted_vllm", model="m")
+        if kwargs["max_tokens"] > 8192:
+            raise ContextWindowExceededError(message="too long", model="m",
+                                             llm_provider="hosted_vllm")
+        return _reply("ok")
+
+    monkeypatch.setattr(client_module, "MAX_RETRIES", 0)
+    monkeypatch.setattr(client_module, "_is_always_think_model", lambda model: False)
+    monkeypatch.setattr(litellm, "acompletion", fake_acompletion)
+    monkeypatch.setattr(litellm, "get_model_info", _unknown_model_info)
+    llm_client = LLMClient(model="hosted_vllm/m", effort="low")
+    assert asyncio.run(llm_client._call_with_retry("p", 16384)) == "ok"
+    assert request_list == [(16384, True), (16384, False), (8192, False)]
+
+
+def test_the_table_is_looked_up_at_the_calls_endpoint_with_their_key(monkeypatch):
+    lookup_dict = {}
+
+    def fake_model_info(model, api_base=None, api_key=None):
+        lookup_dict.update(model=model, api_base=api_base, api_key=api_key)
+        return {"max_output_tokens": 8192}
+
+    monkeypatch.setattr(litellm, "get_model_info", fake_model_info)
+    assert client_module._table_output_limit("ollama/m", "http://host:11434", "") == 8192
+    assert lookup_dict == {"model": "ollama/m", "api_base": "http://host:11434",
+                           "api_key": None}
+
+
+def test_a_shorter_prompt_taking_a_recorded_limit_moves_the_record_without_a_warning(
+        monkeypatch, caplog):
+    llm_client, _ = _length_run(monkeypatch, 30000)
+    with caplog.at_level("INFO", logger=client_module.logger.name):
+        # Both prompts fit 30000 at 8192 and not at 16384
+        assert asyncio.run(llm_client._call_with_retry("L" * 20, 32768)) == "ok"
+        assert asyncio.run(llm_client._call_with_retry("M" * 15, 32768)) == "ok"
+    assert llm_client.fit_chars_dict == {8192: 15}
+    assert sum(record.levelname == "WARNING" for record in caplog.records) == 1
+    assert any(record.levelname == "INFO" and "prompt of 15 characters" in record.getMessage()
+               for record in caplog.records)
+
+
+def test_a_long_prompt_asks_for_the_lowest_limit_recorded_for_its_length(monkeypatch):
+    llm_client, request_list = _length_run(monkeypatch, 32768)
+    llm_client.fit_chars_dict.update({8192: 10, 4096: 20})
+    for prompt in ("s" * 15, "L" * 25):
+        assert asyncio.run(llm_client._call_with_retry(prompt, 16384)) == "ok"
+    assert request_list == [("s" * 15, 8192), ("L" * 25, 4096)]
+
+
+def test_a_longer_prompt_taking_a_recorded_limit_keeps_the_record(monkeypatch, caplog):
+    llm_client, _ = _length_run(monkeypatch, 30000)
+
+    async def run_together():
+        return await asyncio.gather(*(llm_client._call_with_retry(prompt, 32768)
+                                      for prompt in ("M" * 15, "L" * 20)))
+
+    with caplog.at_level("INFO", logger=client_module.logger.name):
+        assert asyncio.run(run_together()) == ["ok", "ok"]
+    assert llm_client.fit_chars_dict == {8192: 15}
+    assert not any("prompt of 20 characters" in record.getMessage()
+                   for record in caplog.records)
