@@ -86,7 +86,7 @@ _HEADER_REQUEST = "## Request"
 # {title} is replaced with the section title (e.g. "Overview & Purpose")
 _SECTION_REQUEST_TEMPLATE = "Write the content for the \"{title}\" section following the instructions below."
 
-# {language} is replaced with the output language (e.g. "Japanese")
+# {language} is replaced with the output language (e.g. "English")
 _OUTPUT_LANGUAGE_INSTRUCTION = "Write the output in {language}."
 
 # Instruction to ensure consistency with source code

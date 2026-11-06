@@ -181,7 +181,7 @@ CODE_SUMMARY_MAX_CHARS = get_config_value(
 
 # Encodings tried, in order, on a source file without a BOM or with a UTF-8 BOM that is
 # not valid UTF-8, without the BOM (comma-separated Python codec names, e.g.
-# "euc_jp,cp932").
+# "cp1252").
 # Empty: none. A file that none of them decodes is decoded with the encoding
 # charset-normalizer detects.
 # process_all_files() checks each name before it analyses anything.

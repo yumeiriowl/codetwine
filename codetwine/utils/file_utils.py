@@ -109,7 +109,7 @@ def check_source_encoding() -> None:
         except LookupError:
             raise ValueError(
                 f"SOURCE_ENCODING names '{encoding}', which is not a text encoding Python "
-                f"knows. Use Python codec names such as cp932, euc_jp or cp1252, "
+                f"knows. Use Python codec names such as cp1252 or latin-1, "
                 f"in the .env file or your shell."
             ) from None
 
